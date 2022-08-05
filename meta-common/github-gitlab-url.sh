@@ -75,3 +75,5 @@ sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.memory
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.memory-resilience-technology-engine.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.memory-resilience-technology-engine.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-core/memory-resilience-technology-engine/memory-resilience-technology-engine.bb
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.optane-memory.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.optane-memory.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/optane-memory/optane-memory_git.bb
+
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.mctp-emulator.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.mctp-emulator.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/pmci/mctp-emulator.bb
