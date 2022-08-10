@@ -1,6 +1,6 @@
 SUMMARY = "PEF and alert management application"
 
-SRC_URI = "git://github.com/intel-collab/firmware.management.bmc.openbmc-commercial.pef-alert-manager.git;protocol=https"
+SRC_URI = "git://git.ami.com/core/oe/common/firmware.management.bmc.openbmc-commercial.pef-alert-manager.git;protocol=https;branch=master"
 SRCREV = "99f2ba2b1be0adc311423314cb8eb893f5fa7d6a"
 SRC_URI += "file://pef-alert-manager.json"
 

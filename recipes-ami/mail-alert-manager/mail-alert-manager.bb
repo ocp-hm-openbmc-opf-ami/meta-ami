@@ -1,6 +1,6 @@
 SUMMARY = "mail alert management application"
 
-SRC_URI = "git://github.com/intel-collab/firmware.management.bmc.openbmc-commercial.mail-alert-manager.git;protocol=https"
+SRC_URI = "git://git.ami.com/core/oe/common/firmware.management.bmc.openbmc-commercial.mail-alert-manager.git;protocol=https;branch=master"
 SRCREV = "e5f62aea1411406fc947cc446e453d0acf265384"
 
 SRC_URI += "file://smtp-config.json"

@@ -6,14 +6,14 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 APP_NAME = "adcapp"
 bindir = "/usr/bin"
 
-SRC_URI = "git://github.com/openbmc/openbmc-tools"
+SRC_URI = "git://github.com/openbmc/openbmc-tools;protocol=https;branch=master"
 
 
 SRCREV = "12c5f115dcf5bcb3983e53f3e1e8bb39ab0f1d98"
 
 S = "${WORKDIR}/git/adcapp/src"
 PV = "0.1+git${SRCPV}"
-CFLAGS:append +="-DAST2600_ADCAPP"
+CFLAGS:append =" -DAST2600_ADCAPP"
 
 do_compile() {
         ${CC} adcapp.c adcifc.c EINTR_wrappers.c ${LDFLAGS} ${CFLAGS} -o adcapp
