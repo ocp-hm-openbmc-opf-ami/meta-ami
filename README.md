@@ -38,9 +38,6 @@ git clone https://git.ami.com/core/oe/common/firmware.bmc.openbmc.yocto.openbmc;
 git clone https://git.ami.com/core/oe/common/firmware.bmc.openbmc.yocto.openbmc-meta-intel openbmc-meta-intel
 git clone https://git.ami.com/core/oe/common/meta-ami
 sh meta-ami/meta-common/github-gitlab-url.sh
-TEMPLATECONF=openbmc-meta-intel/meta-egs/conf . openbmc-env
-bitbake intel-platforms
-
 ```
 
 ### 3) How to Build ArcherCity
