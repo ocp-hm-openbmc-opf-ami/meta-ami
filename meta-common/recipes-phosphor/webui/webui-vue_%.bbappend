@@ -7,6 +7,7 @@ FILESEXTRAPATHS:append := "${THISDIR}/${PN}:"
 SRC_URI += " \
     file://login-company-logo.svg \
     file://logo-header.svg \
+    file://0001-Session-timeout-feature-in-webui.patch \
     "
 
 do_compile:prepend() {
