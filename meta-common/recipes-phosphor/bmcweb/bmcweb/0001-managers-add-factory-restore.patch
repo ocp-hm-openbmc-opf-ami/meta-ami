@@ -1,0 +1,73 @@
+--- a/redfish-core/lib/managers.hpp	2022-08-22 10:37:10.316432131 -0400
++++ b/redfish-core/lib/managers.hpp	2022-08-22 10:47:18.998384030 -0400
+@@ -100,6 +100,33 @@
+         interfaceName, destProperty, dbusPropertyValue);
+ }
+ 
++inline void
++    writeRestoreOptions(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                        const std::string& resetType)
++{
++    constexpr const char* restoreOpFname = "/tmp/.rwfs/.restore_op";
++    int option = 0;
++
++    if (resetType == "ResetAll")
++    {
++        option = 2; // full restore
++    }
++    else if (resetType == "ResetToDefaultButKeepReservedSettings")
++    {
++        option = 5; // reset to factory defaults but reserve user and lan
++                    // configuration
++    }
++
++    std::ofstream restoreFile(restoreOpFname, std::ios::trunc);
++    if (!restoreFile)
++    {
++        BMCWEB_LOG_ERROR << "error in opring output stream " << restoreOpFname;
++        messages::internalError(asyncResp->res);
++        return;
++    }
++    restoreFile << option << "\n";
++}
++
+ /**
+  * ManagerResetAction class supports the POST method for the Reset (reboot)
+  * action.
+@@ -196,7 +223,8 @@
+                     return;
+                 }
+ 
+-                if (resetType != "ResetAll")
++                if (resetType != "ResetAll" &&
++                    resetType != "ResetToDefaultButKeepReservedSettings")
+                 {
+                     BMCWEB_LOG_DEBUG
+                         << "Invalid property value for ResetToDefaultsType: "
+@@ -207,7 +235,7 @@
+                 }
+ 
+                 crow::connections::systemBus->async_method_call(
+-                    [asyncResp](const boost::system::error_code ec) {
++                    [asyncResp, resetType](const boost::system::error_code ec) {
+                         if (ec)
+                         {
+                             BMCWEB_LOG_DEBUG << "Failed to ResetToDefaults: "
+@@ -215,6 +243,7 @@
+                             messages::internalError(asyncResp->res);
+                             return;
+                         }
++                        writeRestoreOptions(asyncResp, resetType);
+                         // Factory Reset doesn't actually happen until a reboot
+                         // Can't erase what the BMC is running on
+                         doBMCGracefulRestart(asyncResp);
+@@ -2086,7 +2115,8 @@
+                 asyncResp->res.jsonValue["Actions"]["#Manager.ResetToDefaults"];
+             resetToDefaults["target"] =
+                 "/redfish/v1/Managers/bmc/Actions/Manager.ResetToDefaults";
+-            resetToDefaults["ResetType@Redfish.AllowableValues"] = {"ResetAll"};
++            resetToDefaults["ResetType@Redfish.AllowableValues"] = {
++                "ResetAll", "ResetToDefaultButKeepReservedSettings"};
+ 
+             std::pair<std::string, std::string> redfishDateTimeOffset =
+                 crow::utility::getDateTimeOffsetNow();
