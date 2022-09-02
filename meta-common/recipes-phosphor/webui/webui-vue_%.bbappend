@@ -12,6 +12,7 @@ SRC_URI += " \
     file://0003-User-Management-Enabled-Disabled-Custom-error-change.patch \
     file://0004-SSL-Certificate-certificate-creation-changes.patch \
     file://0005-Network-Configuration-Changes.patch \
+    file://0006-Sensor-state-threshold-values-are-not-getting-update.patch \
     "
 
 do_compile:prepend() {
