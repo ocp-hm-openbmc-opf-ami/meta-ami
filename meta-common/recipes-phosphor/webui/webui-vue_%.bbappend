@@ -11,6 +11,7 @@ SRC_URI += " \
     file://0002-NTP-date-and-time-syncing-issue-fixed.patch \
     file://0003-User-Management-Enabled-Disabled-Custom-error-change.patch \
     file://0004-SSL-Certificate-certificate-creation-changes.patch \
+    file://0005-Network-Configuration-Changes.patch \
     "
 
 do_compile:prepend() {
