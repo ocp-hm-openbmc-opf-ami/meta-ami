@@ -6,6 +6,7 @@ SRC_URI += " \
            file://0003-Add-system-Interface-Privilege-Confdition-Check.patch \
            file://0004-fix-systemInfo-parameter-response.patch \
            file://0005-VLAN-Priority.patch \
+           file://0006-AutType-ErrorMsg.patch \
            "
 
 do_install:append:evb-ast2600(){
