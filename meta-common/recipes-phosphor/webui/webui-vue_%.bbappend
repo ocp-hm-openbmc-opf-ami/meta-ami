@@ -9,6 +9,7 @@ SRC_URI += " \
     file://logo-header.svg \
     file://0001-Session-timeout-feature-in-webui.patch \
     file://0002-NTP-date-and-time-syncing-issue-fixed.patch \
+    file://0003-User-Management-Enabled-Disabled-Custom-error-change.patch \
     "
 
 do_compile:prepend() {
