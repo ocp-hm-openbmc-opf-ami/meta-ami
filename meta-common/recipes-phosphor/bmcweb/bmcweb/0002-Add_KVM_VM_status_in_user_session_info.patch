@@ -1,0 +1,251 @@
+diff -Naur bmcweb_bkp/http/websocket.hpp bmcweb_orgg/http/websocket.hpp
+--- bmcweb_bkp/http/websocket.hpp	2022-09-01 12:06:52.523780486 +0530
++++ bmcweb_orgg/http/websocket.hpp	2022-09-01 13:04:38.967056055 +0530
+@@ -22,11 +22,12 @@
+ {
+   public:
+     explicit Connection(const crow::Request& reqIn) :
+-        req(reqIn.req), userdataPtr(nullptr)
++        req(reqIn.req), session(reqIn.session), userdataPtr(nullptr)
+     {}
+ 
+     explicit Connection(const crow::Request& reqIn, std::string user) :
+-        req(reqIn.req), userName{std::move(user)}, userdataPtr(nullptr)
++        req(reqIn.req), session(reqIn.session), userName{std::move(user)},
++        userdataPtr(nullptr)
+     {}
+ 
+     Connection(const Connection&) = delete;
+@@ -58,6 +59,7 @@
+ 
+     boost::beast::http::request<boost::beast::http::string_body> req;
+     crow::Response res;
++    std::shared_ptr<persistent_data::UserSession> session;
+ 
+   private:
+     std::string userName{};
+diff -Naur bmcweb_bkp/include/kvm_websocket.hpp bmcweb_orgg/include/kvm_websocket.hpp
+--- bmcweb_bkp/include/kvm_websocket.hpp	2022-09-01 12:06:52.523780486 +0530
++++ bmcweb_orgg/include/kvm_websocket.hpp	2022-09-01 13:05:06.523420487 +0530
+@@ -173,9 +173,11 @@
+             }
+ 
+             sessions[&conn] = std::make_unique<KvmSession>(conn);
++            conn.session->kvmConnections++;
+         })
+         .onclose([](crow::websocket::Connection& conn, const std::string&) {
+             sessions.erase(&conn);
++            conn.session->kvmConnections--;
+         })
+         .onmessage([](crow::websocket::Connection& conn,
+                       const std::string& data, bool) {
+diff -Naur bmcweb_bkp/include/nbd_proxy.hpp bmcweb_orgg/include/nbd_proxy.hpp
+--- bmcweb_bkp/include/nbd_proxy.hpp	2022-09-01 12:06:52.523780486 +0530
++++ bmcweb_orgg/include/nbd_proxy.hpp	2022-09-01 13:06:02.052153431 +0530
+@@ -45,7 +45,10 @@
+         endpointId(endpointIdIn), path(pathIn),
+         acceptor(connIn.getIoContext(), stream_protocol::endpoint(socketId)),
+         connection(connIn)
+-    {}
++    {
++        std::filesystem::path endpointPath(endpointIdIn);
++        endpointIndex = std::stoul(endpointPath.filename().string());
++    }
+ 
+     NbdProxyServer(const NbdProxyServer&) = delete;
+     NbdProxyServer(NbdProxyServer&&) = delete;
+@@ -62,6 +65,11 @@
+         return endpointId;
+     }
+ 
++    unsigned getEndpointIndex() const
++    {
++        return endpointIndex;
++    }
++
+     void run()
+     {
+         acceptor.async_accept(
+@@ -230,6 +238,9 @@
+     const std::string endpointId;
+     const std::string path;
+ 
++    // endpoint id represented in unsigned int
++    unsigned endpointIndex;
++
+     bool uxWriteInProgress = false;
+ 
+     // UNIX => WebSocket buffer
+@@ -401,6 +412,10 @@
+                         *endpointObjectPath);
+ 
+                     sessions[&conn]->run();
++                    conn.session
++                        ->vmNbdActive[sessions[&conn]->getEndpointIndex()] =
++                        true;
++
+                 };
+                 crow::connections::systemBus->async_method_call(
+                     std::move(openHandler), "xyz.openbmc_project.VirtualMedia",
+@@ -425,6 +440,8 @@
+                     return;
+                 }
+                 session->second->close();
++                conn.session->vmNbdActive[sessions[&conn]->getEndpointIndex()] =
++                    false;
+                 // Remove reference to session in global map
+                 sessions.erase(session);
+             })
+diff -Naur bmcweb_bkp/include/sessions.hpp bmcweb_orgg/include/sessions.hpp
+--- bmcweb_bkp/include/sessions.hpp	2022-09-01 12:06:52.523780486 +0530
++++ bmcweb_orgg/include/sessions.hpp	2022-09-01 13:06:45.716728546 +0530
+@@ -49,6 +49,11 @@
+     bool cookieAuth = false;
+     bool isConfigureSelfOnly = false;
+ 
++    // Use counter since one user can have multiple kvm connections
++    int kvmConnections = 0;
++    // currently there is only 2 nbd slots
++    std::array<bool, 2> vmNbdActive = {false, false};
++
+     // There are two sources of truth for isConfigureSelfOnly:
+     //  1. When pamAuthenticateUser() returns PAM_NEW_AUTHTOK_REQD.
+     //  2. D-Bus User.Manager.GetUserInfo property UserPasswordExpired.
+diff -Naur bmcweb_bkp/redfish-core/lib/redfish_sessions.hpp bmcweb_orgg/redfish-core/lib/redfish_sessions.hpp
+--- bmcweb_bkp/redfish-core/lib/redfish_sessions.hpp	2022-09-01 12:06:52.527780538 +0530
++++ bmcweb_orgg/redfish-core/lib/redfish_sessions.hpp	2022-09-01 13:07:29.677306565 +0530
+@@ -37,6 +37,17 @@
+     res.jsonValue["Name"] = "User Session";
+     res.jsonValue["Description"] = "Manager User Session";
+     res.jsonValue["ClientOriginIPAddress"] = session.clientIp;
++    res.jsonValue["SessionType"] = "WebUI";
++    res.jsonValue["Oem"]["AMI_WebSession"]["@odata.type"] =
++        "#AMIWebSession.v1_0_0.WebSession";
++    res.jsonValue["Oem"]["AMI_WebSession"]["KvmActive"] =
++        static_cast<bool>(session.kvmConnections);
++    res.jsonValue["Oem"]["AMI_WebSession"]["VmActive"] =
++        nlohmann::json::array();
++    for (const bool status : session.vmNbdActive)
++    {
++        res.jsonValue["Oem"]["AMI_WebSession"]["VmActive"].push_back(status);
++    }
+ #ifdef BMCWEB_ENABLE_IBM_MANAGEMENT_CONSOLE
+     res.jsonValue["Oem"]["OpenBMC"]["@odata.type"] =
+         "#OemSession.v1_0_0.Session";
+@@ -153,6 +164,8 @@
+                         ipAddr.s_addr = remoteIpAddr;
+                         asyncResp->res.jsonValue["ClientOriginIPAddress"] =
+                             inet_ntoa(ipAddr);
++                        asyncResp->res.jsonValue["SessionType"] =
++                                        "IPMI";
+                     }
+                     catch (
+                         const sdbusplus::exception::UnpackPropertyError& error)
+diff -Naur bmcweb_bkp/static/redfish/v1/JsonSchemas/AMIWebSession/index.json bmcweb_orgg/static/redfish/v1/JsonSchemas/AMIWebSession/index.json
+--- bmcweb_bkp/static/redfish/v1/JsonSchemas/AMIWebSession/index.json	1970-01-01 05:30:00.000000000 +0530
++++ bmcweb_orgg/static/redfish/v1/JsonSchemas/AMIWebSession/index.json	2022-09-01 12:42:01.383328541 +0530
+@@ -0,0 +1,44 @@
++{
++    "$id": "http://redfish.dmtf.org/schemas/v1/AMIWebSession.v1_0_0.json",
++    "$schema": "http://redfish.dmtf.org/schemas/v1/redfish-schema-v1.json",
++    "copyright": "Copyright 2014-2019 DMTF. For the full DMTF copyright policy, see http://www.dmtf.org/about/policies/copyright",
++    "definitions": {
++        "WebSession": {
++            "additionalProperties": false,
++            "description": "OEM Extension for Session",
++            "longDescription": "OEM Extension for Session to provide the Client details.",
++            "patternProperties": {
++                "^([a-zA-Z_][a-zA-Z0-9_]*)?@(odata|Redfish|Message)\\.[a-zA-Z_][a-zA-Z0-9_]*$": {
++                    "description": "This property shall specify a valid odata or Redfish property.",
++                    "type": [
++                        "array",
++                        "boolean",
++                        "integer",
++                        "number",
++                        "null",
++                        "object",
++                        "string"
++                    ]
++                }
++            },
++            "properties": {
++                "KvmActive" : {
++                    "description" : "Keyboard-Video-Mouse active status.",
++                    "longDescription": "Active status of Keyboard-Video-Mouse in current session.",
++                    "readonly": true,
++                    "type" : "boolean"
++                },
++                "VmActive" : {
++                    "description" : "Virtual Media active status.",
++                    "longDescription": "Active status of Virtual Media in current session.",
++                    "readonly": true,
++                    "type" : "array"
++                }
++            },
++            "type": "object"
++        }
++    },
++    "owningEntity": "AMI_WebSession",
++    "release": "1.0",
++    "title": "#AMIWebSession.v1_0_0"
++}
+diff -Naur bmcweb_bkp/static/redfish/v1/$metadata/index.xml bmcweb_orgg/static/redfish/v1/$metadata/index.xml
+--- bmcweb_bkp/static/redfish/v1/$metadata/index.xml	2022-09-01 12:06:52.527780538 +0530
++++ bmcweb_orgg/static/redfish/v1/$metadata/index.xml	2022-09-01 13:07:45.305511827 +0530
+@@ -2650,4 +2650,8 @@
+     <edmx:Reference Uri="/redfish/v1/schema/CupsPolicyCollection_v1.xml">
+         <edmx:Include Namespace="CupsPolicies"/>
+     </edmx:Reference>
++    <edmx:Reference Uri="/redfish/v1/schema/AMIWebSession_v1.xml">
++        <edmx:Include Namespace="AMIWebSession"/>
++        <edmx:Include Namespace="AMIWebSession.v1_0_0"/>
++    </edmx:Reference>
+ </edmx:Edmx>
+diff -Naur bmcweb_bkp/static/redfish/v1/schema/AMIWebSession_v1.xml bmcweb_orgg/static/redfish/v1/schema/AMIWebSession_v1.xml
+--- bmcweb_bkp/static/redfish/v1/schema/AMIWebSession_v1.xml	1970-01-01 05:30:00.000000000 +0530
++++ bmcweb_orgg/static/redfish/v1/schema/AMIWebSession_v1.xml	2022-09-01 12:44:15.485557550 +0530
+@@ -0,0 +1,44 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" Version="4.0">
++
++  <edmx:Reference Uri="http://docs.oasis-open.org/odata/odata/v4.0/errata03/csd01/complete/vocabularies/Org.OData.Core.V1.xml">
++    <edmx:Include Namespace="Org.OData.Core.V1" Alias="OData"/>
++  </edmx:Reference>
++  <edmx:Reference Uri="http://docs.oasis-open.org/odata/odata/v4.0/errata03/csd01/complete/vocabularies/Org.OData.Measures.V1.xml">
++    <edmx:Include Namespace="Org.OData.Measures.V1" Alias="Measures"/>
++  </edmx:Reference>
++  <edmx:Reference Uri="http://redfish.dmtf.org/schemas/v1/RedfishExtensions_v1.xml">
++    <edmx:Include Namespace="RedfishExtensions.v1_0_0" Alias="Redfish"/>
++  </edmx:Reference>
++  <edmx:Reference Uri="http://redfish.dmtf.org/schemas/v1/Resource_v1.xml">
++    <edmx:Include Namespace="Resource"/>
++    <edmx:Include Namespace="Resource.v1_0_0"/>
++  </edmx:Reference>
++  <edmx:DataServices>
++
++    <Schema xmlns="http://docs.oasis-open.org/odata/ns/edm" Namespace="AMIWebSession">
++      <Annotation Term="Redfish.OwningEntity" String="AMI_WebSession"/>
++    </Schema>
++
++    <Schema xmlns="http://docs.oasis-open.org/odata/ns/edm" Namespace="AMIWebSession.v1_0_0">
++      <Annotation Term="Redfish.OwningEntity" String="AMI_WebSession"/>
++      <Annotation Term="Redfish.Release" String="1.0"/>
++
++      <EntityType Name="WebSession" BaseType="Resource.OemObject" Abstract="true">
++          <Annotation Term="OData.Description" String="AMI OEM Extension for Web Session"/>
++          <Annotation Term="OData.LongDescription" String="AMI OEM Extension for Web Session"/>
++
++            <Property Name="KvmActive" Type="Edm.Boolean">
++              <Annotation Term="OData.Description" String="Keyboard-Video-Mouse active status."/>
++              <Annotation Term="OData.LongDescription" String="Active status of Keyboard-Video-Mouse in current session."/>
++            </Property>
++
++            <Property Name="VmActive" Type="Collection(Edm.Boolean)">
++              <Annotation Term="OData.Description" String="Virtual Media active status."/>
++              <Annotation Term="OData.LongDescription" String="Active status of Virtual Media in current session."/>
++            </Property>
++
++      </EntityType>
++    </Schema>
++  </edmx:DataServices>
++</edmx:Edmx>
