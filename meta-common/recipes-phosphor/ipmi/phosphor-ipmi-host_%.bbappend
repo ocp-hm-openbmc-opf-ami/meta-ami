@@ -8,6 +8,7 @@ SRC_URI += " \
            file://0005-VLAN-Priority.patch \
            file://0006-AutType-ErrorMsg.patch \
            file://0007-get-payload-access-fix.patch \
+           file://0008-Enabled-SetSelTime-ipmi-Command.patch \
            "
 
 do_install:append:evb-ast2600(){
