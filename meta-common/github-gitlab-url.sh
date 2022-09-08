@@ -77,3 +77,22 @@ sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.memory
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.optane-memory.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.optane-memory.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/optane-memory/optane-memory_git.bb
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.mctp-emulator.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.mctp-emulator.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/pmci/mctp-emulator.bb
+
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.trusted-application.git;protocol=ssh;nobranch=1/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.trusted-application.git;protocol=ssh;nobranch=1/g' openbmc-meta-intel/meta-internal/recipes-optee/optee-user-ta/optee-user-ta_git.bb
+
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.ras-manager.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.ras-manager.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/ras-manager/ras-manager_git.bb
+
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.domain-mapperd.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.domain-mapperd.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-internal/recipes-intel/domain-mapperd/domain-mapperd.bb
+
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.power-thermal-utility.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.power-thermal-utility.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-internal/recipes-intel/ptu/ptu_git.bb
+
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.mmbi-seamless.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.mmbi-seamless.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-internal/recipes-intel/mmbi/mmbi-seamless.bb
+
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.power-feature-discovery.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.power-feature-discovery.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/power-feature-discovery/power-feature-discovery_git.bb
+
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.host-instrumentation.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.host-instrumentation.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-internal/recipes-intel/host-instrumentation/host-instrumentation.bb
+
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.secure-control-module-i2c-memory-map.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.secure-control-module-i2c-memory-map.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-internal/recipes-intel/scm-i2c-memory-map/scm-i2c-memory-map.bb
+
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.sdsi.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.sdsi.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-intel/sdsi/sdsi_git.bb
+
