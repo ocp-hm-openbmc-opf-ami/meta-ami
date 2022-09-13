@@ -13,6 +13,7 @@ SRC_URI += " \
     file://0004-SSL-Certificate-certificate-creation-changes.patch \
     file://0005-Network-Configuration-Changes.patch \
     file://0006-Sensor-state-threshold-values-are-not-getting-update.patch \
+    file://0007-virtual-media-support-multiple-media-types.patch \
     "
 
 do_compile:prepend() {
