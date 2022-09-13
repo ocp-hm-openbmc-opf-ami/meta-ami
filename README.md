@@ -44,14 +44,18 @@ sh meta-ami/meta-common/github-gitlab-url.sh
 ```
 TEMPLATECONF=openbmc-meta-intel/meta-egs/conf . openbmc-env
 bitbake intel-platforms
-
 ```
 
-### 4) How to Build AST2600EVB
+### 4) How to Build BHS
 ```
-TEMPLATECONF=meta-evb/meta-evb-aspeed/meta-evb-ast2600/conf . openbmc-env
+TEMPLATECONF=openbmc-meta-intel/meta-bhs/conf . openbmc-env
+bitbake intel-platforms
+```
+
+### 5) How to Build AST2600EVB
+```
+TEMPLATECONF=meta-ami/meta-evb/meta-evb-aspeed/meta-evb-ast2600/conf . openbmc-env
 bitbake obmc-phosphor-image
-
 ```
 
 ## Features of OpenEdition
