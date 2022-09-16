@@ -17,6 +17,7 @@ SRC_URI += " \
     file://0008-Support-for-Multiple-Service-configurations-like-KVM.patch \
     file://0009-Restrict-able-to-disable-change-privilege-from-root.patch \
     file://0010-Implementing-Factory-Default-page-in-webui.patch \
+    file://0011-Fix-for-able-to-access-KVM-windows-even-after-loggin.patch \
     "
 
 do_compile:prepend() {
