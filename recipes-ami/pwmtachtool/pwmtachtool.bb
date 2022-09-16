@@ -8,6 +8,7 @@ bindir = "/usr/bin"
 SRC_URI = "git://github.com/openbmc/openbmc-tools;protocol=https;branch=master"
 SRC_URI += "file://0002-pwm-max-min-value-range.patch"
 SRC_URI += "file://0003-set-fan-speed-set-dutycycle.patch"
+SRC_URI += "file://0001-Mapping-pwm-tach-number-starting-from-0.patch"
 
 SRCREV = "90cb34fc2f169aef4bb740c95daefcd8f16e0353"
 
