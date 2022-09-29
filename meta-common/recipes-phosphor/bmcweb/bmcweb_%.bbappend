@@ -7,4 +7,5 @@ SRC_URI += "file://0002-virtual-media-nfs-support.patch \
             file://0006-Add-Chassis-Sensors-Collection.patch \
 	    file://0007-Restricted-root-user-privilage.patch \
 	    file://0008-enhanced-passwordpolicy.patch \
+            file://0011-Time-zone-configuration-support.patch \
            "
