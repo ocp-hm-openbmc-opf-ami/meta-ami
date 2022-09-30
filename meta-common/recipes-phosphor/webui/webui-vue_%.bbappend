@@ -22,6 +22,7 @@ SRC_URI += " \
     file://0013-VLAN-feature-support-in-WEBUI.patch \
     file://0014-password-policies-in-webui.patch \
     file://0015-invalid-password-shows-wrong-error-response.patch \
+    file://0016-virtual-media-file-type-validation-changes.patch \
     "
 
 do_compile:prepend() {
