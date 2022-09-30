@@ -36,7 +36,7 @@ sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.provis
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.security-manager.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/common\/firmware.bmc.openbmc.applications.security-manager.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/security-manager/security-manager_git.bb
 
-sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.settings-manager.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.settings-manager.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/settings/settings_git.bb
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.settings-manager.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/common\/firmware.bmc.openbmc.applications.settings-manager.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/settings/settings_git.bb
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.special-mode-manager.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.special-mode-manager.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/special-mode-mgr/special-mode-mgr_git.bb
 
