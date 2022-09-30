@@ -9,6 +9,7 @@ SRC_URI += " \
            file://0006-AutType-ErrorMsg.patch \
            file://0007-get-payload-access-fix.patch \
            file://0008-Enabled-SetSelTime-ipmi-Command.patch \
+           file://0009-For-Get-set-user-payload-acess-created-users-will-ge.patch \
            "
 
 do_install:append:evb-ast2600(){
