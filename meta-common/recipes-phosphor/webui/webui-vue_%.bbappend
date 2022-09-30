@@ -20,6 +20,7 @@ SRC_URI += " \
     file://0011-Fix-for-able-to-access-KVM-windows-even-after-loggin.patch \
     file://0012-Operations-section-and-Server-status-is-not-getting-.patch \
     file://0013-VLAN-feature-support-in-WEBUI.patch \
+    file://0014-password-policies-in-webui.patch \
     "
 
 do_compile:prepend() {
