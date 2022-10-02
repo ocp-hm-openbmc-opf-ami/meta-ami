@@ -10,11 +10,17 @@ SRC_URI += " \
            file://0007-get-payload-access-fix.patch \
            file://0008-Enabled-SetSelTime-ipmi-Command.patch \
            file://0009-For-Get-set-user-payload-acess-created-users-will-ge.patch \
+           file://0010-Add-warm-reset-support.patch \
+           file://phosphor-ipmi-host-ami.service \
            "
 
-do_install:append:evb-ast2600(){
+do_install:append(){
   install -d ${D}${includedir}/phosphor-ipmi-host
   install -m 0644 -D ${S}/sensorhandler.hpp ${D}${includedir}/phosphor-ipmi-host
   install -m 0644 -D ${S}/selutility.hpp ${D}${includedir}/phosphor-ipmi-host
+  install -m 0644 -D ${S}/phosphor-ipmi-warm-reset.target ${D}${systemd_system_unitdir}
+  install -m 0644 -D ${WORKDIR}/phosphor-ipmi-host-ami.service ${D}${systemd_system_unitdir}/phosphor-ipmi-host.service
 }
+
+FILES:${PN} += "${systemd_system_unitdir}/*"
 
