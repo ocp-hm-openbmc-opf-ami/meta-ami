@@ -23,6 +23,7 @@ SRC_URI += " \
     file://0014-password-policies-in-webui.patch \
     file://0015-invalid-password-shows-wrong-error-response.patch \
     file://0016-virtual-media-file-type-validation-changes.patch \
+    file://0017-IPV6-Configuration-support-implementation.patch \
     "
 
 do_compile:prepend() {
