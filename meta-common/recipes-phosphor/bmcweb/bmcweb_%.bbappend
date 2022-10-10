@@ -12,4 +12,5 @@ SRC_URI += "file://0002-virtual-media-nfs-support.patch \
 	    file://0009-enabled-redfish-dump-log.patch \
 	    file://0010-added-IPv6StaticDefaultGateways-property.patch \
             file://0011-Time-zone-configuration-support.patch \
-           "
+            file://0018-Post-Chassis.Reset-ChassisId-validation.patch \
+            "
