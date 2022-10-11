@@ -24,6 +24,7 @@ SRC_URI += " \
     file://0015-invalid-password-shows-wrong-error-response.patch \
     file://0016-virtual-media-file-type-validation-changes.patch \
     file://0017-IPV6-Configuration-support-implementation.patch \
+    file://0018-Ldap-feature-enabled-in-webui.patch \
     "
 
 do_compile:prepend() {
