@@ -25,6 +25,7 @@ SRC_URI += " \
     file://0016-virtual-media-file-type-validation-changes.patch \
     file://0017-IPV6-Configuration-support-implementation.patch \
     file://0018-Ldap-feature-enabled-in-webui.patch \
+    file://0019-Web-UI-not-showing-active-sessions.patch \
     "
 
 do_compile:prepend() {
