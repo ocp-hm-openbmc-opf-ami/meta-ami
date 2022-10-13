@@ -26,6 +26,7 @@ SRC_URI += " \
     file://0017-IPV6-Configuration-support-implementation.patch \
     file://0018-Ldap-feature-enabled-in-webui.patch \
     file://0019-Web-UI-not-showing-active-sessions.patch \
+    file://0020-Time-zone-configuration-support-Implementation.patch \
     "
 
 do_compile:prepend() {
