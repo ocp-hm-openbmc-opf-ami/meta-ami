@@ -14,7 +14,7 @@ sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.psu-ma
 
 sed -i 's/git@github.com\/intel-collab\/os.linux.kernel.openbmc.linux.git;protocol=ssh;branch=${KBRANCH}/git@git.ami.com\/core\/oe\/common\/os.linux.kernel.openbmc.linux.git;protocol=ssh;branch=${KBRANCH}/g' openbmc-meta-intel/meta-common/recipes-kernel/linux/linux-aspeed_%.bbappend
 
-sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.node-manager-proxy.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.node-manager-proxy.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/ipmi/phosphor-node-manager-proxy_git.bb
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.node-manager-proxy.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/common\/firmware.bmc.openbmc.applications.node-manager-proxy.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/ipmi/phosphor-node-manager-proxy_git.bb
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.libraries.libmctp.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.libraries.libmctp.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/pmci/libmctp-intel_git.bb
 
@@ -34,7 +34,7 @@ sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.pmci-l
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.provisioning-mode-manager.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.provisioning-mode-manager.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/prov-mode-mgr/prov-mode-mgr_git.bb
 
-sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.security-manager.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/common\/firmware.bmc.openbmc.applications.security-manager.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/security-manager/security-manager_git.bb
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.security-manager.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.security-manager.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/security-manager/security-manager_git.bb
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.settings-manager.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/common\/firmware.bmc.openbmc.applications.settings-manager.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/settings/settings_git.bb
 
@@ -54,7 +54,7 @@ sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.cups-s
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.modular-system.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.modular-system.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-internal/recipes-intel/modular-system/modular-system_git.bb
 
-sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.node-manager.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/common\/firmware.bmc.openbmc.applications.node-manager.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-internal/recipes-intel/node-manager/node-manager_git.bb
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.node-manager.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.node-manager.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-internal/recipes-intel/node-manager/node-manager_git.bb
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.optane-cxl.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.optane-cxl.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-internal/recipes-intel/optane-cxl/optane-cxl_git.bb
 
