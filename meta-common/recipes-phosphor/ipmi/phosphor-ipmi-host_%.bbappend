@@ -12,6 +12,7 @@ SRC_URI += " \
            file://0009-For-Get-set-user-payload-acess-created-users-will-ge.patch \
            file://0010-Add-warm-reset-support.patch \
            file://phosphor-ipmi-host-ami.service \
+           file://0012-Get-Channel-Payload-Support-Detailed-Information-bel.patch \
            "
 
 do_install:append(){
