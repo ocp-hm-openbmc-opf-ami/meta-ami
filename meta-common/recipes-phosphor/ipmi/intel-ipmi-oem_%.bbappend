@@ -5,6 +5,7 @@ SRC_URI += "\
 	   file://0008-fix-sdr-count-issue.patch \
            file://0009-Removed-SetSelTime-ipmi-Handler.patch \
            file://0010-Add-warm-reset-config.patch \
+           file://0011-For-GetSensorType-ipmi-command-issue-is-getting-resp.patch \
 	   file://dcmi_whitelists_conf.patch \	
            "
 
