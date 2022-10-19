@@ -10,4 +10,7 @@ SRC_URI += "file://0001-managers-add-factory-restore.patch \
 	    file://0006-enabled-redfish-dump-log.patch \ 
 	    file://0007-Restricted-root-user-privilage.patch \
 	    file://0008-enhanced-passwordpolicy.patch \
+            file://0009-Post-Chassis.Reset-ChassisId-validation.patch \
+            file://0010-Time-zone-configuration-support.patch \
+            file://0011-Add-Chassis-Sensors-Collection.patch \
 "
