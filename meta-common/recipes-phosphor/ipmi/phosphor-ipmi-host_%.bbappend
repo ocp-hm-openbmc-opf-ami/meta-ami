@@ -1,5 +1,7 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
+SRCREV = "0a24e5cd3fb7f3f17e9c440fb8fb33bcffdfecfb"
+
 SRC_URI += " \
 	   file://0001-BMC-ARP-Control.patch \
            file://0002_readall_for_sensor_instanceStart.patch \
