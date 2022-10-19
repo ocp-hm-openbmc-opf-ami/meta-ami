@@ -7,13 +7,13 @@ SRC_URI += " \
            file://0004-fix-systemInfo-parameter-response.patch \
            file://0005-VLAN-Priority.patch \
            file://0006-AutType-ErrorMsg.patch \
-           file://0007-get-payload-access-fix.patch \
            file://0008-Enabled-SetSelTime-ipmi-Command.patch \
-           file://0009-For-Get-set-user-payload-acess-created-users-will-ge.patch \
            file://0010-Add-warm-reset-support.patch \
            file://phosphor-ipmi-host-ami.service \
 	   file://0011-Add-Compact-SDR-Type2-Support.patch \
            file://0012-Get-Channel-Payload-Support-Detailed-Information-bel.patch \
+	   file://0037-Systemd_Restart_Wrappper.patch \
+           file://dcmi-getActive-command.patch \  
            "
 
 do_install:append(){
