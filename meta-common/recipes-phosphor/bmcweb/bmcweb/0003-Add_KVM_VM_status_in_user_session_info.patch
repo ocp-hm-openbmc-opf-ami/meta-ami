@@ -1,7 +1,8 @@
-diff -Naur bmcweb_bkp/http/websocket.hpp bmcweb_orgg/http/websocket.hpp
---- bmcweb_bkp/http/websocket.hpp	2022-09-01 12:06:52.523780486 +0530
-+++ bmcweb_orgg/http/websocket.hpp	2022-09-01 13:04:38.967056055 +0530
-@@ -22,11 +22,12 @@
+diff --git a/http/websocket.hpp b/http/websocket.hpp
+index beda2700..4b623148 100644
+--- a/http/websocket.hpp
++++ b/http/websocket.hpp
+@@ -21,11 +21,12 @@ struct Connection : std::enable_shared_from_this<Connection>
  {
    public:
      explicit Connection(const crow::Request& reqIn) :
@@ -16,7 +17,7 @@ diff -Naur bmcweb_bkp/http/websocket.hpp bmcweb_orgg/http/websocket.hpp
      {}
  
      Connection(const Connection&) = delete;
-@@ -58,6 +59,7 @@
+@@ -57,6 +58,7 @@ struct Connection : std::enable_shared_from_this<Connection>
  
      boost::beast::http::request<boost::beast::http::string_body> req;
      crow::Response res;
@@ -24,25 +25,58 @@ diff -Naur bmcweb_bkp/http/websocket.hpp bmcweb_orgg/http/websocket.hpp
  
    private:
      std::string userName{};
-diff -Naur bmcweb_bkp/include/kvm_websocket.hpp bmcweb_orgg/include/kvm_websocket.hpp
---- bmcweb_bkp/include/kvm_websocket.hpp	2022-09-01 12:06:52.523780486 +0530
-+++ bmcweb_orgg/include/kvm_websocket.hpp	2022-09-01 13:05:06.523420487 +0530
-@@ -173,9 +173,11 @@
+diff --git a/include/kvm_websocket.hpp b/include/kvm_websocket.hpp
+index ede4d864..9dc55023 100644
+--- a/include/kvm_websocket.hpp
++++ b/include/kvm_websocket.hpp
+@@ -13,6 +13,7 @@ namespace obmc_kvm
+ {
+ 
+ static constexpr const uint maxSessions = 4;
++int kvmActiveStatus = 0;
+ 
+ class KvmSession
+ {
+@@ -173,9 +174,13 @@ inline void requestRoutes(App& app)
              }
  
              sessions[&conn] = std::make_unique<KvmSession>(conn);
 +            conn.session->kvmConnections++;
++	     kvmActiveStatus = 1;
          })
          .onclose([](crow::websocket::Connection& conn, const std::string&) {
              sessions.erase(&conn);
 +            conn.session->kvmConnections--;
++	     kvmActiveStatus = 0;
          })
          .onmessage([](crow::websocket::Connection& conn,
                        const std::string& data, bool) {
-diff -Naur bmcweb_bkp/include/nbd_proxy.hpp bmcweb_orgg/include/nbd_proxy.hpp
---- bmcweb_bkp/include/nbd_proxy.hpp	2022-09-01 12:06:52.523780486 +0530
-+++ bmcweb_orgg/include/nbd_proxy.hpp	2022-09-01 13:06:02.052153431 +0530
-@@ -45,7 +45,10 @@
+@@ -184,6 +189,20 @@ inline void requestRoutes(App& app)
+                 sessions[&conn]->onMessage(data);
+             }
+         });
++
++	BMCWEB_ROUTE(app, "/kvm/kvmActiveStatus")
++        .privileges({{"ConfigureComponents", "ConfigureManager"}})
++        .methods(boost::beast::http::verb::get)(
++            [](const crow::Request& req,
++               const std::shared_ptr<bmcweb::AsyncResp>& ares) {
++                if (req.session == nullptr)
++                {
++                    BMCWEB_LOG_DEBUG << "Internal Server Error";
++                    return;
++                }
++                ares->res.jsonValue["kvmActiveStatus"] = kvmActiveStatus;
++        });
++
+ }
+ 
+ } // namespace obmc_kvm
+diff --git a/include/nbd_proxy.hpp b/include/nbd_proxy.hpp
+index b6683f56..aabd690d 100644
+--- a/include/nbd_proxy.hpp
++++ b/include/nbd_proxy.hpp
+@@ -45,7 +45,10 @@ struct NbdProxyServer : std::enable_shared_from_this<NbdProxyServer>
          endpointId(endpointIdIn), path(pathIn),
          acceptor(connIn.getIoContext(), stream_protocol::endpoint(socketId)),
          connection(connIn)
@@ -54,7 +88,7 @@ diff -Naur bmcweb_bkp/include/nbd_proxy.hpp bmcweb_orgg/include/nbd_proxy.hpp
  
      NbdProxyServer(const NbdProxyServer&) = delete;
      NbdProxyServer(NbdProxyServer&&) = delete;
-@@ -62,6 +65,11 @@
+@@ -62,6 +65,11 @@ struct NbdProxyServer : std::enable_shared_from_this<NbdProxyServer>
          return endpointId;
      }
  
@@ -66,7 +100,7 @@ diff -Naur bmcweb_bkp/include/nbd_proxy.hpp bmcweb_orgg/include/nbd_proxy.hpp
      void run()
      {
          acceptor.async_accept(
-@@ -230,6 +238,9 @@
+@@ -230,6 +238,9 @@ struct NbdProxyServer : std::enable_shared_from_this<NbdProxyServer>
      const std::string endpointId;
      const std::string path;
  
@@ -76,30 +110,31 @@ diff -Naur bmcweb_bkp/include/nbd_proxy.hpp bmcweb_orgg/include/nbd_proxy.hpp
      bool uxWriteInProgress = false;
  
      // UNIX => WebSocket buffer
-@@ -401,6 +412,10 @@
-                         *endpointObjectPath);
+@@ -399,6 +410,9 @@ inline void requestRoutes(App& app)
+                     conn, *socketValue, *endpointValue, *endpointObjectPath);
  
-                     sessions[&conn]->run();
+                 sessions[&conn]->run();
 +                    conn.session
 +                        ->vmNbdActive[sessions[&conn]->getEndpointIndex()] =
 +                        true;
+             };
+             crow::connections::systemBus->async_method_call(
+                 std::move(openHandler), "xyz.openbmc_project.VirtualMedia",
+@@ -422,6 +436,9 @@ inline void requestRoutes(App& app)
+             return;
+         }
+         session->second->close();
++        conn.session->vmNbdActive[sessions[&conn]->getEndpointIndex()] =
++           false;
 +
-                 };
-                 crow::connections::systemBus->async_method_call(
-                     std::move(openHandler), "xyz.openbmc_project.VirtualMedia",
-@@ -425,6 +440,8 @@
-                     return;
-                 }
-                 session->second->close();
-+                conn.session->vmNbdActive[sessions[&conn]->getEndpointIndex()] =
-+                    false;
-                 // Remove reference to session in global map
-                 sessions.erase(session);
-             })
-diff -Naur bmcweb_bkp/include/sessions.hpp bmcweb_orgg/include/sessions.hpp
---- bmcweb_bkp/include/sessions.hpp	2022-09-01 12:06:52.523780486 +0530
-+++ bmcweb_orgg/include/sessions.hpp	2022-09-01 13:06:45.716728546 +0530
-@@ -49,6 +49,11 @@
+         // Remove reference to session in global map
+         sessions.erase(session);
+         })
+diff --git a/include/sessions.hpp b/include/sessions.hpp
+index 3dabff4b..fd18c9f7 100644
+--- a/include/sessions.hpp
++++ b/include/sessions.hpp
+@@ -40,6 +40,11 @@ struct UserSession
      bool cookieAuth = false;
      bool isConfigureSelfOnly = false;
  
@@ -111,10 +146,11 @@ diff -Naur bmcweb_bkp/include/sessions.hpp bmcweb_orgg/include/sessions.hpp
      // There are two sources of truth for isConfigureSelfOnly:
      //  1. When pamAuthenticateUser() returns PAM_NEW_AUTHTOK_REQD.
      //  2. D-Bus User.Manager.GetUserInfo property UserPasswordExpired.
-diff -Naur bmcweb_bkp/redfish-core/lib/redfish_sessions.hpp bmcweb_orgg/redfish-core/lib/redfish_sessions.hpp
---- bmcweb_bkp/redfish-core/lib/redfish_sessions.hpp	2022-09-01 12:06:52.527780538 +0530
-+++ bmcweb_orgg/redfish-core/lib/redfish_sessions.hpp	2022-09-01 13:07:29.677306565 +0530
-@@ -37,6 +37,17 @@
+diff --git a/redfish-core/lib/redfish_sessions.hpp b/redfish-core/lib/redfish_sessions.hpp
+index 7d9e7fa5..908573da 100644
+--- a/redfish-core/lib/redfish_sessions.hpp
++++ b/redfish-core/lib/redfish_sessions.hpp
+@@ -38,6 +38,17 @@ inline void fillSessionObject(crow::Response& res,
      res.jsonValue["Name"] = "User Session";
      res.jsonValue["Description"] = "Manager User Session";
      res.jsonValue["ClientOriginIPAddress"] = session.clientIp;
@@ -132,18 +168,34 @@ diff -Naur bmcweb_bkp/redfish-core/lib/redfish_sessions.hpp bmcweb_orgg/redfish-
  #ifdef BMCWEB_ENABLE_IBM_MANAGEMENT_CONSOLE
      res.jsonValue["Oem"]["OpenBMC"]["@odata.type"] =
          "#OemSession.v1_0_0.Session";
-@@ -153,6 +164,8 @@
-                         ipAddr.s_addr = remoteIpAddr;
-                         asyncResp->res.jsonValue["ClientOriginIPAddress"] =
-                             inet_ntoa(ipAddr);
-+                        asyncResp->res.jsonValue["SessionType"] =
-+                                        "IPMI";
-                     }
-                     catch (
-                         const sdbusplus::exception::UnpackPropertyError& error)
-diff -Naur bmcweb_bkp/static/redfish/v1/JsonSchemas/AMIWebSession/index.json bmcweb_orgg/static/redfish/v1/JsonSchemas/AMIWebSession/index.json
---- bmcweb_bkp/static/redfish/v1/JsonSchemas/AMIWebSession/index.json	1970-01-01 05:30:00.000000000 +0530
-+++ bmcweb_orgg/static/redfish/v1/JsonSchemas/AMIWebSession/index.json	2022-09-01 12:42:01.383328541 +0530
+@@ -164,6 +175,9 @@ inline void
+                 ipAddr.s_addr = remoteIpAddr;
+                 asyncResp->res.jsonValue["ClientOriginIPAddress"] =
+                     inet_ntoa(ipAddr);
++                asyncResp->res.jsonValue["SessionType"] =
++                              "IPMI";
++
+             }
+             catch (const sdbusplus::exception::UnpackPropertyError& error)
+             {
+diff --git a/static/redfish/v1/$metadata/index.xml b/static/redfish/v1/$metadata/index.xml
+index 52b01984..a0919ea1 100644
+--- a/static/redfish/v1/$metadata/index.xml
++++ b/static/redfish/v1/$metadata/index.xml
+@@ -2725,5 +2725,8 @@
+     <edmx:Reference Uri="/redfish/v1/schema/OemLicense_v1.xml">
+         <edmx:Include Namespace="OemLicense"/>
+         <edmx:Include Namespace="OemLicense.v1_0_0"/>
++    <edmx:Reference Uri="/redfish/v1/schema/AMIWebSession_v1.xml">
++        <edmx:Include Namespace="AMIWebSession"/>
++        <edmx:Include Namespace="AMIWebSession.v1_0_0"/>
+     </edmx:Reference>
+ </edmx:Edmx>
+diff --git a/static/redfish/v1/JsonSchemas/AMIWebSession/index.json b/static/redfish/v1/JsonSchemas/AMIWebSession/index.json
+new file mode 100644
+index 00000000..23604900
+--- /dev/null
++++ b/static/redfish/v1/JsonSchemas/AMIWebSession/index.json
 @@ -0,0 +1,44 @@
 +{
 +    "$id": "http://redfish.dmtf.org/schemas/v1/AMIWebSession.v1_0_0.json",
@@ -189,21 +241,11 @@ diff -Naur bmcweb_bkp/static/redfish/v1/JsonSchemas/AMIWebSession/index.json bmc
 +    "release": "1.0",
 +    "title": "#AMIWebSession.v1_0_0"
 +}
-diff -Naur bmcweb_bkp/static/redfish/v1/$metadata/index.xml bmcweb_orgg/static/redfish/v1/$metadata/index.xml
---- bmcweb_bkp/static/redfish/v1/$metadata/index.xml	2022-09-01 12:06:52.527780538 +0530
-+++ bmcweb_orgg/static/redfish/v1/$metadata/index.xml	2022-09-01 13:07:45.305511827 +0530
-@@ -2650,4 +2650,8 @@
-     <edmx:Reference Uri="/redfish/v1/schema/CupsPolicyCollection_v1.xml">
-         <edmx:Include Namespace="CupsPolicies"/>
-     </edmx:Reference>
-+    <edmx:Reference Uri="/redfish/v1/schema/AMIWebSession_v1.xml">
-+        <edmx:Include Namespace="AMIWebSession"/>
-+        <edmx:Include Namespace="AMIWebSession.v1_0_0"/>
-+    </edmx:Reference>
- </edmx:Edmx>
-diff -Naur bmcweb_bkp/static/redfish/v1/schema/AMIWebSession_v1.xml bmcweb_orgg/static/redfish/v1/schema/AMIWebSession_v1.xml
---- bmcweb_bkp/static/redfish/v1/schema/AMIWebSession_v1.xml	1970-01-01 05:30:00.000000000 +0530
-+++ bmcweb_orgg/static/redfish/v1/schema/AMIWebSession_v1.xml	2022-09-01 12:44:15.485557550 +0530
+diff --git a/static/redfish/v1/schema/AMIWebSession_v1.xml b/static/redfish/v1/schema/AMIWebSession_v1.xml
+new file mode 100644
+index 00000000..4803c5e8
+--- /dev/null
++++ b/static/redfish/v1/schema/AMIWebSession_v1.xml
 @@ -0,0 +1,44 @@
 +<?xml version="1.0" encoding="UTF-8"?>
 +<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" Version="4.0">
@@ -249,3 +291,4 @@ diff -Naur bmcweb_bkp/static/redfish/v1/schema/AMIWebSession_v1.xml bmcweb_orgg/
 +    </Schema>
 +  </edmx:DataServices>
 +</edmx:Edmx>
+
