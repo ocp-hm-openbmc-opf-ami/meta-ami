@@ -2,6 +2,9 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 EXTRA_OEMESON += "-Dredfish-dump-log=enabled"
 
+SRCREV = "188cb6294105a045a445619415d01843de8c3732"
+
+
 SRC_URI += "file://0001-managers-add-factory-restore.patch \
 	    file://0002-virtual-media-nfs-support.patch \
 	    file://0003-Add_KVM_VM_status_in_user_session_info.patch \
