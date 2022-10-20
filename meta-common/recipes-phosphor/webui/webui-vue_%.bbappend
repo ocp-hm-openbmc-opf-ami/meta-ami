@@ -27,10 +27,14 @@ SRC_URI += " \
     file://0018-Ldap-feature-enabled-in-webui.patch \
     file://0019-Web-UI-not-showing-active-sessions.patch \
     file://0020-Time-zone-configuration-support-Implementation.patch \
+    file://0021-KVM-master-session-check-from-WEBUI.patch \
+    file://0022-description-for-complexity-and-password-history.patch \
+    file://0023-WEB-UI-Customization.patch \
+    file://favicon.ico \
     "
-
 do_compile:prepend() {
   cp -vf ${S}/.env.intel ${S}/.env
   cp -vf ${WORKDIR}/login-company-logo.svg ${S}/src/assets/images
   cp -vf ${WORKDIR}/logo-header.svg ${S}/src/assets/images
+  cp -vf ${WORKDIR}/favicon.ico ${S}/public
 }
