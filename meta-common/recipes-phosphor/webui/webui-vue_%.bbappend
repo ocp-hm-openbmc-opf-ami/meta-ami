@@ -31,6 +31,7 @@ SRC_URI += " \
     file://0022-description-for-complexity-and-password-history.patch \
     file://0023-WEB-UI-Customization.patch \
     file://favicon.ico \
+    file://0024-Time-zone-configuration-not-working-as-expected.patch \
     "
 do_compile:prepend() {
   cp -vf ${S}/.env.intel ${S}/.env
