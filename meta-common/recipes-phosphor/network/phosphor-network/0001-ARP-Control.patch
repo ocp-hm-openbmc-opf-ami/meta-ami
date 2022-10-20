@@ -1,38 +1,9 @@
-From 645b77cb1ce66a8f8ff42ec37f1b0c3151d58701 Mon Sep 17 00:00:00 2001
-From: dhineskumare <dinesh1994>
-Date: Thu, 4 Aug 2022 15:23:33 +0530
-Subject: [PATCH 53/53] ARP GARP Support Network 002
-
----
- meson.build                                |  11 +
- src/ethernet_interface.cpp                 | 205 +++++++++++-
- src/ethernet_interface.hpp                 |  60 ++++
- src/garp_control.cpp                       | 365 +++++++++++++++++++++
- src/garp_control.hpp                       | 220 +++++++++++++
- src/garp_control_main.cpp                  | 118 +++++++
- src/meson.build                            |  10 +
- src/network_config.cpp                     |  12 +
- src/network_config.hpp                     |   1 +
- src/network_manager.cpp                    |  76 +++++
- src/network_manager.hpp                    |  13 +
- src/network_manager_main.cpp               |   1 +
- src/util.hpp                               |   3 +
- xyz.openbmc_project.GARPControl.service.in |   9 +
- 14 files changed, 1103 insertions(+), 1 deletion(-)
- create mode 100644 src/garp_control.cpp
- create mode 100644 src/garp_control.hpp
- create mode 100644 src/garp_control_main.cpp
- create mode 100644 xyz.openbmc_project.GARPControl.service.in
-
-diff --git a/meson.build b/meson.build
-index f227b1a..814ae4e 100644
---- a/meson.build
-+++ b/meson.build
-@@ -77,6 +77,17 @@ configure_file(
-   install_dir: dependency('systemd').get_variable(
+--- /dev/null
++++ b/meson.build	2022-10-20 15:34:59.634932388 +0530
+@@ -82,6 +82,18 @@
      pkgconfig: 'systemdsystemunitdir'))
  
-+configure_file(
+ configure_file(
 +  input: 'xyz.openbmc_project.GARPControl.service.in',
 +  output: 'xyz.openbmc_project.GARPControl.service',
 +  configuration: {
@@ -43,20 +14,22 @@ index f227b1a..814ae4e 100644
 +  install_dir: dependency('systemd').get_variable(
 +    pkgconfig: 'systemdsystemunitdir'))
 +
- configure_file(
++
++configure_file(
    input: 'xyz.openbmc_project.Network.conf.in',
    output: 'xyz.openbmc_project.Network.conf',
---- a/src/ethernet_interface.cpp	2022-08-04 16:24:12.548365353 +0530
-+++ b/src/ethernet_interface.cpp	2022-08-04 18:20:19.000762796 +0530
+   configuration: {'DEFAULT_BUSNAME': default_busname},
+--- /dev/null
++++ b/src/ethernet_interface.cpp	2022-10-20 15:34:59.642932492 +0530
 @@ -2,7 +2,6 @@
  
  #include "ethernet_interface.hpp"
  
 -#include "config_parser.hpp"
+ #include "ipaddress.hpp"
  #include "neighbor.hpp"
  #include "network_manager.hpp"
- #include "vlan_interface.hpp"
-@@ -34,6 +33,7 @@
+@@ -38,6 +37,7 @@
  namespace network
  {
  
@@ -64,7 +37,7 @@ index f227b1a..814ae4e 100644
  using namespace phosphor::logging;
  using namespace sdbusplus::xyz::openbmc_project::Common::Error;
  using NotAllowed = sdbusplus::xyz::openbmc_project::Common::Error::NotAllowed;
-@@ -45,6 +45,12 @@
+@@ -49,6 +49,12 @@
  constexpr auto RESOLVED_SERVICE_PATH = "/org/freedesktop/resolve1/link/";
  constexpr auto METHOD_GET = "Get";
  
@@ -77,19 +50,19 @@ index f227b1a..814ae4e 100644
  static constexpr const char* networkChannelCfgFile =
      "/var/channel_intf_data.json";
  static constexpr const char* defaultChannelPriv = "priv-admin";
-@@ -122,6 +128,7 @@
+@@ -123,7 +129,7 @@
      EthernetInterfaceIntf::speed(std::get<0>(ifInfo));
  #endif
      getChannelPrivilege(intfName);
+-
 +    this->loadARPControl();
- 
      // Emit deferred signal.
      if (emitSignal)
-@@ -1412,5 +1419,200 @@
+     {
+@@ -1326,5 +1332,199 @@
      return ChannelAccessIntf::maxPrivilege(std::move(priv));
  }
  
-+
 +
 +/** @brief load the ARP Control Configurations.
 + */
@@ -107,7 +80,7 @@ index f227b1a..814ae4e 100644
 +    ARPControlIface::gratuitousARPInterval(this->getGratuitousARPInterval(parser));
 +
 +    auto cmd = ((!arpEnable)?arpResponseDisable:arpResponseEnable) + sysctlConfigPrefix +
-+		    interfaceName() + sysctlConfigSurffix;
++                    interfaceName() + sysctlConfigSurffix;
 +
 +    this->sysctlConfig(cmd);
 +}
@@ -127,7 +100,7 @@ index f227b1a..814ae4e 100644
 +    val = ARPControlIface::arpResponse(value);
 +    writeConfiguration();
 +    auto cmd = ((!val)?arpResponseDisable:arpResponseEnable) + sysctlConfigPrefix +
-+		    interfaceName() + sysctlConfigSurffix;
++                    interfaceName() + sysctlConfigSurffix;
 +
 +    this->sysctlConfig(cmd);
 +
@@ -207,7 +180,7 @@ index f227b1a..814ae4e 100644
 + */
 +bool EthernetInterface::getARPResponse(config::Parser& parser)
 +{
-+    config::ValueList values;
++    config::ValueListstr values;
 +    auto rc = config::ReturnCode::SUCCESS;
 +
 +    std::tie(rc, values) = parser.getValues("ARP_Response", "Enabled");
@@ -219,14 +192,13 @@ index f227b1a..814ae4e 100644
 +
 +    return false;
 +}
-+
 +/** @brief retrive the getGratuitousARP status from ARP Control conf file.
 + *  @param[in] parser - config parser object.
 + *  @return status of getGratuitousARP
 + */
 +bool EthernetInterface::getGratuitousARP(config::Parser& parser)
 +{
-+    config::ValueList values;
++    config::ValueListstr values;
 +    auto rc = config::ReturnCode::SUCCESS;
 +
 +    std::tie(rc, values) = parser.getValues("GARP", "Enabled");
@@ -245,14 +217,14 @@ index f227b1a..814ae4e 100644
 + */
 +uint64_t EthernetInterface::getGratuitousARPInterval(config::Parser& parser)
 +{
-+    config::ValueList values;
++    config::ValueListstr values;
 +    auto rc = config::ReturnCode::SUCCESS;
 +    auto interval = 0;
 +
 +    std::tie(rc, values) = parser.getValues("GARP", "Interval");
 +    if (rc == config::ReturnCode::SUCCESS && !values.empty())
 +    {
-+	std::stringstream garpInterval(values[0]);
++        std::stringstream garpInterval(values[0]);
 +        garpInterval>>interval;
 +        return interval;
 +    }
@@ -284,31 +256,32 @@ index f227b1a..814ae4e 100644
 +    return ((outConfig.empty())?1:0);
 +}
 +
++
  } // namespace network
  } // namespace phosphor
---- a/src/ethernet_interface.hpp	2022-08-05 13:02:29.094594297 +0530
-+++ b/src/ethernet_interface.hpp	2022-08-05 13:08:23.555300380 +0530
-@@ -2,9 +2,11 @@
- 
+--- /dev/null
++++ b/src/ethernet_interface.hpp	2022-10-20 15:34:59.642932492 +0530
+@@ -1,8 +1,11 @@
+ #pragma once
  #include "types.hpp"
- #include "util.hpp"
++#include "util.hpp"
 +#include "config_parser.hpp"
  #include "xyz/openbmc_project/Channel/ChannelAccess/server.hpp"
  #include "xyz/openbmc_project/Network/IP/Create/server.hpp"
  #include "xyz/openbmc_project/Network/Neighbor/CreateStatic/server.hpp"
 +#include <xyz/openbmc_project/Network/ARPControl/server.hpp>
  
- #include <filesystem>
+ #include <map>
  #include <nlohmann/json.hpp>
-@@ -22,6 +24,7 @@
+@@ -21,6 +24,7 @@
  {
  
- using Ifaces = sdbusplus::server::object::object<
+ using Ifaces = sdbusplus::server::object_t<
 +    sdbusplus::xyz::openbmc_project::Network::server::ARPControl,
      sdbusplus::xyz::openbmc_project::Network::server::EthernetInterface,
      sdbusplus::xyz::openbmc_project::Network::server::MACAddress,
      sdbusplus::xyz::openbmc_project::Network::IP::server::Create,
-@@ -37,6 +40,8 @@
+@@ -36,6 +40,8 @@
      sdbusplus::xyz::openbmc_project::Network::server::MACAddress;
  using ChannelAccessIntf =
      sdbusplus::xyz::openbmc_project::Channel::server::ChannelAccess;
@@ -317,7 +290,7 @@ index f227b1a..814ae4e 100644
  
  using ServerList = std::vector<std::string>;
  using ObjectPath = sdbusplus::message::object_path;
-@@ -245,6 +250,23 @@
+@@ -238,6 +244,23 @@
       *  @param[in] gateway - default v6 gateway of the interface.
       */
      std::string defaultGateway6(std::string gateway) override;
@@ -339,9 +312,9 @@ index f227b1a..814ae4e 100644
 +     */
 +    uint64_t gratuitousARPInterval(uint64_t interval) override;
  
-     using EthernetInterfaceIntf::dhcpEnabled;
      /** @brief sets the channel maxium privilege.
-@@ -260,6 +282,9 @@
+      *  @param[in] value - Channel privilege which needs to be set on the
+@@ -252,6 +275,9 @@
      using EthernetInterfaceIntf::mtu;
      using EthernetInterfaceIntf::nicEnabled;
      using MacAddressIntf::macAddress;
@@ -351,11 +324,11 @@ index f227b1a..814ae4e 100644
  
      using EthernetInterfaceIntf::defaultGateway;
      using EthernetInterfaceIntf::defaultGateway6;
-@@ -398,6 +423,37 @@
+@@ -388,6 +414,38 @@
       */
      int writeJsonFile(const std::string& configFile,
                        const nlohmann::json& jsonData);
-+        /** @brief load the ARP Control Configurations.
++     /** @brief load the ARP Control Configurations.
 +     */
 +    void loadARPControl();
 +
@@ -386,14 +359,249 @@ index f227b1a..814ae4e 100644
 +     *  @return status of the shell command execution
 +     */
 +    bool sysctlConfig(const std::string& cmd);
++
  };
  
  } // namespace network
-diff --git a/src/garp_control.cpp b/src/garp_control.cpp
-new file mode 100644
-index 0000000..4a512ec
 --- /dev/null
-+++ b/src/garp_control.cpp
++++ b/src/meson.build	2022-10-20 15:34:59.642932492 +0530
+@@ -2,6 +2,19 @@
+ 
+ src_includes = include_directories('.')
+ 
++executable(
++  'phosphor-garpcontrol',
++  'garp_control_main.cpp',
++  'config_parser.cpp',
++  'garp_control.cpp',
++  implicit_include_directories: false,
++  include_directories: src_includes,
++  dependencies: [
++    dependency('stdplus'),
++  ],
++  install: true,
++  install_dir: get_option('bindir'))
++
+ fmt_dep = dependency('fmt', required: false)
+ if not fmt_dep.found()
+   fmt_opts = import('cmake').subproject_options()
+--- /dev/null
++++ b/src/network_config.cpp	2022-10-20 15:34:59.642932492 +0530
+@@ -3,6 +3,7 @@
+ #include "network_config.hpp"
+ 
+ #include "config_parser.hpp"
++#include <fstream>
+ 
+ namespace phosphor
+ {
+@@ -45,6 +46,18 @@
+         "true");
+     config.writeFile(filename);
+ }
++void writeARPControlDefault(const std::string& filename)
++{
++    std::ofstream filestream;
++
++    filestream.open(filename);
++    filestream << "[ARP_Response]\nEnabled=true"
++                "\n[GARP]\nEnable=false\n"
++                "Interval=2000\n";
++    filestream.close();
++}
++
++
+ } // namespace bmc
+ 
+ } // namespace network
+--- /dev/null
++++ b/src/network_config.hpp	2022-10-20 15:34:59.642932492 +0530
+@@ -10,6 +10,7 @@
+ {
+ void writeDHCPDefault(const std::filesystem::path& filename,
+                       std::string_view interface);
++void writeARPControlDefault(const std::string& filename);
+ }
+ 
+ } // namespace network
+--- /dev/null
++++ b/src/network_manager.cpp	2022-10-20 15:34:59.642932492 +0530
+@@ -25,6 +25,7 @@
+ constexpr char SYSTEMD_PATH[] = "/org/freedesktop/systemd1";
+ constexpr char SYSTEMD_INTERFACE[] = "org.freedesktop.systemd1.Manager";
+ constexpr auto FirstBootFile = "/var/lib/network/firstBoot_";
++constexpr char ARPCONTROL_CONF_DIR[] = "/etc/arpcontrol";
+ 
+ constexpr char NETWORKD_BUSNAME[] = "org.freedesktop.network1";
+ constexpr char NETWORKD_PATH[] = "/org/freedesktop/network1";
+@@ -188,6 +189,63 @@
+ 
+     return isCreated;
+ }
++bool Manager::createDefaultARPControlFiles(bool force)
++{
++    auto isCreated = false;
++    try
++    {
++        // Directory would have created before with
++        // setConfDir function.
++        if (force)
++        {
++            // Factory Reset case
++            // we need to forcefully write the files
++            // so delete the existing ones.
++            if (fs::is_directory(arpConfDir))
++            {
++                for (const auto& file : fs::directory_iterator(arpConfDir))
++                {
++                    fs::remove(file.path());
++                }
++            }
++        }
++
++        auto interfaceStrList = getInterfaces();
++        for (const auto& interface : interfaceStrList)
++        {
++            // if the interface has '.' in the name, it means that this is a
++            // VLAN - don't create the network file.
++            if (interface.find(".") != std::string::npos)
++            {
++                continue;
++            }
++
++            auto fileName = phosphor::network::arpPrefix +
++                                   interface + phosphor::network::arpSurffix;
++
++            fs::path filePath = arpConfDir;
++            filePath /= fileName;
++
++            // create the interface specific network file
++            // if not exist or we forcefully wants to write
++            // the network file.
++
++            if (force || !fs::is_regular_file(filePath.string()))
++            {
++                bmc::writeARPControlDefault(filePath.string());
++                log<level::INFO>("Created the default ARP Control file.",
++                                 entry("INTERFACE=%s", interface.c_str()));
++                isCreated = true;
++            }
++        }
++    }
++    catch (std::exception& e)
++    {
++        log<level::ERR>("Unable to create the default ARP Control file");
++    }
++    return isCreated;
++}
++
+ 
+ void Manager::setConfDir(const fs::path& dir)
+ {
+@@ -202,6 +260,20 @@
+             elog<InternalFailure>();
+         }
+     }
++    fs::path arpDir(ARPCONTROL_CONF_DIR);
++    arpConfDir = arpDir;
++
++    if (!fs::exists(arpConfDir))
++    {
++        if (!fs::create_directories(arpConfDir))
++        {
++            log<level::ERR>("Unable to create the arpcontrol conf dir",
++                            entry("DIR=%s", arpConfDir.c_str()));
++            elog<InternalFailure>();
++        }
++    }
++
++
+ }
+ 
+ void Manager::createInterfaces()
+@@ -298,6 +370,12 @@
+     }
+     createDefaultNetworkFiles();
+     log<level::INFO>("Network Factory Reset queued.");
++    if (!createDefaultARPControlFiles(true))
++    {
++        log<level::ERR>("Network ARP Control Factory Reset failed.");
++        return;
++    }
++
+ }
+ 
+ // Need to merge the below function with the code which writes the
+--- /dev/null
++++ b/src/network_manager.hpp	2022-10-20 15:34:59.642932492 +0530
+@@ -85,6 +85,14 @@
+         return confDir;
+     }
+ 
++     /** @brief gets the arp control conf directory.
++     */
++    fs::path getARPConfDir()
++    {
++        return arpConfDir;
++    }
++
++
+     /** @brief gets the system conf object.
+      *
+      */
+@@ -106,6 +114,7 @@
+      */
+     bool createDefaultNetworkFiles();
+ 
++    bool createDefaultARPControlFiles(bool force);
+     /** @brief This function gets the MAC address from the VPD and
+      *  sets it on the corresponding ethernet interface during first
+      *  Boot, once it sets the MAC from VPD, it creates a file named
+@@ -193,6 +202,8 @@
+ 
+     /** @brief Network Configuration directory. */
+     fs::path confDir;
++    /** @brief ARP Control Configuration directory. */
++    fs::path arpConfDir;
+ 
+     /** @brief The routing table */
+     route::Table routeTable;
+--- /dev/null
++++ b/src/network_manager_main.cpp	2022-10-20 15:34:59.642932492 +0530
+@@ -320,6 +320,7 @@
+ 
+ int main(int /*argc*/, char** /*argv*/)
+ {
++    phosphor::network::manager->createDefaultARPControlFiles(false);
+     try
+     {
+         return phosphor::network::main();
+--- /dev/null
++++ b/src/util.hpp	2022-10-20 15:34:59.642932492 +0530
+@@ -27,6 +27,9 @@
+ constexpr auto IPV4_MIN_PREFIX_LENGTH = 1;
+ constexpr auto IPV4_MAX_PREFIX_LENGTH = 32;
+ constexpr auto IPV6_MAX_PREFIX_LENGTH = 128;
++constexpr auto arpPrefix = "00-bmc-arpcontrol-";
++constexpr auto arpSurffix = ".conf";
++
+ 
+ namespace mac_address
+ {
+--- /dev/null
++++ b/xyz.openbmc_project.GARPControl.service.in
+@@ -0,0 +1,9 @@
++[Unit]
++Description=Phosphor GARP Control
++After=systemd-networkd.service xyz.openbmc_project.Network.service 
++[Service]
++ExecStart=/usr/bin/env phosphor-garpcontrol
++SyslogIdentifier=phosphor-garpcontrol
++
++[Install]
++WantedBy=@SYSTEMD_TARGET@
+--- /dev/null
++++ b/src/garp_control.cpp	2022-10-20 16:02:31.966869088 +0530
 @@ -0,0 +1,365 @@
 +#include "config.h"
 +
@@ -760,11 +968,8 @@ index 0000000..4a512ec
 +    } /* namespace garpControl */
 +
 +} /* namespace network */
-diff --git a/src/garp_control.hpp b/src/garp_control.hpp
-new file mode 100644
-index 0000000..72455a8
 --- /dev/null
-+++ b/src/garp_control.hpp
++++ b/src/garp_control.hpp	2022-10-20 15:57:42.875305270 +0530
 @@ -0,0 +1,220 @@
 +#pragma once
 +
@@ -986,11 +1191,8 @@ index 0000000..72455a8
 +
 +} /* namespace network */
 +
-diff --git a/src/garp_control_main.cpp b/src/garp_control_main.cpp
-new file mode 100644
-index 0000000..afe68bf
 --- /dev/null
-+++ b/src/garp_control_main.cpp
++++ b/src/garp_control_main.cpp	2022-10-20 15:58:02.383542570 +0530
 @@ -0,0 +1,118 @@
 +#include "config.h"
 +#include "config_parser.hpp"
@@ -1110,249 +1312,113 @@ index 0000000..afe68bf
 +
 +    return 0;
 +}
-diff --git a/src/meson.build b/src/meson.build
-index 08decbd..58c0654 100644
---- a/src/meson.build
-+++ b/src/meson.build
-@@ -2,6 +2,16 @@ phosphor_logging_dep = dependency('phosphor-logging')
- 
- src_includes = include_directories('.')
- 
-+executable(
-+  'phosphor-garpcontrol',
-+  'garp_control_main.cpp',
-+  'config_parser.cpp',
-+  'garp_control.cpp',
-+  implicit_include_directories: false,
-+  include_directories: src_includes,
-+  install: true,
-+  install_dir: get_option('bindir'))
-+
- fmt_dep = dependency('fmt', required: false)
- if not fmt_dep.found()
-   fmt_opts = import('cmake').subproject_options()
-diff --git a/src/network_config.cpp b/src/network_config.cpp
-index a2620a4..d4ebaf2 100644
---- a/src/network_config.cpp
-+++ b/src/network_config.cpp
-@@ -45,6 +45,18 @@ void writeDHCPDefault(const std::string& filename, const std::string& interface)
- 
-     filestream.close();
- }
-+
-+void writeARPControlDefault(const std::string& filename)
-+{
-+    std::ofstream filestream;
-+
-+    filestream.open(filename);
-+    filestream << "[ARP_Response]\nEnabled=true"
-+                "\n[GARP]\nEnable=false\n"
-+                "Interval=2000\n";
-+    filestream.close();
-+}
-+
- } // namespace bmc
- 
- } // namespace network
-diff --git a/src/network_config.hpp b/src/network_config.hpp
-index 7260ca2..35fcafc 100644
---- a/src/network_config.hpp
-+++ b/src/network_config.hpp
-@@ -9,6 +9,7 @@ namespace bmc
- {
- void writeDHCPDefault(const std::string& filename,
-                       const std::string& interface);
-+void writeARPControlDefault(const std::string& filename);
- }
- 
- } // namespace network
-diff --git a/src/network_manager.cpp b/src/network_manager.cpp
-index 6e7deeb..1246bf2 100644
---- a/src/network_manager.cpp
-+++ b/src/network_manager.cpp
-@@ -25,6 +25,7 @@ constexpr char SYSTEMD_BUSNAME[] = "org.freedesktop.systemd1";
- constexpr char SYSTEMD_PATH[] = "/org/freedesktop/systemd1";
- constexpr char SYSTEMD_INTERFACE[] = "org.freedesktop.systemd1.Manager";
- constexpr auto FirstBootFile = "/var/lib/network/firstBoot_";
-+constexpr char ARPCONTROL_CONF_DIR[] = "/etc/arpcontrol";
- 
- constexpr char NETWORKD_BUSNAME[] = "org.freedesktop.network1";
- constexpr char NETWORKD_PATH[] = "/org/freedesktop/network1";
-@@ -108,6 +109,63 @@ bool Manager::createDefaultNetworkFiles(bool force)
-     return isCreated;
- }
- 
-+bool Manager::createDefaultARPControlFiles(bool force)
-+{
-+    auto isCreated = false;
-+    try
-+    {
-+        // Directory would have created before with
-+        // setConfDir function.
-+        if (force)
-+        {
-+            // Factory Reset case
-+            // we need to forcefully write the files
-+            // so delete the existing ones.
-+            if (fs::is_directory(arpConfDir))
-+            {
-+                for (const auto& file : fs::directory_iterator(arpConfDir))
-+                {
-+                    fs::remove(file.path());
-+                }
-+            }
-+        }
-+
-+        auto interfaceStrList = getInterfaces();
-+        for (const auto& interface : interfaceStrList)
-+        {
-+            // if the interface has '.' in the name, it means that this is a
-+            // VLAN - don't create the network file.
-+            if (interface.find(".") != std::string::npos)
-+            {
-+                continue;
-+            }
-+
-+            auto fileName = phosphor::network::arpPrefix +
-+                                   interface + phosphor::network::arpSurffix;
-+
-+            fs::path filePath = arpConfDir;
-+            filePath /= fileName;
-+
-+            // create the interface specific network file
-+            // if not exist or we forcefully wants to write
-+            // the network file.
-+
-+            if (force || !fs::is_regular_file(filePath.string()))
-+            {
-+                bmc::writeARPControlDefault(filePath.string());
-+                log<level::INFO>("Created the default ARP Control file.",
-+                                 entry("INTERFACE=%s", interface.c_str()));
-+                isCreated = true;
-+            }
-+        }
-+    }
-+    catch (std::exception& e)
-+    {
-+        log<level::ERR>("Unable to create the default ARP Control file");
-+    }
-+    return isCreated;
-+}
-+
- void Manager::setConfDir(const fs::path& dir)
- {
-     confDir = dir;
-@@ -121,6 +179,19 @@ void Manager::setConfDir(const fs::path& dir)
-             elog<InternalFailure>();
-         }
-     }
-+    fs::path arpDir(ARPCONTROL_CONF_DIR);
-+    arpConfDir = arpDir;
-+
-+    if (!fs::exists(arpConfDir))
-+    {
-+        if (!fs::create_directories(arpConfDir))
-+        {
-+            log<level::ERR>("Unable to create the arpcontrol conf dir",
-+                            entry("DIR=%s", arpConfDir.c_str()));
-+            elog<InternalFailure>();
-+        }
-+    }
-+
- }
- 
- void Manager::createInterfaces()
-@@ -216,6 +287,11 @@ void Manager::reset()
-         return;
-         // TODO: openbmc/openbmc#1721 - Log ResetFailed error here.
-     }
-+     if (!createDefaultARPControlFiles(true))
-+    {
-+        log<level::ERR>("Network ARP Control Factory Reset failed.");
-+        return;
-+    }
- 
-     log<level::INFO>("Network Factory Reset done.");
- }
-diff --git a/src/network_manager.hpp b/src/network_manager.hpp
-index 7ca9939..081e79b 100644
---- a/src/network_manager.hpp
-+++ b/src/network_manager.hpp
-@@ -85,6 +85,14 @@ class Manager : public details::VLANCreateIface
-         return confDir;
-     }
- 
-+    /** @brief gets the arp control conf directory.
-+     */
-+    fs::path getARPConfDir()
-+    {
-+        return arpConfDir;
-+    }
-+
-+
-     /** @brief gets the system conf object.
-      *
-      */
-@@ -110,6 +118,8 @@ class Manager : public details::VLANCreateIface
-      */
-     bool createDefaultNetworkFiles(bool force);
- 
-+    bool createDefaultARPControlFiles(bool force);
-+
-     /** @brief This function gets the MAC address from the VPD and
-      *  sets it on the corresponding ethernet interface during first
-      *  Boot, once it sets the MAC from VPD, it creates a file named
-@@ -193,6 +203,9 @@ class Manager : public details::VLANCreateIface
-     /** @brief Network Configuration directory. */
-     fs::path confDir;
- 
-+    /** @brief ARP Control Configuration directory. */
-+    fs::path arpConfDir;
-+
-     /** @brief The routing table */
-     route::Table routeTable;
- 
-diff --git a/src/network_manager_main.cpp b/src/network_manager_main.cpp
-index 802b7d6..240144e 100644
---- a/src/network_manager_main.cpp
-+++ b/src/network_manager_main.cpp
-@@ -315,6 +315,7 @@ int main(int /*argc*/, char** /*argv*/)
-         phosphor::network::manager->reloadConfigs();
-     }
- 
-+    phosphor::network::manager->createDefaultARPControlFiles(false);
-     // RtnetLink socket
-     phosphor::Descriptor smartSock;
-     createNetLinkSocket(smartSock);
-diff --git a/src/util.hpp b/src/util.hpp
-index c463ce0..bcf6bd0 100644
---- a/src/util.hpp
-+++ b/src/util.hpp
-@@ -28,6 +28,9 @@ constexpr auto IPV4_MAX_PREFIX_LENGTH = 32;
- constexpr auto IPV6_MAX_PREFIX_LENGTH = 128;
- constexpr auto IPV4_PREFIX = "169.254";
- constexpr auto IPV6_PREFIX = "fe80";
-+constexpr auto arpPrefix = "00-bmc-arpcontrol-";
-+constexpr auto arpSurffix = ".conf";
-+
- 
- namespace mac_address
- {
-diff --git a/xyz.openbmc_project.GARPControl.service.in b/xyz.openbmc_project.GARPControl.service.in
-new file mode 100644
-index 0000000..43582e4
 --- /dev/null
-+++ b/xyz.openbmc_project.GARPControl.service.in
-@@ -0,0 +1,9 @@
-+[Unit]
-+Description=Phosphor GARP Control
-+After=systemd-networkd.service xyz.openbmc_project.Network.service 
-+[Service]
-+ExecStart=/usr/bin/env phosphor-garpcontrol
-+SyslogIdentifier=phosphor-garpcontrol
++++ b/src/config_parser.cpp	2022-10-20 16:52:40.566038101 +0530
+@@ -74,7 +74,48 @@
+     }
+     return nullptr;
+ }
++std::tuple<ReturnCode, KeyValueMapstr>
++    Parser::getSectionstr(const std::string& section)
++{
++    auto it = sections.find(section);
++    if (it == sections.end())
++    {
++        KeyValueMapstr keyValues;
++        return std::make_tuple(ReturnCode::SECTION_NOT_FOUND,
++                               std::move(keyValues));
++    }
 +
-+[Install]
-+WantedBy=@SYSTEMD_TARGET@
--- 
-2.25.1
-
++    return std::make_tuple(ReturnCode::SUCCESS, it->second);
++}
+ 
++
++std::tuple<ReturnCode, ValueListstr> Parser::getValues(const std::string& section,
++                                                    const std::string& key)
++{
++    ValueListstr values;
++    KeyValueMapstr keyValues{};
++    auto rc = ReturnCode::SUCCESS;
++
++   std::tie(rc, keyValues) = getSectionstr(section);
++    if (rc != ReturnCode::SUCCESS)
++    {
++        return std::make_tuple(rc, std::move(values));
++    }
++
++   auto it = keyValues.find(key);
++    if (it == keyValues.end())
++    {
++        return std::make_tuple(ReturnCode::KEY_NOT_FOUND, std::move(values));
++    }
++
++   for (; it != keyValues.end() && key == it->first; it++)
++    {
++        values.push_back(it->second);
++    }
++
++   return std::make_tuple(ReturnCode::SUCCESS, std::move(values));
++}
++
+ std::vector<std::string> SectionMap::getValueStrings(std::string_view section,
+                                                      std::string_view key) const
+ {
+--- /dev/null
++++ b/src/config_parser.hpp	2022-10-20 16:51:32.521087430 +0530
+@@ -4,17 +4,21 @@
+ #include <functional>
+ #include <optional>
+ #include <ostream>
++#include <fstream>
+ #include <string>
+ #include <string_view>
+ #include <unordered_map>
+ #include <vector>
+-
++#include <map>
+ namespace phosphor
+ {
+ namespace network
+ {
+ namespace config
+ {
++using Sectionstr= std::string;
++using KeyValueMapstr = std::multimap<std::string, std::string>;
++using ValueListstr = std::vector<std::string>;
+ 
+ /** @brief Compare in (case insensitive) vs expected (sensitive) */
+ bool icaseeq(std::string_view in, std::string_view expected) noexcept;
+@@ -23,6 +27,13 @@
+ 
+ namespace fs = std::filesystem;
+ 
++enum class ReturnCode
++{
++    SUCCESS = 0x0,
++    SECTION_NOT_FOUND = 0x1,
++    KEY_NOT_FOUND = 0x2,
++};
++
+ fs::path pathForIntfConf(const fs::path& dir, std::string_view intf);
+ fs::path pathForIntfDev(const fs::path& dir, std::string_view intf);
+ 
+@@ -172,6 +183,9 @@
+     /** @brief Determine if there were warnings parsing the file
+      *  @return The number of parsing issues in the file
+      */
++    std::tuple<ReturnCode, ValueListstr> getValues(const std::string& section,
++                                                const std::string& key);
++
+     inline const std::vector<std::string>& getWarnings() const noexcept
+     {
+         return warnings;
+@@ -197,6 +211,9 @@
+   private:
+     fs::path filename;
+     std::vector<std::string> warnings;
++
++    std::tuple<ReturnCode, KeyValueMapstr> getSectionstr(const std::string& section);
++    std::unordered_map<Sectionstr, KeyValueMapstr> sections;
+ };
+ 
+ } // namespace config
