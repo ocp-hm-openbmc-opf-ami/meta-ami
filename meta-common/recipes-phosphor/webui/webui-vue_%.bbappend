@@ -32,6 +32,7 @@ SRC_URI += " \
     file://0023-WEB-UI-Customization.patch \
     file://favicon.ico \
     file://0024-Time-zone-configuration-not-working-as-expected.patch \
+    file://0025-SSL-Page-certificates-validity-time-mismatch.patch \
     "
 do_compile:prepend() {
   cp -vf ${S}/.env.intel ${S}/.env
