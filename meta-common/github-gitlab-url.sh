@@ -2,7 +2,7 @@
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.at-scale-debug.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.at-scale-debug.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-core/at-scale-debug/at-scale-debug_git.bb
 
-sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.libraries.libespi.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/common\/firmware.bmc.openbmc.libraries.libespi.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-core/libespi/libespi_git.bb
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.libraries.libespi.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.libraries.libespi.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-core/libespi/libespi_git.bb
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.mtd-util.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/common\/firmware.bmc.openbmc.applications.mtd-util.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-devtools/mtd-util/mtd-util.bb
 
@@ -32,13 +32,13 @@ sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.pldmd.
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.pmci-launcher.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.pmci-launcher.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/pmci/pmci-launcher.bb
 
-sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.provisioning-mode-manager.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.provisioning-mode-manager.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/prov-mode-mgr/prov-mode-mgr_git.bb
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.provisioning-mode-manager.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/common\/firmware.bmc.openbmc.applications.provisioning-mode-manager.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/prov-mode-mgr/prov-mode-mgr_git.bb
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.security-manager.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.security-manager.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/security-manager/security-manager_git.bb
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.settings-manager.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/common\/firmware.bmc.openbmc.applications.settings-manager.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/settings/settings_git.bb
 
-sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.special-mode-manager.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.special-mode-manager.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/special-mode-mgr/special-mode-mgr_git.bb
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.special-mode-manager.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/common\/firmware.bmc.openbmc.applications.special-mode-manager.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/special-mode-mgr/special-mode-mgr_git.bb
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.virtual-media.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/common\/firmware.bmc.openbmc.applications.virtual-media.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/virtual-media/virtual-media.bb
 
