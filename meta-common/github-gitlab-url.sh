@@ -96,3 +96,7 @@ sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.secure
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.sdsi.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.sdsi.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-intel/sdsi/sdsi_git.bb
 
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.libraries.spdmapplib.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.libraries.spdmapplib.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/pmci/spdmapplib.bb
+
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.spdmd.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.spdmd.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/pmci/spdmd.bb
+
