@@ -68,6 +68,8 @@ sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.bmc-as
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.crashdump.git;branch=egs;protocol=ssh/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.crashdump.git;branch=egs;protocol=ssh/g' openbmc-meta-intel/meta-restricted/recipes-core/crashdump/crashdump_git.bb
 
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.crashdump.git;branch=main;protocol=ssh/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.crashdump.git;branch=main;protocol=ssh/g' openbmc-meta-intel/meta-restricted/recipes-core/crashdump/crashdump_git.bb
+
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.host-memory.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.host-memory.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-core/host-memory/host-memory_git.bb
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.memory-error-collector.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.memory-error-collector.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-core/memory-error-collector/memory-error-collector.bb
