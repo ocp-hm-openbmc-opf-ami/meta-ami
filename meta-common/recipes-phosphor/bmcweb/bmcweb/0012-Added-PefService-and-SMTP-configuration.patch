@@ -1,0 +1,733 @@
+From 0ace503ad271e996ef2d3ca6037b85df3ceff686 Mon Sep 17 00:00:00 2001
+From: Pranoy Goru <gorumanip@ami.com>
+Date: Wed, 2 Nov 2022 11:04:27 +0530
+Subject: [PATCH] Added PefService and SMTP configuration
+
+---
+ redfish-core/include/redfish.hpp              |   3 +
+ redfish-core/lib/event_service.hpp            |  94 ++++-
+ redfish-core/lib/pef_service.hpp              | 347 ++++++++++++++++++
+ redfish-core/lib/service_root.hpp             |   2 +
+ static/redfish/v1/$metadata/index.xml         |   4 +
+ .../redfish/v1/schema/OemServiceRoot_v1.xml   |  19 +-
+ static/redfish/v1/schema/PefService_v1.xml    | 128 +++++++
+ 7 files changed, 595 insertions(+), 2 deletions(-)
+ create mode 100644 redfish-core/lib/pef_service.hpp
+ create mode 100644 static/redfish/v1/schema/PefService_v1.xml
+
+diff --git a/redfish-core/include/redfish.hpp b/redfish-core/include/redfish.hpp
+index 75b06169..c7d48a47 100644
+--- a/redfish-core/include/redfish.hpp
++++ b/redfish-core/include/redfish.hpp
+@@ -45,6 +45,7 @@
+ #include "../lib/node-manager/triggers.hpp"
+ #include "../lib/pcie.hpp"
+ #include "../lib/processor.hpp"
++#include "../lib/pef_service.hpp"
+ #include "../lib/redfish_sessions.hpp"
+ #include "../lib/redfish_v1.hpp"
+ #include "../lib/roles.hpp"
+@@ -284,6 +285,8 @@ class RedfishService
+         requestLicenseServiceRoutes(app);
+         requestRoutesMeterStateData(app);
+ 
++	requestRoutesPefService(app);
++
+         // Note, this must be the last route registered
+         requestRoutesRedfish(app);
+     }
+diff --git a/redfish-core/lib/event_service.hpp b/redfish-core/lib/event_service.hpp
+index 5bf83a88..86aa5be4 100644
+--- a/redfish-core/lib/event_service.hpp
++++ b/redfish-core/lib/event_service.hpp
+@@ -44,6 +44,76 @@ static constexpr const std::array<const char*, 1> supportedResourceTypes = {
+     "Task"};
+ #endif
+ 
++using mailStruct = std::tuple<bool, std::string, uint16_t, std::string>;
++
++/**
++ * @brief Retrieves SMTP configuration params
++ *
++ * @param[in] aResp  Shared pointer for generating response message.
++ *
++ * @return None.
++ */
++inline void getSmtpConfig(const std::shared_ptr<bmcweb::AsyncResp>& aResp)
++{
++    crow::connections::systemBus->async_method_call(
++        [aResp](const boost::system::error_code ec, const mailStruct& resp) {
++            if (ec)
++            {
++                BMCWEB_LOG_ERROR << "GetSMTPconfig: Can't get "
++                                    "alertMailIface ";
++                messages::internalError(aResp->res);
++                return;
++            }
++            const bool serviceEnabled = std::get<0>(resp);
++            const uint16_t port = std::get<2>(resp);
++            const std::string serverAddr = std::get<1>(resp);
++            const std::string fromAddr = std::get<3>(resp);
++
++            aResp->res.jsonValue["SMTP"] = {{"Authentication", "None"},
++                                            {"ConnectionProtocol", "None"},
++                                            {"FromAddress", fromAddr},
++                                            {"Port", port},
++                                            {"ServerAddress", serverAddr},
++                                            {"ServiceEnabled", serviceEnabled}};
++        },
++        "xyz.openbmc_project.mail", "/xyz/openbmc_project/mail/alert",
++        "xyz.openbmc_project.mail.alert", "GetSmtpConfig");
++}
++
++/**
++ * @brief set SMTP configuration properties.
++ *
++ * @param[in] aResp          Shared pointer for generating response message.
++ * @param[in] smtpServiceEnabled The SMTP service enable/disable flag from
++ * incoming request.
++ * @param[in] port               The SMTP port number from incoming request.
++ * @param[in] serverAddr         The SMTP server address from incoming
++ * request.
++ * @param[in] fromAddr           The SMTP 'from' email address of the outgoing
++ * email from incoming request.
++ *
++ * @return Integer error code.
++ */
++inline void setSmtpConfig(const std::shared_ptr<bmcweb::AsyncResp>& aResp,
++                          bool& smtpServiceEnabled, uint16_t& port,
++                          std::string& serverAddr, std::string& fromAddr)
++{
++    crow::connections::systemBus->async_method_call(
++        [aResp, smtpServiceEnabled, port, serverAddr,
++         fromAddr](const boost::system::error_code ec) {
++            if (ec)
++            {
++                BMCWEB_LOG_ERROR << "SetSMTPconfig: Can't get "
++                                    "alertMailIface ";
++                messages::internalError(aResp->res);
++                return;
++            }
++        },
++        "xyz.openbmc_project.mail", "/xyz/openbmc_project/mail/alert",
++        "xyz.openbmc_project.mail.alert", "SetSmtpConfig", smtpServiceEnabled,
++        serverAddr, port, fromAddr);
++}
++
+ inline void requestRoutesEventService(App& app)
+ {
+     BMCWEB_ROUTE(app, "/redfish/v1/EventService/")
+@@ -96,6 +166,8 @@ inline void requestRoutesEventService(App& app)
+ 
+         asyncResp->res.jsonValue["SSEFilterPropertiesSupported"] =
+             supportedSSEFilters;
++
++	getSmtpConfig(asyncResp);
+         });
+ 
+     BMCWEB_ROUTE(app, "/redfish/v1/EventService/")
+@@ -110,11 +182,13 @@ inline void requestRoutesEventService(App& app)
+         std::optional<bool> serviceEnabled;
+         std::optional<uint32_t> retryAttemps;
+         std::optional<uint32_t> retryInterval;
++	std::optional<nlohmann::json> smtpProps;
+ 
+         if (!json_util::readJsonPatch(
+                 req, asyncResp->res, "ServiceEnabled", serviceEnabled,
+                 "DeliveryRetryAttempts", retryAttemps,
+-                "DeliveryRetryIntervalSeconds", retryInterval))
++                "DeliveryRetryIntervalSeconds", retryInterval,
++		"SMTP", smtpProps))
+         {
+             return;
+         }
+@@ -158,6 +232,24 @@ inline void requestRoutesEventService(App& app)
+             }
+         }
+ 
++        if (smtpProps)
++        {
++            std::optional<bool> smtpServiceEnabled;
++            std::optional<uint16_t> port;
++            std::optional<std::string> serverAddr;
++            std::optional<std::string> fromAddr;
++
++            if (!json_util::readJson(
++                *smtpProps, asyncResp->res, "ServiceEnabled",
++                smtpServiceEnabled, "Port", port, "ServerAddress",
++                serverAddr, "FromAddress", fromAddr))
++            {
++                return;
++            }
++            setSmtpConfig(asyncResp, *smtpServiceEnabled, *port,
++                         *serverAddr, *fromAddr);
++        }
++
+         EventServiceManager::getInstance().setEventServiceConfig(
+             eventServiceConfig);
+         });
+diff --git a/redfish-core/lib/pef_service.hpp b/redfish-core/lib/pef_service.hpp
+new file mode 100644
+index 00000000..62744b2c
+--- /dev/null
++++ b/redfish-core/lib/pef_service.hpp
+@@ -0,0 +1,347 @@
++// Copyright (c) 2020 Intel Corporation
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//      http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#pragma once
++
++#include "dbus_utility.hpp"
++#include "event_service.hpp"
++
++#include <system_error>
++
++namespace redfish
++{
++static constexpr const char* pefAlertSensorNumberIface =
++    "xyz.openbmc_project.pef.alert.SensorNumber";
++static constexpr const char* pefConfIface =
++    "xyz.openbmc_project.pef.PEFConfInfo";
++
++using GetSubTreeType = std::vector<std::pair<
++        std::string,
++        std::vector<std::pair<std::string, std::vector<std::string>>>>>;
++
++inline void getFilterEnable(const std::shared_ptr<bmcweb::AsyncResp>& aResp)
++{
++    crow::connections::systemBus->async_method_call(
++        [aResp](const boost::system::error_code ec,
++                const GetSubTreeType& subtreeLocal) {
++            if (ec || subtreeLocal.empty())
++            {
++                BMCWEB_LOG_ERROR << "GetFilterEnable: Error";
++                messages::internalError(aResp->res);
++                return;
++            }
++            if (subtreeLocal[0].second.size() != 1)
++            {
++                // invalid mapper response, should never happen
++                BMCWEB_LOG_ERROR
++                    << "GetPefAlertSensorNumberIface: Mapper Error";
++                messages::internalError(aResp->res);
++                return;
++            }
++            const std::string& path = subtreeLocal[0].first;
++            const std::string& owner = subtreeLocal[0].second[0].first;
++
++            crow::connections::systemBus->async_method_call(
++                [path, owner, aResp](const boost::system::error_code ec2,
++                                     std::vector<uint8_t>& resp) {
++                    if (ec2)
++                    {
++                        BMCWEB_LOG_ERROR << "GetPefAlert: Can't get "
++                                            "pefAlertSensorNumberIface "
++                                         << path;
++                        messages::internalError(aResp->res);
++                        return;
++                    }
++                    const std::vector<uint8_t>* filterEnable = &resp;
++                    if (filterEnable == nullptr)
++                    {
++                        BMCWEB_LOG_ERROR << "Field Illegal FilterEnable";
++                        messages::internalError(aResp->res);
++                        return;
++                    }
++                    aResp->res.jsonValue["FilterEnable"] = *filterEnable;
++                },
++                owner, path, pefAlertSensorNumberIface, "GetFilterEnable");
++        },
++        "xyz.openbmc_project.ObjectMapper",
++        "/xyz/openbmc_project/object_mapper",
++        "xyz.openbmc_project.ObjectMapper", "GetSubTree", "/", 0,
++        std::array<const char*, 1>{pefAlertSensorNumberIface});
++}
++
++inline void setFilterEnable(const std::shared_ptr<bmcweb::AsyncResp>& aResp,
++                            std::vector<uint8_t>& filterEnable)
++{
++    crow::connections::systemBus->async_method_call(
++        [aResp, filterEnable](
++            const boost::system::error_code ec,
++            const GetSubTreeType& subtreeLocal) {
++            if (ec || subtreeLocal.empty())
++            {
++                BMCWEB_LOG_ERROR << "SetFilterEnable: Error";
++                messages::internalError(aResp->res);
++                return;
++            }
++            if (subtreeLocal[0].second.size() != 1)
++            {
++                // invalid mapper response, should never happen
++                BMCWEB_LOG_ERROR
++                    << "GetPefAlertSensorNumberIface: Mapper Error";
++                messages::internalError(aResp->res);
++                return;
++            }
++            const std::string& path = subtreeLocal[0].first;
++            const std::string& owner = subtreeLocal[0].second[0].first;
++
++            crow::connections::systemBus->async_method_call(
++                [aResp, filterEnable](const boost::system::error_code ec2) {
++                    if (ec2)
++                    {
++                        BMCWEB_LOG_ERROR
++                            << "Set Property SetFilterEnable: Set Error";
++                        messages::internalError(aResp->res);
++                        return;
++                    }
++                },
++                owner, path, pefAlertSensorNumberIface, "SetFilterEnable",
++                std::vector<uint8_t>{filterEnable});
++        },
++        "xyz.openbmc_project.ObjectMapper",
++        "/xyz/openbmc_project/object_mapper",
++        "xyz.openbmc_project.ObjectMapper", "GetSubTree", "/", 0,
++        std::array<const char*, 1>{pefAlertSensorNumberIface});
++}
++
++inline void getPefConfParam(const std::shared_ptr<bmcweb::AsyncResp>& aResp)
++{
++    crow::connections::systemBus->async_method_call(
++        [aResp](const boost::system::error_code ec,
++                const GetSubTreeType& subtreeLocal) {
++            if (ec || subtreeLocal.empty())
++            {
++                BMCWEB_LOG_ERROR << "GetPefConfParam: Error";
++                messages::internalError(aResp->res);
++                return;
++            }
++            if (subtreeLocal[0].second.size() != 1)
++            {
++                // invalid mapper response, should never happen
++                BMCWEB_LOG_ERROR << "pefConfIface: Mapper Error";
++                messages::internalError(aResp->res);
++                return;
++            }
++            const std::string& path = subtreeLocal[0].first;
++            const std::string& owner = subtreeLocal[0].second[0].first;
++
++            crow::connections::systemBus->async_method_call(
++                [path, owner, aResp](
++                    const boost::system::error_code ec2,
++                    const std::vector<
++                        std::pair<std::string, dbus::utility::DbusVariantType>>&
++                        propertiesList) {
++                    if (ec2)
++                    {
++                        BMCWEB_LOG_ERROR << "GetBootCount: Can't get "
++                                            "pefConfIface "
++                                         << path;
++                        messages::internalError(aResp->res);
++                        return;
++                    }
++
++                    for (const std::pair<std::string,
++                                         dbus::utility::DbusVariantType>&
++                             property : propertiesList)
++                    {
++                        if (property.first == "PEFActionGblControl")
++                        {
++                            const uint8_t* value =
++                                std::get_if<uint8_t>(&property.second);
++                            if (value != nullptr)
++                            {
++                                aResp->res.jsonValue["PEFActionGblControl"] =
++                                    *value;
++                            }
++                        }
++                        if (property.first == "Recipient")
++                        {
++                            const std::vector<std::string>* value =
++                                std::get_if<std::vector<std::string>>(
++                                    &property.second);
++                            if (value != nullptr)
++                            {
++                                aResp->res.jsonValue["Recipient"] = *value;
++                            }
++                        }
++                    }
++                },
++                owner, path, "org.freedesktop.DBus.Properties", "GetAll",
++                pefConfIface);
++        },
++        "xyz.openbmc_project.ObjectMapper",
++        "/xyz/openbmc_project/object_mapper",
++        "xyz.openbmc_project.ObjectMapper", "GetSubTree", "/", 0,
++        std::array<const char*, 1>{pefConfIface});
++}
++
++inline void setPefConfParam(const std::shared_ptr<bmcweb::AsyncResp>& aResp,
++                            const std::optional<uint8_t>& pefActionGblControl,
++                            const std::vector<std::string>& recipient)
++{
++    crow::connections::systemBus->async_method_call(
++        [aResp, pefActionGblControl,
++         recipient](const boost::system::error_code ec,
++                    const GetSubTreeType& subtreeLocal) {
++            if (ec || subtreeLocal.empty())
++            {
++                BMCWEB_LOG_ERROR << "SetPefConfParam: Error";
++                messages::internalError(aResp->res);
++                return;
++            }
++            if (subtreeLocal[0].second.size() != 1)
++            {
++                // invalid mapper response, should never happen
++                BMCWEB_LOG_ERROR << "SetPefConf: Mapper Error";
++                messages::internalError(aResp->res);
++                return;
++            }
++            const std::string& path = subtreeLocal[0].first;
++            const std::string& owner = subtreeLocal[0].second[0].first;
++
++            if (pefActionGblControl)
++            {
++                crow::connections::systemBus->async_method_call(
++                    [aResp,
++                     pefActionGblControl](const boost::system::error_code ec2) {
++                        if (ec2)
++                        {
++                            BMCWEB_LOG_ERROR
++                                << "SetPefActionGblControl: Set Error";
++                            messages::internalError(aResp->res);
++                            return;
++                        }
++                    },
++                    owner, path, "org.freedesktop.DBus.Properties", "Set",
++                    pefConfIface, "PEFActionGblControl",
++                    dbus::utility::DbusVariantType(*pefActionGblControl));
++            }
++            if (!recipient.empty())
++            {
++                crow::connections::systemBus->async_method_call(
++                    [aResp, recipient](const boost::system::error_code ec3) {
++                        if (ec3)
++                        {
++                            BMCWEB_LOG_ERROR << "SetPefConf: Set Error";
++                            messages::internalError(aResp->res);
++                            return;
++                        }
++                    },
++                    owner, path, "org.freedesktop.DBus.Properties", "Set",
++                    pefConfIface, "Recipient",
++                    dbus::utility::DbusVariantType{recipient});
++            }
++        },
++        "xyz.openbmc_project.ObjectMapper",
++        "/xyz/openbmc_project/object_mapper",
++        "xyz.openbmc_project.ObjectMapper", "GetSubTree", "/", 0,
++        std::array<const char*, 1>{pefConfIface});
++}
++
++inline void requestRoutesPefService(App& app)
++{
++    BMCWEB_ROUTE(app, "/redfish/v1/PefService/")
++        .privileges({{"Login"}, {"ConfigureComponents"}})
++        .methods(boost::beast::http::verb::get)(
++            [](const crow::Request&,
++               const std::shared_ptr<bmcweb::AsyncResp>& aResp) {
++                aResp->res.jsonValue = {
++                    {"@odata.type", "#PefService.v1_0_0.PefService"},
++                    {"@odata.id", "/redfish/v1/PefService"},
++                    {"Id", "Pef Service"},
++                    {"Name", "Pef Service"}};
++                aResp->res.jsonValue["Actions"]["#PefService.SendAlertMail"]
++                                    ["target"] =
++                    "/redfish/v1/PefService/Actions/"
++                    "PefService.SendAlertMail/";
++
++                getFilterEnable(aResp);
++                getPefConfParam(aResp);
++            });
++
++    BMCWEB_ROUTE(app, "/redfish/v1/PefService/")
++        .privileges({{"Login"}, {"ConfigureComponents"}})
++        .methods(boost::beast::http::verb::patch)(
++            [](const crow::Request& req,
++               const std::shared_ptr<bmcweb::AsyncResp>& aResp) {
++                std::optional<std::vector<uint8_t>> filterEnable;
++                std::optional<uint8_t> pefActionGblControl;
++                std::optional<std::vector<std::string>> recipient;
++
++                if (!json_util::readJsonPatch(req, aResp->res, "FilterEnable",
++                                         filterEnable, "PEFActionGblControl",
++                                         pefActionGblControl, "Recipient",
++                                         recipient))
++                {
++                    return;
++                }
++                if (filterEnable)
++                {
++                    setFilterEnable(aResp, *filterEnable);
++                }
++                if (pefActionGblControl || recipient)
++                {
++                    setPefConfParam(aResp, pefActionGblControl, *recipient);
++                }
++            });
++
++    BMCWEB_ROUTE(app,
++                 "/redfish/v1/PefService/Actions/PefService.SendAlertMail/")
++        .privileges({{"Login"}, {"ConfigureComponents"}})
++        .methods(boost::beast::http::verb::post)(
++            [](const crow::Request& req,
++               const std::shared_ptr<bmcweb::AsyncResp>& aResp) {
++                std::string recipient;
++                std::string subject;
++                std::string mailBuf;
++
++                if (!json_util::readJsonPatch(req, aResp->res, "Recipient",
++                                         recipient, "Subject", subject,
++                                         "MailContent", mailBuf))
++                {
++                    return;
++                }
++                if (recipient.empty())
++                {
++                    BMCWEB_LOG_ERROR << "SendMail: Empty recipent error";
++                    messages::internalError(aResp->res);
++                    return;
++                }
++
++                crow::connections::systemBus->async_method_call(
++                    [recipient, subject, mailBuf,
++                     aResp](const boost::system::error_code ec) {
++                        if (ec)
++                        {
++                            BMCWEB_LOG_ERROR << "SendMail: Can't get "
++                                                "alertMailIface ";
++                            messages::internalError(aResp->res);
++                            return;
++                        }
++                    },
++                    "xyz.openbmc_project.mail",
++                    "/xyz/openbmc_project/mail/alert",
++                    "xyz.openbmc_project.mail.alert", "SendMail", recipient,
++                    subject, mailBuf);
++            });
++}
++} // namespace redfish
+diff --git a/redfish-core/lib/service_root.hpp b/redfish-core/lib/service_root.hpp
+index 7767066a..3c69b500 100644
+--- a/redfish-core/lib/service_root.hpp
++++ b/redfish-core/lib/service_root.hpp
+@@ -84,6 +84,8 @@ inline void handleServiceRootGetImpl(
+         "#OemServiceRoot.v1_0_0.ServiceRoot";
+     asyncResp->res.jsonValue["Oem"]["OpenBmc"]["CupsService"] = {
+         {"@odata.id", "/redfish/v1/CupsService"}};
++    asyncResp->res.jsonValue["Oem"]["OpenBmc"]["PefService"] = {
++        {"@odata.id", "/redfish/v1/PefService"}};
+ 
+     nlohmann::json& protocolFeatures =
+         asyncResp->res.jsonValue["ProtocolFeaturesSupported"];
+diff --git a/static/redfish/v1/$metadata/index.xml b/static/redfish/v1/$metadata/index.xml
+index a0919ea1..a4d286bd 100644
+--- a/static/redfish/v1/$metadata/index.xml
++++ b/static/redfish/v1/$metadata/index.xml
+@@ -2722,6 +2722,10 @@
+         <edmx:Include Namespace="ProvisionDynamicFeature"/>
+         <edmx:Include Namespace="ProvisionDynamicFeature.v1_0_0"/>
+     </edmx:Reference>
++    <edmx:Reference Uri="/redfish/v1/schema/PefService_v1.xml">
++        <edmx:Include Namespace="PefService"/>
++        <edmx:Include Namespace="PefService.v1_0_0"/>
++    </edmx:Reference>
+     <edmx:Reference Uri="/redfish/v1/schema/OemLicense_v1.xml">
+         <edmx:Include Namespace="OemLicense"/>
+         <edmx:Include Namespace="OemLicense.v1_0_0"/>
+diff --git a/static/redfish/v1/schema/OemServiceRoot_v1.xml b/static/redfish/v1/schema/OemServiceRoot_v1.xml
+index 83dd491c..7ba38e1e 100644
+--- a/static/redfish/v1/schema/OemServiceRoot_v1.xml
++++ b/static/redfish/v1/schema/OemServiceRoot_v1.xml
+@@ -18,6 +18,10 @@
+   <edmx:Reference Uri="/redfish/v1/schema/CupsService_v1.xml">
+     <edmx:Include Namespace="CupsService"/>
+   </edmx:Reference>
++  <edmx:Reference Uri="/redfish/v1/schema/PefService_v1.xml">
++    <edmx:Include Namespace="PefService"/>
++  </edmx:Reference>
++
+ 
+   <edmx:DataServices>
+ 
+@@ -35,20 +39,33 @@
+           <Annotation Term="OData.LongDescription" String="This property shall contain a link to a Resource of type CupsService."/>
+           <Annotation Term="OData.AutoExpandReferences"/>
+         </NavigationProperty>
++        <NavigationProperty Name="PefService" Type="PefService.PefService" Nullable="false">
++          <Annotation Term="OData.Permissions" EnumMember="OData.Permission/Read"/>
++          <Annotation Term="OData.Description" String="The link to the Pef Service."/>
++          <Annotation Term="OData.LongDescription" String="This property shall contain a link to a Resource of type PefService."/>
++          <Annotation Term="OData.AutoExpandReferences"/>
++        </NavigationProperty>
+ 
+       <EntityContainer Name="ServiceContainer" Extends="ServiceRoot.v1_0_0.ServiceContainer">
+         <Singleton Name="CupsService" Type="CupsService.CupsService"/>
++	<Singleton Name="PefService" Type="PefService.PefService"/>
+       </EntityContainer>
+ 
+       <EntityType Name="ServiceRoot" BaseType="Resource.OemObject" Abstract="true">
+         <Annotation Term="OData.Description" String="OEM Extension for ServiceRoot"/>
+-        <Annotation Term="OData.LongDescription" String="OEM Extension for ServiceRoot to support CupsService."/>
++        <Annotation Term="OData.LongDescription" String="OEM Extension for ServiceRoot to support oem services."/>
+         <NavigationProperty Name="CupsService" Type="CupsService.CupsService" Nullable="false">
+           <Annotation Term="OData.Permissions" EnumMember="OData.Permission/Read"/>
+           <Annotation Term="OData.Description" String="The link to the Cups Service."/>
+           <Annotation Term="OData.LongDescription" String="This property shall contain a link to a Resource of type CupsService."/>
+           <Annotation Term="OData.AutoExpandReferences"/>
+         </NavigationProperty>
++        <NavigationProperty Name="PefService" Type="PefService.PefService" Nullable="false">
++          <Annotation Term="OData.Permissions" EnumMember="OData.Permission/Read"/>
++          <Annotation Term="OData.Description" String="The link to the Pef Service."/>
++          <Annotation Term="OData.LongDescription" String="This property shall contain a link to a Resource of type PefService."/>
++          <Annotation Term="OData.AutoExpandReferences"/>
++        </NavigationProperty>
+       </EntityType>
+     </Schema>
+ 
+diff --git a/static/redfish/v1/schema/PefService_v1.xml b/static/redfish/v1/schema/PefService_v1.xml
+new file mode 100644
+index 00000000..761c4022
+--- /dev/null
++++ b/static/redfish/v1/schema/PefService_v1.xml
+@@ -0,0 +1,128 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!---->
++<!--################################################################################       -->
++<!--# Redfish Schema:  PefService                                                         -->
++<!--#                                                                                      -->
++<!--################################################################################       -->
++<!---->
++<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" Version="4.0">
++
++  <edmx:Reference Uri="http://docs.oasis-open.org/odata/odata/v4.0/errata03/csd01/complete/vocabularies/Org.OData.Core.V1.xml">
++    <edmx:Include Namespace="Org.OData.Core.V1" Alias="OData"/>
++  </edmx:Reference>
++  <edmx:Reference Uri="http://docs.oasis-open.org/odata/odata/v4.0/errata03/csd01/complete/vocabularies/Org.OData.Capabilities.V1.xml">
++    <edmx:Include Namespace="Org.OData.Capabilities.V1" Alias="Capabilities"/>
++  </edmx:Reference>
++  <edmx:Reference Uri="http://docs.oasis-open.org/odata/odata/v4.0/errata03/csd01/complete/vocabularies/Org.OData.Measures.V1.xml">
++    <edmx:Include Namespace="Org.OData.Measures.V1" Alias="Measures"/>
++  </edmx:Reference>
++  <edmx:Reference Uri="http://redfish.dmtf.org/schemas/v1/Resource_v1.xml">
++    <edmx:Include Namespace="Resource"/>
++    <edmx:Include Namespace="Resource.v1_0_0"/>
++  </edmx:Reference>
++  <edmx:Reference Uri="http://redfish.dmtf.org/schemas/v1/RedfishExtensions_v1.xml">
++    <edmx:Include Namespace="RedfishExtensions.v1_0_0" Alias="Redfish"/>
++    <edmx:Include Namespace="Validation.v1_0_0" Alias="Validation"/>
++  </edmx:Reference>
++
++  <edmx:DataServices>
++
++    <Schema xmlns="http://docs.oasis-open.org/odata/ns/edm" Namespace="PefService">
++      <Annotation Term="Redfish.OwningEntity" String="DMTF"/>
++
++      <EntityType Name="PefService" BaseType="Resource.v1_0_0.Resource" Abstract="true">
++        <Annotation Term="OData.Description" String="The PefService schema describes the Pef Alert & Alert Mail service."/>
++        <Annotation Term="OData.LongDescription" String="The PefService schema describes the root of the Pef Service. All Pef Alert & Alert Mail propertiesshowcased with this schema."/>
++        <Annotation Term="Capabilities.InsertRestrictions">
++          <Record>
++            <PropertyValue Property="Insertable" Bool="false"/>
++          </Record>
++        </Annotation>
++        <Annotation Term="Capabilities.UpdateRestrictions">
++          <Record>
++            <PropertyValue Property="Updatable" Bool="true"/>
++          </Record>
++        </Annotation>
++        <Annotation Term="Capabilities.DeleteRestrictions">
++          <Record>
++            <PropertyValue Property="Deletable" Bool="false"/>
++          </Record>
++        </Annotation>
++        <Annotation Term="Redfish.Uris">
++          <Collection>
++	          <String>/redfish/v1/PefService</String>
++          </Collection>
++        </Annotation>
++      </EntityType>
++
++      <Action Name="SendAlertMail" IsBound="true">
++        <Annotation Term="OData.Description" String="This action sends alert mail from Pef Service."/>
++        <Annotation Term="OData.LongDescription" String="This action shall sends alert mail from Pef Service."/>
++        <Annotation Term="Redfish.Revisions">
++          <Collection>
++            <Record>
++              <PropertyValue Property="Kind" EnumMember="Redfish.RevisionKind/Added"/>
++              <PropertyValue Property="Version" String="v1_0_0"/>
++            </Record>
++          </Collection>
++        </Annotation>
++        <Parameter Name="PefService" Type="PefService.v1_0_0.Actions"/>
++        <Parameter Name="Recipient" Type="Edm.String">
++          <Annotation Term="OData.Description" String="The recipient mail address to send the Pef Alert Mail."/>
++          <Annotation Term="OData.LongDescription" String="This parameter shall contain the Recipient mail address to send the Pef Alert Mail."/>       
++        </Parameter>
++        <Parameter Name="MailContent" Type="Edm.String">
++          <Annotation Term="OData.Description" String="The MailContent of the mail to send the Pef Alert Mail."/>
++          <Annotation Term="OData.LongDescription" String="This parameter shall contain the mail content of the mail to send the Pef Alert Mail."/>       
++        </Parameter>
++        <Parameter Name="Subject" Type="Edm.String">
++          <Annotation Term="OData.Description" String="The Subject of the mail to send the Pef Alert Mail."/>
++          <Annotation Term="OData.LongDescription" String="This parameter shall contain the subject of the mail to send the Pef Alert Mail."/>       
++        </Parameter>		
++      </Action>
++    </Schema>
++	
++    <Schema xmlns="http://docs.oasis-open.org/odata/ns/edm" Namespace="PefService.v1_0_0">
++      <Annotation Term="Redfish.OwningEntity" String="DMTF"/>
++      <Annotation Term="Redfish.Release" String="1.0"/>
++
++      <EntityType Name="PefService" BaseType="PefService.PefService">
++        <Property Name="FilterEnable" Type="Collection(Edm.Int64)" Nullable="false">
++          <Annotation Term="OData.Permissions" EnumMember="OData.Permission/ReadWrite"/>
++          <Annotation Term="OData.Description" String="The array of different filters required for PefService."/>
++          <Annotation Term="OData.LongDescription" String="This property shall contain the array of bytes of different sensors filters flags."/>
++        </Property>
++        <Property Name="Recipient" Type="Collection(Edm.String)" Nullable="false">
++          <Annotation Term="OData.Permissions" EnumMember="OData.Permission/ReadWrite"/>
++          <Annotation Term="OData.Description" String="The recipient mail address of the Pef Service."/>
++          <Annotation Term="OData.LongDescription" String="This property shall contain the Recipient mail address of the PefService."/>
++        </Property>
++        <Property Name="PEFActionGblControl" Type="Edm.Int64" Nullable="false">
++          <Annotation Term="OData.Permissions" EnumMember="OData.Permission/ReadWrite"/>
++          <Annotation Term="OData.Description" String="The Global Action Control flag of Pef Service."/>
++          <Annotation Term="OData.LongDescription" String="This property shall contain the Global Action Control flag of PefService."/>
++        </Property>
++        <Property Name="Actions" Type="PefService.v1_0_0.Actions" Nullable="false">
++          <Annotation Term="OData.Description" String="The available actions for this resource."/>
++          <Annotation Term="OData.LongDescription" String="This property shall contain the available actions for this resource."/>
++        </Property>	
++      </EntityType>
++	  
++      <ComplexType Name="Actions">
++        <Annotation Term="OData.AdditionalProperties" Bool="false"/>
++        <Annotation Term="OData.Description" String="The available actions for this resource."/>
++        <Annotation Term="OData.LongDescription" String="This type shall contain the available actions for this resource."/>
++        <Property Name="Oem" Type="PefService.v1_0_0.OemActions" Nullable="false">
++          <Annotation Term="OData.Description" String="The available OEM-specific actions for this resource."/>
++          <Annotation Term="OData.LongDescription" String="This property shall contain the available OEM-specific actions for this resource."/>
++        </Property>
++      </ComplexType>	  	 
++      <ComplexType Name="OemActions">
++        <Annotation Term="OData.AdditionalProperties" Bool="true"/>
++        <Annotation Term="OData.Description" String="The available OEM-specific actions for this resource."/>
++        <Annotation Term="OData.LongDescription" String="This type shall contain the available OEM-specific actions for this resource."/>
++      </ComplexType>
++    </Schema>
++
++  </edmx:DataServices>
++</edmx:Edmx>

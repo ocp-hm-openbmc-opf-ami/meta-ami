@@ -16,4 +16,5 @@ SRC_URI += "file://0001-managers-add-factory-restore.patch \
             file://0009-Post-Chassis.Reset-ChassisId-validation.patch \
             file://0010-Time-zone-configuration-support.patch \
             file://0011-Add-Chassis-Sensors-Collection.patch \
+	    file://0012-Added-PefService-and-SMTP-configuration.patch \
 "
