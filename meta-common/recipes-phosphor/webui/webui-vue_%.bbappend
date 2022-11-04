@@ -35,6 +35,7 @@ SRC_URI += " \
     file://0025-SSL-Page-certificates-validity-time-mismatch.patch \
     file://0026-WEBUI-cosmetic-design-changes.patch \
     file://0027-Unable-to-edit-the-static-ipv6-address.patch \
+    file://0028-Added-PEF-Feature-Support-in-WEBUI.patch \
     "
 do_compile:prepend() {
   cp -vf ${S}/.env.intel ${S}/.env
