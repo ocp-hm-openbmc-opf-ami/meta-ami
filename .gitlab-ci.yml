@@ -1,0 +1,174 @@
+stages:
+    - build
+    - bitbakeRetry1
+    - bitbakeRetry2
+    - rebuild
+    - deploy
+
+image:
+    name: amioe:v0.1
+
+variables:
+    GIT_CLEAN_FLAGS: none
+    openbmcFolder: openbmc
+    post_build_output: Post-Build_Output
+    build_success: build_success
+
+building:
+    stage: build
+    tags:
+        - OE-Build
+
+    before_script:
+        - ls -al
+        - echo $CI_COMMIT_REF_NAME
+        - echo $CI_MERGE_REQUEST_TARGET_BRANCH_NAME  
+        - pwd
+        - if [ -d "$openbmcFolder" ]; then echo "openbmc folder exist! remove it"; fi
+        - if [ -d "$openbmcFolder" ]; then rm -rf $openbmcFolder; fi
+        - git clone https://git.ami.com/core/oe/common/firmware.bmc.openbmc.yocto.openbmc.git $openbmcFolder; cd $openbmcFolder
+        - git clone https://git.ami.com/core/oe/common/firmware.bmc.openbmc.yocto.openbmc-meta-intel.git openbmc-meta-intel
+          #- git clone https://git.ami.com/core/oe/common/meta-ami.git
+        - git clone --recurse-submodules https://git.ami.com/core/oe/common/meta-ami.git --branch $CI_COMMIT_REF_NAME
+        - ls -a
+        - sh meta-ami/meta-common/github-gitlab-url.sh
+
+    script:
+        - echo "CI build start...."
+        - ls -al
+        - pwd
+        - export TEMPLATECONF=openbmc-meta-intel/meta-egs/conf/templates/default
+          #- export TEMPLATECONF=meta-evb/meta-evb-aspeed/meta-evb-ast2600/conf
+        - . openbmc-env
+        - mkdir logfile
+        - cp -rf /downloads downloads
+        - ls -al downloads/
+        - pwd
+        - bitbake intel-platforms | tee -a logfile/Build_log
+          # - bitbake obmc-phosphor-image
+        - echo "CI build finished"
+        - touch $build_success
+        - ls -al
+        - echo "CI build end"
+
+    timeout: 12 hrs
+    only:
+        - merge_requests
+    except:
+        - main
+
+bitbakeRetry1:
+    stage : bitbakeRetry1
+    tags:
+        - OE-Build
+    script:
+        - echo "bitbakeRetry1 start...."
+        - ls -al
+        - pwd
+        - cd $openbmcFolder
+        - ls -a
+        - pwd
+        - export TEMPLATECONF=openbmc-meta-intel/meta-egs/conf/templates/default
+        - . openbmc-env
+        - bitbake intel-platforms | tee -a logfile/Rebuild1_log
+        - echo "bitbakeRetry 1 finished........"
+        - touch $build_success
+        - echo "bitbakeRetry 1 end"
+
+    timeout: 6 hr
+    when: on_failure
+    only:
+        - merge_requests
+    except:
+        - main 
+
+bitbakeRetry2:
+    stage : bitbakeRetry2
+    tags:
+        - OE-Build
+    script:
+        - echo "bitbakeRetry2 start...."
+        - ls -al
+        - pwd
+        - if [ -f $openbmcFolder/build/$build_success ]; then echo "already build success"; fi
+        - if [ -f $openbmcFolder/build/$build_success ]; then exit 0; fi
+        - ls -al
+        - pwd
+        - cd $openbmcFolder
+        - ls -al
+        - export TEMPLATECONF=openbmc-meta-intel/meta-egs/conf/templates/default
+        - . openbmc-env
+        - bitbake intel-platforms | tee -a logfile/Rebuild2_log
+        - echo "bitbakeRetry2 finished........"
+        - touch $build_success
+        - echo "bitbakeRetry2 end"
+
+    timeout: 6 hr
+    when: on_failure
+    only:
+        - merge_requests
+    except:
+        - main
+
+rebuild:
+    stage : rebuild
+    tags:
+        - OE-Build
+    script:
+        - echo "rebuild  start...."
+        - ls -al
+        - pwd
+        - if [ -f $openbmcFolder/build/$build_success ]; then echo "already build success"; fi
+        - if [ -f $openbmcFolder/build/$build_success ]; then exit 0; fi
+        - ls -al
+        - pwd
+        - cd $openbmcFolder
+        - ls -al
+        - export TEMPLATECONF=openbmc-meta-intel/meta-egs/conf/templates/default
+        - . openbmc-env
+        - if [ -d tmp ]; then rm -rf tmp; fi
+        - if [ -d sstate-cache ]; then rm -rf sstate-cache; fi
+        - if [ -d cache ]; then rm -rf cache; fi
+        - bitbake intel-platforms | tee -a logfile/keep_download_build_log
+        - echo "rebuild finished........"
+        - touch $build_success
+        - echo "rebuild end"
+    timeout: 6 hr
+    when: always
+    only:
+        - merge_requests
+    except:
+        - main
+
+DeployImage:
+    stage: deploy
+    tags:
+        - OE-Build         
+    script:
+        - echo "start deploy image and log"
+        - ls -al
+        - pwd
+        - if [ -d $post_build_output ]; then rm -rf $post_build_output; fi
+        - mkdir $post_build_output
+        - if [ -f $openbmcFolder/build/$build_success ]; then echo "CI merge request build success"; else echo "CI merge request build failed"; fi
+        - if [ -f $openbmcFolder/build/$build_success ]; then cp $openbmcFolder/build/tmp/deploy/images/intel-ast2600/*.mtd $post_build_output; fi
+        - cp $openbmcFolder/build/logfile/* $post_build_output
+        - version="v$(date +"%Y%m%d_%H%M%S")"
+        - pwd
+        - echo $version
+        - echo $version > $post_build_output/version
+        - ls -al
+        - echo "deploy image success"
+
+    artifacts:
+        paths:
+            - $post_build_output
+        expire_in: 12 weeks
+
+    when: always
+    only:
+        - merge_requests
+    except:
+        - main
+
+
