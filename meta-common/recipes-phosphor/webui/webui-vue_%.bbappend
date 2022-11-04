@@ -33,6 +33,7 @@ SRC_URI += " \
     file://favicon.ico \
     file://0024-Time-zone-configuration-not-working-as-expected.patch \
     file://0025-SSL-Page-certificates-validity-time-mismatch.patch \
+    file://0026-WEBUI-cosmetic-design-changes.patch \
     file://0027-Unable-to-edit-the-static-ipv6-address.patch \
     "
 do_compile:prepend() {
