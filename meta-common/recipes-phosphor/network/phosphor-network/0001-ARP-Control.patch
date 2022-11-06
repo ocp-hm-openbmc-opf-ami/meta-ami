@@ -19,12 +19,12 @@
    input: 'xyz.openbmc_project.Network.conf.in',
    output: 'xyz.openbmc_project.Network.conf',
    configuration: {'DEFAULT_BUSNAME': default_busname},
---- /dev/null
-+++ b/src/ethernet_interface.cpp	2022-10-20 15:34:59.642932492 +0530
+--- a/src/ethernet_interface.cpp       2022-11-06 05:11:03.729422103 -0500
++++ b/src/ethernet_interface.cpp      2022-11-06 05:29:18.871513855 -0500
 @@ -2,7 +2,6 @@
- 
+
  #include "ethernet_interface.hpp"
- 
+
 -#include "config_parser.hpp"
  #include "ipaddress.hpp"
  #include "neighbor.hpp"
@@ -32,7 +32,7 @@
 @@ -38,6 +37,7 @@
  namespace network
  {
- 
+
 +using namespace std::string_literals;
  using namespace phosphor::logging;
  using namespace sdbusplus::xyz::openbmc_project::Common::Error;
@@ -40,7 +40,7 @@
 @@ -49,6 +49,12 @@
  constexpr auto RESOLVED_SERVICE_PATH = "/org/freedesktop/resolve1/link/";
  constexpr auto METHOD_GET = "Get";
- 
+
 +constexpr auto garpControlService = "xyz.openbmc_project.GARPControl.service";
 +constexpr auto sysctlConfigPrefix ="/proc/sys/net/ipv4/conf/";
 +constexpr auto sysctlConfigSurffix = "/arp_ignore";
@@ -59,10 +59,10 @@
      // Emit deferred signal.
      if (emitSignal)
      {
-@@ -1326,5 +1332,199 @@
+@@ -1326,5 +1332,146 @@
      return ChannelAccessIntf::maxPrivilege(std::move(priv));
  }
- 
+
 +
 +/** @brief load the ARP Control Configurations.
 + */
@@ -73,11 +73,13 @@
 +                           interfaceName() + phosphor::network::arpSurffix;
 +    confPath /= fileName;
 +    config::Parser parser(confPath.string());
-+    auto arpEnable = this->getARPResponse(parser);
 +
++    auto garpEnable = getArpGarpEnabled(parser, "GARP");
++    auto arpEnable = getArpGarpEnabled(parser, "ARP_Response");
++    auto garpInt = getGarpInterval(parser);
 +    ARPControlIface::arpResponse(arpEnable);
-+    ARPControlIface::gratuitousARP(this->getGratuitousARP(parser));
-+    ARPControlIface::gratuitousARPInterval(this->getGratuitousARPInterval(parser));
++    ARPControlIface::gratuitousARP(garpEnable);
++    ARPControlIface::gratuitousARPInterval(strtoul(garpInt.c_str(), nullptr,10));
 +
 +    auto cmd = ((!arpEnable)?arpResponseDisable:arpResponseEnable) + sysctlConfigPrefix +
 +                    interfaceName() + sysctlConfigSurffix;
@@ -162,74 +164,19 @@
 +                elog<InternalFailure>();
 +    }
 +
-+    /* Write the ARPControl properties*/
-+    stream << "[ARP_Response]\n";
-+    stream << "Enabled=" <<((ARPControlIface::arpResponse())?"true":"false")<< "\n";
++    config::Parser config;
++    std::string garpIntv;
++    garpIntv = std::to_string(ARPControlIface::gratuitousARPInterval());
 +
-+    stream << "[GARP]\n";
-+    stream << "Enabled=" <<((ARPControlIface::gratuitousARP())?"true":"false")<< "\n";
-+    stream << "Interval=" <<ARPControlIface::gratuitousARPInterval()<< "\n";
++    auto& Garp = config.map["GARP"].emplace_back();
++    Garp["Interval"].emplace_back(garpIntv);
++    Garp["Enabled"].emplace_back((ARPControlIface::gratuitousARP())?"true":"false");
 +
-+    stream.close();
++    auto& ARPResp = config.map["ARP_Response"].emplace_back();
++    ARPResp["Enabled"].emplace_back((ARPControlIface::arpResponse())?"true":"false");
++    config.writeFile(confPath.string());
 +
-+}
 +
-+/** @brief retrive the ARP Response status from ARP Control conf file.
-+ *  @param[in] parser - config parser object.
-+ *  @return status of ARP Response
-+ */
-+bool EthernetInterface::getARPResponse(config::Parser& parser)
-+{
-+    config::ValueListstr values;
-+    auto rc = config::ReturnCode::SUCCESS;
-+
-+    std::tie(rc, values) = parser.getValues("ARP_Response", "Enabled");
-+    if (rc == config::ReturnCode::SUCCESS && !values.empty())
-+    {
-+        transform(values[0].begin(),values[0].end(), values[0].begin(), ::tolower);
-+        return (values[0] == "true");
-+    }
-+
-+    return false;
-+}
-+/** @brief retrive the getGratuitousARP status from ARP Control conf file.
-+ *  @param[in] parser - config parser object.
-+ *  @return status of getGratuitousARP
-+ */
-+bool EthernetInterface::getGratuitousARP(config::Parser& parser)
-+{
-+    config::ValueListstr values;
-+    auto rc = config::ReturnCode::SUCCESS;
-+
-+    std::tie(rc, values) = parser.getValues("GARP", "Enabled");
-+    if (rc == config::ReturnCode::SUCCESS && !values.empty())
-+    {
-+        transform(values[0].begin(),values[0].end(), values[0].begin(), ::tolower);
-+        return (values[0] == "true");
-+    }
-+
-+    return false;
-+}
-+
-+/** @brief retrive the ARPControl interval from garp conf file.
-+ *  @param[in] parser - config parser object.
-+ *  @return GratuitousARP interval
-+ */
-+uint64_t EthernetInterface::getGratuitousARPInterval(config::Parser& parser)
-+{
-+    config::ValueListstr values;
-+    auto rc = config::ReturnCode::SUCCESS;
-+    auto interval = 0;
-+
-+    std::tie(rc, values) = parser.getValues("GARP", "Interval");
-+    if (rc == config::ReturnCode::SUCCESS && !values.empty())
-+    {
-+        std::stringstream garpInterval(values[0]);
-+        garpInterval>>interval;
-+        return interval;
-+    }
-+
-+    return interval;
 +}
 +
 +/** @brief set the ARP Response status in sysctl config for the ethernet interface.
@@ -259,8 +206,9 @@
 +
  } // namespace network
  } // namespace phosphor
---- /dev/null
-+++ b/src/ethernet_interface.hpp	2022-10-20 15:34:59.642932492 +0530
+ 
+--- a/src/ethernet_interface.hpp       2022-11-06 05:11:04.853482074 -0500
++++ b/src/ethernet_interface.hpp      2022-11-06 05:29:55.653428887 -0500
 @@ -1,8 +1,11 @@
  #pragma once
  #include "types.hpp"
@@ -270,12 +218,12 @@
  #include "xyz/openbmc_project/Network/IP/Create/server.hpp"
  #include "xyz/openbmc_project/Network/Neighbor/CreateStatic/server.hpp"
 +#include <xyz/openbmc_project/Network/ARPControl/server.hpp>
- 
+
  #include <map>
  #include <nlohmann/json.hpp>
 @@ -21,6 +24,7 @@
  {
- 
+
  using Ifaces = sdbusplus::server::object_t<
 +    sdbusplus::xyz::openbmc_project::Network::server::ARPControl,
      sdbusplus::xyz::openbmc_project::Network::server::EthernetInterface,
@@ -287,14 +235,14 @@
      sdbusplus::xyz::openbmc_project::Channel::server::ChannelAccess;
 +using ARPControlIface =
 +    sdbusplus::xyz::openbmc_project::Network::server::ARPControl;
- 
+
  using ServerList = std::vector<std::string>;
  using ObjectPath = sdbusplus::message::object_path;
 @@ -238,6 +244,23 @@
       *  @param[in] gateway - default v6 gateway of the interface.
       */
      std::string defaultGateway6(std::string gateway) override;
-+    
++
 +    /** @brief set the Enable/Disable of ARP Response in sysctl config.
 +     *  @param[in] value - Enable/Disable
 +     *  @return the status of ARP Response in sysctl config
@@ -311,7 +259,7 @@
 +     *  @param[in] interval - interval in milliseconds.
 +     */
 +    uint64_t gratuitousARPInterval(uint64_t interval) override;
- 
+
      /** @brief sets the channel maxium privilege.
       *  @param[in] value - Channel privilege which needs to be set on the
 @@ -252,6 +275,9 @@
@@ -321,10 +269,10 @@
 +    using ARPControlIface::arpResponse;
 +    using ARPControlIface::gratuitousARP;
 +    using ARPControlIface::gratuitousARPInterval;
- 
+
      using EthernetInterfaceIntf::defaultGateway;
      using EthernetInterfaceIntf::defaultGateway6;
-@@ -388,6 +414,38 @@
+@@ -388,6 +414,20 @@
       */
      int writeJsonFile(const std::string& configFile,
                        const nlohmann::json& jsonData);
@@ -336,24 +284,6 @@
 +     */
 +    void writeConfiguration();
 +
-+    /** @brief retrive the ARP Response status from ARP Control conf file.
-+     *  @param[in] parser - config parser object.
-+     *  @return status of ARP Response
-+     */
-+    bool getARPResponse(config::Parser& parser);
-+
-+    /** @brief retrive the GratuitousARP status from ARP Control conf file.
-+     *  @param[in] parser - config parser object.
-+     *  @return status of GratuitousARP
-+     */
-+    bool getGratuitousARP(config::Parser& parser);
-+
-+    /** @brief retrive the GratuitousARP interval from ARP Control conf file.
-+     *  @param[in] parser - config parser object.
-+     *  @return GratuitousARP interval
-+     */
-+    uint64_t getGratuitousARPInterval(config::Parser& parser);
-+
 +    /** @brief set the ARP Response status in sysctl config for the ethernet interface.
 +     *  @param[in] cmd - shell command.
 +     *  @return status of the shell command execution
@@ -361,58 +291,52 @@
 +    bool sysctlConfig(const std::string& cmd);
 +
  };
- 
+
  } // namespace network
---- /dev/null
-+++ b/src/meson.build	2022-10-20 15:34:59.642932492 +0530
-@@ -2,6 +2,19 @@
- 
- src_includes = include_directories('.')
- 
+--- a/src/meson.build  2022-11-06 05:11:05.677526038 -0500
++++ b/src/meson.build 2022-11-06 05:18:19.876633201 -0500
+@@ -80,6 +80,21 @@
+   include_directories: src_includes,
+   dependencies: networkd_deps)
+
 +executable(
 +  'phosphor-garpcontrol',
 +  'garp_control_main.cpp',
++  'util.cpp',
 +  'config_parser.cpp',
 +  'garp_control.cpp',
 +  implicit_include_directories: false,
 +  include_directories: src_includes,
 +  dependencies: [
++    networkd_deps,
 +    dependency('stdplus'),
 +  ],
 +  install: true,
 +  install_dir: get_option('bindir'))
 +
- fmt_dep = dependency('fmt', required: false)
- if not fmt_dep.found()
-   fmt_opts = import('cmake').subproject_options()
---- /dev/null
-+++ b/src/network_config.cpp	2022-10-20 15:34:59.642932492 +0530
-@@ -3,6 +3,7 @@
- #include "network_config.hpp"
- 
- #include "config_parser.hpp"
-+#include <fstream>
- 
- namespace phosphor
- {
-@@ -45,6 +46,18 @@
+ networkd_dep = declare_dependency(
+   sources: conf_header,
+   dependencies: networkd_deps,
+--- a/src/network_config.cpp  2022-11-05 15:43:28.935122065 +0530
++++ b/src/network_config.cpp      2022-11-05 15:46:07.865694341 +0530
+@@ -45,6 +45,18 @@
          "true");
      config.writeFile(filename);
  }
++
 +void writeARPControlDefault(const std::string& filename)
 +{
-+    std::ofstream filestream;
-+
-+    filestream.open(filename);
-+    filestream << "[ARP_Response]\nEnabled=true"
-+                "\n[GARP]\nEnable=false\n"
-+                "Interval=2000\n";
-+    filestream.close();
++    config::Parser config;
++    auto& Garp = config.map["GARP"].emplace_back();
++    Garp["Interval"].emplace_back("2000");
++    Garp["Enabled"].emplace_back("false");
++    auto& ARPResp = config.map["ARP_Response"].emplace_back();
++    ARPResp["Enabled"].emplace_back("true");
++    config.writeFile(filename);
 +}
 +
-+
  } // namespace bmc
- 
+
  } // namespace network
 --- /dev/null
 +++ b/src/network_config.hpp	2022-10-20 15:34:59.642932492 +0530
@@ -566,28 +490,17 @@
  
      /** @brief The routing table */
      route::Table routeTable;
---- /dev/null
-+++ b/src/network_manager_main.cpp	2022-10-20 15:34:59.642932492 +0530
-@@ -320,6 +320,7 @@
- 
- int main(int /*argc*/, char** /*argv*/)
- {
+--- a/src/network_manager_main.cpp    2022-11-06 05:43:57.893618093 -0500
++++ b/src/network_manager_main.cpp_vs 2022-11-06 06:00:04.400613826 -0500
+@@ -297,6 +297,8 @@
+         manager->reloadConfigs();
+     }
+
 +    phosphor::network::manager->createDefaultARPControlFiles(false);
-     try
-     {
-         return phosphor::network::main();
---- /dev/null
-+++ b/src/util.hpp	2022-10-20 15:34:59.642932492 +0530
-@@ -27,6 +27,9 @@
- constexpr auto IPV4_MIN_PREFIX_LENGTH = 1;
- constexpr auto IPV4_MAX_PREFIX_LENGTH = 32;
- constexpr auto IPV6_MAX_PREFIX_LENGTH = 128;
-+constexpr auto arpPrefix = "00-bmc-arpcontrol-";
-+constexpr auto arpSurffix = ".conf";
 +
- 
- namespace mac_address
- {
+     // RTNETLINK event handler
+     rtnetlink::Server svr(eventPtr);
+
 --- /dev/null
 +++ b/xyz.openbmc_project.GARPControl.service.in
 @@ -0,0 +1,9 @@
@@ -1191,9 +1104,9 @@
 +
 +} /* namespace network */
 +
---- /dev/null
-+++ b/src/garp_control_main.cpp	2022-10-20 15:58:02.383542570 +0530
-@@ -0,0 +1,118 @@
+--- /dev/null    2022-11-06 05:20:28.867482042 -0500
++++ b/src/garp_control_main.cpp       2022-11-06 05:18:28.953115292 -0500
+@@ -0,0 +1,123 @@
 +#include "config.h"
 +#include "config_parser.hpp"
 +#include "garp_control.hpp"
@@ -1203,11 +1116,15 @@
 +#include <thread>
 +#include <algorithm>
 +
++#include "util.hpp"
++
 +using namespace phosphor::network;
 +
++
++
 +constexpr char ARPCONTROL_CONF_DIR[] = "/etc/arpcontrol";
-+constexpr auto arpPrefix = "00-bmc-arpcontrol-";
-+constexpr auto arpSurffix = ".conf";
++//constexpr auto arpPrefix = "00-bmc-arpcontrol-";
++//constexpr auto arpSurffix = ".conf";
 +std::string arpKey = "ARP_Response";
 +std::string garpKey = "GARP";
 +
@@ -1217,8 +1134,8 @@
 +    namespace fs = std::filesystem;
 +
 +    /** @brief create the ARP Control config parser object
-+     *  @returns parser object if success or null 
-+     */	
++     *  @returns parser object if success or null
++     */
 +    bool parser(config::Parser& parser, std::string& fileName)
 +    {
 +        fs::path confPath = ARPCONTROL_CONF_DIR;
@@ -1226,19 +1143,19 @@
 +
 +        if (!fs::is_regular_file(confPath.string()))
 +        {
-+	    return false;
++           return false;
 +        }
 +        config::Parser arpControl(confPath.string());
 +        parser = arpControl;
 +
-+	return true;
++       return true;
 +    }
-+    
++
 +    /** @brief read the Enabled field from ARP Control config
 +     *  @param[in] parser - parser object
 +     *  @param[in] key - searching key
 +     *  @returns value of Enabled field
-+     */	
++     */
 +    bool enabled(config::Parser& parser, std::string& key)
 +    {
 +        ServerList values;
@@ -1258,7 +1175,7 @@
 +     *  @param[in] parser - parser object
 +     *  @param[in] key - searching key
 +     *  @returns value of interval field
-+     */	
++     */
 +    unsigned interval(config::Parser& parser, std::string& key)
 +    {
 +        ServerList servers;
@@ -1294,13 +1211,14 @@
 +
 +    for (it = interfaceList.begin(); it != interfaceList.end(); ++it)
 +    {
-+	std::string fileName = arpPrefix + *it + arpSurffix;
++       std::string fileName = arpPrefix + *it + arpSurffix;
 +
 +        if (!arpControlConfig::parser(arpControlParser, fileName))
 +            continue;
 +
-+        auto garpEnabled = arpControlConfig::enabled(arpControlParser, garpKey);
-+        auto garpInterval = arpControlConfig::interval(arpControlParser, garpKey);
++        auto garpEnabled = getArpGarpEnabled(arpControlParser, "GARP");
++       auto garpInt = getGarpInterval(arpControlParser);
++        auto garpInterval = strtoul(garpInt.c_str(),nullptr,10);
 +
 +        if(garpEnabled)
 +            threads.push_back(std::thread(GARPTask, *it, garpInterval, garpEnabled));
@@ -1312,6 +1230,7 @@
 +
 +    return 0;
 +}
+
 --- /dev/null
 +++ b/src/config_parser.cpp	2022-10-20 16:52:40.566038101 +0530
 @@ -74,7 +74,48 @@
@@ -1422,3 +1341,50 @@
  };
  
  } // namespace config
+--- a/src/util.hpp     2022-11-06 06:06:14.475771123 -0500
++++ b/src/util.hpp    2022-11-06 05:18:19.876633201 -0500
+@@ -27,6 +27,9 @@
+ constexpr auto IPV4_MIN_PREFIX_LENGTH = 1;
+ constexpr auto IPV4_MAX_PREFIX_LENGTH = 32;
+ constexpr auto IPV6_MAX_PREFIX_LENGTH = 128;
++constexpr auto arpPrefix = "00-bmc-arpcontrol-";
++constexpr auto arpSurffix = ".conf";
++
+
+ namespace mac_address
+ {
+@@ -140,6 +143,9 @@
+  */
+ bool getDHCPProp(const config::Parser& config, std::string_view key);
+
++bool getArpGarpEnabled(const config::Parser& config, std::string_view section);
++std::string getGarpInterval(const config::Parser& config);
++
+ namespace internal
+ {
+
+--- a/src/util.cpp     2022-11-06 06:02:47.073144456 -0500
++++ b/src/util.cpp    2022-11-06 05:18:19.876633201 -0500
+@@ -417,6 +417,22 @@
+         .value_or(true);
+ }
+
++bool getArpGarpEnabled(const config::Parser& config, std::string_view section){
++return systemdParseLast(config, section, "Enabled", config::parseBool)
++        .value_or(false);
++}
++
++std::string getGarpInterval(const config::Parser& parser)
++{
++    if (auto str = parser.map.getLastValueString("GARP", "Interval"); str == nullptr)
++    {
++               return "2000";//Default value as 2000
++       }
++       else{
++           return *str;
++       }
++}
++
+ namespace mac_address
+ {
+
