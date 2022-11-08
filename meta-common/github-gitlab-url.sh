@@ -50,7 +50,7 @@ sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.bmc-co
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-internal/recipes-intel/cups/cups-service.bb
 
-sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=egs/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=egs/g' openbmc-meta-intel/meta-internal/recipes-intel/cups/cups-service.bb
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=egs/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-internal/recipes-intel/cups/cups-service.bb
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.modular-system.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.modular-system.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-internal/recipes-intel/modular-system/modular-system_git.bb
 
