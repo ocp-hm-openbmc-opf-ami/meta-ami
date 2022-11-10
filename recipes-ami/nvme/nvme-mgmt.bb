@@ -16,7 +16,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 S = "${WORKDIR}/git/nvme-mgmt/src"
 SRC_URI = "git://git.ami.com/core/oe/common/firmware.management.bmc.openbmc-commercial.nvme-mgmt.git;protocol=https;branch=main"
-SRCREV = "15f30576d31a2992fcbbf43bf01c1f0bb4db3bc3"
+SRCREV = "69f9455c469881ccc7b9d8ffbe288ac57ad9b976"
 
 #Change Application name, if it is different from recipe name.
 APP_NAME = "nvme-mgmt"
