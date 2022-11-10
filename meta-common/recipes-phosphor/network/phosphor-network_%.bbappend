@@ -6,5 +6,6 @@ SRC_URI += " file://0001-ARP-Control.patch \
              file://0002-VLAN-Priority.patch \
            "
 
+EXTRA_OEMESON:append = " -Dpersist-mac=true"
 
 SYSTEMD_SERVICE:${PN} += "xyz.openbmc_project.GARPControl.service"
