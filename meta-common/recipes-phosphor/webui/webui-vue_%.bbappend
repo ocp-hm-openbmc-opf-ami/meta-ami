@@ -37,6 +37,7 @@ SRC_URI += " \
     file://0027-Unable-to-edit-the-static-ipv6-address.patch \
     file://0028-Added-PEF-Feature-Support-in-WEBUI.patch \
     file://0029-BMC-dump-feature-from-webui.patch \
+    file://0030-Added-Physical-Indicator-LED-status.patch \
     "
 do_compile:prepend() {
   cp -vf ${S}/.env.intel ${S}/.env
