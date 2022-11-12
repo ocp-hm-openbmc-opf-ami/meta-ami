@@ -17,6 +17,7 @@ SRC_URI += " \
 	   file://0037-Systemd_Restart_Wrappper.patch \
            file://dcmi-getActive-command.patch \  
            file://0013-Enable-Ipv6-static-address-and-disable-ipv6-dynamic-address.patch \  
+           file://dcmi_getDCMICapabilities_info_oldHandler_to_newHandler.patch \ 
            "
 
 do_install:append(){
