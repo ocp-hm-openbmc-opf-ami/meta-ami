@@ -1,6 +1,6 @@
-From 31dc229e05620d32c9cd32141438b8d5cf4faeac Mon Sep 17 00:00:00 2001
+From 7f479813071e7fd80c2201db34be65bd4e347d5c Mon Sep 17 00:00:00 2001
 From: vipinc <vipinc@ami.com>
-Date: Thu, 27 Oct 2022 18:01:48 +0530
+Date: Sun, 13 Nov 2022 21:19:44 +0530
 Subject: [PATCH] Add SMTP IPMI OEM Commands Support
 
 Added below commands
@@ -12,20 +12,20 @@ Added below commands
 Tested:
 Verified the SMTP IPMI commands are working as expected.
 
-Signed-off-by: vipinc <vipinc@ami.com>
+Refer MR: https://git.ami.com/core/oe/common/meta-ami/-/merge_requests/117
 
-%% original patch: 0015-Add-SMTP-IPMI-OEM-Commands-Support.patch
+Signed-off-by: vipinc <vipinc@ami.com>
 ---
- include/oemcommands.hpp |  20 +++
+ include/oemcommands.hpp |  21 +++
  ipmi-whitelist.conf     |   2 +
- src/oemcommands.cpp     | 315 +++++++++++++++++++++++++++++++++++++++-
- 3 files changed, 336 insertions(+), 1 deletion(-)
+ src/oemcommands.cpp     | 316 ++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 339 insertions(+)
 
 diff --git a/include/oemcommands.hpp b/include/oemcommands.hpp
-index f69e050..11c5364 100644
+index 28d25f2..e6f7ed0 100644
 --- a/include/oemcommands.hpp
 +++ b/include/oemcommands.hpp
-@@ -76,6 +76,8 @@ static constexpr Cmd cmdGetSecurityMode = 0xB3;
+@@ -79,6 +79,8 @@ static constexpr Cmd cmdGetSecurityMode = 0xB3;
  static constexpr Cmd cmdSetSecurityMode = 0xB4;
  static constexpr Cmd cmdMtmKeepAlive = 0xB5;
  static constexpr Cmd cmdOEMGetReading = 0xE2;
@@ -34,7 +34,7 @@ index f69e050..11c5364 100644
  static constexpr Cmd cmdSetBIOSCap = 0xD3;
  static constexpr Cmd cmdGetBIOSCap = 0xD4;
  static constexpr Cmd cmdSetPayload = 0xD5;
-@@ -213,6 +215,15 @@ constexpr const char* settingsBusName = "xyz.openbmc_project.Settings";
+@@ -328,6 +330,16 @@ constexpr const char* settingsBusName = "xyz.openbmc_project.Settings";
  static constexpr const uint8_t getHostSerialCfgCmd = 0;
  static constexpr const uint8_t setHostSerialCfgCmd = 1;
  
@@ -47,10 +47,11 @@ index f69e050..11c5364 100644
 +static constexpr const char* pefConfInfoIntf =
 +    "xyz.openbmc_project.pef.PEFConfInfo";
 +
++
  // parameters:
  // 0: host serial port 1 and 2 normal speed
  // 1: host serial port 1 high spend, port 2 normal speed
-@@ -377,6 +388,15 @@ enum class dimmOffsetTypes : uint8_t
+@@ -492,6 +504,15 @@ enum class dimmOffsetTypes : uint8_t
      dimmPower = 0x2
  };
  
@@ -67,10 +68,10 @@ index f69e050..11c5364 100644
  enum IpmiPartitionPowerControlCmds : uint8_t
  {
 diff --git a/ipmi-whitelist.conf b/ipmi-whitelist.conf
-index c932a55..9e627d0 100644
+index 833ffac..c8ac462 100644
 --- a/ipmi-whitelist.conf
 +++ b/ipmi-whitelist.conf
-@@ -295,6 +295,8 @@
+@@ -296,6 +296,8 @@
  0x30:0xd9:0x7f7f   //<Intel General Application>:<OOB Update Status>
  0x30:0xdb:0x7f7f   //<Intel General Application>:<Get/Set BMC Remote Debug Parameters>
  0x30:0xe2:0xff7f   //<Intel General Application>:<OEM Get Reading>
@@ -80,18 +81,10 @@ index c932a55..9e627d0 100644
  0x30:0xe6:0x7f7f   //<Intel General Application>:<Send Raw PECI>
  0x30:0xe7:0x7f7f   //<Intel General Application>:<Aggregate Send Raw PECI>
 diff --git a/src/oemcommands.cpp b/src/oemcommands.cpp
-index 5366f80..383c6e7 100644
+index 2e18fbe..5196b62 100644
 --- a/src/oemcommands.cpp
 +++ b/src/oemcommands.cpp
-@@ -13,7 +13,6 @@
- // See the License for the specific language governing permissions and
- // limitations under the License.
- */
--
- #include "types.hpp"
- #include "xyz/openbmc_project/Common/error.hpp"
- #include "xyz/openbmc_project/Led/Physical/server.hpp"
-@@ -3872,6 +3871,312 @@ ipmi::RspType<uint8_t, uint8_t> ipmiOEMGetBufferSize()
+@@ -3947,6 +3947,312 @@ ipmi::RspType<uint8_t, uint8_t> ipmiOEMGetBufferSize()
      return ipmi::responseSuccess(kcsMaxBufferSize, ipmbMaxBufferSize);
  }
  
@@ -140,10 +133,10 @@ index 5366f80..383c6e7 100644
 +        std::string,std::variant<std::string, uint64_t, std::vector<std::string>>>resp;
 +    try
 +    {
-+	    auto method =bus.new_method_call(pefBus, pefObj, dBusPropertyIntf, "GetAll");
-+	    method.append(pefConfInfoIntf);
-+	    auto reply = bus.call(method);
-+	    reply.read(resp);
++            auto method =bus.new_method_call(pefBus, pefObj, dBusPropertyIntf, "GetAll");
++            method.append(pefConfInfoIntf);
++            auto reply = bus.call(method);
++            reply.read(resp);
 +    }
 +    catch (const sdbusplus::exception_t&)
 +    {
@@ -155,7 +148,7 @@ index 5366f80..383c6e7 100644
 +    auto getRecipient = resp.find("Recipient");
 +    if (getRecipient == resp.end())
 +    {
-+	    return false;
++            return false;
 +    }
 +    rec = std::get<std::vector<std::string>>(getRecipient->second);
 +    return true;
@@ -404,21 +397,23 @@ index 5366f80..383c6e7 100644
  ipmi::RspType<std::vector<uint8_t>>
      ipmiOEMReadPFRMailbox(ipmi::Context::ptr& ctx, const uint8_t readRegister,
                            const uint8_t numOfBytes, uint8_t registerIdentifier)
-@@ -4230,6 +4535,14 @@ static void registerOEMFunctions(void)
+@@ -4926,6 +5232,16 @@ static void registerOEMFunctions(void)
  
      registerHandler(prioOemBase, intel::netFnApp, intel::app::cmdPFRMailboxRead,
                      Privilege::Admin, ipmiOEMReadPFRMailbox);
-+
++    
++    // <Set SMTP Config>
 +    registerHandler(prioOemBase, intel::netFnGeneral,
 +                    intel::general::cmdOEMSetSmtpConfig, Privilege::User,
 +                    ipmiOEMSetSmtpConfig);
 +
++    // <Get SMTP Config>
 +    registerHandler(prioOemBase, intel::netFnGeneral,
 +                    intel::general::cmdOEMGetSmtpConfig, Privilege::User,
 +                    ipmiOEMGetSmtpConfig);
- }
  
- } // namespace ipmi
+ 
+     // <Get USB Description>
 -- 
 2.25.1
 
