@@ -2,6 +2,9 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 EXTRA_OEMESON += "-Dredfish-dump-log=enabled"
 
+# add "redfish-hostiface" group
+GROUPADD_PARAM:${PN}:append = ";redfish-hostiface"
+
 SRCREV = "188cb6294105a045a445619415d01843de8c3732"
 
 
