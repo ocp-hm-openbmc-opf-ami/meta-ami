@@ -10,8 +10,8 @@ SRC_URI += "\
            file://0011-For-GetSensorType-ipmi-command-issue-is-getting-resp.patch \
 	   file://0012-Add-SDR-Support-for-Processor-Type-Sensor.patch \
 	   file://dcmi_whitelists_conf.patch \
-	   file://0013-Add-SMTP-IPMI-OEM-Commands-Support.patch \	
            file://0014-Added-Get-BT-Interface-Capabilities-ipmi-command-in-.patch \
 	   file://0014-Add-Watchdog2-Discrete-Sensor.patch \
 	   file://0015-Add-OOB-BIOS-support-OEM.patch \	
+	   file://0016-Add-SMTP-IPMI-OEM-Commands-Support.patch \
            "
