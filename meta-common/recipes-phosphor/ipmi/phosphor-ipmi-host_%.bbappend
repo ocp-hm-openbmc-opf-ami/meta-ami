@@ -15,9 +15,10 @@ SRC_URI += " \
 	   file://0011-Add-Compact-SDR-Type2-Support.patch \
            file://0012-Get-Channel-Payload-Support-Detailed-Information-bel.patch \
 	   file://0037-Systemd_Restart_Wrappper.patch \
-           file://dcmi-getActive-command.patch \  
+           file://dcmi-getActive-command.patch \
            file://0013-Enable-Ipv6-static-address-and-disable-ipv6-dynamic-address.patch \  
            file://dcmi_getDCMICapabilities_info_oldHandler_to_newHandler.patch \ 
+	   file://dcmi_old_to_new_handler_implementation.patch \
            "
 
 do_install:append(){
