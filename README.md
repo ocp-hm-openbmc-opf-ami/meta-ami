@@ -34,7 +34,7 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 
 ### 2) Download the source
 ```
-git clone https://git.ami.com/core/oe/common/firmware.bmc.openbmc.yocto.openbmc; openbmc; cd openbmc
+git clone https://git.ami.com/core/oe/common/firmware.bmc.openbmc.yocto.openbmc openbmc; cd openbmc
 git clone https://git.ami.com/core/oe/common/firmware.bmc.openbmc.yocto.openbmc-meta-intel openbmc-meta-intel
 git clone https://git.ami.com/core/oe/common/meta-ami
 sh meta-ami/meta-common/github-gitlab-url.sh
@@ -42,19 +42,13 @@ sh meta-ami/meta-common/github-gitlab-url.sh
 
 ### 3) How to Build ArcherCity
 ```
-TEMPLATECONF=openbmc-meta-intel/meta-egs/conf . openbmc-env
+TEMPLATECONF=openbmc-meta-intel/meta-egs/conf/templates/default . openbmc-env
 bitbake intel-platforms
 ```
 
-### 4) How to Build BHS
+### 4) How to Build AST2600EVB
 ```
-TEMPLATECONF=openbmc-meta-intel/meta-bhs/conf . openbmc-env
-bitbake intel-platforms
-```
-
-### 5) How to Build AST2600EVB
-```
-TEMPLATECONF=meta-ami/meta-evb/meta-evb-aspeed/meta-evb-ast2600/conf . openbmc-env
+TEMPLATECONF=meta-ami/meta-evb/meta-evb-aspeed/meta-evb-ast2600/conf/templates/default . openbmc-env
 bitbake obmc-phosphor-image
 ```
 
@@ -112,7 +106,6 @@ bitbake obmc-phosphor-image
 * NIC Management
 * NVMe-Basic, NVMe-MI
 * Seamless update
-* Testability
 
 ## Finding out more
 
