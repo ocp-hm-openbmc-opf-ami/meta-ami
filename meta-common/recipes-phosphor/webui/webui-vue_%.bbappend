@@ -40,6 +40,7 @@ SRC_URI += " \
     file://0030-Added-Physical-Indicator-LED-status.patch \
     file://0031-Virtual-media-Load-image-not-able-to-configure.patch \
     file://0032-Removed-the-System-Dump-option-in-dropdown-list.patch \
+    file://0033-Added-the-support-enable-disable-option-to-event-filter.patch \
     "
 do_compile:prepend() {
   cp -vf ${S}/.env.intel ${S}/.env
