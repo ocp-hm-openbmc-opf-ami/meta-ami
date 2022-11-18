@@ -39,6 +39,7 @@ SRC_URI += " \
     file://0029-BMC-dump-feature-from-webui.patch \
     file://0030-Added-Physical-Indicator-LED-status.patch \
     file://0031-Virtual-media-Load-image-not-able-to-configure.patch \
+    file://0032-Removed-the-System-Dump-option-in-dropdown-list.patch \
     "
 do_compile:prepend() {
   cp -vf ${S}/.env.intel ${S}/.env
