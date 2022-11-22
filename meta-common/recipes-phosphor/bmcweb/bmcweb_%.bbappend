@@ -25,4 +25,5 @@ SRC_URI += "file://0001-managers-add-factory-restore.patch \
 	    file://0015-added-OEM-led-indicator-amber-green-susack-status.patch \
 	    file://0016-Added-OOB-Bios-Configuration-Support-in-Redfish.patch \
 	    file://0017-Integrated-NVME-Interface.patch \
+	    file://0018-Integrated-NIC-Interface-in-Redfish.patch \
 "
