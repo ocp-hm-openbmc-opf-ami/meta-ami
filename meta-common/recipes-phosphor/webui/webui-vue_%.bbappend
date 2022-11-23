@@ -43,6 +43,7 @@ SRC_URI += " \
     file://0033-Added-the-support-enable-disable-option-to-event-filter.patch \
     file://0034-Fix-for-Ipv6-Dhcp-and-Static-address-issue.patch \
     file://0035-Added-NIC-Information-support-in-WEBUI.patch \
+    file://0036-WEB-UI-support-for-NVME-Information.patch \
     file://0037-WEB-UI-Dump-count-issue-fixed-under-overview-page.patch \
     "
 do_compile:prepend() {
