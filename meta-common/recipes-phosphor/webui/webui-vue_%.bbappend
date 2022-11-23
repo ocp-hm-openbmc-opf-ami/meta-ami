@@ -42,6 +42,7 @@ SRC_URI += " \
     file://0032-Removed-the-System-Dump-option-in-dropdown-list.patch \
     file://0033-Added-the-support-enable-disable-option-to-event-filter.patch \
     file://0034-Fix-for-Ipv6-Dhcp-and-Static-address-issue.patch \
+    file://0035-Added-NIC-Information-support-in-WEBUI.patch \
     "
 do_compile:prepend() {
   cp -vf ${S}/.env.intel ${S}/.env
