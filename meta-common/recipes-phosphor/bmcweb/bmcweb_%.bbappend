@@ -28,4 +28,5 @@ SRC_URI += "file://0001-managers-add-factory-restore.patch \
 	    file://0018-Add-Redfish-Logs-for-Discrete-Sensors.patch \
             file://0019-IndicatorLED-Depreacted.patch \
             file://0020-Additional-Sensors-Support.patch \ 
+            file://0021-Integrated-NIC-Interface-in-Redfish.patch \
 "
