@@ -19,6 +19,7 @@ SRC_URI += " \
            file://0013-Enable-Ipv6-static-address-and-disable-ipv6-dynamic-address.patch \  
            file://dcmi_getDCMICapabilities_info_oldHandler_to_newHandler.patch \ 
 	   file://dcmi_old_to_new_handler_implementation.patch \
+           file://0014-master-write-read-shows-wrong-response-for-invalid-d.patch \
            "
 
 do_install:append(){
