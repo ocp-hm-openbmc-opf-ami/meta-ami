@@ -6,6 +6,7 @@ SRC_URI += "file://0001-converted-index-to-0-based-and-made-pwm-starts-from-.pat
 	    file://0002-Add-Processor-Type-Sensor-Support.patch \
             file://0003-ProcessorSensor-Replace-iterator-pairs-with-structur.patch \
 	    file://0004-Add-Watchdog2-Discrete-Sensor.patch \
+	    file://0005-Add-Severity-Information-For-Discrete-Sensor.patch \
             "
 
 PACKAGECONFIG[processorstatus] = "-Dprocstatus=enabled, -Dprocstatus=disabled"
