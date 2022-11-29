@@ -45,6 +45,7 @@ SRC_URI += " \
     file://0035-Added-NIC-Information-support-in-WEBUI.patch \
     file://0036-WEB-UI-support-for-NVME-Information.patch \
     file://0037-WEB-UI-Dump-count-issue-fixed-under-overview-page.patch \
+    file://0038-Sensor-data-not-showing-in-webui.patch \
     "
 do_compile:prepend() {
   cp -vf ${S}/.env.intel ${S}/.env
