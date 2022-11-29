@@ -1,0 +1,161 @@
+From 4c38956cce07293e0ac0b8c8e70d31116ccda7bf Mon Sep 17 00:00:00 2001
+From: selvaganapathi <selvaganapathim@ami.com>
+Date: Tue, 29 Nov 2022 21:54:26 +0530
+Subject: [PATCH] Add Current PowerState monitoring before CPU detecting
+
+Signed-off-by: selvaganapathi <selvaganapathim@ami.com>
+---
+ src/base/discovery.hpp | 73 +++++++++++++++++++++++++++++++++++++++++-
+ src/base/service.hpp   |  2 +-
+ 2 files changed, 73 insertions(+), 2 deletions(-)
+
+diff --git a/src/base/discovery.hpp b/src/base/discovery.hpp
+index 83a6cf9..1cf1d2c 100644
+--- a/src/base/discovery.hpp
++++ b/src/base/discovery.hpp
+@@ -22,6 +22,10 @@
+ #include "utils/log.hpp"
+ 
+ #include <boost/asio/steady_timer.hpp>
++#include <sdbusplus/asio/object_server.hpp>
++#include <sdbusplus/asio/property.hpp>
++#include <sdbusplus/bus/match.hpp>
++#include <sdbusplus/message.hpp>
+ 
+ #include <array>
+ #include <chrono>
+@@ -43,10 +47,12 @@ class CupsDiscovery : public std::enable_shared_from_this<CupsDiscovery>
+   public:
+     CupsDiscovery(
+         ctor_lock, boost::asio::io_context& iocArg,
++	std::shared_ptr<sdbusplus::asio::connection> busArg,
+         std::shared_ptr<peci::transport::Adapter> peciAdapterArg,
+         std::function<void(const std::array<std::optional<peci::metrics::Cpu>,
+                                             peci::cpu::limit>&)>&& cpuUpdate) :
+         ioc(iocArg),
++	bus(busArg),
+         peciAdapter(peciAdapterArg),
+         timer(iocArg, interval), updateCb{std::move(cpuUpdate)}
+     {
+@@ -58,12 +64,14 @@ class CupsDiscovery : public std::enable_shared_from_this<CupsDiscovery>
+ 
+     static std::shared_ptr<CupsDiscovery> make(
+         boost::asio::io_context& ioc,
++	std::shared_ptr<sdbusplus::asio::connection> bus,
+         std::shared_ptr<peci::transport::Adapter> peciAdapter,
+         std::function<void(const std::array<std::optional<peci::metrics::Cpu>,
+                                             peci::cpu::limit>&)>&& cpuUpdate)
+     {
+         auto discovery = std::make_shared<CupsDiscovery>(
+-            ctor_lock{}, ioc, peciAdapter, std::move(cpuUpdate));
++            ctor_lock{}, ioc, bus, peciAdapter, std::move(cpuUpdate));
++	discovery->initHostStateMonitor();
+         discovery->detectCpus();
+         discovery->updateCb(discovery->cpus);
+         discovery->tick(discovery->interval);
+@@ -83,7 +91,9 @@ class CupsDiscovery : public std::enable_shared_from_this<CupsDiscovery>
+ 
+   private:
+     std::reference_wrapper<boost::asio::io_context> ioc;
++    std::shared_ptr<sdbusplus::asio::connection> bus;
+     std::shared_ptr<peci::transport::Adapter> peciAdapter;
++    std::unique_ptr<sdbusplus::bus::match_t> hostStateMonitor;
+ 
+     const std::chrono::milliseconds interval = std::chrono::seconds(30);
+     boost::asio::steady_timer timer;
+@@ -96,6 +106,65 @@ class CupsDiscovery : public std::enable_shared_from_this<CupsDiscovery>
+         const std::array<std::optional<peci::metrics::Cpu>, peci::cpu::limit>&)>
+         updateCb;
+ 
++    std::string hostState;
++
++    void initHostStateMonitor()
++    {
++        sdbusplus::asio::getProperty<std::string>(
++            *bus, "xyz.openbmc_project.State.Host",
++            "/xyz/openbmc_project/state/chassis0",
++            "xyz.openbmc_project.State.Chassis", "CurrentPowerState",
++            [self = shared_from_this()](const boost::system::error_code ec,
++                                        const std::string& initialHostState) {
++                if (ec)
++                {
++                    LOG_ERROR << "Couldn't get host state: " << ec;
++                }
++                else
++                {
++                    self->hostState = initialHostState;
++                    LOG_DEBUG << "Initial host state: " << self->hostState;
++                }
++            });
++
++        constexpr auto matchParam =
++            "type='signal',member='PropertiesChanged',path='/xyz/"
++            "openbmc_project/state/"
++            "chassis0',arg0='xyz.openbmc_project.State.Chassis'";
++
++        hostStateMonitor = std::make_unique<sdbusplus::bus::match_t>(
++            *bus, matchParam,
++            [weakSelf =
++                 weak_from_this()](sdbusplus::message::message& message) {
++                if (auto self = weakSelf.lock())
++                {
++                    std::string iface;
++                    boost::container::flat_map<
++                        std::string, std::variant<std::monostate, std::string>>
++                        changedProperties;
++                    std::vector<std::string> invalidatedProperties;
++
++                    message.read(iface, changedProperties,
++                                 invalidatedProperties);
++
++                    if (iface == "xyz.openbmc_project.State.Chassis")
++                    {
++                        const auto it =
++                            changedProperties.find("CurrentPowerState");
++                        if (it != changedProperties.end())
++                        {
++                            if (auto val =
++                                    std::get_if<std::string>(&it->second))
++                            {
++                                LOG_DEBUG << "New host state: " << *val;
++                                self->hostState = *val;
++                            }
++                        }
++                    }
++                }
++            });
++    }
++
+     void tick(std::chrono::milliseconds startDelay)
+     {
+         timer.expires_after(startDelay);
+@@ -126,11 +195,13 @@ class CupsDiscovery : public std::enable_shared_from_this<CupsDiscovery>
+             const uint8_t address =
+                 static_cast<uint8_t>(peci::cpu::minAddress + index);
+ 
++	    if ((hostState != "xyz.openbmc_project.State.Chassis.PowerState.Off")){
+             if (auto metrics = peci::metrics::Cpu::detect(peciAdapter, address))
+             {
+                 LOG_DEBUG << "CPU found: " << metrics->core;
+                 cpus[index].emplace(std::move(*metrics));
+             }
++	    }
+         }
+     }
+ };
+diff --git a/src/base/service.hpp b/src/base/service.hpp
+index 0d9c7e7..ce0588d 100644
+--- a/src/base/service.hpp
++++ b/src/base/service.hpp
+@@ -150,7 +150,7 @@ class CupsService
+             };
+ 
+         cupsService->discovery = CupsDiscovery::make(
+-            ioc, cupsService->peciAdapter, std::move(cpuSetter));
++            ioc, bus, cupsService->peciAdapter, std::move(cpuSetter));
+         cupsService->readings =
+             CupsReadings::make(ioc, bus, std::move(cpuGetter));
+     }
+-- 
+2.25.1
+
