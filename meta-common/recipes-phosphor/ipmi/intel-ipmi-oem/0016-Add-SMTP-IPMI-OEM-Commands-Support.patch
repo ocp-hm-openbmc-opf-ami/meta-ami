@@ -1,31 +1,7 @@
-From 7f479813071e7fd80c2201db34be65bd4e347d5c Mon Sep 17 00:00:00 2001
-From: vipinc <vipinc@ami.com>
-Date: Sun, 13 Nov 2022 21:19:44 +0530
-Subject: [PATCH] Add SMTP IPMI OEM Commands Support
-
-Added below commands
-1. Set/Get SMTP enable/disable command
-2. Set/Get SMTP server IP address command
-3. Set/Get SMTP port number command
-4. Set/Get SMTP sender mail address command
-5. Set/Get SMTP Receiver mail addres command
-Tested:
-Verified the SMTP IPMI commands are working as expected.
-
-Refer MR: https://git.ami.com/core/oe/common/meta-ami/-/merge_requests/117
-
-Signed-off-by: vipinc <vipinc@ami.com>
----
- include/oemcommands.hpp |  21 +++
- ipmi-whitelist.conf     |   2 +
- src/oemcommands.cpp     | 316 ++++++++++++++++++++++++++++++++++++++++
- 3 files changed, 339 insertions(+)
-
-diff --git a/include/oemcommands.hpp b/include/oemcommands.hpp
-index 28d25f2..e6f7ed0 100644
---- a/include/oemcommands.hpp
-+++ b/include/oemcommands.hpp
-@@ -79,6 +79,8 @@ static constexpr Cmd cmdGetSecurityMode = 0xB3;
+diff -Naur a/include/oemcommands.hpp b/include/oemcommands.hpp
+--- a/include/oemcommands.hpp	2022-11-30 23:20:02.066517134 +0530
++++ b/include/oemcommands.hpp	2022-11-30 23:15:46.870847789 +0530
+@@ -79,6 +79,8 @@
  static constexpr Cmd cmdSetSecurityMode = 0xB4;
  static constexpr Cmd cmdMtmKeepAlive = 0xB5;
  static constexpr Cmd cmdOEMGetReading = 0xE2;
@@ -34,7 +10,7 @@ index 28d25f2..e6f7ed0 100644
  static constexpr Cmd cmdSetBIOSCap = 0xD3;
  static constexpr Cmd cmdGetBIOSCap = 0xD4;
  static constexpr Cmd cmdSetPayload = 0xD5;
-@@ -328,6 +330,16 @@ constexpr const char* settingsBusName = "xyz.openbmc_project.Settings";
+@@ -327,6 +329,16 @@
  static constexpr const uint8_t getHostSerialCfgCmd = 0;
  static constexpr const uint8_t setHostSerialCfgCmd = 1;
  
@@ -51,7 +27,7 @@ index 28d25f2..e6f7ed0 100644
  // parameters:
  // 0: host serial port 1 and 2 normal speed
  // 1: host serial port 1 high spend, port 2 normal speed
-@@ -492,6 +504,15 @@ enum class dimmOffsetTypes : uint8_t
+@@ -491,6 +503,16 @@
      dimmPower = 0x2
  };
  
@@ -64,27 +40,27 @@ index 28d25f2..e6f7ed0 100644
 +    recMailId = 0x5,
 +};
 +
- // Various Partition Power control operations under a single command.
- enum IpmiPartitionPowerControlCmds : uint8_t
++
+ // FIXME: this stuff needs to be rewritten
+ enum IPMI_INTEL_OEM_RETURN_CODES
  {
-diff --git a/ipmi-whitelist.conf b/ipmi-whitelist.conf
-index 833ffac..c8ac462 100644
---- a/ipmi-whitelist.conf
-+++ b/ipmi-whitelist.conf
-@@ -296,6 +296,8 @@
+diff -Naur a/ipmi-whitelist.conf b/ipmi-whitelist.conf
+--- a/ipmi-whitelist.conf	2022-11-30 23:20:13.358502587 +0530
++++ b/ipmi-whitelist.conf	2022-11-30 23:15:54.962837235 +0530
+@@ -296,6 +296,9 @@
  0x30:0xd9:0x7f7f   //<Intel General Application>:<OOB Update Status>
  0x30:0xdb:0x7f7f   //<Intel General Application>:<Get/Set BMC Remote Debug Parameters>
  0x30:0xe2:0xff7f   //<Intel General Application>:<OEM Get Reading>
++0x30:0xe3:0xff7f   //<Intel General Application>:<OEM Set SMTP>
 +0x30:0xe3:0xff7f   //<Intel General Application>:<OEM Set SMTP>
 +0x30:0xe4:0xff7f   //<Intel General Application>:<OEM Get SMTP>
  0x30:0xe5:0xff7f   //<Intel General Application>:<Get NMI Source>
  0x30:0xe6:0x7f7f   //<Intel General Application>:<Send Raw PECI>
  0x30:0xe7:0x7f7f   //<Intel General Application>:<Aggregate Send Raw PECI>
-diff --git a/src/oemcommands.cpp b/src/oemcommands.cpp
-index 2e18fbe..5196b62 100644
---- a/src/oemcommands.cpp
-+++ b/src/oemcommands.cpp
-@@ -3947,6 +3947,312 @@ ipmi::RspType<uint8_t, uint8_t> ipmiOEMGetBufferSize()
+diff -Naur a/src/oemcommands.cpp b/src/oemcommands.cpp
+--- a/src/oemcommands.cpp	2022-11-30 23:20:24.778487879 +0530
++++ b/src/oemcommands.cpp	2022-11-30 23:16:18.414806691 +0530
+@@ -3946,6 +3946,313 @@
      return ipmi::responseSuccess(kcsMaxBufferSize, ipmbMaxBufferSize);
  }
  
@@ -394,15 +370,15 @@ index 2e18fbe..5196b62 100644
 +    return ipmi::responseSuccess(resData);
 +}
 +
++
  ipmi::RspType<std::vector<uint8_t>>
      ipmiOEMReadPFRMailbox(ipmi::Context::ptr& ctx, const uint8_t readRegister,
                            const uint8_t numOfBytes, uint8_t registerIdentifier)
-@@ -4926,6 +5232,16 @@ static void registerOEMFunctions(void)
+@@ -4921,6 +5228,17 @@
+                                ipmi::Privilege::Admin,
+                                ipmi::ipmiGetManagerCertFingerPrint);
  
-     registerHandler(prioOemBase, intel::netFnApp, intel::app::cmdPFRMailboxRead,
-                     Privilege::Admin, ipmiOEMReadPFRMailbox);
-+    
-+    // <Set SMTP Config>
++     // <Set SMTP Config>
 +    registerHandler(prioOemBase, intel::netFnGeneral,
 +                    intel::general::cmdOEMSetSmtpConfig, Privilege::User,
 +                    ipmiOEMSetSmtpConfig);
@@ -411,9 +387,8 @@ index 2e18fbe..5196b62 100644
 +    registerHandler(prioOemBase, intel::netFnGeneral,
 +                    intel::general::cmdOEMGetSmtpConfig, Privilege::User,
 +                    ipmiOEMGetSmtpConfig);
++
++
+ }
  
- 
-     // <Get USB Description>
--- 
-2.25.1
-
+ } // namespace ipmi
