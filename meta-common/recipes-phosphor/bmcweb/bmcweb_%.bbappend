@@ -29,4 +29,5 @@ SRC_URI += "file://0001-managers-add-factory-restore.patch \
             file://0019-IndicatorLED-Depreacted.patch \
             file://0020-Additional-Sensors-Support.patch \ 
             file://0021-Integrated-NIC-Interface-in-Redfish.patch \
+			file://0022-Fixed-the-Enable-Disable-outband-IPMI-issue.patch \
 "
