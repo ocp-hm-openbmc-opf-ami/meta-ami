@@ -35,7 +35,7 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 ### 2) Download the source
 ```
 git clone https://git.ami.com/core/oe/common/firmware.bmc.openbmc.yocto.openbmc openbmc; cd openbmc
-git clone https://git.ami.com/core/oe/common/firmware.bmc.openbmc.yocto.openbmc-meta-intel openbmc-meta-intel
+git clone https://git.ami.com/core/oe/common/openbmc-meta-intel-egs openbmc-meta-intel
 git clone https://git.ami.com/core/oe/common/meta-ami
 sh meta-ami/meta-common/github-gitlab-url.sh
 ```
@@ -51,7 +51,14 @@ bitbake intel-platforms
 TEMPLATECONF=meta-ami/meta-evb/meta-evb-aspeed/meta-evb-ast2600/conf/templates/default . openbmc-env
 bitbake obmc-phosphor-image
 ```
-
+### 5) How to Enable Full Extension Packs
+```
+Step 1: Uncomment IMAGE_INSTALL in meta-ami/conf/layer.conf
+Step 2: Enable PFR in openbmc-meta-intel/meta-egs/conf/templates/default/local.conf.sample 
+Step 3: Enable egs-image-common in openbmc-meta-intel/meta-egs/recipes-intel/images/intel-platforms.bbappend 
+Step 4: Enable obmc-phosphor-image-restricted in openbmc-meta-intel/meta-restricted/recipes-intel/images/intel-platforms.bbappend 
+Step 5: Rebuild the image
+ ```
 ## Features of OpenEdition
 
 ** Feature List**
