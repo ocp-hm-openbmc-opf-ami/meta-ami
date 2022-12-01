@@ -48,7 +48,7 @@ sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.cups-s
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=egs/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/cups/cups-service.bb
 
-sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.node-manager.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.node-manager.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-internal/recipes-intel/node-manager/node-manager_git.bb
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.node-manager.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.node-manager.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/node-manager/node-manager_git.bb
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.bmc-assisted-fru-isolation.git;branch=main;protocol=ssh/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.bmc-assisted-fru-isolation.git;branch=main;protocol=ssh/g' openbmc-meta-intel/meta-restricted/recipes-core/bafi/bafi.bb
 
