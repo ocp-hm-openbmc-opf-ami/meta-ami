@@ -4,7 +4,7 @@ SRCREV = "f7dce2e866821caa28010ee5d869e01f0de905a4"
 
 SRC_URI += " file://0001-ARP-Control.patch \
              file://0002-VLAN-Priority.patch \
-             file://0005-Support-For-DHCP-Static.patch \
+             file://0006-keep-IPv6AcceptRA-TRUE-when-enable-ipv6-static.patch \
            "
 
 EXTRA_OEMESON:append = " -Dpersist-mac=true"
