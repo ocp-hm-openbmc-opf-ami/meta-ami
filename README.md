@@ -34,10 +34,10 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 
 ### 2) Download the source
 ```
-git clone https://git.ami.com/core/oe/common/firmware.bmc.openbmc.yocto.openbmc openbmc; cd openbmc
-git clone https://git.ami.com/core/oe/common/openbmc-meta-intel-egs openbmc-meta-intel
-git clone https://git.ami.com/core/oe/common/meta-ami
-sh meta-ami/meta-common/github-gitlab-url.sh
+git clone -b 'OE2.3' https://git.ami.com/core/oe/common/firmware.bmc.openbmc.yocto.openbmc openbmc; cd openbmc
+git clone -b 'OE2.3' https://git.ami.com/core/oe/common/openbmc-meta-intel-egs openbmc-meta-intel
+git clone -b 'OE2.3'  https://git.ami.com/core/oe/common/meta-ami
+sh meta-ami/meta-common/github-gitlab-url.sh - You need to modify the script if repos are hosted in different location.
 ```
 
 ### 3) How to Build ArcherCity
@@ -87,7 +87,7 @@ Step 5: Rebuild the image
 * Diagnostics, fault detection and analysis 
 * Thermal Management
 * ARP/GARP Support
-* IPv6
+* IPv4 and IPv6
 * VLAN
 * Debug Log Collector
 * DNS and mDNS Support
@@ -112,7 +112,56 @@ Step 5: Rebuild the image
 * MCTP and Binding (I2c, PCIe)
 * NIC Management
 * NVMe-Basic, NVMe-MI
+* PFR
 * Seamless update
+
+## Repository Name with License
+| Repository Location                                  |  Feature    |  License | OpenSource |
+| -------------------------------------------------    | ----    | -------------| ------------|
+| https://git.ami.com/core/oe/common/firmware.bmc.openbmc.yocto.openbmc|Core	| Apache|Yes|
+| https://git.ami.com/core/oe/common/os.linux.kernel.openbmc.linux|Core	|GPL	|Yes|
+|https://git.ami.com/core/oe/common/openbmc-meta-intel-egs|Core|	Intel|	No|
+|https://git.ami.com/core/oe/common/meta-ami|Core|Apache|Yes|
+|https://git.ami.com/core/oe/common/firmware.bmc.openbmc.applications.special-mode-manager|Core|Apache|	Yes|
+|https://git.ami.com/core/oe/common/firmware.bmc.openbmc.applications.provisioning-mode-manager|Core|Apache|Yes|
+|https://git.ami.com/core/oe/common/firmware.bmc.openbmc.applications.settings-manager|Core|Apache|Yes|
+|https://git.ami.com/core/oe/common/firmware.bmc.openbmc.applications.virtual-media|Core|Apache|Yes|
+|https://git.ami.com/core/oe/common/firmware.bmc.openbmc.applications.node-manager-proxy|Core|Apache|Yes|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.applications.security-manager|Core|Apache|Yes|
+|https://git.ami.com/core/oe/common/firmware.bmc.openbmc.applications.mtd-util|Core|Apache|Yes|
+|https://git.ami.com/core/oe/common/firmware.management.bmc.openbmc-commercial.pef-alert-manager|Core|Apache|Yes|
+|https://git.ami.com/core/oe/common/firmware.management.bmc.openbmc-commercial.mail-alert-manager|Core|Apache|Yes|
+|https://git.ami.com/core/oe/advanced-features/firmware.management.bmc.openbmc-commercial.nvme-mgmt|Extension Pack|AMI|No|
+|https://git.ami.com/core/oe/advanced-features/firmware.management.bmc.openbmc-commercial.nic-mgmt|Extension Pack|	AMI|	No|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.applications.crashdump|Extension Pack	|AMI|	No|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.libraries.libespi|Core|	Intel|	No|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.libraries.spdmapplib|Extension Pack	|Intel|	No|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.applications.spdmd|Extension Pack	|Intel|	No|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.applications.memory-resilience-technology-engine|Extension Pack|	Intel|	No|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.libraries.mctpwplus|Extension Pack	|Apache|	Yes|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.libraries.mctp-wrapper|Extension Pack|	Apache|	Yes|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.applications.pmci-launcher|Extension Pack	|Apache	|Yes|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.applications.pldmd|Extension Pack|	Intel|	No|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.applications.mctpd|Extension Pack|	Apache|	Yes|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.applications.mctp-emulator|Extension Pack|	Apache|	Yes|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.applications.cups-service|Extension Pack	|Intel	|No|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.applications.bmc-collector|Extension Pack	|Intel|	No|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.applications.nvme-mi-daemon|Core	|Apache	|Yes|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.applications.host-misc-comm-manager|Core|	Apache	|Yes|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.applications.at-scale-debug|Extension Pack	|Intel	|No|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.applications.crashdump-add-in-card|Extension Pack|	Intel|	No|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.applications.bmc-assisted-fru-isolation|Extension Pack	|Intel	|No|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.applications.memory-error-collector|Extension Pack	|Intel|	No|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.libraries.libmctp|Extension Pack	|Apache	|Yes|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.applications.node-manager|Extension Pack|	Intel|	No|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.libraries.libpldm|Extension Pack	|Intel|	No|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.applications.intel-pfr-signing-utility|Extension Pack|Apache|	Yes|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.applications.host-memory|Extension Pack|	Intel	|No|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.applications.optane-memory|Extension Pack	|Intel|	No|
+|https://git.ami.com/core/oe/advanced-features/firmware.bmc.openbmc.applications.psu-managerCore|Apache|	Yes|
+|All other Repo in AMI Gitlab|	Private|	AMI/Intel|	No|
+ 
+
 
 ## Finding out more
 

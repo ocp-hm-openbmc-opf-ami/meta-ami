@@ -72,3 +72,5 @@ sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.libraries.spdmappli
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.spdmd.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.spdmd.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/pmci/spdmd.bb
 
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.optane-memory.git;protocol=ssh;branch=main/git@git.ami.com\/core\/oe\/advanced-features\/firmware.bmc.openbmc.applications.optane-memory.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/optane-memory/optane-memory_git.bb
+
