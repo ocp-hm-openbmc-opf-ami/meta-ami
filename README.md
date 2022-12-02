@@ -39,29 +39,25 @@ git clone -b 'OE2.3' https://git.ami.com/core/oe/common/openbmc-meta-intel-egs o
 git clone -b 'OE2.3'  https://git.ami.com/core/oe/common/meta-ami
 sh meta-ami/meta-common/github-gitlab-url.sh - You need to modify the script if repos are hosted in different location.
 ```
-
-### 3) How to Build ArcherCity
+### 3) How to Enable Expansion Packs
+ ```
+By default all the expansion packs are disabled, follow the below steps if you have required license:
+Uncomment associated IMAGE_INSTALL in meta-ami/conf/layer.conf
+For example to enble ASD, uncomment IMAGE_INSTALL:append = " at-scale-debug"
+```
+### 4) How to Build ArcherCity
 ```
 TEMPLATECONF=openbmc-meta-intel/meta-egs/conf/templates/default . openbmc-env
 bitbake intel-platforms
 ```
 
-### 4) How to Build AST2600EVB
+### 5) How to Build AST2600EVB
 ```
 TEMPLATECONF=meta-ami/meta-evb/meta-evb-aspeed/meta-evb-ast2600/conf/templates/default . openbmc-env
 bitbake obmc-phosphor-image
 ```
-### 5) How to Enable Full Extension Packs
-```
-Step 1: Uncomment IMAGE_INSTALL in meta-ami/conf/layer.conf
-Step 2: Enable PFR in openbmc-meta-intel/meta-egs/conf/templates/default/local.conf.sample 
-Step 3: Enable egs-image-common in openbmc-meta-intel/meta-egs/recipes-intel/images/intel-platforms.bbappend 
-Step 4: Enable obmc-phosphor-image-restricted in openbmc-meta-intel/meta-restricted/recipes-intel/images/intel-platforms.bbappend 
-Step 5: Rebuild the image
- ```
-## Features of OpenEdition
+### Features of OpenEdition
 
-** Feature List**
 * IPMI 2.0
 * DCMI 1.5
 * IPMI LAN Interface
