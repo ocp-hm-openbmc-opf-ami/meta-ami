@@ -15,4 +15,5 @@ SRC_URI += "\
 	   file://0015-Add-OOB-BIOS-support-OEM.patch \	
 	   file://0016-Add-SMTP-IPMI-OEM-Commands-Support.patch \
 	   file://0017-Modified-Host-Interface-Channel-Number.patch \
+	   file://0018-fixed-add-sel.patch \
            "
