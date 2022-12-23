@@ -1,6 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRCREV = "0a24e5cd3fb7f3f17e9c440fb8fb33bcffdfecfb"
+SRCREV = "511369844523794fd2dd1655528b48fe38b8e1e5"
 
 SRC_URI += " \
 	   file://0001-BMC-ARP-Control.patch \
@@ -18,7 +18,6 @@ SRC_URI += " \
            file://dcmi-getActive-command.patch \
            file://0013-Enable-Ipv6-static-address-and-disable-ipv6-dynamic-address.patch \  
            file://dcmi_getDCMICapabilities_info_oldHandler_to_newHandler.patch \ 
-	   file://dcmi_old_to_new_handler_implementation.patch \
            file://0014-master-write-read-shows-wrong-response-for-invalid-d.patch \
            file://0038-alongwith-fix-in-ethernet-interface-enable-disable-ipv6-static-IP.patch \
            "

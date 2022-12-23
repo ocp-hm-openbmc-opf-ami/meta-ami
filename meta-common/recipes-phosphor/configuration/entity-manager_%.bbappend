@@ -1,7 +1,7 @@
 #AMI-AC-Baseboard.json  and AMI-solum_pssf162202_psu.json is the local AC-Baseboard.json which will contain the Changes from AMI.
 #AMI-AC-Baseboard.json and AMI-solum_pssf162202_psu.json will replace the Default AC-Baseboard.json and solum_pssf162202_psu.json in rootfs
 FILESEXTRAPATHS:append := ":${THISDIR}/${PN}"
-SRCREV = "7b8786f44741ac66468daaae9764111a5ec29d25"
+SRCREV = "10612f3fe552ea8141ed1960a6c2df088cff0b92"
 
 SRC_URI:append = " \
     file://AMI-AC-Baseboard.json \
