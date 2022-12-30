@@ -12,7 +12,6 @@ SRC_URI += " \
     file://0003-User-Management-Enabled-Disabled-Custom-error-change.patch \
     file://0004-SSL-Certificate-certificate-creation-changes.patch \
     file://0005-Network-Configuration-Changes.patch \
-    file://0006-Sensor-state-threshold-values-are-not-getting-update.patch \
     file://0007-virtual-media-support-multiple-media-types.patch \
     file://0008-Support-for-Multiple-Service-configurations-like-KVM.patch \
     file://0009-Restrict-able-to-disable-change-privilege-from-root.patch \
