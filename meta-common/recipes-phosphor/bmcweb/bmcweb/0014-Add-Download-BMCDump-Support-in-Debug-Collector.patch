@@ -1,13 +1,30 @@
+From 9bd6938bb3b48372d904af3a287040d93c0271a7 Mon Sep 17 00:00:00 2001
+From: Abinaya L <abinayal@ami.com>
+Date: Tue, 3 Jan 2023 12:27:19 +0530
+Subject: [PATCH] 0014-Add-Download-BMCDump-Support-in-Debug-Collector
+
+---
+ http/http_connection.hpp |  40 +++++
+ http/http_response.hpp   | 120 +++++++++++++++
+ http/http_stream.hpp     | 158 +++++++++++++++++++
+ http/routing.hpp         |  99 ++++++++++++
+ include/dump_offload.hpp | 305 +++++++++++++++++++++++++++++++++++++
+ src/webserver_main.cpp   |   6 +
+ 6 files changed, 728 insertions(+)
+ create mode 100644 http/http_stream.hpp
+ create mode 100644 include/dump_offload.hpp
+
 diff --git a/http/http_connection.hpp b/http/http_connection.hpp
-index ab43051..1c79c03 100644
+index 939b672..fd3dd82 100644
 --- a/http/http_connection.hpp
 +++ b/http/http_connection.hpp
-@@ -408,6 +408,45 @@ class Connection :
+@@ -407,6 +407,46 @@ class Connection :
              handler->handleUpgrade(thisReq, asyncResp, std::move(adaptor));
              return;
          }
 +
-+	std::string url(thisReq.target());
++
++       std::string url(thisReq.target());
 +        std::size_t dumpPos = url.rfind("Dump");
 +        std::size_t attachmentPos = url.rfind("attachment");
 +        if ((dumpPos != std::string::npos) &&
@@ -25,7 +42,7 @@ index ab43051..1c79c03 100644
 +                        // which implies successful handle upgrade. Response
 +                        // needs to be sent over this connection only on
 +                        // failure.
-+			 boost::asio::post(self->adaptor.get_executor(),
++                        boost::asio::post(self->adaptor.get_executor(),
 +                                          [self, &thisRes] {
 +                                              self->completeRequest(thisRes);
 +                                          });
@@ -45,11 +62,11 @@ index ab43051..1c79c03 100644
 +
 +        }
 +
-         handler->handle(thisReq, asyncResp);
-     }
- 
+         std::string_view expected =
+             req->getHeaderValue(boost::beast::http::field::if_none_match);
+         if (!expected.empty())
 diff --git a/http/http_response.hpp b/http/http_response.hpp
-index 90d53bc..246d6a4 100644
+index 9f89987..f0b5983 100644
 --- a/http/http_response.hpp
 +++ b/http/http_response.hpp
 @@ -6,6 +6,10 @@
@@ -63,10 +80,11 @@ index 90d53bc..246d6a4 100644
  #include <optional>
  #include <string>
  #include <string_view>
-@@ -232,4 +236,119 @@ struct Response
+@@ -261,4 +265,120 @@ struct Response
      std::function<void(Response&)> completeRequestHandler;
      std::function<bool()> isAliveHelper;
  };
++
 +
 +struct DynamicResponse
 +{
@@ -183,130 +201,6 @@ index 90d53bc..246d6a4 100644
 +};
 +
  } // namespace crow
-diff --git a/http/routing.hpp b/http/routing.hpp
-index 6c16347..7b8dada 100644
---- a/http/routing.hpp
-+++ b/http/routing.hpp
-@@ -5,6 +5,7 @@
- #include "error_messages.hpp"
- #include "http_request.hpp"
- #include "http_response.hpp"
-+#include "http_stream.hpp"
- #include "logging.hpp"
- #include "privileges.hpp"
- #include "server_sent_event.hpp"
-@@ -526,6 +527,95 @@ class SseSocketRule :
-     std::function<void(std::shared_ptr<crow::SseConnection>&)> closeHandler;
- };
- 
-+class StreamingResponseRule : public BaseRule
-+{
-+    using self_t = StreamingResponseRule;
-+
-+  public:
-+    StreamingResponseRule(const std::string& ruleIn) : BaseRule(ruleIn)
-+    {}
-+
-+    void validate() override
-+    {}
-+
-+    void handle(const Request&,
-+                const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-+                const RoutingParams&) override
-+    {
-+        asyncResp->res.result(boost::beast::http::status::not_found);
-+    }
-+    void handleUpgrade(const Request& req,
-+                       const std::shared_ptr<bmcweb::AsyncResp>& /*asyncResp*/,
-+                       boost::asio::ip::tcp::socket&& adaptor) override
-+    {
-+        std::shared_ptr<crow::streaming_response::ConnectionImpl<
-+            boost::asio::ip::tcp::socket>>
-+            myConnection =
-+                std::make_shared<crow::streaming_response::ConnectionImpl<
-+                    boost::asio::ip::tcp::socket>>(req, std::move(adaptor),
-+                                                   openHandler, messageHandler,
-+                                                   closeHandler, errorHandler);
-+
-+        myConnection->start();
-+        myConnection.reset();
-+        myConnection = nullptr;
-+    }
-+
-+#ifdef BMCWEB_ENABLE_SSL
-+    void handleUpgrade(const Request& req,
-+                       const std::shared_ptr<bmcweb::AsyncResp>& /*asyncResp*/,
-+                       boost::beast::ssl_stream<boost::asio::ip::tcp::socket>&&
-+                           adaptor) override
-+    {
-+        std::shared_ptr<crow::streaming_response::ConnectionImpl<
-+            boost::beast::ssl_stream<boost::asio::ip::tcp::socket>>>
-+            myConnection =
-+                std::make_shared<crow::streaming_response::ConnectionImpl<
-+                    boost::beast::ssl_stream<boost::asio::ip::tcp::socket>>>(
-+                    req, std::move(adaptor), openHandler, messageHandler,
-+                    closeHandler, errorHandler);
-+        myConnection->start();
-+        myConnection.reset();
-+        myConnection = nullptr;
-+    }
-+#endif
-+   template <typename Func>
-+    self_t& onopen(Func f)
-+    {
-+        openHandler = f;
-+        return *this;
-+    }
-+
-+    template <typename Func>
-+    self_t& onmessage(Func f)
-+    {
-+        messageHandler = f;
-+        return *this;
-+    }
-+
-+    template <typename Func>
-+    self_t& onclose(Func f)
-+    {
-+        closeHandler = f;
-+        return *this;
-+    }
-+
-+    template <typename Func>
-+    self_t& onerror(Func f)
-+    {
-+        errorHandler = f;
-+        return *this;
-+    }
-+
-+  protected:
-+    std::function<void(crow::streaming_response::Connection&)> openHandler;
-+    std::function<void(crow::streaming_response::Connection&,
-+                       const std::string&, bool)>
-+        messageHandler;
-+    std::function<void(crow::streaming_response::Connection&)> closeHandler;
-+    std::function<void(crow::streaming_response::Connection&)> errorHandler;
-+};
-+
- template <typename T>
- struct RuleParameterTraits : public PrivilegeParameterTraits<T>
- {
-@@ -546,6 +636,15 @@ struct RuleParameterTraits : public PrivilegeParameterTraits<T>
-         return *p;
-     }
- 
-+     StreamingResponseRule& streamingResponse()
-+    {
-+        BMCWEB_LOG_DEBUG << "Invoking stream response rule";
-+        self_t* self = static_cast<self_t*>(this);
-+        StreamingResponseRule* p = new StreamingResponseRule(self->rule);
-+        self->ruleToUpgrade.reset(p);
-+        return *p;
-+    }
-+
-     self_t& name(const std::string_view name) noexcept
-     {
-         self_t* self = static_cast<self_t*>(this);
 diff --git a/http/http_stream.hpp b/http/http_stream.hpp
 new file mode 100644
 index 0000000..7101097
@@ -471,6 +365,130 @@ index 0000000..7101097
 +};
 +} // namespace streaming_response
 +} // namespace crow
+diff --git a/http/routing.hpp b/http/routing.hpp
+index 4299d6f..e6c2300 100644
+--- a/http/routing.hpp
++++ b/http/routing.hpp
+@@ -5,6 +5,7 @@
+ #include "error_messages.hpp"
+ #include "http_request.hpp"
+ #include "http_response.hpp"
++#include "http_stream.hpp"
+ #include "logging.hpp"
+ #include "privileges.hpp"
+ #include "server_sent_event.hpp"
+@@ -521,6 +522,95 @@ class SseSocketRule :
+     std::function<void(std::shared_ptr<crow::SseConnection>&)> closeHandler;
+ };
+ 
++class StreamingResponseRule : public BaseRule
++{
++    using self_t = StreamingResponseRule;
++
++  public:
++    StreamingResponseRule(const std::string& ruleIn) : BaseRule(ruleIn)
++    {}
++
++    void validate() override
++    {}
++
++    void handle(const Request&,
++                const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                const RoutingParams&) override
++    {
++        asyncResp->res.result(boost::beast::http::status::not_found);
++    }
++    void handleUpgrade(const Request& req,
++                       const std::shared_ptr<bmcweb::AsyncResp>& /*asyncResp*/,
++                       boost::asio::ip::tcp::socket&& adaptor) override
++    {
++        std::shared_ptr<crow::streaming_response::ConnectionImpl<
++            boost::asio::ip::tcp::socket>>
++            myConnection =
++                std::make_shared<crow::streaming_response::ConnectionImpl<
++                    boost::asio::ip::tcp::socket>>(req, std::move(adaptor),
++                                                   openHandler, messageHandler,
++                                                   closeHandler, errorHandler);
++
++        myConnection->start();
++        myConnection.reset();
++        myConnection = nullptr;
++    }
++
++#ifdef BMCWEB_ENABLE_SSL
++    void handleUpgrade(const Request& req,
++                       const std::shared_ptr<bmcweb::AsyncResp>& /*asyncResp*/,
++                       boost::beast::ssl_stream<boost::asio::ip::tcp::socket>&&
++                           adaptor) override
++    {
++        std::shared_ptr<crow::streaming_response::ConnectionImpl<
++            boost::beast::ssl_stream<boost::asio::ip::tcp::socket>>>
++            myConnection =
++                std::make_shared<crow::streaming_response::ConnectionImpl<
++                    boost::beast::ssl_stream<boost::asio::ip::tcp::socket>>>(
++                    req, std::move(adaptor), openHandler, messageHandler,
++                    closeHandler, errorHandler);
++        myConnection->start();
++        myConnection.reset();
++        myConnection = nullptr;
++    }
++#endif
++   template <typename Func>
++    self_t& onopen(Func f)
++    {
++        openHandler = f;
++       return *this;
++    }
++
++    template <typename Func>
++    self_t& onmessage(Func f)
++    {
++        messageHandler = f;
++        return *this;
++    }
++
++    template <typename Func>
++    self_t& onclose(Func f)
++    {
++        closeHandler = f;
++        return *this;
++    }
++
++    template <typename Func>
++    self_t& onerror(Func f)
++    {
++        errorHandler = f;
++        return *this;
++    }
++
++  protected:
++    std::function<void(crow::streaming_response::Connection&)> openHandler;
++    std::function<void(crow::streaming_response::Connection&,
++                       const std::string&, bool)>
++        messageHandler;
++    std::function<void(crow::streaming_response::Connection&)> closeHandler;
++    std::function<void(crow::streaming_response::Connection&)> errorHandler;
++};
++
+ template <typename T>
+ struct RuleParameterTraits : public PrivilegeParameterTraits<T>
+ {
+@@ -541,6 +631,15 @@ struct RuleParameterTraits : public PrivilegeParameterTraits<T>
+         return *p;
+     }
+ 
++    StreamingResponseRule& streamingResponse()
++    {
++        BMCWEB_LOG_DEBUG << "Invoking stream response rule";
++        self_t* self = static_cast<self_t*>(this);
++        StreamingResponseRule* p = new StreamingResponseRule(self->rule);
++        self->ruleToUpgrade.reset(p);
++        return *p;
++    }
++
+     self_t& name(const std::string_view name) noexcept
+     {
+         self_t* self = static_cast<self_t*>(this);
 diff --git a/include/dump_offload.hpp b/include/dump_offload.hpp
 new file mode 100644
 index 0000000..ecc5b4f
@@ -806,3 +824,6 @@ index e7f3ffe..a63b8c0 100644
      app.run();
      io->run();
  
+-- 
+2.17.1
+
