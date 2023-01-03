@@ -1,11 +1,12 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRCREV = "f7dce2e866821caa28010ee5d869e01f0de905a4"
+SRCREV = "a4c18d4e50b74f1c19ebdfaaf7073ab89d6524bb"
 
-SRC_URI += " file://0001-ARP-Control.patch \
-             file://0002-VLAN-Priority.patch \
+SRC_URI:append = " \
+	     file://0001-ARP-Control.patch \
              file://0006-keep-IPv6AcceptRA-TRUE-when-enable-ipv6-static.patch \
            "
+
 
 EXTRA_OEMESON:append = " -Dpersist-mac=true"
 

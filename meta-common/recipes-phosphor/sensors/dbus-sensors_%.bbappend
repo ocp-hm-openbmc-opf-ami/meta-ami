@@ -1,6 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRCREV = "61baea42b86c74f5c6350f669f889d9d2a728be4"
+SRCREV = "1e3842541db673c850625bfae4227fb88767a2a9"
 
 SRC_URI += "file://0001-converted-index-to-0-based-and-made-pwm-starts-from-.patch \
 	    file://0002-Add-Processor-Type-Sensor-Support.patch \
@@ -8,6 +8,7 @@ SRC_URI += "file://0001-converted-index-to-0-based-and-made-pwm-starts-from-.pat
 	    file://0004-Add-Watchdog2-Discrete-Sensor.patch \
 	    file://0005-Add-Severity-Information-For-Discrete-Sensor.patch \
 	    file://0006-disable-unsupported-sensors.patch\
+	    file://0007-Update-ObjectManager-for-sensors-in-Right-Path.patch \
             "
 
 PACKAGECONFIG[processorstatus] = "-Dprocstatus=enabled, -Dprocstatus=disabled"

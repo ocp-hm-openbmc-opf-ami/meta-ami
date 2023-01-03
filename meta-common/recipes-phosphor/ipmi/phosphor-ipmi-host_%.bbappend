@@ -20,6 +20,7 @@ SRC_URI += " \
            file://dcmi_getDCMICapabilities_info_oldHandler_to_newHandler.patch \ 
            file://0014-master-write-read-shows-wrong-response-for-invalid-d.patch \
            file://0038-alongwith-fix-in-ethernet-interface-enable-disable-ipv6-static-IP.patch \
+	   file://0015-dcmi_old_to_new_handler_implementation.patch \
            "
 
 do_install:append(){
