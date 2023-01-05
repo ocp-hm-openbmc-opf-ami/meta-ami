@@ -1,7 +1,7 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 
-SRC_URI:append = "file://plugins.d/arpcntlconf \
+SRC_URI += "file://plugins.d/arpcntlconf \
 	    file://plugins.d/arptableinfo  \
 	    file://plugins.d/biospostcode  \
 	    file://plugins.d/channelaccess  \
