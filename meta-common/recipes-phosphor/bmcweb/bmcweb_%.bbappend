@@ -21,7 +21,6 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
             file://0010-Time-zone-configuration-support.patch \
             file://0011-Add-Chassis-Sensors-Collection.patch \
             file://0012-Added-PefService-and-SMTP-configuration.patch \
-	    file://0013-Changed-CUPS-sensors-path.patch \
 	    file://0015-added-OEM-led-indicator-amber-green-susack-status.patch \
 	    file://0016-Added-OOB-Bios-Configuration-Support-in-Redfish.patch \
 	    file://0017-Integrated-NVME-Interface.patch \
