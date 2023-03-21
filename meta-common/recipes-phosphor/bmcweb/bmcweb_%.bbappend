@@ -30,4 +30,5 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
             file://0021-Integrated-NIC-Interface-in-Redfish.patch \
 	    file://0022-Fixed-the-Enable-Disable-outband-IPMI-issue.patch \
 	    file://0023-Fix-for-unable-to-delete-newly-created-ipv4-static.patch \
+            file://0024-Time-Zone-Configuration-issue-fix.patch \ 
 "
