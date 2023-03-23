@@ -5,10 +5,7 @@
 (Please base on those items as below to provide information)
 
 ### [Issue Description] 
-(Please describes "what the issue or the issue symptom is?" please provide detailed information )
-
-### [Root cause]
-(What is the reason to cause this issue? please provide detailed information)
+(Please provide SCA issue list or describes "what the SCA issue or the issue symptom is?". please provide detailed information )
 
 ### [Resolution]
 (What solution is used to fix this issue? please provide detailed information)
@@ -20,17 +17,12 @@
 (Please provide the Gitlab Test image link that used for verification)
 
 ## Related MR
-(Please include the related MR for this bug fix if any)
+(Please include the related MR for this SCA fix if any)
 
-/label ~defect
-(Do not remove this defect label)
+/label ~sca-fix
+(Do not remove this security label)
 
 (Please provide Milestone information)
 
 ## List additional approvers if needed
 ```@username1, @username2 ....``` (Remove ``` when adding usernames)
-
-## List QA Engineer if applicable 
-```@username1, @username2....``` (Remove ``` when adding usernames)
-(QA Engineer listed here will be notified to create test case for this defect)
-

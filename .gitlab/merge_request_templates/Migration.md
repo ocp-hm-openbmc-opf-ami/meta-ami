@@ -2,7 +2,7 @@
 (Copy full MegaRAC Git Workitem URL and paste here)
 
 ## Summary of work done
-(Please base on those items as below to provide information)
+(Please add the summary of the EIP or GITTASK link list with the issue summary information. that issue summary information is base on those items as below to provide information)
 
 ### [Issue Description] 
 (Please describes "what the issue or the issue symptom is?" please provide detailed information )
@@ -22,7 +22,7 @@
 ## Related MR
 (Please include the related MR for this bug fix if any)
 
-/label ~defect
+/label ~feature
 (Do not remove this defect label)
 
 (Please provide Milestone information)
