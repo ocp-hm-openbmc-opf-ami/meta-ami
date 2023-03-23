@@ -21,6 +21,7 @@ SRC_URI += " \
            file://0014-master-write-read-shows-wrong-response-for-invalid-d.patch \
            file://0038-alongwith-fix-in-ethernet-interface-enable-disable-ipv6-static-IP.patch \
 	   file://0015-dcmi_old_to_new_handler_implementation.patch \
+           file://0039-Added-Diag-and-safe-boot-mode-support.patch \
            "
 
 do_install:append(){
