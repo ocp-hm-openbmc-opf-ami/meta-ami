@@ -84,3 +84,10 @@ sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.mmbi-s
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.trusted-application.git;protocol=ssh;nobranch=1/git@git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.trusted-application.git;protocol=ssh;nobranch=1/g' openbmc-meta-intel/meta-common/recipes-optee/optee-user-ta/optee-user-ta_git.bb
 
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.host-memory.git;protocol=ssh;nobranch=1/git@git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.host-memory.git;protocol=ssh;nobranch=1/g' openbmc-meta-intel/meta-restricted/recipes-core/host-memory/host-memory_git.bb
+
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.optane-memory.git;protocol=ssh;nobranch=1/git@git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.optane-memory.git;protocol=ssh;nobranch=1/g' openbmc-meta-intel/meta-restricted/recipes-intel/optane-memory/optane-memory_git.bb
+
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.memory-error-collector.git;protocol=ssh;nobranch=1/git@git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.memory-error-collector.git;protocol=ssh;nobranch=1/g' openbmc-meta-intel/meta-restricted/recipes-core/memory-error-collector/memory-error-collector.bb
+
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.memory-resilience-technology-engine.git;protocol=ssh;nobranch=1/git@git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.memory-resilience-technology-engine.git;protocol=ssh;nobranch=1/g' openbmc-meta-intel/meta-restricted/recipes-core/memory-resilience-technology-engine/memory-resilience-technology-engine.bb
