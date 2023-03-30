@@ -1,4 +1,4 @@
-## Issue URL
+## Issue URL (AMI Internal Use Only)
 (Copy full MegaRAC Git Workitem URL and paste here)
 
 ## Summary of work done
