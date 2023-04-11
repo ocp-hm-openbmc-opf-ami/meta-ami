@@ -1415,3 +1415,102 @@ diff -Naur a/xyz.openbmc_project.GARPControl.service.in b/xyz.openbmc_project.GA
 +
 +[Install]
 +WantedBy=@SYSTEMD_TARGET@
+diff -Naur a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+--- a/src/ethernet_interface.cpp	2023-01-31 16:47:07.282993679 +0530
++++ b/src/ethernet_interface.cpp	2023-01-31 16:45:58.858643266 +0530
+@@ -1085,7 +1085,7 @@
+     config::Parser parser(confPath.string());
+ 
+     auto garpEnable = getArpGarpEnabled(parser, "GARP");
+-    auto arpEnable = getArpGarpEnabled(parser, "ARP_Response");
++    auto arpEnable = getArpEnabled(parser, "ARP_Response");
+     auto garpInt = getGarpInterval(parser);
+     ARPControlIface::arpResponse(arpEnable);
+     ARPControlIface::gratuitousARP(garpEnable);
+diff -Naur a/src/network_manager.cpp b/src/network_manager.cpp
+--- a/src/network_manager.cpp	2023-01-31 15:50:52.292373665 +0530
++++ b/src/network_manager.cpp	2023-01-31 15:59:57.117426478 +0530
+@@ -161,6 +161,7 @@
+         bus, (this->objPath / "config").str);
+     dhcpConf = std::make_unique<phosphor::network::dhcp::Configuration>(
+         bus, (this->objPath / "dhcp").str, *this);
++    setConfDir(confDir);
+     initSupportedPrivilges();
+ }
+ 
+@@ -692,6 +693,33 @@
+         }
+     }
+ }
++
++void Manager::setConfDir(const fs::path& dir)
++{
++    confDir = dir;
++
++    if (!fs::exists(confDir))
++    {
++        if (!fs::create_directories(confDir))
++        {
++            log<level::ERR>("Unable to create the network conf dir",
++                            entry("DIR=%s", confDir.c_str()));
++            elog<InternalFailure>();
++        }
++    }
++    fs::path arpDir(ARPCONTROL_CONF_DIR);
++    arpConfDir = arpDir;
++
++    if (!fs::exists(arpConfDir))
++    {
++        if (!fs::create_directories(arpConfDir))
++        {
++            log<level::ERR>("Unable to create the arpcontrol conf dir",
++                            entry("DIR=%s", arpConfDir.c_str()));
++            elog<InternalFailure>();
++        }
++    }
++}
+ 
+ } // namespace network
+ } // namespace phosphor
+diff -Naur a/src/network_manager.hpp b/src/network_manager.hpp
+--- a/src/network_manager.hpp	2023-01-31 15:54:07.480635654 +0530
++++ b/src/network_manager.hpp	2023-01-31 15:43:17.102562414 +0530
+@@ -172,6 +172,11 @@
+     /** @brief Network Configuration directory. */
+     std::filesystem::path confDir;
+ 
++    /** @brief sets the network conf directory.
++     *  @param[in] dirName - Absolute path of the directory.
++     */
++    void setConfDir(const fs::path& dir);
++
+     /** @brief Map of interface info for undiscovered interfaces */
+     std::unordered_map<unsigned, AllIntfInfo> intfInfo;
+ 
+diff -Naur a/src/util.cpp b/src/util.cpp
+--- a/src/util.cpp	2023-01-31 15:51:12.260392315 +0530
++++ b/src/util.cpp	2023-01-31 15:41:49.726181602 +0530
+@@ -222,6 +222,11 @@
+         .value_or(false);
+ }
+ 
++bool getArpEnabled(const config::Parser& config, std::string_view section){
++return systemdParseLast(config, section, "Enabled", config::parseBool)
++        .value_or(true);
++}
++
+ std::string getGarpInterval(const config::Parser& parser)
+ {
+     if (auto str = parser.map.getLastValueString("GARP", "Interval"); str == nullptr)
+diff -Naur a/src/util.hpp b/src/util.hpp
+--- a/src/util.hpp	2023-01-31 15:51:16.212396255 +0530
++++ b/src/util.hpp	2023-01-31 15:41:45.398162582 +0530
+@@ -92,6 +92,8 @@
+ bool getArpGarpEnabled(const config::Parser& config, std::string_view section);
+ std::string getGarpInterval(const config::Parser& config);
+ 
++bool getArpEnabled(const config::Parser& config, std::string_view section);
++
+ /** @brief Get all the interfaces from the system.
+  *  @returns list of interface names.
+  */

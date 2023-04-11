@@ -14,4 +14,6 @@ SRC_URI += "\
 	   file://0016-Add-SMTP-IPMI-OEM-Commands-Support.patch \
 	   file://0017-Modified-Host-Interface-Channel-Number.patch \
 	   file://0018-fixed-add-sel.patch \
+	   file://0019-fix-platform-event-ipmi-command.patch\
+	   file://0020-fixed-redfish-clear-sel.patch \
            "
