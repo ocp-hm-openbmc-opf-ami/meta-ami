@@ -1,6 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-dbus-interface.git;branch=master;protocol=https"
+SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-dbus-interface.git;branch=main;protocol=https"
 SRCREV = "84610859a1b16676eedd2b0c0838aa6476065319"
 
 SRC_URI += "file://0001-ARP-Control-property.patch\
