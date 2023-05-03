@@ -32,4 +32,5 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
 	    file://0023-Fix-for-unable-to-delete-newly-created-ipv4-static.patch \
             file://0024-Time-Zone-Configuration-issue-fix.patch \ 
 	    file://0025-Add-Diag-and-Safe-Mode-Support.patch \
+			file://0026-fix-progress-not-getting-updated-issue.patch \ 
 "
