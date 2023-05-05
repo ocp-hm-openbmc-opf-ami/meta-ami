@@ -78,6 +78,8 @@ sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.bmc-co
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=main/git@git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/telemetry/cups-service.bb
 
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=egs/git@git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=egs/g' openbmc-meta-intel/meta-restricted/recipes-intel/telemetry/cups-service.bb
+
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.platform-monitoring-technology.git;protocol=ssh;branch=main/git@git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.platform-monitoring-technology.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/telemetry/pmt_git.bb
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.mmbi-seamless.git;protocol=ssh;branch=main/git@git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.mmbi-seamless.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/seamless/mmbi-seamless.bb
@@ -91,3 +93,5 @@ sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.optane
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.memory-error-collector.git;protocol=ssh;nobranch=1/git@git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.memory-error-collector.git;protocol=ssh;nobranch=1/g' openbmc-meta-intel/meta-restricted/recipes-core/memory-error-collector/memory-error-collector.bb
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.memory-resilience-technology-engine.git;protocol=ssh;nobranch=1/git@git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.memory-resilience-technology-engine.git;protocol=ssh;nobranch=1/g' openbmc-meta-intel/meta-restricted/recipes-core/memory-resilience-technology-engine/memory-resilience-technology-engine.bb
+
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.ondemand.git;protocol=ssh;branch=main/git@git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.ondemand.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-intel/ondemand/ondemand_git.bb
