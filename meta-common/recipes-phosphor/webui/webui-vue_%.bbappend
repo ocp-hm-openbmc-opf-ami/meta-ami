@@ -47,6 +47,7 @@ SRC_URI += " \
     file://0038-Sensor-data-not-showing-in-webui.patch \
     file://0039-Fixed-KVM-already-session-running-issue.patch \
     file://0042-megarac-onetree-logo-change.patch \
+    file://0043-Webui-remove-built-on-OpenBMC-Logo.patch \
     "
 do_compile:prepend() {
   cp -vf ${S}/.env.intel ${S}/.env
