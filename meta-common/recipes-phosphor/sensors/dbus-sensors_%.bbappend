@@ -2,13 +2,15 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRCREV = "1e3842541db673c850625bfae4227fb88767a2a9"
 
-SRC_URI += "file://0001-converted-index-to-0-based-and-made-pwm-starts-from-.patch \
+SRC_URI:append = " \
+            file://0001-converted-index-to-0-based-and-made-pwm-starts-from-.patch \
 	    file://0002-Add-Processor-Type-Sensor-Support.patch \
             file://0003-ProcessorSensor-Replace-iterator-pairs-with-structur.patch \
 	    file://0004-Add-Watchdog2-Discrete-Sensor.patch \
 	    file://0005-Add-Severity-Information-For-Discrete-Sensor.patch \
 	    file://0006-disable-unsupported-sensors.patch\
 	    file://0007-Update-ObjectManager-for-sensors-in-Right-Path.patch \
+            file://0008-Fix-For-CPU-Sensor-dbus-entry-is-not-creating.patch \
             "
 
 PACKAGECONFIG[processorstatus] = "-Dprocstatus=enabled, -Dprocstatus=disabled"
