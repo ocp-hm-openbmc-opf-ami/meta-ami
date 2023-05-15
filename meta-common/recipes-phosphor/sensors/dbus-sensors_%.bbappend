@@ -11,6 +11,7 @@ SRC_URI:append = " \
 	    file://0006-disable-unsupported-sensors.patch\
 	    file://0007-Update-ObjectManager-for-sensors-in-Right-Path.patch \
             file://0008-Fix-For-CPU-Sensor-dbus-entry-is-not-creating.patch \
+        file://0009-Fix-for-Fan-Redundancy.patch \
             "
 
 PACKAGECONFIG[processorstatus] = "-Dprocstatus=enabled, -Dprocstatus=disabled"

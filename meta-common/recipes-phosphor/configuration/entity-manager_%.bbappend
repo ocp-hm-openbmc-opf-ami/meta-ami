@@ -5,4 +5,5 @@ SRC_URI:append = " \
     file://AVC-2DPC-Baseboard.json \
     file://AC-Baseboard.json \
     file://solum_pssf162202_psu.json \
+    file://AVC-Baseboard.json \
     "
