@@ -49,10 +49,10 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 - meta-ami/github-gitlab-url.sh
 - Add the features into meta-ami/meta-evb/meta-evb-aspeed/meta-evb-ast2600/conf/layer.conf
 - TEMPLATECONF=meta-ami/meta-evb/meta-evb-aspeed/meta-evb-ast2600/conf/templates/default . openbmc-env
-- bitbake obmc-phopshor-image
+- bitbake obmc-phosphor-image
 ```
 
-### 6) OT Intel Silicon and Expansion Pack
+### 6) OT Intel Silicon and Expansion Pack (EGS)
 ```
 - git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/egs openbmc-meta-intel/meta-egs
 - git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-restricted openbmc-meta-intel/meta-restricted
@@ -62,18 +62,31 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 - TEMPLATECONF=openbmc-meta-intel/meta-egs/conf/templates/default . openbmc-env
 - bitbake intel-platforms
 ```
-
-### 7) OT Intel Silicon and Expansion Pack
+### 7) OT Intel Silicon and Expansion Pack (BHS)
 ```
-- git clone  https://git.ami.com/core/ami-bmc/one-tree/core/meta-ami
+- git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/bhs openbmc-meta-intel/meta-bhs
+- git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-restricted openbmc-meta-intel/meta-restricted
+- meta-ami/github-gitlab-url.sh
+- Add meta-resticted layer into openbmc-meta-intel/meta-bhs/conf/templates/default/bblayers.conf.sample
+- Enable the needed Si and EP features in openbmc-meta-intel/meta-restricted/conf/layer.conf (Uncomment IMAGE_INSTALL and/or EXTRA_IMAGE_FEATURES)
+- TEMPLATECONF=openbmc-meta-intel/meta-bhs/conf/templates/default . openbmc-env
+- bitbake intel-platforms
+```
+
+### 8) OT AMI Exapnsion Pack
+```
+- git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/egs openbmc-meta-intel/meta-egs (For EGS)
+- git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/bhs openbmc-meta-intel/meta-bhs (For BHS)
 - git clone https://git.ami.com/core/ami-bmc/one-tree/ami/amipacks/nic meta-ami/recipes-ami/nic (For NIC EP)
 - git clone https://git.ami.com/core/ami-bmc/one-tree/ami/amipacks/nvme meta-ami/recipes-ami/nvme (For NVMe EP)
 - git clone https://git.ami.com/core/ami-bmc/one-tree/ami/amipacks/raid-brcm meta-ami/recipes-ami/raid-brcm (For BRCM Raid EP)
 - meta-ami/github-gitlab-url.sh
 - Enable the needed AMI EP features in meta-ami/conf/layer.conf (Uncomment IMAGE_INSTALL)
-- TEMPLATECONF=openbmc-meta-intel/meta-egs/conf/templates/default . openbmc-env
+- TEMPLATECONF=openbmc-meta-intel/meta-egs/conf/templates/default . openbmc-env (For EGS)
+- TEMPLATECONF=openbmc-meta-intel/meta-bhs/conf/templates/default . openbmc-env (For BHS)
 - bitbake intel-platforms
 ```
+
 ### Notes
 - By default root user is disabled in the stack except AST2600EVB
 - uncomment EXTRA_IMAGE_FEATURES += "debug-tweaks" in build/conf/local.conf to enable the root user access
