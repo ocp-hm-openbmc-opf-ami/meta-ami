@@ -51,6 +51,7 @@ SRC_URI += " \
     file://0042-megarac-onetree-logo-change.patch \
     file://0043-Webui-remove-built-on-OpenBMC-Logo.patch \
     file://0045-webui-support-for-password-change-enhancements.patch \
+    file://0046-Add-validation-to-NTP-address-in-Date-Time-Page.patch \
     file://0048-Fix-for-able-to-delete-current-logged-in-user.patch \
     file://0049-WebUI-support-for-Autonomous-Crash-Dump-enhancement.patch \
     file://0050-Enable-all-event-filters-option.patch \
