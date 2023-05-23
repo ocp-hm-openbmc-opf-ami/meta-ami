@@ -48,6 +48,7 @@ SRC_URI += " \
     file://0039-Fixed-KVM-already-session-running-issue.patch \
     file://0042-megarac-onetree-logo-change.patch \
     file://0043-Webui-remove-built-on-OpenBMC-Logo.patch \
+    file://0048-Fix-for-able-to-delete-current-logged-in-user.patch \
     "
 do_compile:prepend() {
   cp -vf ${S}/.env.intel ${S}/.env
