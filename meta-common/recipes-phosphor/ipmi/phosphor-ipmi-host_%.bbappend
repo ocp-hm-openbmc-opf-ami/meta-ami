@@ -22,6 +22,7 @@ SRC_URI += " \
            file://0038-alongwith-fix-in-ethernet-interface-enable-disable-ipv6-static-IP.patch \
 	   file://0015-dcmi_old_to_new_handler_implementation.patch \
            file://0039-Added-Diag-and-safe-boot-mode-support.patch \
+           file://0017-Return-proper-error-response-for-reserved-data-bytes.patch \
            "
 
 do_install:append(){
