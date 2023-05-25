@@ -1,0 +1,104 @@
+From 25d01372454c73055cf1661baa17d548734f87f9 Mon Sep 17 00:00:00 2001
+From: arjuncr <arjuncr@ami.com>
+Date: Mon, 1 May 2023 17:52:13 +0530
+Subject: [PATCH] Support to Enable SPS NM at BMC NM Init Mode 3
+
+Signed-off-by: arjuncr <arjuncr@ami.com>
+---
+ include/sps_integrator.hpp | 56 +++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 55 insertions(+), 1 deletion(-)
+
+diff --git a/include/sps_integrator.hpp b/include/sps_integrator.hpp
+index 5efbd02..5d897f2 100644
+--- a/include/sps_integrator.hpp
++++ b/include/sps_integrator.hpp
+@@ -29,6 +29,7 @@ namespace nodemanager
+ using namespace std::literals::chrono_literals;
+ 
+ static constexpr const uint8_t kDisablingSpsNmRetryMax = 3;
++static constexpr const uint8_t kEnablingSpsNmRetryMax = 3;
+ static constexpr const auto kRetryDuration = 25ms;
+ 
+ /**
+@@ -149,11 +150,43 @@ class SpsIntegrator
+         return true;
+     }
+ 
++    bool EnableSpsNm()
++    {
++        request::GetCapabilities req{};
++        std::optional<response::GetCapabilities> res =
++            IpmbUtil::ipmbSendRequest<response::GetCapabilities>(
++                bus, req, kIpmiNetFnOem, kIpmiGetNmCapabilitiesCmd);
++
++        if (res && res->assistModule.nm == kSupportedAndDisabledValue)
++        {
++            Logger::log<LogLevel::info>("SPS NM disabled, enabling...");
++            if (tryEnableSpsNm(res->assistModule))
++            {
++                if (tryColdResetSPS())
++                {
++                    Logger::log<LogLevel::info>(
++                        "starting SPS NM");
++                    return true;
++                }
++            }
++            Logger::log<LogLevel::warning>(
++                "Unable to enable the SPS NM");
++            return false;
++        }
++        Logger::log<LogLevel::info>("Starting SPS NM");
++        return true;
++    }
++
+     bool stopBmcNmUnconditionally()
+     {
+         RedfishLogger::logInitializationMode3();
+         Logger::log<LogLevel::warning>(
+             "InitializationMode: 3, stopping OpenBMC NM unconditionally");
++	if(EnableSpsNm() == false)
++	{
++		Logger::log<LogLevel::warning>(
++                "Unable to enable the SPS NM");
++	}
+         return false;
+     }
+ 
+@@ -193,6 +226,27 @@ class SpsIntegrator
+         return false;
+     }
+ 
++    bool tryEnableSpsNm(const AssistModuleCapabilities& assist)
++    {
++        request::SetCapabilities setReq{};
++        setReq.assistModule = assist;
++        correctAssistModule(setReq.assistModule);
++        setReq.assistModule.nm = kSupportedAndEnabledValue;
++
++        for (uint8_t retry = 0; retry <= kEnablingSpsNmRetryMax; retry++)
++        {
++            if (IpmbUtil::ipmbSendRequest<response::SetCapabilities>(
++                    bus, setReq, kIpmiNetFnOem, kIpmiSetNmCapabilitiesCmd))
++            {
++                return true;
++            }
++            Logger::log<LogLevel::error>("Cannot enable the SPS NM, retry: %d",
++                                         unsigned{retry});
++            std::this_thread::sleep_for(kRetryDuration);
++        }
++        return false;
++    }
++
+     bool tryColdResetSPS()
+     {
+         for (uint8_t retry = 0; retry <= kDisablingSpsNmRetryMax; retry++)
+@@ -232,4 +286,4 @@ class SpsIntegrator
+     }
+ };
+ 
+-} // namespace nodemanager
+\ No newline at end of file
++} // namespace nodemanager
+-- 
+2.34.1
+
