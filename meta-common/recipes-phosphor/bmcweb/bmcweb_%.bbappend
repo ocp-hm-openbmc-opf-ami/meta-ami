@@ -35,6 +35,7 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
 	    file://0026-fix-progress-not-getting-updated-issue.patch \
 	    file://0027-Fix-KVM-disconnect-issue.patch \
 	    file://0029-Fix-getting-empty-IP-address.patch \
+	    file://0030-Rolemapping-Mismatch-Fix.patch \
 "
 SRC_URI_BHS:append ="file://0028-Adding-proper-path-to-get-the-cupsensors.patch \
 "
