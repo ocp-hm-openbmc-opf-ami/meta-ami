@@ -8,6 +8,7 @@ SRC_URI:append = " \
              file://0007-IP-Gateway-Validation-When-Set-To-Static.patch \
              file://0008-Reload-Network-After-Reset-Conf.patch \
              file://0009-removed-error-message-ingnoring-function-when-settin.patch \
+	     file://0010-Allow-empty-gateway6-when-ipv6-source-is-static.patch \
            "
 
 
