@@ -23,7 +23,8 @@ SRC_URI += " \
 	   file://0015-dcmi_old_to_new_handler_implementation.patch \
            file://0039-Added-Diag-and-safe-boot-mode-support.patch \
            file://0017-Return-proper-error-response-for-reserved-data-bytes.patch \
-	   file://0040-Disable-DHCP-for-IPv6-when-ipv6-source-is-set-Static.patch \	
+	   file://0040-Disable-DHCP-for-IPv6-when-ipv6-source-is-set-Static.patch \
+	   file://0041-Fix-to-block-IPv6-Router-Static-Address-Configuration.patch \
            "
 
 do_install:append(){
