@@ -5,7 +5,7 @@ EXTRA_OEMESON += "-Dredfish-dump-log=enabled"
 # add "redfish-hostiface" group
 GROUPADD_PARAM:${PN}:append = ";redfish-hostiface"
 
-SRCREV = "188cb6294105a045a445619415d01843de8c3732"
+#SRCREV = "188cb6294105a045a445619415d01843de8c3732"
 
 #SRC_URI:append	= " file://0006-enabled-redfish-dump-log.patch "
 #SRC_URI:append	= " file://0014-Add-Download-BMCDump-Support-in-Debug-Collector.patch "
@@ -36,6 +36,10 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
 	    file://0027-Fix-KVM-disconnect-issue.patch \
 	    file://0029-Fix-getting-empty-IP-address.patch \
 	    file://0030-Rolemapping-Mismatch-Fix.patch \
+	    file://0030-FIXED-PATCH-operation-in-EthernetInterface.patch \
+	    file://0031-Integrated-RAID-HBA-Interface.patch \
+	    file://0032-Fixes-ethernetInternet-DHCP-property-patch-support.patch \
+	    file://0033-Fixed-the-Attribute-MaxConcurrentSession-type-to-int.patch \
 "
 SRC_URI_BHS:append ="file://0028-Adding-proper-path-to-get-the-cupsensors.patch \
 "
