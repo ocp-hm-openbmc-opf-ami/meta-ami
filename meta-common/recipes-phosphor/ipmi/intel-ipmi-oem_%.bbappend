@@ -16,6 +16,7 @@ SRC_URI += "\
 	   file://0018-fixed-add-sel.patch \
 	   file://0019-fix-platform-event-ipmi-command.patch\
 	   file://0020-fixed-redfish-clear-sel.patch \
-           file://0001-accessing-Chassis-Force-Identity-reserved-bits.patch \
+       file://0001-accessing-Chassis-Force-Identity-reserved-bits.patch \
+       file://0021-Fix-add-SEL-entry-IPMI-command-response.patch \
            "
 
