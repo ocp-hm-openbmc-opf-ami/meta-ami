@@ -56,6 +56,7 @@ SRC_URI += " \
     file://0050-Enable-all-event-filters-option.patch \
     file://0051-WebUI-support-for-At-Scale-Debug-enhancement.patch \
     file://0052-Display-user-account-Locked-error-message-in-Login.patch \
+    file://0056-Fix-for-elevate-user-privilege-and-also-disable-admi.patch \
     "
 do_compile:prepend() {
   cp -vf ${S}/.env.ami ${S}/.env.intel
