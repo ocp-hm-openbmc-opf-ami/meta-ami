@@ -15,6 +15,5 @@ SRC_URI:append = " \
 
 
 EXTRA_OEMESON:append = " -Dpersist-mac=true"
-EXTRA_OEMESON:append = " -Ddefault-link-local-autoconf=ipv6"
 
 SYSTEMD_SERVICE:${PN} += "xyz.openbmc_project.GARPControl.service"

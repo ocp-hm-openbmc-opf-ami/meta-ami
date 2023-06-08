@@ -27,6 +27,7 @@ SRC_URI += " \
 	   file://0041-Fix-to-block-IPv6-Router-Static-Address-Configuration.patch \
            file://0019-Fix-for-get-set-dcmi-configuration-parameter-2-disco.patch \
            file://0018-Added-proper-error-responses-for-set-DCMI-configuara.patch \
+           file://0042-Block-Manually_Set-Gateway-MAC-Address.patch \ 
            "
 
 do_install:append(){
