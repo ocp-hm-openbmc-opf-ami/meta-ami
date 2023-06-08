@@ -10,5 +10,6 @@ SRC_URI += "file://0001-ARP-Control-property.patch\
 		file://0036-EnhancedPasswordPolicy.patch \
 	    file://0005-Add-Bootstrap-credential-support.patch \
             file://0006-Add-Diag-Arugment-in-Boot-Mode-Interface.patch \
+            file://0007-Added-the-TimeOut-property-under-State-interface.patch \
 		"
 EXTRA_OEMESON += "-Ddata_com_ami=true"

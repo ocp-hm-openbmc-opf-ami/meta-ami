@@ -1,0 +1,142 @@
+From a599cb4e6a6ccec7dcebefc7e3afa43bcf88fcc5 Mon Sep 17 00:00:00 2001
+From: ramadevip <ramadevip@ami.com>
+Date: Tue, 6 Jun 2023 22:25:48 +0530
+Subject: [PATCH] Added the Timer functionality for respective reset operation
+ of the managers POST operation.
+
+Signed-off-by: ramadevip <ramadevip@ami.com>
+---
+ bmc_state_manager.cpp      | 16 +++++++++++-----
+ bmc_state_manager.hpp      | 25 +++++++++++++++++++++++++
+ bmc_state_manager_main.cpp | 13 +++++++++++--
+ 3 files changed, 47 insertions(+), 7 deletions(-)
+
+diff --git a/bmc_state_manager.cpp b/bmc_state_manager.cpp
+index 473329c..e775dbc 100644
+--- a/bmc_state_manager.cpp
++++ b/bmc_state_manager.cpp
+@@ -1,6 +1,9 @@
++#include "config.h"
++
+ #include "bmc_state_manager.hpp"
+ 
+ #include "utils.hpp"
++
+ #include "xyz/openbmc_project/Common/error.hpp"
+ 
+ #include <gpiod.h>
+@@ -238,12 +241,15 @@ int BMC::bmcStateChange(sdbusplus::message_t& msg)
+ 
+ BMC::Transition BMC::requestedBMCTransition(Transition value)
+ {
+-    info("Setting the RequestedBMCTransition field to "
+-         "{REQUESTED_BMC_TRANSITION}",
+-         "REQUESTED_BMC_TRANSITION", value);
++	info("requestedBMCTransition");
++        uint16_t timeOutValue = timeOut();
++
++	info("timeout value""{TIMEOUT}","TIMEOUT", timeOutValue);
++        
++	auto interval = std::chrono::seconds(timeOutValue); // start gTimer
++        gTimer->restart(interval);
+ 
+-    executeTransition(value);
+-    return server::BMC::requestedBMCTransition(value);
++	return server::BMC::requestedBMCTransition(value);
+ }
+ 
+ BMC::BMCState BMC::currentBMCState(BMCState value)
+diff --git a/bmc_state_manager.hpp b/bmc_state_manager.hpp
+index 29e318f..f73b34c 100644
+--- a/bmc_state_manager.hpp
++++ b/bmc_state_manager.hpp
+@@ -5,6 +5,13 @@
+ #include <linux/watchdog.h>
+ 
+ #include <sdbusplus/bus.hpp>
++#include <sdeventplus/event.hpp>
++#include <sdeventplus/utility/timer.hpp>
++#include <sdbusplus/bus/match.hpp>
++
++#include<iostream>
++
++#include <boost/asio.hpp>
+ 
+ namespace phosphor
+ {
+@@ -15,6 +22,9 @@ namespace manager
+ 
+ using BMCInherit = sdbusplus::server::object_t<
+     sdbusplus::xyz::openbmc_project::State::server::BMC>;
++
++using Timer = sdeventplus::utility::Timer<sdeventplus::ClockId::RealTime>;
++
+ namespace sdbusRule = sdbusplus::bus::match::rules;
+ 
+ /** @class BMC
+@@ -44,6 +54,18 @@ class BMC : public BMCInherit
+         discoverInitialState();
+         discoverLastRebootCause();
+         this->emit_object_added();
++
++	std::cerr << "bmc constsructor called 1" << "\n";
++	auto timerCB = [&](Timer&) {  
++
++		Transition value = sdbusplus::xyz::openbmc_project::State::server::BMC::requestedBMCTransition();
++		timeOut(0);
++		executeTransition(value);
++		};
++
++    	gTimer = std::make_unique<
++        	sdeventplus::utility::Timer<sdeventplus::ClockId::RealTime>>(
++        	bus.get_event(), std::move(timerCB));
+     };
+ 
+     /** @brief Set value of BMCTransition **/
+@@ -102,6 +124,9 @@ class BMC : public BMCInherit
+     /** @brief Used to subscribe to dbus system state changes **/
+     std::unique_ptr<sdbusplus::bus::match_t> stateSignal;
+ 
++    /** Timer for Bmc reset operation */ 
++    std::shared_ptr<Timer> gTimer;
++
+     /**
+      * @brief discover the last reboot cause of the bmc
+      **/
+diff --git a/bmc_state_manager_main.cpp b/bmc_state_manager_main.cpp
+index 1d6f617..0ef3521 100644
+--- a/bmc_state_manager_main.cpp
++++ b/bmc_state_manager_main.cpp
+@@ -12,6 +12,13 @@ int main()
+     // 0 is for the current instance
+     auto objPathInst = std::string(BMC_OBJPATH) + '0';
+ 
++
++    // Get a default event loop
++    sdeventplus::Event event = sdeventplus::Event::get_default();
++
++    // Attach the bus to sd_event to service user requests
++    bus.attach_event(event.get(), SD_EVENT_PRIORITY_NORMAL);
++
+     // Add sdbusplus ObjectManager.
+     sdbusplus::server::manager_t objManager(bus, objPathInst.c_str());
+ 
+@@ -19,11 +26,13 @@ int main()
+ 
+     bus.request_name(BMC_BUSNAME);
+ 
+-    while (true)
++    event.loop();
++
++    /*while (true)
+     {
+         bus.process_discard();
+         bus.wait();
+-    }
++    }*/
+ 
+     exit(EXIT_SUCCESS);
+ }
+-- 
+2.25.1
+
