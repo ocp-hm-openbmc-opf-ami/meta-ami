@@ -11,6 +11,7 @@ SRC_URI:append = " \
 	     file://0010-Allow-empty-gateway6-when-ipv6-source-is-static.patch \
              file://0010-Fix-Cannot-Communicate-With-Vlan-IP-By-IPMI-Command.patch \
              file://0011-Fix-Dynamic-And-Static-Addrs-Shown-When-IPSrc-Is-DHCP.patch \
+             file://0013-Add-Prefix-Length-at-Neighbor.patch \
            "
 
 
