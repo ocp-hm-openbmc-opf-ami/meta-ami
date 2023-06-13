@@ -6,6 +6,7 @@ SRC_URI += "file://nfs.cfg \
             file://0002-Fixed-compilation-error-on-USB-gadget.patch \
             file://0011-Enable-Threshold-Attributes-for-Core-temperature-sen.patch \
             file://0001-Fix-virtual-USB-hub-not-working-for-evb-ast2600.patch \
+            file://0001-Upstream-aspeed-video.c-driver-from-ASPEED-SDK-v08.05.patch \
            "
 
 SRC_URI_NON_PFR_CPLD = "file://jtag-fragment.cfg \

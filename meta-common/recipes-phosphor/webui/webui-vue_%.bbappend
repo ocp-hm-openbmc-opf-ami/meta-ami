@@ -46,13 +46,18 @@ SRC_URI += " \
     file://0037-WEB-UI-Dump-count-issue-fixed-under-overview-page.patch \
     file://0038-Sensor-data-not-showing-in-webui.patch \
     file://0039-Fixed-KVM-already-session-running-issue.patch \
+    file://0040-customized-styles-for-ami-environment.patch \
+    file://0041-Soft-Keyboard-Support-in-KVM-WebUI.patch \
     file://0042-megarac-onetree-logo-change.patch \
     file://0043-Webui-remove-built-on-OpenBMC-Logo.patch \
+    file://0045-webui-support-for-password-change-enhancements.patch \
     file://0048-Fix-for-able-to-delete-current-logged-in-user.patch \
+    file://0049-WebUI-support-for-Autonomous-Crash-Dump-enhancement.patch \
     file://0050-Enable-all-event-filters-option.patch \
+    file://0051-WebUI-support-for-At-Scale-Debug-enhancement.patch \
     "
 do_compile:prepend() {
-  cp -vf ${S}/.env.intel ${S}/.env
+  cp -vf ${S}/.env.ami ${S}/.env
   cp -vf ${WORKDIR}/login-company-logo.svg ${S}/src/assets/images
   cp -vf ${WORKDIR}/logo-header.svg ${S}/src/assets/images
   cp -vf ${WORKDIR}/favicon.ico ${S}/public
