@@ -50,6 +50,7 @@ SRC_URI += " \
     file://0043-Webui-remove-built-on-OpenBMC-Logo.patch \
     file://0048-Fix-for-able-to-delete-current-logged-in-user.patch \
     file://0050-Enable-all-event-filters-option.patch \
+    file://0059-Unable-to-create-user-with-certain-set-of-passwords.patch \
     "
 do_compile:prepend() {
   cp -vf ${S}/.env.intel ${S}/.env
