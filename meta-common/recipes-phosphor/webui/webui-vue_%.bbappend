@@ -57,9 +57,12 @@ SRC_URI += " \
     file://0050-Enable-all-event-filters-option.patch \
     file://0051-WebUI-support-for-At-Scale-Debug-enhancement.patch \
     file://0052-Display-user-account-Locked-error-message-in-Login.patch \
+<<<<<<< HEAD
     file://0056-Fix-for-elevate-user-privilege-and-also-disable-admi.patch \
     file://0057-account-policy-settings-values-getting-changed.patch \
     file://0058-serial-console-opened-in-new-tab-shows-error.patch \
+=======
+>>>>>>> Unable to create user with certain set of passwords and throwing proper error message
     file://0059-Unable-to-create-user-with-certain-set-of-passwords.patch \
     "
 do_compile:prepend() {
