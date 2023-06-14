@@ -45,6 +45,7 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
 	    file://0035-MaintenanceWindow-OperationApplyTime-Support-under-Managers.patch \
 		file://0036-Add-Locked-status-to-login-API-on-User-locked.patch \
 	    file://0037-Fix-for-500-internal-error-in-ethernet-IPV6-patch-op.patch \
+	    file://0038-fix-StateChange-not-getting-updated-issue.patch \
 	    file://0040-Fix-for-status-code-return-under-Chassis-URI.patch \
 	    file://0041-POST-Event-Subscription-with-Base-as-RegistryPrefixe.patch \ 
 	    file://0042-Add-AutonomousCrashDump-Schema.patch \
