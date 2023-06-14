@@ -148,6 +148,7 @@ ifwi_full_flash() {
     if [[ "$rc" -eq 0 ]]; then
         log "IFWI Full Flash - Image update successful"
         redfish_log_fw_evt success
+        update_percentage $UPDATE_PERCENT_SUCCESS
         set_activation_status Active 
         return 0
     else
@@ -192,7 +193,8 @@ bmc_full_flash() {
     fi
         log "BMC Full Flash - Image update successful"
         redfish_log_fw_evt success
-        set_activation_status Active
+        update_percentage $UPDATE_PERCENT_SUCCESS
+        set_activation_status Active 
         # reboot
         reboot -f
         return 0
@@ -245,11 +247,12 @@ ping_pong_update() {
     log "Writing $(stat -c "%s" "$LOCAL_PATH") bytes"
     cat "$LOCAL_PATH" > "$TGT"
     # fw_setenv "bootcmd" "bootm ${BOOTADDR}"
-    redfish_log_fw_evt success
-    set_activation_status Staged
     wait_for_log_sync
     # stop the nv-sync.service to trigger the overlay sync and unmount before 'reboot -f'
     systemctl stop nv-sync.service
+    redfish_log_fw_evt success
+    update_percentage $UPDATE_PERCENT_SUCCESS
+    set_activation_status Active 
     # reboot
     reboot -f
 }
@@ -261,11 +264,10 @@ cpld_full_flash()
     update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_START
     # Flash: writing to cpld device
     log "CPLD Flash - Starting the cpld write....."
-    local rc=$(cpld-tool -n /dev/jtag0 -p $LOCAL_PATH )
-
     # Log Event: Update percentage and log event
     update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
-    if [[ "$rc" -ne 0 ]]; then
+    cpld-tool -n /dev/jtag0 -p $LOCAL_PATH 
+    if [ $? -ne 0  ]; then
         log "CPLD Flash - Image update failed"
         redfish_log_abort " CPLD Flash - Image update failed"
         set_activation_status Failed
@@ -273,8 +275,17 @@ cpld_full_flash()
         return 1
     fi
         log "CPLD Flash - Image update successful"
+        update_percentage $UPDATE_PERCENT_SUCCESS
         redfish_log_fw_evt success
         set_activation_status Active
+	local output=$(cpld-tool -n /dev/jtag0 -u)
+	local usercode=$(echo "$output" | sed -n 's/.*USERCODE=\(0x[0-9a-fA-F]*\).*/\1/p')
+    log "CPLD Flash - USERCODE = $usercode"
+	busctl set-property xyz.openbmc_project.Software.BMC.Updater \
+            /xyz/openbmc_project/software/cpld_active \
+            xyz.openbmc_project.Software.Version Version \
+            s $usercode
+
         return 0
 }
 
