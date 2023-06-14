@@ -1,6 +1,6 @@
-From 463fdc59477b99c211966b84b553c457afa4ab26 Mon Sep 17 00:00:00 2001
+From bb4652ad6bbff5f8790a15382190fd9e2e896d09 Mon Sep 17 00:00:00 2001
 From: Mohammed Javith Akthar M <mohammedjavitham@ami.com>
-Date: Thu, 25 May 2023 14:31:05 +0530
+Date: Wed, 14 Jun 2023 10:17:49 +0530
 Subject: [PATCH 2/2] Upstream obmc-ikvm server from ASPEED SDK v08.05
 
 Enables partial JPEG capture support in KVM server. This method captures
@@ -12,80 +12,63 @@ party VNC clients such as TightVNC.
 
 Signed-off-by: Mohammed Javith Akthar M <mohammedjavitham@ami.com>
 ---
- ikvm_args.cpp       |  26 +++++----
- ikvm_args.hpp       |  22 +++-----
- ikvm_input.cpp      |  60 ++++++--------------
- ikvm_input.hpp      |  12 ++--
- ikvm_manager.cpp    |   8 +--
- ikvm_server.cpp     |  73 ++++++++++++++----------
- ikvm_server.hpp     |   4 +-
- ikvm_video.cpp      | 134 +++++++++++++++++++++++++++++++++-----------
- ikvm_video.hpp      |  73 ++++++++++++++++++++++--
- 9 files changed, 263 insertions(+), 149 deletions(-)
+ ikvm_args.cpp       |  27 +++++----
+ ikvm_args.hpp       |   8 ++-
+ ikvm_manager.cpp    |   3 +-
+ ikvm_server.cpp     |  54 +++++++++++++++---
+ ikvm_video.cpp      | 130 +++++++++++++++++++++++++++++++++-----------
+ ikvm_video.hpp      |  73 +++++++++++++++++++++++--
+ start-ipkvm.service |   2 +-
+ 7 files changed, 237 insertions(+), 60 deletions(-)
 
 diff --git a/ikvm_args.cpp b/ikvm_args.cpp
-index 4887870..4f4f4cf 100644
+index 4887870..b83da7a 100644
 --- a/ikvm_args.cpp
 +++ b/ikvm_args.cpp
-@@ -8,21 +8,23 @@
+@@ -7,21 +7,18 @@
+ 
  namespace ikvm
  {
- 
--Args::Args(int argc, char* argv[]) :
+-
+ Args::Args(int argc, char* argv[]) :
 -    frameRate(30), subsampling(0), calcFrameCRC{false}, commandLine(argc, argv)
-+Args::Args(int argc, char* argv[]) : frameRate(30), subsampling(0), format(0), calcFrameCRC{false},
-+                                     commandLine(argc, argv)
++    frameRate(60), subsampling(0), format(2), calcFrameCRC{false},
++    commandLine(argc, argv)
  {
      int option;
 -    const char* opts = "f:s:h:k:p:u:v:c";
-+    const char* opts = "f:s:m:h:k:p:v:c";
-     struct option lopts[] = {{"frameRate", 1, 0, 'f'},
-                              {"subsampling", 1, 0, 's'},
-+                             {"format", 1, 0, 'm'},
-                              {"help", 0, 0, 'h'},
-                              {"keyboard", 1, 0, 'k'},
-                              {"mouse", 1, 0, 'p'},
+-    struct option lopts[] = {{"frameRate", 1, 0, 'f'},
+-                             {"subsampling", 1, 0, 's'},
+-                             {"help", 0, 0, 'h'},
+-                             {"keyboard", 1, 0, 'k'},
+-                             {"mouse", 1, 0, 'p'},
 -                             {"udcName", 1, 0, 'u'},
-                              {"videoDevice", 1, 0, 'v'},
-                              {"calcCRC", 0, 0, 'c'},
-                              {0, 0, 0, 0}};
+-                             {"videoDevice", 1, 0, 'v'},
+-                             {"calcCRC", 0, 0, 'c'},
+-                             {0, 0, 0, 0}};
++    const char* opts = "f:s:m:h:k:p:u:v:c";
++    struct option lopts[] = {
++        {"frameRate", 1, 0, 'f'}, {"subsampling", 1, 0, 's'},
++        {"format", 1, 0, 'm'},    {"help", 0, 0, 'h'},
++        {"keyboard", 1, 0, 'k'},  {"mouse", 1, 0, 'p'},
++        {"udcName", 1, 0, 'u'},   {"videoDevice", 1, 0, 'v'},
++        {"calcCRC", 0, 0, 'c'},   {0, 0, 0, 0}};
  
-+    frameRate = 60;
-+    format = 2;
      while ((option = getopt_long(argc, argv, opts, lopts, NULL)) != -1)
      {
-         switch (option)
-@@ -37,6 +39,11 @@ Args::Args(int argc, char* argv[]) :
+@@ -37,6 +34,11 @@ Args::Args(int argc, char* argv[]) :
                  if (subsampling < 0 || subsampling > 1)
                      subsampling = 0;
                  break;
 +            case 'm':
 +                format = (int)strtol(optarg, NULL, 0);
-+                if (format < 0 || format > 2)
++                if (format < 0 || format > 2 || format == 1)
 +                    format = 0;
 +                break;
              case 'h':
                  printUsage();
                  exit(0);
-@@ -46,9 +53,6 @@ Args::Args(int argc, char* argv[]) :
-             case 'p':
-                 pointerPath = std::string(optarg);
-                 break;
--            case 'u':
--                udcName = std::string(optarg);
--                break;
-             case 'v':
-                 videoPath = std::string(optarg);
-                 break;
-@@ -57,6 +61,7 @@ Args::Args(int argc, char* argv[]) :
-                 break;
-         }
-     }
-+	
- }
- 
- void Args::printUsage()
-@@ -66,15 +71,12 @@ void Args::printUsage()
+@@ -66,6 +68,7 @@ void Args::printUsage()
      fprintf(stderr, "Usage: obmc-ikvm [options]\n");
      fprintf(stderr, "-f frame rate          try this frame rate\n");
      fprintf(stderr, "-s subsampling         try this subsampling\n");
@@ -93,31 +76,19 @@ index 4887870..4f4f4cf 100644
      fprintf(stderr, "-h, --help             show this message and exit\n");
      fprintf(stderr, "-k device              HID keyboard gadget device\n");
      fprintf(stderr, "-p device              HID mouse gadget device\n");
--    fprintf(stderr,
--            "-u udc name            UDC that HID gadget will connect to\n");
-     fprintf(stderr, "-v device              V4L2 device\n");
--    fprintf(
--        stderr,
--        "-c, --calcCRC          Calculate CRC for each frame to save bandwidth\n");
-+    fprintf(stderr, "-c, --calcCRC          Calculate CRC for each frame to save bandwidth\n");
-     rfbUsage();
- }
- 
 diff --git a/ikvm_args.hpp b/ikvm_args.hpp
-index cb3d3ad..a39fc27 100644
+index cb3d3ad..6b4e93b 100644
 --- a/ikvm_args.hpp
 +++ b/ikvm_args.hpp
-@@ -25,7 +25,8 @@ class Args
-          * @param[in] v - Array of arguments
-          */
-         CommandLine(int c, char** v) : argc(c), argv(v)
--        {}
-+        {
-+        }
-         ~CommandLine() = default;
-         CommandLine(const CommandLine&) = default;
-         CommandLine& operator=(const CommandLine&) = default;
-@@ -80,6 +81,11 @@ class Args
+@@ -4,7 +4,6 @@
+ 
+ namespace ikvm
+ {
+-
+ /*
+  * @class Args
+  * @brief Command line argument parser and storage
+@@ -80,6 +79,11 @@ class Args
          return subsampling;
      }
  
@@ -129,262 +100,63 @@ index cb3d3ad..a39fc27 100644
      /*
       * @brief Get the path to the USB keyboard device
       *
-@@ -100,16 +106,6 @@ class Args
-         return pointerPath;
-     }
- 
--    /*
--     * @brief Get the name of UDC
--     *
--     * @return Reference to the string storing the name of UDC
--     */
--    inline const std::string& getUdcName() const
--    {
--        return udcName;
--    }
--
-     /*
-      * @brief Get the path to the V4L2 video device
-      *
-@@ -141,12 +137,12 @@ class Args
+@@ -141,6 +145,8 @@ class Args
      int frameRate;
      /* @brief Desired subsampling (0: 444, 1: 420) */
      int subsampling;
-+	/* @brief Desired format (0: standard, 1: aspeed) */
++    /* @brief Desired format (0: standard, 1: aspeed, 2: partial jpeg) */
 +    int format;
      /* @brief Path to the USB keyboard device */
      std::string keyboardPath;
      /* @brief Path to the USB mouse device */
-     std::string pointerPath;
--    /* @brief Name of UDC */
--    std::string udcName;
-     /* @brief Path to the V4L2 video device */
-     std::string videoPath;
-     /* @brief Identical frames detection */
-diff --git a/ikvm_input.cpp b/ikvm_input.cpp
-index 107756b..c295091 100644
---- a/ikvm_input.cpp
-+++ b/ikvm_input.cpp
-@@ -1,7 +1,6 @@
- #include "ikvm_input.hpp"
- 
- #include "ikvm_server.hpp"
--#include "scancodes.hpp"
- 
- #include <err.h>
- #include <errno.h>
-@@ -15,6 +14,8 @@
- #include <phosphor-logging/log.hpp>
- #include <xyz/openbmc_project/Common/File/error.hpp>
- 
-+#include "scancodes.hpp"
-+
- namespace fs = std::filesystem;
- 
- namespace ikvm
-@@ -23,11 +24,9 @@ namespace ikvm
- using namespace phosphor::logging;
- using namespace sdbusplus::xyz::openbmc_project::Common::File::Error;
- 
--Input::Input(const std::string& kbdPath, const std::string& ptrPath,
--             const std::string& udc) :
--    keyboardFd(-1),
--    pointerFd(-1), keyboardReport{0}, pointerReport{0}, keyboardPath(kbdPath),
--    pointerPath(ptrPath), udcName(udc)
-+Input::Input(const std::string& kbdPath, const std::string& ptrPath) :
-+    keyboardFd(-1), pointerFd(-1), keyboardReport{0}, pointerReport{0},
-+    keyboardPath(kbdPath), pointerPath(ptrPath)
- {
-     hidUdcStream.exceptions(std::ofstream::failbit | std::ofstream::badbit);
-     hidUdcStream.open(hidUdcPath, std::ios::out | std::ios::app);
-@@ -53,23 +52,17 @@ void Input::connect()
- {
-     try
-     {
--        if (udcName.empty())
-+        for (const auto& port : fs::directory_iterator(usbVirtualHubPath))
-         {
--            for (const auto& port : fs::directory_iterator(usbVirtualHubPath))
-+            if (fs::is_directory(port) && !fs::is_symlink(port) &&
-+                fs::exists(port.path() / "gadget") &&
-+                !fs::exists(port.path() / "gadget/suspended"))
-             {
--                if (fs::is_directory(port) && !fs::is_symlink(port) &&
--                    !fs::exists(port.path() / "gadget/suspended"))
--                {
--                    const std::string portId = port.path().filename();
--                    hidUdcStream << portId << std::endl;
--                    break;
--                }
-+                const std::string portId = port.path().filename();
-+                hidUdcStream << portId << std::endl;
-+                break;
-             }
-         }
--        else // If UDC has been specified by '-u' parameter, connect to it.
--        {
--            hidUdcStream << udcName << std::endl;
--        }
-     }
-     catch (fs::filesystem_error& e)
-     {
-@@ -86,8 +79,8 @@ void Input::connect()
- 
-     if (!keyboardPath.empty())
-     {
--        keyboardFd =
--            open(keyboardPath.c_str(), O_RDWR | O_CLOEXEC | O_NONBLOCK);
-+        keyboardFd = open(keyboardPath.c_str(),
-+                          O_RDWR | O_CLOEXEC | O_NONBLOCK);
-         if (keyboardFd < 0)
-         {
-             log<level::ERR>("Failed to open input device",
-@@ -221,25 +214,8 @@ void Input::pointerEvent(int buttonMask, int x, int y, rfbClientPtr cl)
-         return;
-     }
- 
--    if (buttonMask > 4)
--    {
--        input->pointerReport[0] = 0;
--        if (buttonMask == 8)
--        {
--            input->pointerReport[5] = 1;
--        }
--        else if (buttonMask == 16)
--        {
--            input->pointerReport[5] = 0xff;
--        }
--    }
--    else
--    {
--        input->pointerReport[0] = ((buttonMask & 0x4) >> 1) |
--                                  ((buttonMask & 0x2) << 1) |
--                                  (buttonMask & 0x1);
--        input->pointerReport[5] = 0;
--    }
-+    input->pointerReport[0] = ((buttonMask & 0x4) >> 1) |
-+                              ((buttonMask & 0x2) << 1) | (buttonMask & 0x1);
- 
-     if (x >= 0 && (unsigned int)x < video.getWidth())
-     {
-@@ -511,7 +487,7 @@ uint8_t Input::keyToScancode(rfbKeySym key)
-     return scancode;
- }
- 
--bool Input::writeKeyboard(const uint8_t* report)
-+bool Input::writeKeyboard(const uint8_t *report)
- {
-     std::unique_lock<std::mutex> lk(keyMutex);
-     uint retryCount = HID_REPORT_RETRY_MAX;
-@@ -543,7 +519,7 @@ bool Input::writeKeyboard(const uint8_t* report)
-     return false;
- }
- 
--void Input::writePointer(const uint8_t* report)
-+void Input::writePointer(const uint8_t *report)
- {
-     std::unique_lock<std::mutex> lk(ptrMutex);
-     uint retryCount = HID_REPORT_RETRY_MAX;
-diff --git a/ikvm_input.hpp b/ikvm_input.hpp
-index 83e4071..558251d 100644
---- a/ikvm_input.hpp
-+++ b/ikvm_input.hpp
-@@ -24,10 +24,8 @@ class Input
-      *
-      * @param[in] kbdPath - Path to the USB keyboard device
-      * @param[in] ptrPath - Path to the USB mouse device
--     * @param[in] udc - Name of UDC
-      */
--    Input(const std::string& kbdPath, const std::string& ptrPath,
--          const std::string& udc);
-+    Input(const std::string& kbdPath, const std::string& ptrPath);
-     ~Input();
-     Input(const Input&) = default;
-     Input& operator=(const Input&) = default;
-@@ -63,7 +61,7 @@ class Input
-   private:
-     static constexpr int NUM_MODIFIER_BITS = 4;
-     static constexpr int KEY_REPORT_LENGTH = 8;
--    static constexpr int PTR_REPORT_LENGTH = 6;
-+    static constexpr int PTR_REPORT_LENGTH = 5;
- 
-     /* @brief HID modifier bits mapped to shift and control key codes */
-     static constexpr uint8_t shiftCtrlMap[NUM_MODIFIER_BITS] = {
-@@ -100,8 +98,8 @@ class Input
-      */
-     static uint8_t keyToScancode(rfbKeySym key);
- 
--    bool writeKeyboard(const uint8_t* report);
--    void writePointer(const uint8_t* report);
-+    bool writeKeyboard(const uint8_t *report);
-+    void writePointer(const uint8_t *report);
- 
-     /* @brief File descriptor for the USB keyboard device */
-     int keyboardFd;
-@@ -115,8 +113,6 @@ class Input
-     std::string keyboardPath;
-     /* @brief Path to the USB mouse device */
-     std::string pointerPath;
--    /* @brief Name of UDC */
--    std::string udcName;
-     /*
-      * @brief Mapping of RFB key code to report data index to keep track
-      *        of which keys are down
 diff --git a/ikvm_manager.cpp b/ikvm_manager.cpp
-index 93fd1ce..6fcd203 100644
+index 93fd1ce..3a0b815 100644
 --- a/ikvm_manager.cpp
 +++ b/ikvm_manager.cpp
-@@ -7,11 +7,11 @@ namespace ikvm
+@@ -4,12 +4,11 @@
  
+ namespace ikvm
+ {
+-
  Manager::Manager(const Args& args) :
      continueExecuting(true), serverDone(false), videoDone(true),
--    input(args.getKeyboardPath(), args.getPointerPath(), args.getUdcName()),
--    video(args.getVideoPath(), input, args.getFrameRate(),
+     input(args.getKeyboardPath(), args.getPointerPath(), args.getUdcName()),
+     video(args.getVideoPath(), input, args.getFrameRate(),
 -          args.getSubsampling()),
-+    input(args.getKeyboardPath(), args.getPointerPath()),
-+    video(args.getVideoPath(), input, args.getFrameRate(), args.getSubsampling(), args.getFormat()),
++          args.getSubsampling(), args.getFormat()),
      server(args, input, video)
--{}
-+{
-+}
+ {}
  
- void Manager::run()
- {
 diff --git a/ikvm_server.cpp b/ikvm_server.cpp
-index 141f6c6..141afc4 100644
+index 141f6c6..0e6ccf9 100644
 --- a/ikvm_server.cpp
 +++ b/ikvm_server.cpp
-@@ -2,12 +2,16 @@
- 
- #include <rfb/rfbproto.h>
- 
--#include <boost/crc.hpp>
- #include <phosphor-logging/elog-errors.hpp>
- #include <phosphor-logging/elog.hpp>
+@@ -8,9 +8,11 @@
  #include <phosphor-logging/log.hpp>
  #include <xyz/openbmc_project/Common/error.hpp>
  
-+#include <boost/crc.hpp>
-+
-+#define 	rfbEncodingAspeed   18
-+#define ROUND_DOWN(x,r) ((x) & ~((r) - 1))
++#define rfbEncodingAspeed 18
++#define ROUND_DOWN(x, r) ((x) & ~((r)-1))
 +
  namespace ikvm
  {
+-
+ using namespace phosphor::logging;
+ using namespace sdbusplus::xyz::openbmc_project::Common::Error;
  
-@@ -94,9 +98,10 @@ void Server::run()
+@@ -94,9 +96,11 @@ void Server::run()
  void Server::sendFrame()
  {
      char* data = video.getData();
 +    uint32_t frameCount = 0;
      rfbClientIteratorPtr it;
      rfbClientPtr cl;
--    int64_t frame_crc = -1;
+     int64_t frame_crc = -1;
 +    bool frame_sent = false;
  
      if (!data || pendingResize)
      {
-@@ -109,6 +114,7 @@ void Server::sendFrame()
+@@ -109,6 +113,7 @@ void Server::sendFrame()
      {
          ClientData* cd = (ClientData*)cl->clientData;
          rfbFramebufferUpdateMsg* fu = (rfbFramebufferUpdateMsg*)cl->updateBuf;
@@ -392,35 +164,15 @@ index 141f6c6..141afc4 100644
  
          if (!cd)
          {
-@@ -126,26 +132,8 @@ void Server::sendFrame()
-             continue;
+@@ -146,6 +151,7 @@ void Server::sendFrame()
          }
  
--        if (calcFrameCRC)
--        {
--            if (frame_crc == -1)
--            {
--                /* JFIF header contains some varying data so skip it for
--                 * checksum calculation */
--                frame_crc =
--                    boost::crc<32, 0x04C11DB7, 0xFFFFFFFF, 0xFFFFFFFF, true,
--                               true>(data + 0x30, video.getFrameSize() - 0x30);
--            }
--
--            if (cd->last_crc == frame_crc)
--            {
--                continue;
--            }
--
--            cd->last_crc = frame_crc;
--        }
--
          cd->needUpdate = false;
 +        frame_sent = true;
  
          if (cl->enableLastRectEncoding)
          {
-@@ -160,11 +148,34 @@ void Server::sendFrame()
+@@ -160,11 +166,39 @@ void Server::sendFrame()
          cl->ublen = sz_rfbFramebufferUpdateMsg;
          rfbSendUpdateBuf(cl);
  
@@ -438,19 +190,24 @@ index 141f6c6..141afc4 100644
 +            cl->updateBuf[cl->ublen++] = (char)(frameCount >> 8 & 0xff);
 +            cl->updateBuf[cl->ublen++] = (char)(frameCount & 0xff);
 +            cl->updateBuf[cl->ublen++] = (char)(video.getSubsampling());
-+            cl->updateBuf[cl->ublen++] = (char)(0x00);	// the value of quality if changed
++            cl->updateBuf[cl->ublen++] =
++                (char)(0x00); // the value of quality if changed
 +        }
 +        else
 +        {
 +            cl->tightEncoding = rfbEncodingTight;
-+            if (video.getFormat() == 2) {
++            if (video.getFormat() == 2)
++            {
 +                v4l2_rect r = video.getBoundingBox(i);
  
 -        cl->updateBuf[cl->ublen++] = (char)(rfbTightJpeg << 4);
 -        rfbSendCompressedDataTight(cl, data, video.getFrameSize());
 +                rfbSendTightHeader(cl, r.left, r.top, r.width, r.height);
-+            } else {
-+                rfbSendTightHeader(cl, 0, 0, video.getWidth(), video.getHeight());
++            }
++            else
++            {
++                rfbSendTightHeader(cl, 0, 0, video.getWidth(),
++                                   video.getHeight());
 +            }
 +
 +            cl->updateBuf[cl->ublen++] = (char)(rfbTightJpeg << 4);
@@ -459,7 +216,7 @@ index 141f6c6..141afc4 100644
  
          if (cl->enableLastRectEncoding)
          {
-@@ -175,12 +186,15 @@ void Server::sendFrame()
+@@ -175,6 +209,9 @@ void Server::sendFrame()
      }
  
      rfbReleaseClientIterator(it);
@@ -469,24 +226,18 @@ index 141f6c6..141afc4 100644
  }
  
  void Server::clientFramebufferUpdateRequest(
--    rfbClientPtr cl, rfbFramebufferUpdateRequestMsg* furMsg)
-+    rfbClientPtr cl, rfbFramebufferUpdateRequestMsg *furMsg)
+@@ -210,8 +247,8 @@ enum rfbNewClientAction Server::newClient(rfbClientPtr cl)
  {
--    ClientData* cd = (ClientData*)cl->clientData;
-+    ClientData *cd = (ClientData *)cl->clientData;
- 
-     if (!cd)
-         return;
-@@ -211,7 +225,7 @@ enum rfbNewClientAction Server::newClient(rfbClientPtr cl)
      Server* server = (Server*)cl->screen->screenData;
  
-     cl->clientData =
+-    cl->clientData =
 -        new ClientData(server->video.getFrameRate(), &server->input);
-+        new ClientData(ROUND_DOWN(server->video.getFrameRate(), 8), &server->input);
++    cl->clientData = new ClientData(ROUND_DOWN(server->video.getFrameRate(), 8),
++                                    &server->input);
      cl->clientGoneHook = clientGone;
      cl->clientFramebufferUpdateRequestHook = clientFramebufferUpdateRequest;
      if (!server->numClients++)
-@@ -248,8 +262,9 @@ void Server::doResize()
+@@ -248,8 +285,9 @@ void Server::doResize()
              continue;
          }
  
@@ -497,36 +248,24 @@ index 141f6c6..141afc4 100644
      }
  
      rfbReleaseClientIterator(it);
-diff --git a/ikvm_server.hpp b/ikvm_server.hpp
-index dcb984a..bfeb73b 100644
---- a/ikvm_server.hpp
-+++ b/ikvm_server.hpp
-@@ -94,8 +94,8 @@ class Server
-      * @param[in] furMsg - Pointer of the FUR message
-      */
-     static void
--        clientFramebufferUpdateRequest(rfbClientPtr cl,
--                                       rfbFramebufferUpdateRequestMsg* furMsg);
-+    clientFramebufferUpdateRequest(rfbClientPtr cl,
-+                                   rfbFramebufferUpdateRequestMsg *furMsg);
-     /*
-      * @brief Handler for a client disconnecting
-      *
 diff --git a/ikvm_video.cpp b/ikvm_video.cpp
-index 734294e..91d1da7 100644
+index 734294e..b908f87 100644
 --- a/ikvm_video.cpp
 +++ b/ikvm_video.cpp
-@@ -19,6 +19,9 @@
+@@ -19,9 +19,11 @@
  #include <xyz/openbmc_project/Common/Device/error.hpp>
  #include <xyz/openbmc_project/Common/File/error.hpp>
  
-+#define V4L2_PIX_FMT_AJPG     v4l2_fourcc('A', 'J', 'P', 'G')
-+#define V4L2_PIX_FMT_FLAG_PARTIAL_JPG   0x00000004
++#define V4L2_PIX_FMT_AJPG v4l2_fourcc('A', 'J', 'P', 'G')
++#define V4L2_PIX_FMT_FLAG_PARTIAL_JPG 0x00000004
 +
  namespace ikvm
  {
- 
-@@ -30,11 +33,12 @@ using namespace phosphor::logging;
+-
+ const int Video::bitsPerSample(8);
+ const int Video::bytesPerPixel(4);
+ const int Video::samplesPerPixel(3);
+@@ -30,9 +32,9 @@ using namespace phosphor::logging;
  using namespace sdbusplus::xyz::openbmc_project::Common::File::Error;
  using namespace sdbusplus::xyz::openbmc_project::Common::Device::Error;
  
@@ -534,16 +273,11 @@ index 734294e..91d1da7 100644
 +Video::Video(const std::string& p, Input& input, int fr, int sub, int fmt) :
      resizeAfterOpen(false), timingsError(false), fd(-1), frameRate(fr),
 -    lastFrameIndex(-1), height(600), width(800), subSampling(sub), input(input),
--    path(p)
--{}
-+    height(600), width(800), subSampling(sub),
-+	format(fmt), input(input), path(p)
-+{
-+}
++    height(600), width(800), subSampling(sub), format(fmt), input(input),
+     path(p)
+ {}
  
- Video::~Video()
- {
-@@ -43,12 +47,21 @@ Video::~Video()
+@@ -43,12 +45,21 @@ Video::~Video()
  
  char* Video::getData()
  {
@@ -568,11 +302,12 @@ index 734294e..91d1da7 100644
  }
  
  void Video::getFrame()
-@@ -58,12 +71,19 @@ void Video::getFrame()
+@@ -58,12 +69,20 @@ void Video::getFrame()
      v4l2_buffer buf;
      fd_set fds;
      timeval tv;
-+    v4l2_selection comp = {.type = V4L2_BUF_TYPE_VIDEO_CAPTURE, .target = V4L2_SEL_TGT_CROP_DEFAULT};
++    v4l2_selection comp = {.type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
++                           .target = V4L2_SEL_TGT_CROP_DEFAULT};
  
      if (fd < 0)
      {
@@ -588,7 +323,7 @@ index 734294e..91d1da7 100644
      FD_ZERO(&fds);
      FD_SET(fd, &fds);
  
-@@ -92,48 +112,71 @@ void Video::getFrame()
+@@ -92,48 +111,73 @@ void Video::getFrame()
  
                  if (!(buf.flags & V4L2_BUF_FLAG_ERROR))
                  {
@@ -597,9 +332,11 @@ index 734294e..91d1da7 100644
 -                    break;
 +                    buffers[buf.index].payload = buf.bytesused;
 +                    buffers[buf.index].sequence = buf.sequence;
-+                    if (format == 2) {
++                    if (format == 2)
++                    {
 +                        rc = ioctl(fd, VIDIOC_G_SELECTION, &comp);
-+                        if (rc) {
++                        if (rc)
++                        {
 +                            log<level::ERR>("Failed to get selection box",
 +                                            entry("ERROR=%s", strerror(errno)));
 +                            comp.r.left = 0;
@@ -622,13 +359,13 @@ index 734294e..91d1da7 100644
  
      fcntl(fd, F_SETFL, fd_flags);
 +}
- 
--    for (unsigned int i = 0; i < buffers.size(); ++i)
++
 +void Video::qbuf(int i)
 +{
 +    int rc;
 +    v4l2_buffer buf;
-+
+ 
+-    for (unsigned int i = 0; i < buffers.size(); ++i)
 +    if (!buffers[i].queued)
      {
 -        if (i == (unsigned int)lastFrameIndex)
@@ -683,7 +420,7 @@ index 734294e..91d1da7 100644
  bool Video::needsResize()
  {
      int rc;
-@@ -183,7 +226,7 @@ bool Video::needsResize()
+@@ -183,7 +227,7 @@ bool Video::needsResize()
                  xyz::openbmc_project::Common::File::Open::PATH(path.c_str()));
          }
  
@@ -692,11 +429,12 @@ index 734294e..91d1da7 100644
          return true;
      }
  
-@@ -434,6 +477,29 @@ void Video::start()
+@@ -434,6 +478,30 @@ void Video::start()
                  CALLOUT_DEVICE_PATH(path.c_str()));
      }
  
-+    switch (format) {
++    switch (format)
++    {
 +        case 2:
 +            fmt.fmt.pix.flags = V4L2_PIX_FMT_FLAG_PARTIAL_JPG;
 +        default:
@@ -722,18 +460,7 @@ index 734294e..91d1da7 100644
      memset(&sparm, 0, sizeof(v4l2_streamparm));
      sparm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
      sparm.parm.capture.timeperframe.numerator = 1;
-@@ -446,8 +512,8 @@ void Video::start()
-     }
- 
-     ctrl.id = V4L2_CID_JPEG_CHROMA_SUBSAMPLING;
--    ctrl.value = subSampling ? V4L2_JPEG_CHROMA_SUBSAMPLING_420
--                             : V4L2_JPEG_CHROMA_SUBSAMPLING_444;
-+    ctrl.value = subSampling
-+	       ? V4L2_JPEG_CHROMA_SUBSAMPLING_420 : V4L2_JPEG_CHROMA_SUBSAMPLING_444;
-     rc = ioctl(fd, VIDIOC_S_CTRL, &ctrl);
-     if (rc < 0)
-     {
-@@ -477,7 +543,7 @@ void Video::stop()
+@@ -477,7 +545,7 @@ void Video::stop()
          return;
      }
  
@@ -743,28 +470,37 @@ index 734294e..91d1da7 100644
      rc = ioctl(fd, VIDIOC_STREAMOFF, &type);
      if (rc)
 diff --git a/ikvm_video.hpp b/ikvm_video.hpp
-index 17477df..ccfb089 100644
+index 17477df..d8a7406 100644
 --- a/ikvm_video.hpp
 +++ b/ikvm_video.hpp
-@@ -5,6 +5,8 @@
+@@ -2,13 +2,15 @@
+ 
+ #include "ikvm_input.hpp"
+ 
++#include <linux/videodev2.h>
++
++#include <deque>
  #include <mutex>
  #include <string>
  #include <vector>
-+#include <deque>
-+ #include <linux/videodev2.h>
  
  namespace ikvm
  {
-@@ -23,7 +25,7 @@ class Video
+-
+ /*
+  * @class Video
+  * @brief Sets up the V4L2 video device and performs read operations
+@@ -23,7 +25,8 @@ class Video
       * @param[in] input - Reference to the Input object
       * @param[in] fr    - desired frame rate of the video
       */
 -    Video(const std::string& p, Input& input, int fr = 30, int sub = 0);
-+    Video(const std::string& p, Input& input, int fr = 30, int sub = 0, int fmt = 0);
++    Video(const std::string& p, Input& input, int fr = 30, int sub = 0,
++          int fmt = 0);
      ~Video();
      Video(const Video&) = default;
      Video& operator=(const Video&) = default;
-@@ -36,8 +38,11 @@ class Video
+@@ -36,8 +39,11 @@ class Video
       * @return Pointer to the video frame data
       */
      char* getData();
@@ -776,7 +512,7 @@ index 17477df..ccfb089 100644
      /*
       * @brief Gets whether or not the video frame needs to be resized
       *
-@@ -73,7 +78,28 @@ class Video
+@@ -73,7 +79,28 @@ class Video
       */
      inline size_t getFrameSize() const
      {
@@ -806,7 +542,7 @@ index 17477df..ccfb089 100644
      }
      /*
       * @brief Gets the height of the video frame
-@@ -111,6 +137,36 @@ class Video
+@@ -111,6 +138,36 @@ class Video
      {
          subSampling = _sub;
      }
@@ -843,7 +579,7 @@ index 17477df..ccfb089 100644
  
      /* @brief Number of bits per component of a pixel */
      static const int bitsPerSample;
-@@ -118,8 +174,12 @@ class Video
+@@ -118,8 +175,12 @@ class Video
      static const int bytesPerPixel;
      /* @brief Number of components in a pixel (i.e. 3 for RGB pixel) */
      static const int samplesPerPixel;
@@ -856,16 +592,6 @@ index 17477df..ccfb089 100644
      /*
       * @struct Buffer
       * @brief Store the address and size of frame data from streaming
-@@ -128,7 +188,8 @@ class Video
-     struct Buffer
-     {
-         Buffer() : data(nullptr), queued(false), payload(0), size(0)
--        {}
-+        {
-+        }
-         ~Buffer() = default;
-         Buffer(const Buffer&) = default;
-         Buffer& operator=(const Buffer&) = default;
 @@ -139,6 +200,8 @@ class Video
          bool queued;
          size_t payload;
@@ -892,6 +618,19 @@ index 17477df..ccfb089 100644
      /* @brief Reference to the Input object */
      Input& input;
      /* @brief Path to the V4L2 video device */
+diff --git a/start-ipkvm.service b/start-ipkvm.service
+index 10e4248..e193719 100644
+--- a/start-ipkvm.service
++++ b/start-ipkvm.service
+@@ -5,7 +5,7 @@ ConditionPathIsMountPoint=/sys/kernel/config
+ [Service]
+ Restart=always
+ ExecStartPre=/usr/bin/create_usbhid.sh disconnect
+-ExecStart=/usr/bin/obmc-ikvm -c -v /dev/video0 -k /dev/hidg0 -p /dev/hidg1
++ExecStart=/usr/bin/obmc-ikvm -v /dev/video0 -k /dev/hidg0 -p /dev/hidg1 -m 2 -f 60
+ 
+ [Install]
+ WantedBy=multi-user.target
 -- 
 2.25.1
 
