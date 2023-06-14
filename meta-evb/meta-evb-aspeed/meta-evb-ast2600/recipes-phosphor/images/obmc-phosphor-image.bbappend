@@ -1,6 +1,6 @@
 FILESEXTRAPATHS:append:= "${THISDIR}/files:"
 
-INITRAMFS_ROOTFS = "tmp/work/evb_ast2600-openbmc-linux-gnueabi/obmc-phosphor-initramfs/1.0-r0/rootfs"
+INITRAMFS_ROOTFS = "${TMPDIR}/work/${MACHINE}-openbmc-${TARGET_OS}/${INITRAMFS_IMAGE}/${PV}-${PR}/rootfs"
 
 do_generate_static:append() {
 
