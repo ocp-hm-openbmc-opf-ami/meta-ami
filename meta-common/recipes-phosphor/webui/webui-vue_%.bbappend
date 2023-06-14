@@ -58,6 +58,7 @@ SRC_URI += " \
     file://0052-Display-user-account-Locked-error-message-in-Login.patch \
     "
 do_compile:prepend() {
+  cp -vf ${S}/.env.ami ${S}/.env.intel
   cp -vf ${S}/.env.ami ${S}/.env
   cp -vf ${WORKDIR}/login-company-logo.svg ${S}/src/assets/images
   cp -vf ${WORKDIR}/logo-header.svg ${S}/src/assets/images
