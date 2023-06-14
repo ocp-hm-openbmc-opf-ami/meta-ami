@@ -52,6 +52,7 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
 	    file://0042-Add-AutonomousCrashDump-Schema.patch \
 	    file://0043-Add-AtScaleDebug-Schema.patch \
             file://0044-Restrict-the-patch-of-IPv4-from-DHCP-to-Static-and-v.patch \ 
+	    file://0045-Fixes-LED-Button-display-issue-in-Overview-Page.patch \
 "
 SRC_URI_BHS:append ="file://0028-Adding-proper-path-to-get-the-cupsensors.patch \
 "
