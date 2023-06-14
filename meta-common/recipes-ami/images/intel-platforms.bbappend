@@ -1,0 +1,1 @@
+inherit obmc-phosphor-signining

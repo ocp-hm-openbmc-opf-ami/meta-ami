@@ -328,11 +328,8 @@ fetch_fw() {
             file)
                 METAFILE_PATH=$(echo $URI | sed 's,^file://,,')
                 COMPONENTNAME=$(cat $METAFILE_PATH | awk -F= '$1=="ComponentName"{print $2}')
-                IMAGENAME=$(cat $METAFILE_PATH | awk -F= '$1=="Image"{print $2}')
                 LOCAL_PATH="$(dirname "$METAFILE_PATH")/$IMAGENAME"
                 echo "METAFILE_PATH=$METAFILE_PATH"
-                echo "COMPONENTNAME=$COMPONENTNAME"
-                echo "IMAGENAME=$IMAGENAME"
                 ;;
             *)
                 log "Invalid URI $URI"
@@ -350,15 +347,21 @@ update_fw() {
         if [ -f "$(dirname "$METAFILE_PATH")/image-runtime" ]; then
             LOCAL_PATH="$(dirname "$METAFILE_PATH")/image-runtime" 
             COMPONENTNAME="bmc"
+            echo "Updating image $LOCAL_PATH"
             ping_pong_update
             return 0
         elif [ -f "$(dirname "$METAFILE_PATH")/image-bmc" ]; then
             LOCAL_PATH="$(dirname "$METAFILE_PATH")/image-bmc" 
             COMPONENTNAME="bmc"
-        fi
-    fi   
-
-
+        elif [ -f "$(dirname "$METAFILE_PATH")/image-bios" ]; then
+            LOCAL_PATH="$(dirname "$METAFILE_PATH")/image-bios" 
+            COMPONENTNAME="bios"
+        elif [ -f "$(dirname "$METAFILE_PATH")/image-cpld" ]; then
+            LOCAL_PATH="$(dirname "$METAFILE_PATH")/image-cpld" 
+            COMPONENTNAME="cpld"
+        fi     
+    fi  
+    echo "Updating image $LOCAL_PATH"
     case "$COMPONENTNAME" in
         "bmc")
             log "BMC Full Flash - full SPI update request"
