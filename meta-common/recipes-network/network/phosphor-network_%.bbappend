@@ -12,6 +12,7 @@ SRC_URI:append = " \
              file://0010-Fix-Cannot-Communicate-With-Vlan-IP-By-IPMI-Command.patch \
              file://0011-Fix-Dynamic-And-Static-Addrs-Shown-When-IPSrc-Is-DHCP.patch \
              file://0013-Add-Prefix-Length-at-Neighbor.patch \
+             file://0013-Allow-Empty-Gateway4-When-IPv4-Source-Is-Static.patch \
            "
 
 

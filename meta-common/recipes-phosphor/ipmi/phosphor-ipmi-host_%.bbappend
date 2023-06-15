@@ -30,6 +30,7 @@ SRC_URI += " \
            file://0042-Block-Manually_Set-Gateway-MAC-Address.patch \ 
            file://0043-Add-Prefix-Length-at-Neighbor.patch \
            file://0042-Fix-To-Block-IPv6-Index-Over-16.patch \
+	   file://0042-Set-IPv4-Static-Address-When-Disable-DHCP.patch \
            "
 
 do_install:append(){
