@@ -60,6 +60,7 @@ SRC_URI += " \
     file://0056-Fix-for-elevate-user-privilege-and-also-disable-admi.patch \
     file://0057-account-policy-settings-values-getting-changed.patch \
     file://0058-serial-console-opened-in-new-tab-shows-error.patch \
+    file://0060-Remove-VTPM-and-RTAD-configuration-settings-on-the-Policies-Page.patch \
     "
 do_compile:prepend() {
   cp -vf ${S}/.env.ami ${S}/.env.intel
