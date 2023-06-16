@@ -37,7 +37,7 @@ def repo_status(d, f, repo, tagargs):
 python() {
     import re
 
-    gen = d.getVar('PRODUCT_GENERATION', True)
+    gen = d.getVar('PRODUCT_GENERATION_TAG', True)
     if gen is None:
         gen = 'unknown'
 
