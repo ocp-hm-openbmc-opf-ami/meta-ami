@@ -61,6 +61,7 @@ SRC_URI += " \
     file://0057-account-policy-settings-values-getting-changed.patch \
     file://0058-serial-console-opened-in-new-tab-shows-error.patch \
     file://0062-Conditional-Rendering-on-Expansion-Pack-features.patch \
+    file://0064-The-error-popups-in-Web-does-not-get-closed-and-just-gets-piled-up.patch \
     "
 do_compile:prepend() {
   cp -vf ${S}/.env.ami ${S}/.env.intel
