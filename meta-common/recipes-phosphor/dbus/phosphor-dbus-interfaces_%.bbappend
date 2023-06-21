@@ -12,5 +12,6 @@ SRC_URI += "file://0001-ARP-Control-property.patch\
             file://0006-Add-Diag-Arugment-in-Boot-Mode-Interface.patch \
             file://0007-Added-the-TimeOut-property-under-State-interface.patch \
             file://0008-Add-Prefix-Length-at-Neighbor.patch \
+            file://0009-Implement-EIP-741000.-Implement-DDNS-Nsupdate-Featur.patch \
 	    "
 EXTRA_OEMESON += "-Ddata_com_ami=true"
