@@ -1,8 +1,8 @@
 diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
-index eb31b46..a504dac 100644
+index 18238e5..facc4ab 100644
 --- a/src/ethernet_interface.cpp
 +++ b/src/ethernet_interface.cpp
-@@ -23,6 +23,10 @@
+@@ -23,6 +23,11 @@
  #include <variant>
  #include <xyz/openbmc_project/Common/error.hpp>
  
@@ -10,19 +10,11 @@ index eb31b46..a504dac 100644
 +#include <linux/if_packet.h>  /* struct sockaddr_ll (see man 7 packet) */
 +#include <netinet/ether.h>
 +
++
  namespace phosphor
  {
  namespace network
-@@ -239,7 +243,7 @@ ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
-                 gateway = ToAddr<in_addr>{}(ipgateway);
-                 ip_address::isValidIPv4Addr((in_addr*)&addr, ip_address::Type::IP4_ADDRESS);
-                 ip_address::isValidIPv4Addr((in_addr*)&gateway, ip_address::Type::GATEWAY4_ADDRESS);
--                EthernetInterfaceIntf::defaultGateway(ipgateway);
-+                defaultGateway(ipgateway);
-                 break;
-             case IP::Protocol::IPv6:
-                 addr = ToAddr<in6_addr>{}(ipaddress);
-@@ -249,7 +253,7 @@ ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
+@@ -252,7 +257,7 @@ ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
                          gateway = ToAddr<in6_addr>{}(ipgateway);
                          ip_address::isValidIPv6Addr((in6_addr*)&gateway, ip_address::Type::GATEWAY6_ADDRESS);
                  }
@@ -31,7 +23,7 @@ index eb31b46..a504dac 100644
                  break;
              default:
                  throw std::logic_error("Exhausted protocols");
-@@ -371,8 +375,19 @@ bool EthernetInterface::ipv6AcceptRA(bool value)
+@@ -374,8 +379,19 @@ bool EthernetInterface::ipv6AcceptRA(bool value)
  
  bool EthernetInterface::dhcp4(bool value)
  {
@@ -53,23 +45,25 @@ index eb31b46..a504dac 100644
          writeConfigurationFile();
          manager.reloadConfigs();
      }
-@@ -892,8 +907,14 @@ std::string EthernetInterface::defaultGateway(std::string gateway)
+@@ -895,8 +911,16 @@ std::string EthernetInterface::defaultGateway(std::string gateway)
      {
          return gateway;
      }
+-    EthernetInterfaceIntf::defaultGateway(gateway);
+ 
 +    manager.removeNeighbor(
 +        NeighborInfo{
 +            .ifidx=ifIdx,
 +             .addr=ToAddr<in_addr>{}(EthernetInterfaceIntf::defaultGateway())
 +       }
 +    );
-     EthernetInterfaceIntf::defaultGateway(gateway);
--
++
++    EthernetInterfaceIntf::defaultGateway(gateway);
 +    setDwMacAddrByIP(gateway);
      writeConfigurationFile();
      manager.reloadConfigs();
  
-@@ -1243,5 +1264,174 @@ bool EthernetInterface::sysctlConfig(const std::string& cmd)
+@@ -1246,5 +1270,182 @@ bool EthernetInterface::sysctlConfig(const std::string& cmd)
      return ((outConfig.empty())?1:0);
  }
  
@@ -80,6 +74,13 @@ index eb31b46..a504dac 100644
 +        log<level::INFO>("/proc/net/arp not opened\n");
 +        return std::string::npos;
 +    }
++
++    auto prefixLength = 0;
++    for (auto& addr : addrs) {
++        if (addr.second->type() == IP::Protocol::IPv4 && addr.second->origin() != IP::AddressOrigin::LinkLocal) {
++            prefixLength = addr.second->prefixLength();
++        }
++    }
 +    std::string line, mac;
 +    std::vector<std::string> vv;
 +    while (!ifs.eof()) {
@@ -87,7 +88,7 @@ index eb31b46..a504dac 100644
 +        if (line == gateway) {
 +            ifs >> line >> line >> mac >> line >> line;
 +            if (line == interfaceName() && ether_aton(mac.c_str()) != nullptr) {
-+                neighbor(gateway, mac);
++                neighbor(gateway, mac, prefixLength);
 +                return 0;
 +            }
 +        }
@@ -154,6 +155,7 @@ index eb31b46..a504dac 100644
 +
 +    for (auto& addr : addrs) {
 +        if (addr.second->type() == IP::Protocol::IPv4 && addr.second->origin() != IP::AddressOrigin::LinkLocal) {
++            prefixLength = addr.second->prefixLength();
 +            retry = 2;
 +            while(retry) {
 +                dstsock = srcsock;
@@ -227,9 +229,8 @@ index eb31b46..a504dac 100644
 +                }
 +                retry--;
 +            }
-+
 +            if(0 == memcmp(p,preMAC,6)) {
-+                neighbor(gateway, fmt::format("{:0>2x}:{:0>2x}:{:0>2x}:{:0>2x}:{:0>2x}:{:0>2x}", p[0],p[1],p[2],p[3],p[4],p[5]));
++                neighbor(gateway, fmt::format("{:0>2x}:{:0>2x}:{:0>2x}:{:0>2x}:{:0>2x}:{:0>2x}", p[0],p[1],p[2],p[3],p[4],p[5]), prefixLength);
 +                ret = 0;
 +                goto close;
 +            } // if
@@ -242,13 +243,14 @@ index eb31b46..a504dac 100644
 +    return ret;
 +}
 +
++
  } // namespace network
  } // namespace phosphor
 diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
-index 0c1078c..50eb1eb 100644
+index 94d0f05..52d691a 100644
 --- a/src/ethernet_interface.hpp
 +++ b/src/ethernet_interface.hpp
-@@ -242,6 +242,10 @@ class EthernetInterface : public Ifaces
+@@ -243,6 +243,10 @@ class EthernetInterface : public Ifaces
       */
      uint64_t gratuitousARPInterval(uint64_t interval) override;
  

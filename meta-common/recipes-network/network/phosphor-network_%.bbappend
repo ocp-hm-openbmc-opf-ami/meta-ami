@@ -15,6 +15,7 @@ SRC_URI:append = " \
              file://0013-Allow-Empty-Gateway4-When-IPv4-Source-Is-Static.patch \
              file://nsupdate.sh \
              file://0015-Implement-EIP-741000.-DDNS-Nsupdate-Feature.patch \
+             file://0014-Fix-No-Default-GW-MAC-Address.patch \
            "
 
 do_install:append() {
