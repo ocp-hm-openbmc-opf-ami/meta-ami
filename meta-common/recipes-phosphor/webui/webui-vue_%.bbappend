@@ -64,6 +64,7 @@ SRC_URI += " \
     file://0060-Remove-VTPM-and-RTAD-configuration-settings-on-the-Policies-Page.patch \
     file://0062-Conditional-Rendering-on-Expansion-Pack-features.patch \
     file://0063-Expansion-Pack-features-webui-bundle-handling.patch \
+    file://0065-network-page-ipv4-static-and-dhcp-fix.patch \
     "
 do_compile:prepend() {
   cp -vf ${S}/.env.ami ${S}/.env.intel
