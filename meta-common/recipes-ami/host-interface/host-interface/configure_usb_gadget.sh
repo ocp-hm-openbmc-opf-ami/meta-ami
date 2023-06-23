@@ -44,10 +44,7 @@ echo 1e6a0000.usb-vhub:p3 > /sys/kernel/config/usb_gadget/eth/UDC
 
 ## Assigning MAC address
 USB0_MAC=`dmesg | grep "usb0: MAC" | cut -d ' ' -f 7`
-USB1_MAC=`dmesg | grep "usb1: MAC" | cut -d ' ' -f 7`
 ifconfig usb0 down
 ifconfig usb0 hw ether $USB0_MAC
+ifconfig usb0 169.254.0.17 netmask 255.255.0.0
 ifconfig usb0 up
-ifconfig usb1 down
-ifconfig usb1 hw ether $USB1_MAC
-ifconfig usb1 up
