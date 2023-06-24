@@ -45,9 +45,8 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 ```
 ### 5) OT Core AST2600EVB Build Instruction
 ```
-- git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/egs openbmc-meta-intel/meta-egs
 - meta-ami/github-gitlab-url.sh
-- Add the features into meta-ami/meta-evb/meta-evb-aspeed/meta-evb-ast2600/conf/layer.conf
+- Add the other meta layer and features (optional)
 - TEMPLATECONF=meta-ami/meta-evb/meta-evb-aspeed/meta-evb-ast2600/conf/templates/default . openbmc-env
 - bitbake obmc-phosphor-image
 ```
