@@ -56,6 +56,7 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
 	    file://0045-Fixes-LED-Button-display-issue-in-Overview-Page.patch \
             file://0048-changing-maximum-supported-kvm-session-value-to-1.patch \ 
 	    file://0052-Fixed-Apache-Benchmark-tool-timeout-issue.patch \
+            file://0054-Fix-for-Unable-to-set-User-lockout-time-manual.patch \
 "
 SRC_URI_BHS:append ="file://0028-Adding-proper-path-to-get-the-cupsensors.patch \
 "
