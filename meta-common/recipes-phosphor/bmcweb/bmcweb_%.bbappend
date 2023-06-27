@@ -58,6 +58,7 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
 	    file://0052-Fixed-Apache-Benchmark-tool-timeout-issue.patch \
             file://0054-Fix-for-Unable-to-set-User-lockout-time-manual.patch \
             file://0058-Removing-KVM-ServiceEnabled-property-under-manager.patch \ 
+            file://0062-Fixed-VirtualMedia-not-listing-issue-under-Accounts.patch \ 
 "
 SRC_URI_BHS:append ="file://0028-Adding-proper-path-to-get-the-cupsensors.patch \
 "
