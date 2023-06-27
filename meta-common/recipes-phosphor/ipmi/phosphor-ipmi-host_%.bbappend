@@ -32,6 +32,7 @@ SRC_URI += " \
            file://0042-Fix-To-Block-IPv6-Index-Over-16.patch \
 	   file://0042-Set-IPv4-Static-Address-When-Disable-DHCP.patch \
 	   file://0044-Set-IP-address-source-to-unspecified-address-source.patch \
+           file://0045-Support-16-Max-IPv6-Address.patch \
            "
 
 do_install:append(){
