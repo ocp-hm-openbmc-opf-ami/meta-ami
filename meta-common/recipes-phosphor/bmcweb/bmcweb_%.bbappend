@@ -60,6 +60,7 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
 	    file://0056-Added-Bios-Setting-URI-to-Bios.patch \
             file://0058-Removing-KVM-ServiceEnabled-property-under-manager.patch \ 
             file://0062-Fixed-VirtualMedia-not-listing-issue-under-Accounts.patch \ 
+            file://0064-Fix-for-Empty-response-body-for-updating-username.patch \
 "
 SRC_URI_BHS:append ="file://0028-Adding-proper-path-to-get-the-cupsensors.patch \
 "
