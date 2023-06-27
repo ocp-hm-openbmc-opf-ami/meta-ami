@@ -9,6 +9,7 @@ SRC_URI += "file://nfs.cfg \
             file://0001-Upstream-aspeed-video.c-driver-from-ASPEED-SDK-v08.05.patch \
             file://jtag-fragment.cfg \
             file://0002-Added-jtag-aspeed-internal-driver.patch \
+	    file://0003-Fix-incorrect-MAC-address-in-RNDIS-driver.patch \
            "
 
 NON_PFR_SRC_URI_AMI = "file://0012-Add-new-layout-as-per-AMI-requirements.patch"
