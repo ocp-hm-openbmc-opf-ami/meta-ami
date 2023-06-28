@@ -43,7 +43,7 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
 	    file://0032-Fixes-ethernetInternet-DHCP-property-patch-support.patch \
 	    file://0033-Fixed-the-Attribute-MaxConcurrentSession-type-to-int.patch \
 	    file://0034-fix-for-the-kvm-session-not-able-to-open-more-than-o.patch \
-	    file://0035-MaintenanceWindow-OperationApplyTime-Support-under-Managers.patch \
+            file://0035-MaintenanceWindow-OperationApplyTime-Support.patch \
 	    file://0036-Add-Locked-status-to-login-API-on-User-locked.patch \
 	    file://0037-Fix-for-500-internal-error-in-ethernet-IPV6-patch-op.patch \
 	    file://0038-fix-StateChange-not-getting-updated-issue.patch \
