@@ -33,6 +33,7 @@ SRC_URI += " \
 	   file://0042-Set-IPv4-Static-Address-When-Disable-DHCP.patch \
 	   file://0044-Set-IP-address-source-to-unspecified-address-source.patch \
            file://0045-Support-16-Max-IPv6-Address.patch \
+           file://0045-Implement-IPMI-Command-IPv4-IPv6-Enabled-Disabled.patch \
            "
 
 do_install:append(){
