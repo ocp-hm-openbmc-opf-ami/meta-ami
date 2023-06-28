@@ -8,6 +8,7 @@ SRC_URI += " \
 	     file://0012-passwordpolicy.patch \
 	     file://0003-Add-Host-Interface-User-Support.patch \
              file://0013-Adding-code-for-setting-Root-unlock-Timeout.patch \
+	     file://0014-rename-workaround.patch \
            "
 
 FILES:${PN} += "${datadir}/dbus-1/system.d/phosphor-nslcd-cert-config.conf"
