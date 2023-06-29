@@ -54,6 +54,7 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
 	    file://0043-Add-AtScaleDebug-Schema.patch \
             file://0044-Restrict-the-patch-of-IPv4-from-DHCP-to-Static-and-v.patch \ 
 	    file://0045-Fixes-LED-Button-display-issue-in-Overview-Page.patch \
+	    file://0047-Fix-for-Unauthorized-OOB-user-in-bmcweb.patch \
             file://0048-changing-maximum-supported-kvm-session-value-to-1.patch \ 
 	    file://0049-Fix-for-DateTimeLocalOffset-return-code-status.patch \
 	    file://0052-Fixed-Apache-Benchmark-tool-timeout-issue.patch \
