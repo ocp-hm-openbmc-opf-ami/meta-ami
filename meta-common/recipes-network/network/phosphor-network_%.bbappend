@@ -16,6 +16,7 @@ SRC_URI:append = " \
              file://nsupdate.sh \
              file://0015-Implement-EIP-741000.-DDNS-Nsupdate-Feature.patch \
              file://0014-Fix-No-Default-GW-MAC-Address.patch \
+             file://0016-Add-Function-IPv4-IPv6-Enabled-Disabled.patch \
            "
 
 do_install:append() {
@@ -25,5 +26,7 @@ do_install:append() {
 
 
 EXTRA_OEMESON:append = " -Dpersist-mac=true"
+
+EXTRA_OEMESON:append = " -Ddefault-link-local-autoconf=ipv6"
 
 SYSTEMD_SERVICE:${PN} += "xyz.openbmc_project.GARPControl.service"
