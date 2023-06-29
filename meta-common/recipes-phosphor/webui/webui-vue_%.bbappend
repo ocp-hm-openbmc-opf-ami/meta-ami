@@ -66,6 +66,7 @@ SRC_URI += " \
     file://0063-Expansion-Pack-features-webui-bundle-handling.patch \
     file://0064-The-error-popups-in-Web-does-not-get-closed-and-just-gets-piled-up.patch \
     file://0065-network-page-ipv4-static-and-dhcp-fix.patch \
+    file://0066-virtual-media-image-load-options-are-not-enabled.patch \
     "
 do_compile:prepend() {
   cp -vf ${S}/.env.ami ${S}/.env.intel
