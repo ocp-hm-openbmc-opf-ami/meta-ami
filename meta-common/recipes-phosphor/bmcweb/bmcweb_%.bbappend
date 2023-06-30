@@ -63,6 +63,7 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
 	    file://0056-Added-Bios-Setting-URI-to-Bios.patch \
 	    file://0057-Fixed-passwordChange-policy-is-able-to-access-after-passwd-expire.patch \
             file://0058-Removing-KVM-ServiceEnabled-property-under-manager.patch \ 
+	    file://0060-Redesign-DHCPv4-DHCPv6-Enable-Disable-Flow-Limit-Sta.patch \
             file://0062-Fixed-VirtualMedia-not-listing-issue-under-Accounts.patch \ 
             file://0064-Fix-for-Empty-response-body-for-updating-username.patch \
             file://0066-DateTime-patch-error.patch \
@@ -70,7 +71,7 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
             file://0069-changing-the-error-code-of-non-writeable-error-messa.patch \
 	    file://0070-Adding-successResponse-for-Factory-Default-Reset.patch \
 	    file://0071-Added-new-property-PasswordChangeRequired-to-create-newuser.patch \
-	    file://0060-Redesign-DHCPv4-DHCPv6-Enable-Disable-Flow-Limit-Sta.patch \
+	    file://0074-Adding-400-Bad-request-response-for-invalid-MACAddre.patch \
 "
 SRC_URI_BHS:append ="file://0028-Adding-proper-path-to-get-the-cupsensors.patch \
 "
