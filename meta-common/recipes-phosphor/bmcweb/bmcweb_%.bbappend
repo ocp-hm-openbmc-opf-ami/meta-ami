@@ -68,6 +68,7 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
             file://0066-DateTime-patch-error.patch \
 	    file://0067-Providing-propertyNotWritable-Error-Message-for-Read.patch \
             file://0069-changing-the-error-code-of-non-writeable-error-messa.patch \
+	    file://0070-Adding-successResponse-for-Factory-Default-Reset.patch \
 	    file://0071-Added-new-property-PasswordChangeRequired-to-create-newuser.patch \
 	    file://0060-Redesign-DHCPv4-DHCPv6-Enable-Disable-Flow-Limit-Sta.patch \
 "
