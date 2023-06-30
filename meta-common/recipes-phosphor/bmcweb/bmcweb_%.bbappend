@@ -75,9 +75,12 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
             file://0072-Removing-Depricated-properties_Fixing-Redfish-Valida.patch \
 	    file://0074-Adding-400-Bad-request-response-for-invalid-MACAddre.patch \
             file://0075-removing-getcertificate-call-from-replace-certificat.patch \
+	    file://0076-Implemented-SNMPTrap-in-Redfish-Event-Service.patch \
 	    file://0077-Adding-PropertyNotWritable-errorMessage-For-ReadOnly.patch \
 "
 SRC_URI_BHS:append ="file://0028-Adding-proper-path-to-get-the-cupsensors.patch \
 "
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'bhs', "${@bb.utils.contains('BBFILE_COLLECTIONS', 'restricted', SRC_URI_BHS, '', d)}", '', d)}"
 EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '',' -Dhttp-body-limit=68 ', d)}"
+
+DEPENDS += "phosphor-snmp"
