@@ -67,6 +67,7 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
             file://0064-Fix-for-Empty-response-body-for-updating-username.patch \
             file://0066-DateTime-patch-error.patch \
             file://0069-changing-the-error-code-of-non-writeable-error-messa.patch \
+	    file://0071-Added-new-property-PasswordChangeRequired-to-create-newuser.patch \
 "
 SRC_URI_BHS:append ="file://0028-Adding-proper-path-to-get-the-cupsensors.patch \
 "
