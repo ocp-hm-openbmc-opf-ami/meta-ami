@@ -18,5 +18,5 @@ SRC_URI += "\
        file://0001-accessing-Chassis-Force-Identity-reserved-bits.patch \
        file://0021-Fix-add-SEL-entry-IPMI-command-response.patch \
        file://0022-Add-IPMI-Get-Set-SEL-Policy-OEM-command.patch \
-           "
+       file://0023-Get-SDR-with-the-Invalid-Record-ID-shows-invalid-req.patch \     "
 
