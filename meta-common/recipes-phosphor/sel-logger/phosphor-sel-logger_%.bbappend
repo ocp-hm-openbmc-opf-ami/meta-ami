@@ -11,4 +11,8 @@ SRC_URI += "\
 DEPENDS += "intel-ipmi-oem"
 RDEPENDS:${PN} += "intel-ipmi-oem"
 
+
 PACKAGECONFIG:append:intel = " clears-sel"
+
+PACKAGECONFIG:append:intel = " log-watchdog"
+
