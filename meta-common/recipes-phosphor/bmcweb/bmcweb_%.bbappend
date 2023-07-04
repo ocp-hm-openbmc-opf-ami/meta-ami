@@ -77,6 +77,7 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
             file://0075-removing-getcertificate-call-from-replace-certificat.patch \
 	    file://0076-Implemented-SNMPTrap-in-Redfish-Event-Service.patch \
 	    file://0077-Adding-PropertyNotWritable-errorMessage-For-ReadOnly.patch \
+            file://0063-Adding-success-message-resp-for-clearing-postcode-lo.patch \ 
 "
 SRC_URI_BHS:append ="file://0028-Adding-proper-path-to-get-the-cupsensors.patch \
 "
