@@ -79,6 +79,7 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
 	    file://0077-Adding-PropertyNotWritable-errorMessage-For-ReadOnly.patch \
             file://0063-Adding-success-message-resp-for-clearing-postcode-lo.patch \ 
             file://0061-Fix-for-Incorrect-status-code-return-under-accounts.patch \ 
+            file://0078-Fix-for-invalid-IPv6StaticAddresses-error-Message.patch \
 "
 SRC_URI_BHS:append ="file://0028-Adding-proper-path-to-get-the-cupsensors.patch \
 "
