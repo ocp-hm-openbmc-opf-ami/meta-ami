@@ -43,7 +43,7 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
 	    file://0032-Fixes-ethernetInternet-DHCP-property-patch-support.patch \
 	    file://0033-Fixed-the-Attribute-MaxConcurrentSession-type-to-int.patch \
 	    file://0034-fix-for-the-kvm-session-not-able-to-open-more-than-o.patch \
-	    file://0035-MaintenanceWindow-OperationApplyTime-Support-under-Managers.patch \
+            file://0035-MaintenanceWindow-OperationApplyTime-Support.patch \
 	    file://0036-Add-Locked-status-to-login-API-on-User-locked.patch \
 	    file://0037-Fix-for-500-internal-error-in-ethernet-IPV6-patch-op.patch \
 	    file://0038-fix-StateChange-not-getting-updated-issue.patch \
@@ -54,18 +54,37 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
 	    file://0043-Add-AtScaleDebug-Schema.patch \
             file://0044-Restrict-the-patch-of-IPv4-from-DHCP-to-Static-and-v.patch \ 
 	    file://0045-Fixes-LED-Button-display-issue-in-Overview-Page.patch \
+	    file://0047-Fix-for-Unauthorized-OOB-user-in-bmcweb.patch \
             file://0048-changing-maximum-supported-kvm-session-value-to-1.patch \ 
 	    file://0049-Fix-for-DateTimeLocalOffset-return-code-status.patch \
 	    file://0052-Fixed-Apache-Benchmark-tool-timeout-issue.patch \
             file://0054-Fix-for-Unable-to-set-User-lockout-time-manual.patch \
+	    file://0055-Fixes-TrustedModuleRequiredToBoot-Property-patch-iss.patch \
 	    file://0056-Added-Bios-Setting-URI-to-Bios.patch \
 	    file://0057-Fixed-passwordChange-policy-is-able-to-access-after-passwd-expire.patch \
             file://0058-Removing-KVM-ServiceEnabled-property-under-manager.patch \ 
+	    file://0060-Redesign-DHCPv4-DHCPv6-Enable-Disable-Flow-Limit-Sta.patch \
             file://0062-Fixed-VirtualMedia-not-listing-issue-under-Accounts.patch \ 
             file://0064-Fix-for-Empty-response-body-for-updating-username.patch \
+            file://0065-Dmtf-Tools.Redfish-Service-Validator-getting-failed.patch \
             file://0066-DateTime-patch-error.patch \
+            file://0068-Dmtf-Tools.Redfish-Service-Validator-getting.patch \
+            file://0069-changing-the-error-code-of-non-writeable-error-messa.patch \
+	    file://0070-Adding-successResponse-for-Factory-Default-Reset.patch \
+	    file://0071-Added-new-property-PasswordChangeRequired-to-create-newuser.patch \
+            file://0072-Removing-Depricated-properties_Fixing-Redfish-Valida.patch \
+	    file://0074-Adding-400-Bad-request-response-for-invalid-MACAddre.patch \
+            file://0075-removing-getcertificate-call-from-replace-certificat.patch \
+	    file://0076-Implemented-SNMPTrap-in-Redfish-Event-Service.patch \
+	    file://0077-Adding-PropertyNotWritable-errorMessage-For-ReadOnly.patch \
+            file://0063-Adding-success-message-resp-for-clearing-postcode-lo.patch \ 
+            file://0061-Fix-for-Incorrect-status-code-return-under-accounts.patch \ 
+            file://0078-Fix-for-invalid-IPv6StaticAddresses-error-Message.patch \
+	    file://0067-adding-support-for-HttpPushUriTargets.patch \
 "
 SRC_URI_BHS:append ="file://0028-Adding-proper-path-to-get-the-cupsensors.patch \
 "
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'bhs', "${@bb.utils.contains('BBFILE_COLLECTIONS', 'restricted', SRC_URI_BHS, '', d)}", '', d)}"
 EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '',' -Dhttp-body-limit=68 ', d)}"
+
+DEPENDS += "phosphor-snmp"

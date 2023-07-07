@@ -78,7 +78,9 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 - git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/bhs openbmc-meta-intel/meta-bhs (For BHS)
 - git clone https://git.ami.com/core/ami-bmc/one-tree/ami/amipacks/nic meta-ami/recipes-ami/nic (For NIC EP)
 - git clone https://git.ami.com/core/ami-bmc/one-tree/ami/amipacks/nvme meta-ami/recipes-ami/nvme (For NVMe EP)
-- git clone https://git.ami.com/core/ami-bmc/one-tree/ami/amipacks/raid-brcm meta-ami/recipes-ami/raid-brcm (For BRCM Raid EP)
+- git clone https://git.ami.com/core/ami-bmc/one-tree/ami/amipacks/raid/raid-brcm meta-ami/recipes-ami/raid-brcm (For BRCM Raid EP)
+- git clone https://git.ami.com/core/ami-bmc/one-tree/ami/amipacks/redfish meta-ami/recipes-ami/redfish (For Redfish EP)
+- git clone https://git.ami.com/core/ami-bmc/one-tree/ami/amipacks/firmware-update meta-ami/recipes-ami/fwupdate (For FirmwareUpdate EP)
 - meta-ami/github-gitlab-url.sh
 - Enable the needed AMI EP features in meta-ami/conf/layer.conf (Uncomment IMAGE_INSTALL)
 - TEMPLATECONF=openbmc-meta-intel/meta-egs/conf/templates/default . openbmc-env (For EGS)

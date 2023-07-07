@@ -1,0 +1,117 @@
+From f8f221ecb2f063cba494e404f20431ed96f03c2c Mon Sep 17 00:00:00 2001
+From: Abinaya L <abinayal@ami.com>
+Date: Tue, 27 Jun 2023 20:39:23 +0530
+Subject: [PATCH] adding support for HttpPushUriTargets
+
+---
+ redfish-core/lib/update_service.hpp | 47 ++++++++++++++---------------
+ 1 file changed, 22 insertions(+), 25 deletions(-)
+
+diff --git a/redfish-core/lib/update_service.hpp b/redfish-core/lib/update_service.hpp
+index c92f0364..033216b0 100644
+--- a/redfish-core/lib/update_service.hpp
++++ b/redfish-core/lib/update_service.hpp
+@@ -61,24 +61,8 @@ inline static void activateImage(const std::string& objPath,
+                                  const std::vector<std::string>& imgUriTargets)
+ {
+     BMCWEB_LOG_DEBUG << "Activate image for " << objPath << " " << service;
+-    // If targets is empty, it will apply to the active.
+-    if (imgUriTargets.size() == 0)
++    if(!imgUriTargets.empty())
+     {
+-        crow::connections::systemBus->async_method_call(
+-            [](const boost::system::error_code errorCode) {
+-            if (errorCode)
+-            {
+-                BMCWEB_LOG_DEBUG << "RequestedActivation failed: error_code = "
+-                                 << errorCode;
+-                BMCWEB_LOG_DEBUG << "error msg = " << errorCode.message();
+-            }
+-            },
+-            service, objPath, "org.freedesktop.DBus.Properties", "Set",
+-            activationIntf, reqActivationPropName,
+-            std::variant<std::string>(reqActivationsActive));
+-        return;
+-    }
+-
+     // TODO: Now we support only one target becuase software-manager
+     // code support one activation per object. It will be enhanced
+     // to multiple targets for single image in future. For now,
+@@ -115,7 +99,7 @@ inline static void activateImage(const std::string& objPath,
+             BMCWEB_LOG_DEBUG << "Image target matched with object "
+                              << invObjPath;
+             crow::connections::systemBus->async_method_call(
+-                [objPath, service](const boost::system::error_code ec2,
++                [invObjPath, service](const boost::system::error_code ec2,
+                                    const std::variant<std::string> value) {
+                 if (ec2)
+                 {
+@@ -133,7 +117,7 @@ inline static void activateImage(const std::string& objPath,
+                 }
+                 BMCWEB_LOG_DEBUG << "Setting RequestedActivation value as "
+                                  << reqActivation << " for " << service << " "
+-                                 << objPath;
++                                 << invObjPath;
+                 crow::connections::systemBus->async_method_call(
+                     [](const boost::system::error_code ec3) {
+                     if (ec3)
+@@ -143,7 +127,7 @@ inline static void activateImage(const std::string& objPath,
+                     }
+                     return;
+                     },
+-                    service, objPath, "org.freedesktop.DBus.Properties", "Set",
++                    service, invObjPath, "org.freedesktop.DBus.Properties", "Set",
+                     activationIntf, reqActivationPropName,
+                     std::variant<std::string>(reqActivation));
+                 },
+@@ -156,6 +140,22 @@ inline static void activateImage(const std::string& objPath,
+         "/xyz/openbmc_project/object_mapper",
+         "xyz.openbmc_project.ObjectMapper", "GetSubTree", "/",
+         static_cast<int32_t>(0), std::array<const char*, 1>{versionIntf});
++    }
++
++        // If targets is empty, it will apply to the active.
++        crow::connections::systemBus->async_method_call(
++            [](const boost::system::error_code errorCode) {
++            if (errorCode)
++            {
++                BMCWEB_LOG_DEBUG << "RequestedActivation failed: error_code = "
++                                 << errorCode;
++                BMCWEB_LOG_DEBUG << "error msg = " << errorCode.message();
++            }
++            },
++            service, objPath, "org.freedesktop.DBus.Properties", "Set",
++            activationIntf, reqActivationPropName,
++            std::variant<std::string>(reqActivationsActive));
++        return;
+ }
+ 
+ // Note that asyncResp can be either a valid pointer or nullptr. If nullptr
+@@ -879,9 +879,7 @@ inline void requestRoutesUpdateService(App& app)
+                 }
+             }
+         }
+-        if (imgTargetBusy)
+-        {
+-            if ((httpPushUriTargetBusy) && (*imgTargetBusy))
++            if ((httpPushUriTargetBusy) && (imgTargetBusy))
+             {
+                 BMCWEB_LOG_DEBUG
+                     << "Other client has reserved the HttpPushUriTargets "
+@@ -892,7 +890,7 @@ inline void requestRoutesUpdateService(App& app)
+ 
+             if (imgTargets)
+             {
+-                if (!(*imgTargetBusy))
++                if (imgTargetBusy)
+                 {
+                     BMCWEB_LOG_DEBUG
+                         << "UpdateService doPatch: httpPushUriTargetBusy "
+@@ -972,7 +970,6 @@ inline void requestRoutesUpdateService(App& app)
+             {
+                 httpPushUriTargetBusy = *imgTargetBusy;
+             }
+-        }
+         });
+ 
+ // The "old" behavior of the update service URI causes redfish-service validator

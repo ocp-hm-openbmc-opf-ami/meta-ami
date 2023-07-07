@@ -66,6 +66,9 @@ SRC_URI += " \
     file://0063-Expansion-Pack-features-webui-bundle-handling.patch \
     file://0064-The-error-popups-in-Web-does-not-get-closed-and-just-gets-piled-up.patch \
     file://0065-network-page-ipv4-static-and-dhcp-fix.patch \
+    file://0066-virtual-media-image-load-options-are-not-enabled.patch \
+    file://0069-Fix-for-Unable-to-unlock-root-user-when-root-user-locked.patch \
+    file://0071-fix-for-PEF-send-alert-email-showing-error-with-second-send-email-address.patch \
     "
 do_compile:prepend() {
   cp -vf ${S}/.env.ami ${S}/.env.intel
