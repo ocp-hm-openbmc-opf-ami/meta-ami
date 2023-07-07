@@ -1,4 +1,7 @@
 inherit obmc-phosphor-signining
+
+IMAGE_FEATURES[validitems] += "dual-image"
+
 python() {
     types = d.getVar('IMAGE_FSTYPES', True).split()
     d.setVar('UBOOT_SEC_SIZE', str(1024*1024))

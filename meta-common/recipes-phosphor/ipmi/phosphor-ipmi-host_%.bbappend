@@ -34,6 +34,8 @@ SRC_URI += " \
 	   file://0044-Set-IP-address-source-to-unspecified-address-source.patch \
            file://0045-Support-16-Max-IPv6-Address.patch \
            file://0045-Implement-IPMI-Command-IPv4-IPv6-Enabled-Disabled.patch \
+           file://0031-IPMI-command-for-Set-System-Info-Param0-should-throw.patch \
+           file://0033-Set-watchdog-timer-Accepting-the-reserved-timer-acti.patch \
            "
 
 do_install:append(){

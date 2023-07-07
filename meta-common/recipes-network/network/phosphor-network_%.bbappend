@@ -14,11 +14,11 @@ SRC_URI:append = " \
              file://0013-Add-Prefix-Length-at-Neighbor.patch \
              file://0013-Allow-Empty-Gateway4-When-IPv4-Source-Is-Static.patch \
              file://nsupdate.sh \
+	     file://0014-Fix-No-Default-GW-MAC-Address.patch \
              file://0015-Implement-EIP-741000.-DDNS-Nsupdate-Feature.patch \
-             file://0014-Fix-No-Default-GW-MAC-Address.patch \
              file://0016-Add-Function-IPv4-IPv6-Enabled-Disabled.patch \
+             file://0017-Fix-property-of-DomainName-in-each-EthernetInterface-Returns-Empty.patch \
            "
-
 do_install:append() {
     install -d ${D}${bindir}
     install -m 0755 ${WORKDIR}/nsupdate.sh  ${D}${bindir}
