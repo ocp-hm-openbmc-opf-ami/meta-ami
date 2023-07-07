@@ -101,6 +101,16 @@ set_activation_status() {
     fi
 }
 
+get_requestedactivation_status() {
+    local image="$1"
+    if [ $local_file -eq 0 ]; then
+    busctl get-property xyz.openbmc_project.Software.BMC.Updater \
+            /xyz/openbmc_project/software/$image \
+            xyz.openbmc_project.Software.Activation RequestedActivation \
+            | awk '/s / {print $2}' | sed 's/"//g'
+    fi
+}
+
 
 exit_fail() {
     set_activation_status Failed
@@ -178,12 +188,41 @@ bmc_full_flash() {
     # fi
 
     update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_START
+    local requestedactivationstate=$(get_requestedactivation_status bmc_bkup)
+     if [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
+        log "BMC Full Flash - Starting the SPI write on bkup CS1 spi . It will take ~8 minutes...."
+        local mtdPart=$( cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"alt-bmc\"" {print $1}')
+        echo "mtdPart=$mtdPart"
+        if [ -z "$mtdPart" ]; then
+            log "BMC Full Flash - alt-bmc mtd patition not found"
+            redfish_log_abort " BMC Full Flash - Image update failed"
+            set_activation_status Failed
+            set_requestedactivation_status None
+            update_percentage $UPDATE_PERCENT_FAIL
+            return 1
+        fi
+        local rc=$(mtd-util -d /dev/$mtdPart c $LOCAL_PATH 0)
+        # Log Event: Update percentage and log event
+        if [[ "$rc" -ne 0 ]]; then
+            log "BMC Full Flash - Image update failed"
+            redfish_log_abort " BMC Full Flash - Image update failed"
+            set_activation_status Failed
+            set_requestedactivation_status None
+            update_percentage $UPDATE_PERCENT_FAIL
+            return 1
+        fi
+        update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
+        log "BMC Full Flash - Image update successful on bkup spi"
+        redfish_log_fw_evt success
+        update_percentage $UPDATE_PERCENT_SUCCESS
+        set_activation_status Active 
+        reboot -f
+    fi    
     # Flash: writing to BMC SPI device
     log "BMC Full Flash - Starting the SPI write. It will take ~8 minutes...."
     local rc=$(mtd-util -d /dev/mtd0 c $LOCAL_PATH 0)
 
     # Log Event: Update percentage and log event
-    update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
     if [[ "$rc" -ne 0 ]]; then
         log "BMC Full Flash - Image update failed"
         redfish_log_abort " BMC Full Flash - Image update failed"
@@ -191,6 +230,7 @@ bmc_full_flash() {
         update_percentage $UPDATE_PERCENT_FAIL
         return 1
     fi
+        update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
         log "BMC Full Flash - Image update successful"
         redfish_log_fw_evt success
         update_percentage $UPDATE_PERCENT_SUCCESS

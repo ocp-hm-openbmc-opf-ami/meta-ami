@@ -26,7 +26,11 @@ do_deploy:prepend() {
         # openssl rsa -in ${SOCSEC_SIGN_KEY} -pubout > ${WORKDIR}/keys/SIG_RSA_KEY2_public.pem
 }
 
-SRC_URI_NON_PFR = "file://0001-adding-Fieldmode-to-enable-failure-when-signature-va.patch"
+SRC_URI_NON_PFR = "file://0001-adding-Fieldmode-to-enable-failure-when-signature-va.patch \
+                    "
+SRC_URI_NON_PFR_DUAL:append = " file://0002-adding-support-for-non-pfr-dual-image-feature.patch \
+                                "
+SRC_URI:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'dual-image', SRC_URI_NON_PFR_DUAL,'', d)}"                    
 SRC_URI:append = " ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
 
 SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', ' file://flash-layout-update.cfg  ', d)}"

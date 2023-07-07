@@ -1,0 +1,112 @@
+#!/bin/bash
+set -o pipefail
+set +e
+
+# Get the mtd device number (mtdX)
+function findmtd() {
+    m="$(grep -xl "$1" /sys/class/mtd/*/name)"
+    m="${m%/name}"
+    m="${m##*/}"
+    echo "${m}"
+}
+
+# Get the mtd device number only (return X of mtdX)
+function findmtdnum() {
+    m="$(findmtd "$1")"
+    m="${m##mtd}"
+    echo "${m}"
+}
+
+
+function mount_static_alt() {
+    typ=$1
+    altFs=$2
+    mountName=$3
+    altFsMount="/run/media/${mountName}"
+    output=$(devmem 0x1e620064 )
+    boot_source=$(( ($output >> 4) & 1 ))
+    if [ "$boot_source" -eq 0 ]; then
+        echo "Performing operations for boot_source CE0"
+        altNum="$(findmtdnum "alt-${altFs}")"
+        if [ -n "${altNum}" ]; then
+            mkdir -p "${altFsMount}"
+            mkdir -p "${altFsMount}/etc/"
+            echo "VERSION_ID=NA" > ${altFsMount}/etc/os-release
+            echo "EXTENDED_VERSION=NA" >> ${altFsMount}/etc/os-release
+
+            dd if=/dev/mtd${altNum} of=/tmp/fit-image
+            dumpimage -T flat_dt -p 3 -o /tmp/ramdisk.img  /tmp/fit-image
+            if [ $? -eq 0 ]; then            
+                mkdir -p /run/media/intrd
+                mount -o loop /tmp/ramdisk.img /run/media/intrd
+                cp /run/media/intrd/usr/lib/os-release "${altFsMount}/etc/"
+                umount -f /run/media/intrd
+                rm -rf /run/media/intrd
+                rm -rf /tmp/ramdisk.img
+            fi
+            rm -rf /tmp/fit-image
+            mkdir -p /run/media/rofs-bmc_active-functional
+            ln -s /etc/ /run/media/rofs-bmc_active-functional/etc
+        fi
+    else
+        echo "Performing operations for boot_source CE1"
+        mkdir -p "${altFsMount}"
+        ln -s /etc/ "${altFsMount}/etc"
+        altNum="$(findmtdnum "${altFs}")"
+        if [ -n "${altNum}" ]; then
+            mkdir -p /run/media/rofs-bmc_active-functional
+            mkdir -p /run/media/rofs-bmc_active-functional/etc/
+            echo "VERSION_ID=NA" > /run/media/rofs-bmc_active-functional/etc/os-release
+            echo "EXTENDED_VERSION=NA" >> /run/media/rofs-bmc_active-functional/etc/os-release
+            dd if=/dev/mtd${altNum} of=/tmp/fit-image
+            dumpimage -T flat_dt -p 3 -o /tmp/ramdisk.img  /tmp/fit-image
+            if [ $? -eq 0 ]; then 
+                mkdir -p /run/media/intrd
+                mount -o loop /tmp/ramdisk.img /run/media/intrd
+                cp /run/media/intrd/usr/lib/os-release /run/media/rofs-bmc_active-functional/etc/
+                umount -f /run/media/intrd
+                rm -rf /run/media/intrd
+                rm -rf /tmp/ramdisk.img
+            fi
+            rm -rf /tmp/fit-image    
+            mkdir -p "${altFsMount}"
+            ln -s /etc/ "${altFsMount}/etc"
+        fi
+    fi 
+    echo $boot_source > /run/media/slot   
+}
+
+function umount_static_alt() {
+    altFs=$1
+    altFsMount="/run/media/${altFs}"
+    rm -rf  "${altFsMount}"
+}
+
+function mtd_write() {
+    flashmtd="$(findmtd "${reqmtd}")"
+    img="/tmp/images/${version}/${imgfile}"
+    flashcp -v "${img}" /dev/"${flashmtd}"
+}
+
+# Copy contents of one MTD device to another
+function mtd_copy() {
+    in=$1
+    out=$2
+
+    # Must erase MTD first to prevent corruption
+    flash_eraseall "${out}"
+    dd if="${in}" of="${out}"
+}
+
+case "$1" in
+    static-altfs)
+        mount_static_alt "$2" "$3" "$4"
+        ;;
+    umount-static-altfs)
+        umount_static_alt "$2"
+        ;;
+    *)
+        echo "Invalid argument"
+        exit 1
+        ;;
+esac
