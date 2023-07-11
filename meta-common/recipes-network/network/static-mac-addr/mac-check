@@ -1,0 +1,274 @@
+#!/bin/bash
+# Copyright (c) 2018-2022 Intel Corporation
+#
+# This software and the related documents are Intel copyrighted
+# materials, and your use of them is governed by the express license
+# under which they were provided to you ("License"). Unless the
+# License provides otherwise, you may not use, modify, copy, publish,
+# distribute, disclose or transmit this software or the related
+# documents without Intel's prior written permission.
+#
+# This software and the related documents are provided as is, with no
+# express or implied warranties, other than those that are expressly
+# stated in the License.
+
+SOFS_MNT=/var/sofs
+SOFS_MACDIR=${SOFS_MNT}/factory-settings/network/mac
+
+read_hw_mac() {
+	local iface="$1"
+	cat /sys/class/net/"$iface"/address 2>/dev/null | tr [:upper:] [:lower:] 2>/dev/null
+}
+
+set_hw_mac() {
+	local iface="$1"
+	local mac="$2"
+	ip link show dev "$iface" | grep -q "${iface}:.*\<UP\>" 2>/dev/null
+	local up=$?
+	[[ $up -eq 0 ]] && ip link set dev "$iface" down
+	ip link set dev "$iface" address "$mac"
+	[[ $up -eq 0 ]] && ip link set dev "$iface" up
+}
+
+read_sofs_mac() {
+	local iface="$1"
+	cat "${SOFS_MACDIR}/${iface}" 2>/dev/null | tr [:upper:] [:lower:] 2>/dev/null
+}
+
+read_fw_env_mac() {
+	local envname="$1"
+	fw_printenv "$envname" 2>/dev/null | sed "s/^$envname=//" 2>/dev/null | tr [:upper:] [:lower:] 2>/dev/null
+}
+
+set_fw_env_mac() {
+	local envname="$1"
+	local mac="$2"
+	fw_setenv "$envname" "$mac"
+}
+
+calculate_checksum() {
+	local -n eeprom_read=$1
+	IFS=' ' read header mac1 mac2 mac3 mac4 mac5 mac6 checksum <<< "$eeprom_read"
+	let sum="$header"+"$mac1"+"$mac2"+"$mac3"+"$mac4"+"$mac5"+"$mac6"
+	checksumMod=256
+	mask=0x00FF
+	eeprom_read=$(echo "$mac1:$mac2:$mac3:$mac4:$mac5:$mac6" | sed "s/0x//g")
+	return $(((("$checksumMod" - "$sum") % "$checksumMod" - "$checksum") & "$mask"))
+}
+
+read_eeprom_mac() {
+	local -n macaddr=$2
+	#1-byte MAC Header, 6-byte MAC Address, 1-byte checksum
+	local macLength="8"
+	local ifacenum=$(echo "$1" | sed "s/[^0-9]*//g")
+	
+	#Offset based on eth0 vs eth1 vs eth2 - Based on format in intel-ipmi-oem
+	let local totaloffset="$macOffset"+"$ifacenum"*"$macLength"
+	macaddr=$(i2ctransfer -f -y "$i2cbus" w1@"$i2caddr" "$totaloffset" r"$macLength")
+	if [ $? -ne 0 ]; then
+		return 1
+	fi
+	calculate_checksum macaddr
+	if [ $? -ne 0 ]; then
+		return 1
+	fi
+	return 0
+}
+
+create_macdir() {
+if [ -a ${SOFS_MACDIR} ]; then
+	if [ ! -d ${SOFS_MACDIR} ]; then
+		rm -rf ${SOFS_MACDIR}
+		mkdir -p ${SOFS_MACDIR}
+	fi
+else
+	mkdir -p ${SOFS_MACDIR}
+fi
+return 0
+}
+
+# An earlier version of the mac_check utility disabled the netipmid for
+# eth1. This was done to eliminate an error message being logged in the
+# journal for systems that only had a single NIC. The error message is
+# undesirable as it is present in Redfish session log output.
+
+# Systems that have both NICs have also had the eth1 netipmid disabled.
+# The reason for this is failing to specify the correct kernel device
+# tree during the U-Boot kernel boot process. Without the correct
+# device tree, eth1 is not enumerated by the kernel. The mac-check
+# script turned off the netipmid service for eth1.
+
+# The configure_netipmid_svc_eth1 function manages enabling and
+# disabling netipmid for eth1. It is explicit, and does not rely upon
+# previous state to enable or disable the service.
+
+# Note: Enabling the service is independent of the IPMI channel
+# enable/disable command. This means "ipmitool lan set <chid> access
+# off" functions correctly with the netipmid service enabled.
+configure_netipmid_svc_eth1() {
+    if [ -h /sys/class/net/eth1 ]; then
+        if [ $(systemctl is-enabled phosphor-ipmi-net@eth1.socket) == "disabled" ];
+        then
+            /bin/systemctl enable "phosphor-ipmi-net@eth1.socket"
+            /bin/systemctl start "phosphor-ipmi-net@eth1.socket"
+        fi
+        if [ $(systemctl is-enabled phosphor-ipmi-net@eth1.service) == "disabled" ];
+        then
+            /bin/systemctl enable "phosphor-ipmi-net@eth1.service"
+            /bin/systemctl start "phosphor-ipmi-net@eth1.service"
+        fi
+    else
+        if [ $(systemctl is-enabled phosphor-ipmi-net@eth1.socket) == "enabled" ];
+        then
+            /bin/systemctl disable "phosphor-ipmi-net@eth1.socket"
+            /bin/systemctl stop "phosphor-ipmi-net@eth1.socket"
+        fi
+        if [ $(systemctl is-enabled phosphor-ipmi-net@eth1.service) == "enabled" ];
+        then
+            /bin/systemctl disable "phosphor-ipmi-net@eth1.service"
+            /bin/systemctl stop "phosphor-ipmi-net@eth1.service"
+        fi
+    fi
+}
+
+mac_check() {
+	local iface="$1"
+	local envname="$2"
+
+	# Read the MAC address in use by the NIC
+	local hw_mac=$(read_hw_mac "$iface")
+
+	# Read the MAC address stored in the non-volatile file provisioned in
+	# manufacturing.
+	local sofs_mac=$(read_sofs_mac "$iface")
+
+	if [ -n "$sofs_mac" ]; then
+		if [ "$hw_mac" != "$sofs_mac" ]; then
+			# A factory assigned address was found.
+			# Update the active interface and save the new value to the u-boot
+			# environment.
+			set_hw_mac "$iface" "$sofs_mac"
+			set_fw_env_mac "$envname" "$sofs_mac"
+		fi
+		return $?
+	else
+		# Read the MAC address stored in the non-volatile DC-SCM EEPROM provisioned
+		# in manufacturing. If run on an unsupported system, this check is skipped.
+		if [ "$i2cbus" -ge 0 ] && [ "$i2caddr" -ge 0 ] && [ "$macOffset" -ge 0 ]; then
+			local eeprom_mac=''
+			local unformatted_mac="ff:ff:ff:ff:ff:ff"
+			read_eeprom_mac "$iface" eeprom_mac
+			if [ $? -eq 0 ] && [ "$eeprom_mac" != "$unformatted_mac" ]; then
+				if [ "$hw_mac" != "$eeprom_mac" ]; then
+					# A factory assigned address was found and is of a valid format.
+					# Update the active interface and save the new value to the u-boot
+					# environment.
+					set_hw_mac "$iface" "$eeprom_mac"
+					set_fw_env_mac "$envname" "$eeprom_mac"
+				fi
+				return $?
+			fi
+		fi
+	fi
+	
+ 	# Read the MAC address stored by U-Boot
+	local fw_env_mac=$(read_fw_env_mac "$envname")
+	if [ "$fw_env_mac" != "$hw_mac" ]; then
+		# No factory assigned address was found.
+		# Set the fw_env_mac to match the hw_mac if it does not.
+		set_fw_env_mac "$envname" "$hw_mac"
+		return $?
+	else
+		# No factory assigned addresses found.
+		return 255
+	fi
+	return 0
+}
+
+create_macdir
+
+configure_netipmid_svc_eth1
+
+error=0
+first_error_seen=0
+
+i2cbus=-1
+i2caddr=-1
+macOffset=-1
+skip_hostname=0
+
+# Process arguments;
+while getopts "a:b:o:h:" opts; do
+	case "${opts}" in
+		a)
+			i2caddr=${OPTARG}
+			if [ "$i2caddr" -lt 0 ] || [ "$i2caddr" -gt 255 ]; then
+				# We received an unacceptable value from static-mac.cpp
+				echo "Invalid i2c address received."
+				i2caddr=-1
+			fi
+			;;
+		b)
+			i2cbus=${OPTARG}
+			if [ "$i2cbus" -lt 0 ] || [ "$i2cbus" -gt 255 ]; then
+				# We received an unacceptable value from static-mac.cpp
+				echo "Invalid i2c bus received."
+				i2cbus=-1
+			fi
+			;;
+		o)
+			macOffset=${OPTARG}
+			if [ "$macOffset" -lt 0 ] || [ "$macOffset" -gt 255 ]; then
+				# We received an unacceptable value from static-mac.cpp
+				echo "Invalid i2c offset received."
+				macOffset=-1
+			fi
+			;;
+		h)
+			skip_hostname=1
+			;;
+	esac
+done
+
+while read IFACE UBDEV; do
+	# Try to configure the MAC address if the kernel finds the NIC. Blindly
+	# trying all of the interfaces listed in the DOCSTRING (END_CONF) below
+	# may result in first_error_seen being set to a non-zero value. If that
+	# happens the journal log will report the error, which is undesirable.
+	if [ -h /sys/class/net/$IFACE ]; then
+		mac_check "$IFACE" "$UBDEV"
+		error=$?
+		if [ $error -ne 0 ] && [ $first_error_seen -eq 0 ]; then
+		    first_error_seen=$error
+		fi
+	fi
+done <<-END_CONF
+	eth0 eth1addr
+	eth1 ethaddr
+END_CONF
+
+### HOSTNAME FEATURE ###
+if [[ $skip_hostname -eq 1 ]]; then
+	echo "mac-check: Skipping hostname check"
+else
+	# Read MAC and strip colon chars
+	hw_mac=$(cat /sys/class/net/eth0/address | tr -d ":")
+	# Read Hostname
+	hostname=$(hostname)
+	#Match bmc-mac<any MAC address> (a MAC address has 12 hex digits)
+	bmc_mac_format="^bmc-mac[a-f0-9]{12}$"
+	#Match bmc-mac<current MAC address>
+	inteldefault="AMIOT-$hw_mac"
+	#if the current hostname already has the current MAC address, we won't rewrite the name unnecessarily.
+	#Otherwise, match intel-obmc or bmc-mac<any MAC address>, and change the hostname to use the current MAC address
+	if [[ "$hostname" == "intel-obmc" || \
+		("$hostname" != "$inteldefault" && \
+		"$hostname" =~ $bmc_mac_format) ]]; then
+		hostnamectl set-hostname "$inteldefault"
+		echo "mac-check: HOSTNAME CHANGED (hostname deemed to be default or wrong MAC Address)"
+	else
+		echo "mac-check: HOSTNAME NOT CHANGED (hostname is already correct or is custom)"
+	fi
+fi
+
+exit $first_error_seen
