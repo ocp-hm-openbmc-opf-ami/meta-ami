@@ -36,6 +36,7 @@ SRC_URI += " \
            file://0045-Implement-IPMI-Command-IPv4-IPv6-Enabled-Disabled.patch \
            file://0031-IPMI-command-for-Set-System-Info-Param0-should-throw.patch \
            file://0033-Set-watchdog-timer-Accepting-the-reserved-timer-acti.patch \
+           file://0046-Add-VLAN_MAX_NUM-for-not-creating-VLAN-interfaces-over-size.patch \
            "
 
 do_install:append(){

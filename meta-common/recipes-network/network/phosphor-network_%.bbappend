@@ -18,6 +18,7 @@ SRC_URI:append = " \
              file://0014-Fix-No-Default-GW-MAC-Address.patch \
              file://0016-Add-Function-IPv4-IPv6-Enabled-Disabled.patch \
              file://0017-Fix-property-of-DomainName-in-each-EthernetInterface-Returns-Empty.patch \
+             file://0018-Add-VLAN_MAX_NUM-for-not-creating-VLAN-interfaces-over-size.patch \
            "
 
 do_install:append() {
