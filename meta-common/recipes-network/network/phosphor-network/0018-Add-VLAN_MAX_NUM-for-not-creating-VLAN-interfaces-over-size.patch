@@ -1,0 +1,80 @@
+From 583d4d71f87722acc3f4cc84b38d0dccc85f3be1 Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Mon, 10 Jul 2023 10:16:29 +0800
+Subject: [PATCH] Add VLAN_MAX_NUM for not creating VLAN interfaces over the
+ pre-defined size 	modified:   src/ethernet_interface.cpp 	modified:  
+ src/ethernet_interface.hpp 	modified:  
+ yaml/xyz/openbmc_project/Network/VLAN/Create.interface.yaml
+
+---
+ src/ethernet_interface.cpp                           | 12 ++++++++++++
+ src/ethernet_interface.hpp                           |  6 ++++++
+ .../Network/VLAN/Create.interface.yaml               |  1 +
+ 3 files changed, 19 insertions(+)
+
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index 6db9728..6689f05 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -60,6 +60,8 @@ constexpr auto sysctlConfigSurffix = "/arp_ignore";
+ std::string arpResponseDisable = "echo 2 >";
+ std::string arpResponseEnable = "echo 0 >";
+ 
++constexpr auto VLAN_MAX_NUM = 2;
++
+ static constexpr const char* networkChannelCfgFile =
+     "/var/channel_intf_data.json";
+ static constexpr const char* defaultChannelPriv = "priv-admin";
+@@ -707,6 +709,11 @@ ObjectPath EthernetInterface::createVLAN(uint16_t id)
+                               Argument::ARGUMENT_VALUE(idStr.c_str()));
+     }
+ 
++    if ( auto size = getCreatedVLANNum(config::pathForIntfConf(manager.getConfDir(), interfaceName())); size >= VLAN_MAX_NUM) {
++        log<level::ERR>(fmt::format("There are already {} VLAN interfaces. so not create VLAN with vid {}", VLAN_MAX_NUM, id).c_str());
++        elog<NotAllowed>(NotAllowedArgument::REASON(fmt::format("There are already {} VLAN interfaces. so not create VLAN with vid {}", VLAN_MAX_NUM, id).c_str()));
++    }
++
+     auto objRoot = std::string_view(objPath).substr(0, objPath.rfind('/'));
+     auto macStr = MacAddressIntf::macAddress();
+     std::optional<ether_addr> mac;
+@@ -1480,6 +1487,11 @@ bool EthernetInterface::sysctlConfig(const std::string& cmd)
+     return ((outConfig.empty())?1:0);
+ }
+ 
++int EthernetInterface::getCreatedVLANNum(fs::path confFile) {
++    config::Parser config(confFile);
++    return (config.map.getValueStrings("Network", "VLAN")).size();
++}
++
+ int EthernetInterface::setDwMacAddrByIP(std::string gateway) {
+     int ret = 0;
+     std::ifstream ifs("/proc/net/arp");
+diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
+index 88e2e33..e1282c9 100644
+--- a/src/ethernet_interface.hpp
++++ b/src/ethernet_interface.hpp
+@@ -373,6 +373,12 @@ class EthernetInterface : public Ifaces
+      */
+     bool sysctlConfig(const std::string& cmd);
+ 
++    /** @brief Get the number of created VLAN interface
++     *  @param[in] confFile - The path of NetIntf configuration
++     *  @return status of the shell command execution
++     */
++    int getCreatedVLANNum(std::filesystem::__cxx11::path confFile);
++
+ };
+ 
+ } // namespace network
+diff --git a/yaml/xyz/openbmc_project/Network/VLAN/Create.interface.yaml b/yaml/xyz/openbmc_project/Network/VLAN/Create.interface.yaml
+index 053c172..e4fb621 100644
+--- a/yaml/xyz/openbmc_project/Network/VLAN/Create.interface.yaml
++++ b/yaml/xyz/openbmc_project/Network/VLAN/Create.interface.yaml
+@@ -20,3 +20,4 @@ methods:
+       errors:
+           - xyz.openbmc_project.Common.Error.InvalidArgument
+           - xyz.openbmc_project.Common.Error.ResourceNotFound
++          - xyz.openbmc_project.Common.Error.NotAllowed
+-- 
+2.25.1
+
