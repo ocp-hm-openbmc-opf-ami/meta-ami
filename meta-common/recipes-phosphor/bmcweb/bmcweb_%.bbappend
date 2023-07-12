@@ -81,6 +81,8 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
             file://0061-Fix-for-Incorrect-status-code-return-under-accounts.patch \ 
             file://0078-Fix-for-invalid-IPv6StaticAddresses-error-Message.patch \
 	    file://0067-adding-support-for-HttpPushUriTargets.patch \
+            file://0061-Fix-for-Incorrect-status-code-return-under-accounts.patch \
+            file://0079-Task-Status-code-200ok-with-no-operation.patch \ 
 "
 SRC_URI_BHS:append ="file://0028-Adding-proper-path-to-get-the-cupsensors.patch \
 "
