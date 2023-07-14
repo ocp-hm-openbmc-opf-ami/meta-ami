@@ -64,10 +64,13 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
 	    file://0057-Fixed-passwordChange-policy-is-able-to-access-after-passwd-expire.patch \
             file://0058-Removing-KVM-ServiceEnabled-property-under-manager.patch \ 
 	    file://0060-Redesign-DHCPv4-DHCPv6-Enable-Disable-Flow-Limit-Sta.patch \
-            file://0062-Fixed-VirtualMedia-not-listing-issue-under-Accounts.patch \ 
+            file://0061-Fix-for-Incorrect-status-code-return-under-accounts.patch \
+            file://0062-Fixed-VirtualMedia-not-listing-issue-under-Accounts.patch \
+            file://0063-Adding-success-message-resp-for-clearing-postcode-lo.patch \ 
             file://0064-Fix-for-Empty-response-body-for-updating-username.patch \
             file://0065-Dmtf-Tools.Redfish-Service-Validator-getting-failed.patch \
             file://0066-DateTime-patch-error.patch \
+            file://0067-adding-support-for-HttpPushUriTargets.patch \
             file://0068-Dmtf-Tools.Redfish-Service-Validator-getting.patch \
             file://0069-changing-the-error-code-of-non-writeable-error-messa.patch \
 	    file://0070-Adding-successResponse-for-Factory-Default-Reset.patch \
@@ -77,12 +80,9 @@ SRC_URI:append = "file://0001-managers-add-factory-restore.patch \
             file://0075-removing-getcertificate-call-from-replace-certificat.patch \
 	    file://0076-Implemented-SNMPTrap-in-Redfish-Event-Service.patch \
 	    file://0077-Adding-PropertyNotWritable-errorMessage-For-ReadOnly.patch \
-            file://0063-Adding-success-message-resp-for-clearing-postcode-lo.patch \ 
-            file://0061-Fix-for-Incorrect-status-code-return-under-accounts.patch \ 
             file://0078-Fix-for-invalid-IPv6StaticAddresses-error-Message.patch \
-	    file://0067-adding-support-for-HttpPushUriTargets.patch \
-            file://0061-Fix-for-Incorrect-status-code-return-under-accounts.patch \
             file://0079-Task-Status-code-200ok-with-no-operation.patch \ 
+            file://0082-Post-Submit-Test-Event-generate-incorrect-value.patch \
 "
 SRC_URI_BHS:append ="file://0028-Adding-proper-path-to-get-the-cupsensors.patch \
 "
