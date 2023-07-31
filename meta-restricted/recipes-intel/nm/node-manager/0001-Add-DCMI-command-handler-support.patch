@@ -1,19 +1,64 @@
-From 3d9dfa71eb11bab64008c804aa9a91f3bceb07cc Mon Sep 17 00:00:00 2001
-From: selvaganapathi <selvaganapathim@ami.com>
-Date: Wed, 23 Nov 2022 01:30:14 +0530
-Subject: [PATCH 1/1] Add DCMI command handler support
+From 51973c53bdc08a872128e4f766e0d12ef624852f Mon Sep 17 00:00:00 2001
+From: Yaswanth <yaswanthsai@ami.com>
+Date: Mon, 31 Jul 2023 14:02:39 +0530
+Subject: [PATCH] Add DCMI command handler support
 
-Implement DCMI command handlers, using node-manager
-service
-
-Signed-off-by: selvaganapathi <selvaganapathim@ami.com>
 ---
- nm-ipmi-lib/include/utility.hpp |  71 +++++++
- nm-ipmi-lib/src/nm_commands.cpp | 343 +++++++++++++++++++++++++-------
- 2 files changed, 337 insertions(+), 77 deletions(-)
+ nm-ipmi-lib/include/nm_cc.hpp       |   3 +-
+ nm-ipmi-lib/include/nm_commands.hpp |  12 +-
+ nm-ipmi-lib/include/utility.hpp     |  87 ++++++-
+ nm-ipmi-lib/src/nm_commands.cpp     | 341 ++++++++++++++++++++++++++++
+ 4 files changed, 440 insertions(+), 3 deletions(-)
 
+diff --git a/nm-ipmi-lib/include/nm_cc.hpp b/nm-ipmi-lib/include/nm_cc.hpp
+index ea2a8d1..a23559c 100644
+--- a/nm-ipmi-lib/include/nm_cc.hpp
++++ b/nm-ipmi-lib/include/nm_cc.hpp
+@@ -29,6 +29,7 @@ namespace nmipmi
+ constexpr ipmi::Cc ccInvalidComponentIdentifier = 0x80; // Invalid Component
+                                                         // Identifier
+ constexpr ipmi::Cc ccInvalidPolicyId = 0x80;            // Invalid Policy Id
++constexpr ipmi::Cc ccPowerLimitNotSet = 0x80;           // Power Limit not set							
+ constexpr ipmi::Cc ccCommandNotSupported =
+     0x81; // Command not supported in the current configuration. Returned when
+           // PSU is configured as the power reading source
+@@ -63,4 +64,4 @@ constexpr ipmi::Cc ccPoliciesCannotBeCreated =
+           // configuration e.g., attempt to create predictive power limiting
+           // policy in DC power domain
+ 
+-} // namespace nmipmi
+\ No newline at end of file
++} // namespace nmipmi
+diff --git a/nm-ipmi-lib/include/nm_commands.hpp b/nm-ipmi-lib/include/nm_commands.hpp
+index 8f4ad4a..2abe778 100644
+--- a/nm-ipmi-lib/include/nm_commands.hpp
++++ b/nm-ipmi-lib/include/nm_commands.hpp
+@@ -46,6 +46,16 @@ static constexpr ipmi::Cmd cmdSetTotalPowerBudget = 0xD0;
+ static constexpr ipmi::Cmd cmdGetTotalPowerBudget = 0xD1;
+ static constexpr ipmi::Cmd cmdGetLimitingPolicyId = 0xF2;
+ } // namespace general
++
++namespace DCMI
++{
++static constexpr ipmi::Cmd cmdGetDcmiCapabInfo = 0x01;
++static constexpr ipmi::Cmd cmdGetPowerReading = 0x02;
++static constexpr ipmi::Cmd cmdGetPowerLimit = 0x03;
++static constexpr ipmi::Cmd cmdSetPowerLimit = 0x04;
++static constexpr ipmi::Cmd cmdActivatePowerLimit = 0x05;
++} // namespace DCMI
++
+ } // namespace intel
+ 
+ //-------------------------------------------------------------------
+@@ -127,4 +137,4 @@ static const boost::container::flat_map<
+         {intel::general::cmdGetLimitingPolicyId, kGetLimitingPolicyIdErr},
+ };
+ 
+-} // namespace nmipmi
+\ No newline at end of file
++} // namespace nmipmi
 diff --git a/nm-ipmi-lib/include/utility.hpp b/nm-ipmi-lib/include/utility.hpp
-index 0550300..1ef9bd1 100644
+index 46b3984..61f9fb3 100644
 --- a/nm-ipmi-lib/include/utility.hpp
 +++ b/nm-ipmi-lib/include/utility.hpp
 @@ -54,6 +54,16 @@ using StatDomainEnergyResponse =
@@ -33,10 +78,11 @@ index 0550300..1ef9bd1 100644
  using StatDomainResponse = ipmi::RspType<uint16_t, // Current Value
                                           uint16_t, // Minimum Value
                                           uint16_t, // Maximum Value
-@@ -326,6 +336,17 @@ enum class StatsMode
-     perPolicyThrottling = 0x13,
+@@ -325,7 +335,18 @@ enum class StatsMode
+     perPolicyTrigger = 0x12,
  };
  
+-static const std::map<StatsMode, std::string> statModeToDBusMap = {
 +enum class DCMIMode
 +{
 +    sysPower = 0x01,
@@ -48,11 +94,34 @@ index 0550300..1ef9bd1 100644
 +    {types::enum_cast<uint8_t>(DCMIMode::enhancedSysPower), "enhancedSysPower"},
 +};
 +
- static const std::map<uint5_t, std::string> statModeToDBusMap = {
-     {types::enum_cast<uint5_t>(StatsMode::power), "Power"},
-     {types::enum_cast<uint5_t>(StatsMode::inletTemp), "Inlet temperature"},
-@@ -366,6 +387,56 @@ void policyStateToBitFlags(const int state, uint1_t& operationalState,
-     }
++/*static const std::map<StatsMode, std::string> statModeToDBusMap = {
+     {StatsMode::power, "Power"},
+     {StatsMode::inletTemp, "Inlet temperature"},
+     {StatsMode::throttling, "Throttling"},
+@@ -335,6 +356,21 @@ static const std::map<StatsMode, std::string> statModeToDBusMap = {
+     {StatsMode::perPolicyPower, "Power"},
+     {StatsMode::energyAccumulator, "Energy accumulator"},
+     {StatsMode::perPolicyTrigger, "Trigger"},
++};*/
++
++static const std::map<uint5_t, std::string> statModeToDBusMap = {
++    {types::enum_cast<uint5_t>(StatsMode::power), "Power"},
++    {types::enum_cast<uint5_t>(StatsMode::inletTemp), "Inlet temperature"},
++    {types::enum_cast<uint5_t>(StatsMode::throttling), "Throttling"},
++    {types::enum_cast<uint5_t>(StatsMode::volumetricAirflow),
++     "Volumetric airflow"},
++    {types::enum_cast<uint5_t>(StatsMode::outletTemp), "Outlet temperature"},
++    {types::enum_cast<uint5_t>(StatsMode::chassisPower), "Chassis power"},
++    {types::enum_cast<uint5_t>(StatsMode::perPolicyPower), "Power"},
++    {types::enum_cast<uint5_t>(StatsMode::perPolicyTrigger), "Trigger"},
++    //{types::enum_cast<uint5_t>(StatsMode::perPolicyThrottling), "Throttling"},
++    {types::enum_cast<uint5_t>(StatsMode::energyAccumulator),
++     "Energy accumulator"},
+ };
+ 
+ void policyStateToBitFlags(const int state, uint1_t& operationalState,
+@@ -419,6 +455,55 @@ ipmi::Cc verifyGetNmStatisticsParameters(uint5_t mode, uint3_t reserved1,
+     return ipmi::ccSuccess;
  }
  
 +StatDCMIResponse responseDCMIStat(ipmi::Context::ptr ctx,
@@ -91,7 +160,6 @@ index 0550300..1ef9bd1 100644
 +    {
 +        return ipmi::response(ccInvalidMode);
 +    }
-+
 +    if (!parseStatValuesMap(allStats, statType, nmStatistics, measurementState))
 +    {
 +        LOGGER_ERR << "Cannot parse statistics";
@@ -105,52 +173,39 @@ index 0550300..1ef9bd1 100644
 +                                 measurementState, uint1_t(0));
 +}
 +
- StatPolicyResponse responsePolicyStat(ipmi::Context::ptr ctx,
-                                       const std::string& statType,
+ StatPolicyResponse responsePolicyStat(ipmi::Context::ptr ctx, StatsMode mode,
                                        uint4_t domainId, uint8_t policyId)
+ {
 diff --git a/nm-ipmi-lib/src/nm_commands.cpp b/nm-ipmi-lib/src/nm_commands.cpp
-index c4c614c..2c45663 100644
+index 3e0be9d..a045e33 100644
 --- a/nm-ipmi-lib/src/nm_commands.cpp
 +++ b/nm-ipmi-lib/src/nm_commands.cpp
-@@ -1491,8 +1491,7 @@ ipmi::RspType<uint8_t, // Group Extension Identification
-  * @returns IPMI response
-  **/
+@@ -1184,6 +1184,331 @@ ipmi::RspType<uint8_t> // Policy ID
+     return ipmi::response(ccNoPolicyIsCurrentlyLimiting);
+ }
  
--ipmi::RspType<uint8_t,  // Group Extension Identification
--              uint16_t, // Current Power
++/**
++ * @brief Get Power Reading
++ *
++ * @param mode - Statistic Mode
++ * @param averageTimePeriods - Supported Rolling Average Time Periods
++ *
++ * @returns IPMI response
++ **/
++
 +ipmi::RspType<uint16_t, // Current Power
-               uint16_t, // Minimum Power
-               uint16_t, // Maximum Power
-               uint16_t, // Average Power
-@@ -1501,29 +1500,102 @@ ipmi::RspType<uint8_t,  // Group Extension Identification
-               uint6_t,  // Reserved
-               uint1_t,  // Power Reading State
-               uint1_t>  // Reserved
--    getPowerReading(uint8_t mode, uint8_t averageTimePeriods,
--                    uint8_t /* reserved */)
++              uint16_t, // Minimum Power
++              uint16_t, // Maximum Power
++              uint16_t, // Average Power
++              uint32_t, // IPMI Time Stamp
++              uint32_t, // Statistics Reporting Time Period
++              uint6_t,  // Reserved
++              uint1_t,  // Power Reading State
++              uint1_t>  // Reserved
 +    getPowerReading(ipmi::Context::ptr ctx, uint8_t mode,
 +                    uint8_t averageTimePeriods, uint8_t reserved)
- {
--    // TODO - Prepare proper handler implementation
--    //
--    // Below are variables declared and sucessful response with proper params,
--    // that can be used within handler implementation.
--    //
--    // uint8_t groupExten = 0;
--    // uint16_t currentPower = 0;
--    // uint16_t minimumPower = 0;
--    // uint16_t maximumPower = 0;
--    // uint16_t averagePower = 0;
--    // uint32_t timestamp = 0;
--    // uint32_t reportingTimePeriod = 0;
--    // uint1_t powerReadingState = 0;
--    //
--    // return ipmi::responseSuccess(groupExten, currentPower, minimumPower,
--    //                             maximumPower, averagePower, timestamp,
--    //                             reportingTimePeriod, uint6_t(0) reserved,
--    // powerReadingState, uint1_t(0) reserved);
-     LOG_ENTRY;
--    return ipmi::responseInvalidCommand();
++{
++    LOG_ENTRY;
 +
 +    uint8_t policyId = 64;
 +    uint8_t domainId = 0;
@@ -243,39 +298,26 @@ index c4c614c..2c45663 100644
 +
 +    return ipmi::responseSuccess(0, action, targetLimit, correctionTimeLimit, 0,
 +                                 statReportingPeriod);
- }
- 
- /**
-@@ -1535,30 +1607,35 @@ ipmi::RspType<uint8_t,  // Group Extension Identification
-  * @returns IPMI response
-  **/
- 
--ipmi::RspType<uint8_t,  // Group Extension Identification
--              uint16_t, // reserved
++}
++
++/**
++ * @brief Get Power Limit
++ *
++ * @param groupExten - Group Extension Identification
++ * @param reserved
++ *
++ * @returns IPMI response
++ **/
++
 +ipmi::RspType<uint16_t, // reserved
-               uint8_t,  // Exception Actions
-               uint16_t, // Requested Power Limit
-               uint32_t, // Correction Time
-               uint16_t, // reserved
-               uint16_t> // Statistics Sampling Period
--    getPowerLimit(uint8_t groupExten, uint16_t /* reserved */)
++              uint8_t,  // Exception Actions
++              uint16_t, // Requested Power Limit
++              uint32_t, // Correction Time
++              uint16_t, // reserved
++              uint16_t> // Statistics Sampling Period
 +    getPowerLimit(ipmi::Context::ptr ctx, uint16_t reserved)
- {
--    // TODO - Prepare proper handler implementation
--    //
--    // Below are variables declared and sucessful response with proper params,
--    // that can be used within handler implementation.
--    //
--    // uint8_t exceptionActions = 0;
--    // uint16_t powerLimit = 0;
--    // uint32_t correctionTime = 0;
--    // uint16_t statSamplingPeriod = 0;
--    //
--    // return ipmi::responseSuccess(groupExten, uint16_t(0) reserved,
--    //                             exceptionActions, powerLimit, correctionTime,
--    //                             uint16_t(0) reserved, statSamplingPeriod);
-     LOG_ENTRY;
--    return ipmi::responseInvalidCommand();
++{
++    LOG_ENTRY;
 +
 +    uint8_t policyId = 64;
 +    uint8_t domainId = 0;
@@ -296,31 +338,28 @@ index c4c614c..2c45663 100644
 +    }
 +
 +    return responseGetDCMIPolicy(ctx, domainId, policyId);
- }
- 
- /**
-@@ -1575,20 +1652,108 @@ ipmi::RspType<uint8_t,  // Group Extension Identification
-  * @returns IPMI response
-  **/
- 
--ipmi::RspType<uint8_t> // Group Extension Identification
--    setPowerLimit(uint8_t groupExten, uint24_t /* reserved */,
--                  uint8_t exceptionActions, uint16_t powerLimit,
--                  uint32_t correctionTime, uint16_t /* reserved */,
--                  uint16_t statSamplingPeriod)
++}
++
++/**
++ * @brief Set Power Limit
++ *
++ * @param groupExten - Group Extension Identification
++ * @param reserved
++ * @param exceptionActions
++ * @param powerLimit
++ * @param correctionTime
++ * @param reserved
++ * @param statSamplingPeriod
++ *
++ * @returns IPMI response
++ **/
++
 +ipmi::RspType<> setPowerLimit(ipmi::Context::ptr ctx, uint24_t reserved1,
 +                              uint8_t exceptionActions, uint16_t powerLimit,
 +                              uint32_t correctionTime, uint16_t reserved2,
 +                              uint16_t statSamplingPeriod)
- {
--    // TODO - Prepare proper handler implementation
--    //
--    // Below is sucessful response with proper params,
--    // that can be used within handler implementation.
--    //
--    // return ipmi::responseSuccess(groupExten);
-     LOG_ENTRY;
--    return ipmi::responseInvalidCommand();
++{
++    LOG_ENTRY;
 +
 +    if (reserved1 != 0 || reserved2 != 0 || exceptionActions >= 0x12)
 +    {
@@ -376,7 +415,7 @@ index c4c614c..2c45663 100644
 +        {
 +            return ipmi::responseUnspecifiedError();
 +        }
-+        auto policyPath =
++	auto policyPath =
 +            ctx->bus->yield_method_call<sdbusplus::message::object_path>(
 +                ctx->yield, ec, nmService.getServiceName(),
 +                nmService.getDomainPath(domainId), kPolicyManagerInterface,
@@ -417,27 +456,23 @@ index c4c614c..2c45663 100644
 +    }
 +
 +    return ipmi::responseSuccess();
- }
- 
- /**
-@@ -1601,17 +1766,45 @@ ipmi::RspType<uint8_t> // Group Extension Identification
-  *  @returns IPMI response
-  **/
- 
--ipmi::RspType<uint8_t> // Group Extension Identification
--    activatePowerLimit(uint8_t groupExten, uint8_t powerLimitActivation)
++}
++
++/**
++ * @brief Activate/Deactivate Power Limit
++ *
++ * @param groupExten - Group Extension Identification
++ * @param powerLimitActivation
++ * @param reserved
++ *
++ *  @returns IPMI response
++ **/
++
 +ipmi::RspType<> activatePowerLimit(ipmi::Context::ptr ctx,
 +                                   uint8_t powerLimitActivation,
 +                                   uint16_t reserved)
- {
--    // TODO - Prepare proper handler implementation
--    //
--    // Below is sucessful response with proper params,
--    // that can be used within handler implementation.
--    //
--    // return ipmi::responseSuccess(groupExten);
-     LOG_ENTRY;
--    return ipmi::responseInvalidCommand();
++{
++    LOG_ENTRY;
 +
 +    uint8_t domainId = 0;
 +    uint8_t policyId = 64;
@@ -472,46 +507,33 @@ index c4c614c..2c45663 100644
 +    }
 +
 +    return ipmi::responseSuccess();
- }
- 
++}
++
  /**
-@@ -1744,24 +1937,20 @@ void registerNmIpmiFunctions(void)
-     //                      intel::DCMI::cmdGetDCMICapabilityInfo,
-     //                      ipmi::Privilege::User, getDCMICapabilityInfo);
- 
--    // TODO - Uncomment after command handler implementation
--    // ipmi::registerHandler(ipmi::prioOemBase, intel::netFnDCMI,
--    //                      intel::DCMI::cmdGetPowerReading,
--    //                      ipmi::Privilege::User, getPowerReading);
+  * @brief Registration of Node Manager IPMI commands handlers
+  **/
+@@ -1242,5 +1567,21 @@ void registerNmIpmiFunctions(void)
+     ipmi::registerOemHandler(ipmi::prioOemBase, intel::oem::intelOemNumber,
+                              intel::general::cmdGetLimitingPolicyId,
+                              ipmi::Privilege::User, getLimitingPolicyId);
++
 +    ipmi::registerGroupHandler(ipmi::prioOpenBmcBase, ipmi::groupDCMI,
 +                               intel::DCMI::cmdGetPowerReading,
 +                               ipmi::Privilege::User, getPowerReading);
- 
--    // TODO - Uncomment after command handler implementation
--    // ipmi::registerHandler(ipmi::prioOemBase, intel::netFnDCMI,
--    //                      intel::DCMI::cmdGetPowerLimit,
--    //                      ipmi::Privilege::User, getPowerLimit);
++
 +    ipmi::registerGroupHandler(ipmi::prioOpenBmcBase, ipmi::groupDCMI,
 +                               intel::DCMI::cmdGetPowerLimit,
 +                               ipmi::Privilege::User, getPowerLimit);
- 
--    // TODO - Uncomment after command handler implementation
--    // ipmi::registerHandler(ipmi::prioOemBase, intel::netFnDCMI,
--    //                      intel::DCMI::cmdSetPowerLimit,
--    //                      ipmi::Privilege::Admin, setPowerLimit);
++
 +    ipmi::registerGroupHandler(ipmi::prioOpenBmcBase, ipmi::groupDCMI,
 +                               intel::DCMI::cmdSetPowerLimit,
 +                               ipmi::Privilege::Admin, setPowerLimit);
- 
--    // TODO - Uncomment after command handler implementation
--    // ipmi::registerHandler(ipmi::prioOemBase, intel::netFnDCMI,
--    //                      intel::DCMI::cmdActivatePowerLimit,
--    //                      ipmi::Privilege::Admin, activatePowerLimit);
++
 +    ipmi::registerGroupHandler(ipmi::prioOpenBmcBase, ipmi::groupDCMI,
 +                               intel::DCMI::cmdActivatePowerLimit,
 +                               ipmi::Privilege::Admin, activatePowerLimit);
  }
  } // namespace nmipmi
 -- 
-2.25.1
+2.34.1
 

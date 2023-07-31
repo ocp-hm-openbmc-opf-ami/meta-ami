@@ -1,5 +1,23 @@
+From 47601c3530560490045d38c9e21b82fd68c510c1 Mon Sep 17 00:00:00 2001
+From: Mohammed Javith Akthar M <mohammedjavitham@ami.com>
+Date: Mon, 24 Jul 2023 11:57:01 +0545
+Subject: [PATCH 2/2] virtual-media add nfs support
+
+Signed-off-by: Mohammed Javith Akthar M <mohammedjavitham@ami.com>
+---
+ src/interfaces/mount_point_state_machine.hpp |   2 +
+ src/nfs.hpp                                  |  51 +++++++++
+ src/resources.hpp                            |  42 ++++++-
+ src/state/activating_state.cpp               |  61 +++++++++-
+ src/state/activating_state.hpp               |   6 +
+ src/state/active_state.cpp                   | 111 +++++++++++++++++++
+ src/state/initial_state.hpp                  |   2 +-
+ 7 files changed, 269 insertions(+), 6 deletions(-)
+ create mode 100644 src/nfs.hpp
+ create mode 100644 src/state/active_state.cpp
+
 diff --git a/src/interfaces/mount_point_state_machine.hpp b/src/interfaces/mount_point_state_machine.hpp
-index e6b175c..0b5619c 100644
+index e6b175c..0dd2199 100644
 --- a/src/interfaces/mount_point_state_machine.hpp
 +++ b/src/interfaces/mount_point_state_machine.hpp
 @@ -18,6 +18,8 @@ struct MountPointStateMachine
@@ -9,14 +27,71 @@ index e6b175c..0b5619c 100644
 +       std::unique_ptr<resource::NfsMount> mountPointNfs;
 +
      };
-
+ 
      virtual ~MountPointStateMachine() = default;
+diff --git a/src/nfs.hpp b/src/nfs.hpp
+new file mode 100644
+index 0000000..eb92ef8
+--- /dev/null
++++ b/src/nfs.hpp
+@@ -0,0 +1,51 @@
++#pragma once
++
++#include "logger.hpp"
++#include "utils.hpp"
++
++#include <sys/mount.h>
++
++#include <filesystem>
++#include <optional>
++
++namespace fs = std::filesystem;
++#define MAX_CMD_NAME_LEN                ((4*256) + 256)
++
++class NfsShare
++{
++    public:
++        NfsShare(const fs::path& mountDir) : mountDir(mountDir)
++    {
++    }
++
++        bool mount(const fs::path& remote, bool rw)
++        {
++            LogMsg(Logger::Debug, "Trying to mount NFS remotely : ", remote);
++
++            char MountCmd [MAX_CMD_NAME_LEN]={0};
++            int size=sizeof(MountCmd);
++
++            int ret = snprintf (MountCmd, static_cast<size_t>(size), "mount -t nfs -o rw,nolock  %s %s",remote.c_str(), mountDir.c_str());
++            if(ret >= size || ret < 0)
++            {
++                std::cerr << "Buffer Overflow\n";
++                return false;
++            }
++
++            auto ec = system(MountCmd);
++            if( ec != 0)
++            {
++                LogMsg(Logger::Info, "Nfs Mount failed",
++                        " with ec = ", ec, " errno = ", errno);
++                return false;
++            }
++
++            return true;
++        }
++
++    private:
++        std::string mountDir;
++
++};
++
++
 diff --git a/src/resources.hpp b/src/resources.hpp
 index b211d55..12d0a78 100644
 --- a/src/resources.hpp
 +++ b/src/resources.hpp
 @@ -2,7 +2,7 @@
-
+ 
  #include "smb.hpp"
  #include "system.hpp"
 -
@@ -27,7 +102,7 @@ index b211d55..12d0a78 100644
 @@ -104,6 +104,46 @@ class Mount
      std::unique_ptr<Directory> directory;
  };
-
+ 
 +
 +class NfsMount
 +{
@@ -72,7 +147,7 @@ index b211d55..12d0a78 100644
  {
    public:
 diff --git a/src/state/activating_state.cpp b/src/state/activating_state.cpp
-index 7143545..7acd9f7 100644
+index 2e40fc4..37da28f 100644
 --- a/src/state/activating_state.cpp
 +++ b/src/state/activating_state.cpp
 @@ -120,11 +120,14 @@ std::unique_ptr<BasicState> ActivatingState::activateLegacyMode()
@@ -93,16 +168,16 @@ index 7143545..7acd9f7 100644
                                          "URL not recognized");
  }
 @@ -138,7 +141,7 @@ std::unique_ptr<BasicState> ActivatingState::mountSmbShare()
-
+ 
          SmbShare smb(mountDir->getPath());
          fs::path remote = getImagePath(machine.getTarget()->imgUrl);
 -        auto remoteParent = "/" + remote.parent_path().string();
 +        auto remoteParent = "//" + remote.parent_path().string();
          auto localFile = mountDir->getPath() / remote.filename();
-
+ 
          LogMsg(Logger::Info, machine.getName(), " Remote name: ", remote,
 @@ -177,6 +180,41 @@ std::unique_ptr<BasicState> ActivatingState::mountHttpsShare()
-
+ 
      return nullptr;
  }
 +std::unique_ptr<BasicState> ActivatingState::mountNfsShare()
@@ -140,10 +215,10 @@ index 7143545..7acd9f7 100644
 +    }
 +}
 +
-
+ 
  std::unique_ptr<resource::Process>
      ActivatingState::spawnNbdKit(interfaces::MountPointStateMachine& machine,
-@@ -312,7 +351,7 @@ bool ActivatingState::getImagePathFromUrl(const std::string& urlScheme,
+@@ -313,7 +351,7 @@ bool ActivatingState::getImagePathFromUrl(const std::string& urlScheme,
      {
          if (imagePath != nullptr)
          {
@@ -151,11 +226,11 @@ index 7143545..7acd9f7 100644
 +            *imagePath = imageUrl.substr(urlScheme.size());
              return true;
          }
-
-@@ -324,6 +363,17 @@ bool ActivatingState::getImagePathFromUrl(const std::string& urlScheme,
+ 
+@@ -325,6 +363,17 @@ bool ActivatingState::getImagePathFromUrl(const std::string& urlScheme,
      return false;
  }
-
+ 
 +bool ActivatingState::isNfsUrl(const std::string& imageUrl)
 +{
 +    return checkUrl("nfs://", imageUrl);
@@ -170,7 +245,7 @@ index 7143545..7acd9f7 100644
  bool ActivatingState::isHttpsUrl(const std::string& imageUrl)
  {
      return checkUrl("https://", imageUrl);
-@@ -358,6 +408,10 @@ fs::path ActivatingState::getImagePath(const std::string& imageUrl)
+@@ -359,6 +408,10 @@ fs::path ActivatingState::getImagePath(const std::string& imageUrl)
      {
          return {imagePath};
      }
@@ -178,7 +253,7 @@ index 7143545..7acd9f7 100644
 +    {
 +        return {imagePath};
 +    }
-
+ 
      LogMsg(Logger::Error, "Unrecognized url's scheme encountered");
      return {""};
 diff --git a/src/state/activating_state.hpp b/src/state/activating_state.hpp
@@ -191,13 +266,13 @@ index 295d185..9b587e4 100644
      std::unique_ptr<BasicState> mountHttpsShare();
 +    std::unique_ptr<BasicState> mountNfsShare();
 +
-
+ 
      static std::unique_ptr<resource::Process>
          spawnNbdKit(interfaces::MountPointStateMachine& machine,
 @@ -52,6 +54,10 @@ struct ActivatingState : public BasicStateT<ActivatingState>
                                          std::string* imagePath);
      static fs::path getImagePath(const std::string& imageUrl);
-
+ 
 +    static bool isNfsUrl(const std::string& imageUrl);
 +    static bool getImagePathFromNfsUrl(const std::string& imageUrl,
 +                                        std::string* imagePath);
@@ -205,76 +280,11 @@ index 295d185..9b587e4 100644
      std::unique_ptr<resource::Process> process;
      std::unique_ptr<resource::Gadget> gadget;
  };
-diff --git a/src/state/initial_state.hpp b/src/state/initial_state.hpp
-index f9255b0..7ca40b7 100644
---- a/src/state/initial_state.hpp
-+++ b/src/state/initial_state.hpp
-@@ -233,7 +233,7 @@ struct InitialState : public BasicStateT<InitialState>
-                            getObjectPath(machine), machine.getName());
-
-                     interfaces::MountPointStateMachine::Target target = {
--                        imgUrl, rw, nullptr, nullptr};
-+                        imgUrl, rw, nullptr, nullptr,nullptr};
-
-                     if (std::holds_alternative<unix_fd>(fd))
-                     {
-
+diff --git a/src/state/active_state.cpp b/src/state/active_state.cpp
+new file mode 100644
+index 0000000..0308c7f
 --- /dev/null
-+++ b/src/nfs.hpp 2022-08-30 12:33:19.547114615 +0530
-@@ -0,0 +1,51 @@
-+#pragma once
-+
-+#include "logger.hpp"
-+#include "utils.hpp"
-+
-+#include <sys/mount.h>
-+
-+#include <filesystem>
-+#include <optional>
-+
-+namespace fs = std::filesystem;
-+#define MAX_CMD_NAME_LEN                ((4*256) + 256)
-+
-+class NfsShare
-+{
-+    public:
-+        NfsShare(const fs::path& mountDir) : mountDir(mountDir)
-+    {
-+    }
-+
-+        bool mount(const fs::path& remote, bool rw)
-+        {
-+            LogMsg(Logger::Debug, "Trying to mount NFS remotely : ", remote);
-+
-+            char MountCmd [MAX_CMD_NAME_LEN]={0};
-+            int size=sizeof(MountCmd);
-+
-+            int ret = snprintf (MountCmd, size, "mount -t nfs -o rw,nolock  %s %s",remote.c_str(), mountDir.c_str());
-+            if(ret >= size || ret < 0)
-+            {
-+                std::cerr << "Buffer Overflow\n";
-+                return false;
-+            }
-+
-+            auto ec = system(MountCmd);
-+            if( ec != 0)
-+            {
-+                LogMsg(Logger::Info, "Nfs Mount failed",
-+                        " with ec = ", ec, " errno = ", errno);
-+                return false;
-+            }
-+
-+            return true;
-+        }
-+
-+    private:
-+        std::string mountDir;
-+
-+};
-+
-+
---- /dev/null
-+++ b/src/state/active_state.cpp        2022-09-01 11:02:31.286710288 +0530
++++ b/src/state/active_state.cpp
 @@ -0,0 +1,111 @@
 +#include "active_state.hpp"
 +
@@ -387,4 +397,19 @@ index f9255b0..7ca40b7 100644
 +    return nullptr;
 +}
 +
+diff --git a/src/state/initial_state.hpp b/src/state/initial_state.hpp
+index 46ebddd..a9728a9 100644
+--- a/src/state/initial_state.hpp
++++ b/src/state/initial_state.hpp
+@@ -230,7 +230,7 @@ struct InitialState : public BasicStateT<InitialState>
+                            getObjectPath(machine), machine.getName());
+ 
+                     interfaces::MountPointStateMachine::Target target = {
+-                        imgUrl, rw, nullptr, nullptr};
++                        imgUrl, rw, nullptr, nullptr,nullptr};
+ 
+                     if (std::holds_alternative<unix_fd>(fd))
+                     {
+-- 
+2.40.1
 

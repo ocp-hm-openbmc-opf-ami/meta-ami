@@ -1,30 +1,29 @@
-From 9bd6938bb3b48372d904af3a287040d93c0271a7 Mon Sep 17 00:00:00 2001
+From ea722763dfa32f92a35a770b4b72b4dbd7089af7 Mon Sep 17 00:00:00 2001
 From: Abinaya L <abinayal@ami.com>
-Date: Tue, 3 Jan 2023 12:27:19 +0530
-Subject: [PATCH] 0014-Add-Download-BMCDump-Support-in-Debug-Collector
+Date: Wed, 19 Jul 2023 17:44:27 +0530
+Subject: [PATCH 14/14] 0014-Add-Download-BMCDump-Support-in-Debug-Collector
 
 ---
- http/http_connection.hpp |  40 +++++
- http/http_response.hpp   | 120 +++++++++++++++
+ http/http_connection.hpp |  39 +++++
+ http/http_response.hpp   | 119 +++++++++++++++
  http/http_stream.hpp     | 158 +++++++++++++++++++
  http/routing.hpp         |  99 ++++++++++++
- include/dump_offload.hpp | 305 +++++++++++++++++++++++++++++++++++++
+ include/dump_offload.hpp | 304 +++++++++++++++++++++++++++++++++++++
  src/webserver_main.cpp   |   6 +
- 6 files changed, 728 insertions(+)
+ 6 files changed, 725 insertions(+)
  create mode 100644 http/http_stream.hpp
  create mode 100644 include/dump_offload.hpp
 
 diff --git a/http/http_connection.hpp b/http/http_connection.hpp
-index 939b672..fd3dd82 100644
+index e87bc24..d1834f1 100644
 --- a/http/http_connection.hpp
 +++ b/http/http_connection.hpp
-@@ -407,6 +407,46 @@ class Connection :
+@@ -269,6 +269,45 @@ class Connection :
              handler->handleUpgrade(thisReq, asyncResp, std::move(adaptor));
              return;
          }
-+
-+
-+       std::string url(thisReq.target());
++       
++	std::string url(thisReq.target());
 +        std::size_t dumpPos = url.rfind("Dump");
 +        std::size_t attachmentPos = url.rfind("attachment");
 +        if ((dumpPos != std::string::npos) &&
@@ -66,12 +65,12 @@ index 939b672..fd3dd82 100644
              req->getHeaderValue(boost::beast::http::field::if_none_match);
          if (!expected.empty())
 diff --git a/http/http_response.hpp b/http/http_response.hpp
-index 9f89987..f0b5983 100644
+index 8738d0d..315e9cd 100644
 --- a/http/http_response.hpp
 +++ b/http/http_response.hpp
 @@ -6,6 +6,10 @@
+ #include <boost/beast/http/message.hpp>
  #include <boost/beast/http/string_body.hpp>
- #include <utils/hex_utils.hpp>
  
 +#include <boost/asio/buffer.hpp>
 +#include <boost/beast/core/flat_static_buffer.hpp>
@@ -80,7 +79,7 @@ index 9f89987..f0b5983 100644
  #include <optional>
  #include <string>
  #include <string_view>
-@@ -261,4 +265,120 @@ struct Response
+@@ -293,4 +297,119 @@ struct Response
      std::function<void(Response&)> completeRequestHandler;
      std::function<bool()> isAliveHelper;
  };
@@ -106,7 +105,6 @@ index 9f89987..f0b5983 100644
 +
 +    DynamicResponse() : bufferResponse(response_type{})
 +    {}
-+
 +    DynamicResponse(const DynamicResponse&) = delete;
 +
 +    DynamicResponse(const DynamicResponse&&) = delete;
@@ -118,7 +116,7 @@ index 9f89987..f0b5983 100644
 +        BMCWEB_LOG_DEBUG << "Moving response containers";
 +        bufferResponse = std::move(r.bufferResponse);
 +        r.bufferResponse.emplace(response_type{});
-+completed = r.completed;
++	completed = r.completed;
 +        return *this;
 +    }
 +
@@ -203,7 +201,7 @@ index 9f89987..f0b5983 100644
  } // namespace crow
 diff --git a/http/http_stream.hpp b/http/http_stream.hpp
 new file mode 100644
-index 0000000..7101097
+index 0000000..df25e53
 --- /dev/null
 +++ b/http/http_stream.hpp
 @@ -0,0 +1,158 @@
@@ -299,7 +297,7 @@ index 0000000..7101097
 +                           const std::string& contentType) override
 +    {
 +
-+        streamres.addHeader("Content-Length", streamDataSize);
++       streamres.addHeader("Content-Length", streamDataSize);
 +        streamres.addHeader("Content-Type", contentType);
 +        boost::beast::http::async_write(
 +            adaptor, *streamres.bufferResponse,
@@ -337,7 +335,7 @@ index 0000000..7101097
 +    void doWrite()
 +    {
 +        boost::asio::async_write(
-+            adaptor, streamres.bufferResponse->body().data(),
++           adaptor, streamres.bufferResponse->body().data(),
 +            [this, self(shared_from_this())](boost::beast::error_code ec,
 +                                             std::size_t bytesWritten) {
 +                streamres.bufferResponse->body().consume(bytesWritten);
@@ -350,7 +348,7 @@ index 0000000..7101097
 +                }
 +                (handlerFunc)();
 +            });
-+    }
++   }
 +
 +  private:
 +    Adaptor adaptor;
@@ -366,10 +364,10 @@ index 0000000..7101097
 +} // namespace streaming_response
 +} // namespace crow
 diff --git a/http/routing.hpp b/http/routing.hpp
-index 4299d6f..e6c2300 100644
+index e72af07..d85dfa1 100644
 --- a/http/routing.hpp
 +++ b/http/routing.hpp
-@@ -5,6 +5,7 @@
+@@ -6,6 +6,7 @@
  #include "error_messages.hpp"
  #include "http_request.hpp"
  #include "http_response.hpp"
@@ -377,7 +375,7 @@ index 4299d6f..e6c2300 100644
  #include "logging.hpp"
  #include "privileges.hpp"
  #include "server_sent_event.hpp"
-@@ -521,6 +522,95 @@ class SseSocketRule :
+@@ -472,6 +473,95 @@ class SseSocketRule :
      std::function<void(std::shared_ptr<crow::SseConnection>&)> closeHandler;
  };
  
@@ -394,13 +392,14 @@ index 4299d6f..e6c2300 100644
 +
 +    void handle(const Request&,
 +                const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-+                const RoutingParams&) override
++                const std::vector<std::string>&) override
 +    {
 +        asyncResp->res.result(boost::beast::http::status::not_found);
 +    }
++
 +    void handleUpgrade(const Request& req,
 +                       const std::shared_ptr<bmcweb::AsyncResp>& /*asyncResp*/,
-+                       boost::asio::ip::tcp::socket&& adaptor) override
++                       boost::asio::ip::tcp::socket&& adaptor) 
 +    {
 +        std::shared_ptr<crow::streaming_response::ConnectionImpl<
 +            boost::asio::ip::tcp::socket>>
@@ -420,7 +419,7 @@ index 4299d6f..e6c2300 100644
 +                       const std::shared_ptr<bmcweb::AsyncResp>& /*asyncResp*/,
 +                       boost::beast::ssl_stream<boost::asio::ip::tcp::socket>&&
 +                           adaptor) override
-+    {
++   {
 +        std::shared_ptr<crow::streaming_response::ConnectionImpl<
 +            boost::beast::ssl_stream<boost::asio::ip::tcp::socket>>>
 +            myConnection =
@@ -434,12 +433,11 @@ index 4299d6f..e6c2300 100644
 +    }
 +#endif
 +   template <typename Func>
-+    self_t& onopen(Func f)
++   self_t& onopen(Func f)
 +    {
 +        openHandler = f;
 +       return *this;
 +    }
-+
 +    template <typename Func>
 +    self_t& onmessage(Func f)
 +    {
@@ -465,7 +463,7 @@ index 4299d6f..e6c2300 100644
 +    std::function<void(crow::streaming_response::Connection&)> openHandler;
 +    std::function<void(crow::streaming_response::Connection&,
 +                       const std::string&, bool)>
-+        messageHandler;
++       messageHandler;
 +    std::function<void(crow::streaming_response::Connection&)> closeHandler;
 +    std::function<void(crow::streaming_response::Connection&)> errorHandler;
 +};
@@ -473,7 +471,7 @@ index 4299d6f..e6c2300 100644
  template <typename T>
  struct RuleParameterTraits : public PrivilegeParameterTraits<T>
  {
-@@ -541,6 +631,15 @@ struct RuleParameterTraits : public PrivilegeParameterTraits<T>
+@@ -493,6 +583,15 @@ struct RuleParameterTraits : public PrivilegeParameterTraits<T>
          return *p;
      }
  
@@ -486,15 +484,15 @@ index 4299d6f..e6c2300 100644
 +        return *p;
 +    }
 +
-     self_t& name(const std::string_view name) noexcept
+     self_t& methods(boost::beast::http::verb method)
      {
          self_t* self = static_cast<self_t*>(this);
 diff --git a/include/dump_offload.hpp b/include/dump_offload.hpp
 new file mode 100644
-index 0000000..ecc5b4f
+index 0000000..ebfea1a
 --- /dev/null
 +++ b/include/dump_offload.hpp
-@@ -0,0 +1,305 @@
+@@ -0,0 +1,304 @@
 +#pragma once
 +
 +#include <sys/select.h>
@@ -536,11 +534,11 @@ index 0000000..ecc5b4f
 +        entryID(entryIDIn),
 +        dumpType(dumpTypeIn),
 +        outputBuffer(boost::beast::flat_static_buffer<socketBufferSize>()),
-+        unixSocketPath(unixSocketPathIn), unixSocket(ios), dumpSize(0),
++       unixSocketPath(unixSocketPathIn), unixSocket(ios), dumpSize(0),
 +        waitTimer(ios), connectRetryCount(0)
 +    {}
 +
-+    /**
++   /**
 +     * @brief Connects to unix socket to read dump data
 +     *
 +     * @return void
@@ -570,21 +568,21 @@ index 0000000..ecc5b4f
 +                    waitTimer.cancel();
 +                    this->connection->sendStreamErrorStatus(
 +                        boost::beast::http::status::internal_server_error);
-+                    this->connection->close();
++                   this->connection->close();
 +                    return;
 +                }
 +                waitTimer.cancel();
 +                this->connection->sendStreamHeaders(
 +                    std::to_string(this->dumpSize), "application/octet-stream");
-+                this->doReadStream();
++               this->doReadStream();
 +            });
-+    }
++   }
 +
 +    /**
 +     * @brief  Invokes InitiateOffload method of dump manager which
 +     *         directs dump manager to start writing on unix domain socket.
 +     *
-+     * @return void
++    * @return void
 +     */
 +    void initiateOffload()
 +    {
@@ -607,14 +605,13 @@ index 0000000..ecc5b4f
 +    }
 +
 +    /**
-+     * @brief  This function setup a timer for retrying unix socket connect.
++    * @brief  This function setup a timer for retrying unix socket connect.
 +     *
 +     * @return void
 +     */
 +    void retrySocketConnect()
 +    {
 +        waitTimer.expires_after(std::chrono::milliseconds(500));
-+
 +        waitTimer.async_wait([this, self(shared_from_this())](
 +                                 const boost::system::error_code& ec) {
 +            if (ec)
@@ -636,7 +633,7 @@ index 0000000..ecc5b4f
 +                BMCWEB_LOG_ERROR
 +                    << "Failed to connect, reached max retry count: "
 +                    << connectRetryCount;
-+                waitTimer.cancel();
++               waitTimer.cancel();
 +                this->connection->sendStreamErrorStatus(
 +                    boost::beast::http::status::internal_server_error);
 +                this->connection->close();
@@ -730,9 +727,9 @@ index 0000000..ecc5b4f
 +
 +inline void requestRoutes(App& app)
 +{
-+	namespace fs = std::filesystem;
-+	fs::path socketPath = "/var/lib/bmcweb";
-+	if (!fs::exists(socketPath))
++      namespace fs = std::filesystem;
++       fs::path socketPath = "/var/lib/bmcweb";
++       if (!fs::exists(socketPath))
 +        {
 +            fs::create_directories(socketPath);
 +        }
@@ -757,7 +754,7 @@ index 0000000..ecc5b4f
 +            handlers[&conn]->getDumpSize(dumpId, dumpType);
 +        })
 +        .onclose([](crow::streaming_response::Connection& conn) {
-+            auto handler = handlers.find(&conn);
++           auto handler = handlers.find(&conn);
 +            if (handler == handlers.end())
 +            {
 +                BMCWEB_LOG_DEBUG << "No handler to cleanup";
@@ -801,29 +798,29 @@ index 0000000..ecc5b4f
 +} // namespace obmc_dump
 +} // namespace crow
 diff --git a/src/webserver_main.cpp b/src/webserver_main.cpp
-index e7f3ffe..a63b8c0 100644
+index dd19f7c..6eb8940 100644
 --- a/src/webserver_main.cpp
 +++ b/src/webserver_main.cpp
-@@ -6,6 +6,7 @@
- #include <cors_preflight.hpp>
- #include <dbus_monitor.hpp>
- #include <dbus_singleton.hpp>
+@@ -4,6 +4,7 @@
+ #include "cors_preflight.hpp"
+ #include "dbus_monitor.hpp"
+ #include "dbus_singleton.hpp"
 +#include <dump_offload.hpp>
- #include <eventservice_sse.hpp>
- #include <google/google_service_root.hpp>
- #include <hostname_monitor.hpp>
+ #include "eventservice_sse.hpp"
+ #include "hostname_monitor.hpp"
+ #include "ibm/management_console_rest.hpp"
 @@ -149,6 +150,11 @@ static int run()
-     crow::hostname_monitor::registerHostnameSignal();
- #endif
+ 
+     bmcweb::registerUserRemovedSignal();
  
 +#ifdef BMCWEB_ENABLE_REDFISH_DUMP_LOG
 +    BMCWEB_LOG_INFO << "Start Download Debug Log ...";
 +    crow::obmc_dump::requestRoutes(app);
 +#endif
-+
++    
      app.run();
      io->run();
  
 -- 
-2.17.1
+2.25.1
 

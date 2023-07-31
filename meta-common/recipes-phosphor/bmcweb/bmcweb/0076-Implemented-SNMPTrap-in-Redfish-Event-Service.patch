@@ -1,6 +1,6 @@
-From 92d53455222259b6a058fff0c6a94c2020c5ff01 Mon Sep 17 00:00:00 2001
+From 262d776c8ef5f16ba378a6e84453e3579d5b6c64 Mon Sep 17 00:00:00 2001
 From: arunthomas <arunthomasb@ami.com>
-Date: Fri, 30 Jun 2023 19:27:34 +0530
+Date: Thu, 20 Jul 2023 14:19:14 +0530
 Subject: [PATCH 76/76] Implemented SNMPTrap in Redfish Event Service.
 
 Implemented SNMPTrap event destination in Redfish Event Service.
@@ -15,28 +15,28 @@ Signed-off-by: arunthomas <arunthomasb@ami.com>
  http/utility.hpp                              |   8 +
  include/eventservice_sse.hpp                  |   6 +-
  meson.build                                   |   3 +-
- .../include/event_service_manager.hpp         | 162 +++++++++-
+ .../include/event_service_manager.hpp         | 161 +++++++++-
  .../include/snmp_trap_event_clients.hpp       | 286 ++++++++++++++++++
- redfish-core/lib/event_service.hpp            | 103 +++++--
- 6 files changed, 524 insertions(+), 44 deletions(-)
+ redfish-core/lib/event_service.hpp            | 104 +++++--
+ 6 files changed, 522 insertions(+), 46 deletions(-)
  create mode 100644 redfish-core/include/snmp_trap_event_clients.hpp
 
 diff --git a/http/utility.hpp b/http/utility.hpp
-index 8c2a3f91..c200bc57 100644
+index aa640431..b84580a1 100644
 --- a/http/utility.hpp
 +++ b/http/utility.hpp
-@@ -883,6 +883,10 @@ inline std::string setProtocolDefaults(const boost::urls::url_view& url)
-             return "http";
+@@ -551,6 +551,10 @@ inline std::string setProtocolDefaults(boost::urls::url_view urlView)
          }
          return "";
-+    }
-+	if (url.scheme() == "snmp")
+     }
++    if (urlView.scheme() == "snmp")
 +    {
 +        return "snmp";
-     }
++    }
      return "";
  }
-@@ -905,6 +909,10 @@ inline uint16_t setPortDefaults(const boost::urls::url_view& url)
+ 
+@@ -572,6 +576,10 @@ inline uint16_t setPortDefaults(boost::urls::url_view url)
      if (url.scheme() == "https")
      {
          return 443;
@@ -48,7 +48,7 @@ index 8c2a3f91..c200bc57 100644
      return 0;
  }
 diff --git a/include/eventservice_sse.hpp b/include/eventservice_sse.hpp
-index aa8b234e..cd188c3c 100644
+index c872eab8..90829df9 100644
 --- a/include/eventservice_sse.hpp
 +++ b/include/eventservice_sse.hpp
 @@ -168,10 +168,8 @@ static bool createSubscription(std::shared_ptr<crow::SseConnection>& conn,
@@ -65,10 +65,10 @@ index aa8b234e..cd188c3c 100644
      {
          messages::internalError(res);
 diff --git a/meson.build b/meson.build
-index 1b7058bc..92f06e94 100644
+index 9f24014e..b36c533e 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -258,7 +258,8 @@ bmcweb_dependencies = []
+@@ -253,7 +253,8 @@ bmcweb_dependencies = []
  pam = cxx.find_library('pam', required: true)
  atomic =  cxx.find_library('atomic', required: true)
  openssl = dependency('openssl', required : true)
@@ -79,10 +79,10 @@ index 1b7058bc..92f06e94 100644
  sdbusplus = dependency('sdbusplus', required : false, include_type: 'system')
  if not sdbusplus.found()
 diff --git a/redfish-core/include/event_service_manager.hpp b/redfish-core/include/event_service_manager.hpp
-index 0f578662..60bad3c2 100644
+index 9bd3d7bf..f4ded282 100644
 --- a/redfish-core/include/event_service_manager.hpp
 +++ b/redfish-core/include/event_service_manager.hpp
-@@ -45,6 +45,8 @@
+@@ -46,6 +46,8 @@
  #include <fstream>
  #include <memory>
  #include <span>
@@ -91,61 +91,58 @@ index 0f578662..60bad3c2 100644
  
  namespace redfish
  {
-@@ -396,8 +398,86 @@ class Subscription : public persistent_data::UserSubscription
+@@ -426,8 +428,82 @@ class Subscription : public persistent_data::UserSubscription
  
      ~Subscription() = default;
  
-+	
 +    bool sendSNMPTrap(uint32_t eventId, uint64_t timestamp, uint8_t sev, std::string &msg)
 +    {
-+        persistent_data::EventServiceConfig eventServiceConfig =
-+            persistent_data::EventServiceStore::getInstance()
-+                .getEventServiceConfig();
-+        if (!eventServiceConfig.enabled)
-+        {
-+            return false;
-+        }
++	persistent_data::EventServiceConfig eventServiceConfig =
++	    persistent_data::EventServiceStore::getInstance()
++	        .getEventServiceConfig();
++	if (!eventServiceConfig.enabled)
++	{
++	    return false;
++	}
 +	phosphor::network::snmp::sendTrap<
-+		phosphor::network::snmp::OBMCErrorNotification>(
-+           static_cast<uint32_t>(eventId), timestamp,
-+           sev, std::move(msg));
++	    phosphor::network::snmp::OBMCErrorNotification>(
++	        static_cast<uint32_t>(eventId), timestamp,
++		    sev, std::move(msg));
 +	eventSeqNum++;
 +	return true;
 +    }
-+	
++
 +    void filterAndsendSNMPTrap(const std::vector<EventLogObjectsType>& eventRecords)
 +    {
-+		
 +        for (const EventLogObjectsType& logEntry : eventRecords)
-+        {
-+            const std::string& idStr = std::get<0>(logEntry);
-+            //const std::string& timestamp = std::get<1>(logEntry);
-+            const std::string& messageID = std::get<2>(logEntry);
-+            const std::string& registryName = std::get<3>(logEntry);
-+            const std::string& messageKey = std::get<4>(logEntry);
-+            const std::vector<std::string>& messageArgs = std::get<5>(logEntry);
-+			
-+            if (!registryPrefixes.empty())
-+            {
-+                auto obj = std::find(registryPrefixes.begin(),
-+                                     registryPrefixes.end(), registryName);
-+                if (obj == registryPrefixes.end())
-+                {
-+                    continue;
-+                }
-+            }
-+            if (!registryMsgIds.empty())
-+            {
-+                auto obj = std::find(registryMsgIds.begin(),
-+                                     registryMsgIds.end(), messageKey);
-+                if (obj == registryMsgIds.end())
-+                {
-+                    continue;
-+                }
-+            }
-+            std::vector<std::string_view> messageArgsView(messageArgs.begin(),
-+                                                          messageArgs.end());
-+          
++	{
++	    const std::string& idStr = std::get<0>(logEntry);
++	    const std::string& messageID = std::get<2>(logEntry);
++	    const std::string& registryName = std::get<3>(logEntry);
++	    const std::string& messageKey = std::get<4>(logEntry);
++	    const std::vector<std::string>& messageArgs = std::get<5>(logEntry);
++
++	    if (!registryPrefixes.empty())
++	    {
++	        auto obj = std::find(registryPrefixes.begin(),
++		    registryPrefixes.end(), registryName);
++		if (obj == registryPrefixes.end())
++		{
++		    continue;
++		}
++	    }
++	    if (!registryMsgIds.empty())
++	    {
++	        auto obj = std::find(registryMsgIds.begin(),
++		    registryMsgIds.end(), messageKey);
++		if (obj == registryMsgIds.end())
++		{
++		    continue;
++		}
++	    }
++	    std::vector<std::string_view> messageArgsView(messageArgs.begin(),
++	        messageArgs.end());
++
 +	    const registries::Message* message = registries::formatMessage(messageID);
 +	    if (message == nullptr)
 +	    {
@@ -161,36 +158,35 @@ index 0f578662..60bad3c2 100644
 +	    std::string messageSeverity{message->messageSeverity};
 +	    uint64_t timestampInt = std::stoull(idStr, nullptr, 10);
 +	    this->sendSNMPTrap(static_cast<uint32_t>(eventSeqNum), timestampInt,
-+		messageSeverity == "Ok" ? static_cast<uint8_t>(0) : 
-+		messageSeverity == "Warning" ? static_cast<uint8_t>(1) : 
-+		messageSeverity == "Critical" ? static_cast<uint8_t>(2): static_cast<uint8_t>(0)
-+	    , msg);
++	        messageSeverity == "Ok" ? static_cast<uint8_t>(0) :
++	        messageSeverity == "Warning" ? static_cast<uint8_t>(1) :
++	        messageSeverity == "Critical" ? static_cast<uint8_t>(2): static_cast<uint8_t>(0)
++	        , msg);
 +	}
 +    }
-+    
 +
      bool sendEvent(std::string& msg)
      {
-+    	if (subscriptionType == "SNMPTrap")
-+        {
-+            return true; // Don't need send SNMPTrap event.
-+        }
++	if (subscriptionType == "SNMPTrap")
++	{
++	    return true; // Don't need send SNMPTrap event.
++	}
          persistent_data::EventServiceConfig eventServiceConfig =
              persistent_data::EventServiceStore::getInstance()
                  .getEventServiceConfig();
-@@ -469,6 +549,22 @@ class Subscription : public persistent_data::UserSubscription
-         return this->sendEvent(strMsg);
+@@ -472,6 +548,22 @@ class Subscription : public persistent_data::UserSubscription
+         return true;
      }
  
 +    bool sendTestSNMPTrap()
-+    {
++    {   	
 +	std::string timestamp = redfish::time_utils::getDateTimeOffsetNow().first;
 +	std::time_t curTs = 0;
 +	std::tm timeStruct = {};
 +	std::istringstream entryStream(timestamp);
 +	if (!(entryStream >> std::get_time(&timeStruct, "%Y-%m-%dT%H:%M:%S")))
 +	{
-+	    return false;
++		return false;
 +	}
 +	curTs = std::mktime(&timeStruct);
 +	std::string msg{"Generated test event"};
@@ -198,52 +194,54 @@ index 0f578662..60bad3c2 100644
 +	return true;
 +    }
 +
- #ifndef BMCWEB_ENABLE_REDFISH_DBUS_LOG_ENTRIES
-     void filterAndSendEventLogs(
-         const std::vector<EventLogObjectsType>& eventRecords)
-@@ -949,23 +1045,25 @@ class EventServiceManager
+     bool sendTestEventLog()
+     {
+         nlohmann::json logEntryArray;
+@@ -972,23 +1064,24 @@ class EventServiceManager
          return subValue;
      }
  
 -    std::string addSubscription(const std::shared_ptr<Subscription>& subValue,
 -                                const bool updateFile = true)
 +    void addSubscription(const std::shared_ptr<Subscription>& subValue,
-+                         std::string& id, const bool updateFile = true)
++                                std::string& id, const bool updateFile = true)
      {
- 
          std::uniform_int_distribution<uint32_t> dist(0);
          bmcweb::OpenSSLGenerator gen;
  
 -        std::string id;
- 
+-
          int retry = 3;
          while (retry != 0)
          {
 -            id = std::to_string(dist(gen));
 -            if (gen.error())
-+            if (id.empty())
-             {
+-            {
 -                retry = 0;
 -                break;
+-            }
++	    if(id.empty())
++	    {
 +                id = std::to_string(dist(gen));
 +                if (gen.error())
 +                {
 +                    retry = 0;
 +                    break;
 +                }
-             }
++	    }	
              auto inserted = subscriptionsMap.insert(std::pair(id, subValue));
              if (inserted.second)
-@@ -978,7 +1076,7 @@ class EventServiceManager
+             {
+@@ -1000,7 +1093,7 @@ class EventServiceManager
          if (retry <= 0)
          {
              BMCWEB_LOG_ERROR << "Failed to generate random number";
 -            return "";
-+            return;
++            return ;
          }
  
-         std::shared_ptr<persistent_data::UserSubscription> newSub =
-@@ -1022,7 +1120,6 @@ class EventServiceManager
+         subValue->id = id;
+@@ -1044,7 +1137,6 @@ class EventServiceManager
                          "OpenBMC.0.1.EventSubscriptionAdded",
                          "REDFISH_MESSAGE_ARGS=%s", id.c_str(), NULL);
  
@@ -251,7 +249,7 @@ index 0f578662..60bad3c2 100644
      }
  
      bool isSubscriptionExist(const std::string& id)
-@@ -1127,9 +1224,21 @@ class EventServiceManager
+@@ -1149,9 +1241,21 @@ class EventServiceManager
  
      bool sendTestEventLog()
      {
@@ -267,13 +265,13 @@ index 0f578662..60bad3c2 100644
 +		    {
 +			snmpNotified = true;
 +		    }
-+	         }
++		}
 +		continue;
 +	    }
              if (!entry->sendTestEventLog())
              {
                  return false;
-@@ -1157,6 +1266,7 @@ class EventServiceManager
+@@ -1179,6 +1283,7 @@ class EventServiceManager
  
          eventRecord.emplace_back(std::move(eventMessage));
  
@@ -281,39 +279,37 @@ index 0f578662..60bad3c2 100644
          for (const auto& it : this->subscriptionsMap)
          {
              std::shared_ptr<Subscription> entry = it.second;
-@@ -1181,6 +1291,27 @@ class EventServiceManager
+@@ -1203,6 +1308,26 @@ class EventServiceManager
              {
                  isSubscribed = true;
              }
 +	    if (entry->subscriptionType == "SNMPTrap")
-+            {
++	    {
 +		if (!snmpNotified)
 +		{
 +		    std::time_t curTs = 0;
 +		    std::tm timeStruct = {};
 +		    std::string timestamp{eventMessage["EventTimestamp"]};
-+	            std::istringstream entryStream(timestamp);
++		    std::istringstream entryStream(timestamp);
 +		    if (!(entryStream >> std::get_time(&timeStruct, "%Y-%m-%dT%H:%M:%S")))
-+		    {		
++		    {
 +			continue;
 +		    }
 +		    curTs = std::mktime(&timeStruct);
 +		    std::string msg{origin};
-+	            entry->sendSNMPTrap(static_cast<uint32_t>(eventId), static_cast<uint64_t>(curTs), 0, msg);
++		    entry->sendSNMPTrap(static_cast<uint32_t>(eventId), static_cast<uint64_t>(curTs), 0, msg);
 +		    snmpNotified = true;
 +		    eventId++;
-+		}		
++		}
 +		continue;
-+
-+            }
++	    }
              if (isSubscribed)
              {
                  nlohmann::json msgJson;
-@@ -1317,13 +1448,22 @@ class EventServiceManager
-             BMCWEB_LOG_DEBUG << "No log entries available to be transferred.";
+@@ -1340,12 +1465,22 @@ class EventServiceManager
              return;
          }
--
+ 
 +	bool snmpNotified = false;
          for (const auto& it : this->subscriptionsMap)
          {
@@ -324,19 +320,19 @@ index 0f578662..60bad3c2 100644
 -                entry->filterAndSendEventLogs(eventRecords);
 +		if (prot != "SNMPv2c")
 +		{
-+                	entry->filterAndSendEventLogs(eventRecords);
++	  	    entry->filterAndSendEventLogs(eventRecords);
 +		}
 +		else if(!snmpNotified)
 +		{
-+			entry->filterAndsendSNMPTrap(eventRecords);
-+			snmpNotified = true;
++		    entry->filterAndsendSNMPTrap(eventRecords);
++		    snmpNotified = true;
 +		}
              }
          }
      }
 diff --git a/redfish-core/include/snmp_trap_event_clients.hpp b/redfish-core/include/snmp_trap_event_clients.hpp
 new file mode 100644
-index 00000000..a4d2d6be
+index 00000000..0e297c73
 --- /dev/null
 +++ b/redfish-core/include/snmp_trap_event_clients.hpp
 @@ -0,0 +1,286 @@
@@ -391,8 +387,8 @@ index 00000000..a4d2d6be
 +    asyncResp->res.jsonValue["@odata.type"] =
 +        "#EventDestination.v1_8_0.EventDestination";
 +    asyncResp->res.jsonValue["Protocol"] = "SNMPv2c";
-+    asyncResp->res.jsonValue["@odata.id"] = crow::utility::urlFromPieces(
-+        "redfish", "v1", "EventService", "Subscriptions", id);
++    asyncResp->res.jsonValue["@odata.id"] = boost::urls::format(
++        "/redfish/v1/EventService/Subscriptions/{}", id);
 +
 +    asyncResp->res.jsonValue["Id"] = id;
 +    asyncResp->res.jsonValue["Name"] = "Event Destination " + id;
@@ -584,8 +580,8 @@ index 00000000..a4d2d6be
 +    const std::string subscriptionId = "snmp" + snmpId;
 +
 +    nlohmann::json::object_t member;
-+    member["@odata.id"] = crow::utility::urlFromPieces(
-+        "redfish", "v1", "EventService", "Subscriptions", subscriptionId);
++    member["@odata.id"] = boost::urls::format(
++        "/redfish/v1/EventService/Subscriptions/{}", subscriptionId);
 +    memberArray.push_back(std::move(member));
 +
 +    asyncResp->res.jsonValue["Members@odata.count"] = memberArray.size();
@@ -626,40 +622,36 @@ index 00000000..a4d2d6be
 +}
 +
 +} // namespace redfish
-\ No newline at end of file
 diff --git a/redfish-core/lib/event_service.hpp b/redfish-core/lib/event_service.hpp
-index 176720d8..354de349 100644
+index 1278159a..583bbd12 100644
 --- a/redfish-core/lib/event_service.hpp
 +++ b/redfish-core/lib/event_service.hpp
-@@ -22,7 +22,12 @@
- #include <logging.hpp>
- #include <query.hpp>
- #include <registries/privilege_registry.hpp>
+@@ -20,6 +20,12 @@
+ #include "logging.hpp"
+ #include "query.hpp"
+ #include "registries/privilege_registry.hpp"
 +#include "snmp_trap_event_clients.hpp"
- 
++
 +#include <sdbusplus/unpack_properties.hpp>
 +#include <utils/dbus_utils.hpp>
 +
 +#include <charconv>
- #include <span>
  
- #define MAX_CONTEXT_SIZE 256
-@@ -404,6 +409,13 @@ inline void requestRoutesEventDestinationCollection(App& app)
-             std::make_shared<Subscription>(host, port, path, urlProto);
+ #include <boost/beast/http/fields.hpp>
  
-         subValue->destinationUrl = destUrl;
-+	if ((protocol != "Redfish") && (protocol != "SNMPv2c"))
+@@ -320,40 +326,62 @@ inline void requestRoutesEventDestinationCollection(App& app)
+         }
+         subValue->owner = req.session->username;
+ 
++	
++        if (protocol != "Redfish" && protocol != "SNMPv2c")
 +        {
 +            messages::propertyValueNotInList(asyncResp->res, protocol,
 +                                             "Protocol");
 +            return;
 +        }
 +        subValue->protocol = protocol;
-         if (req.session == nullptr || req.session->username.empty())
-         {
-             BMCWEB_LOG_ERROR << "Request Session Undefined";
-@@ -414,38 +426,52 @@ inline void requestRoutesEventDestinationCollection(App& app)
- 
++
          if (subscriptionType)
          {
 -            if (*subscriptionType != "RedfishEvent")
@@ -669,8 +661,8 @@ index 176720d8..354de349 100644
 -                return;
 -            }
 -            subValue->subscriptionType = *subscriptionType;
-+            if ( (protocol == "Redfish" && *subscriptionType != "RedfishEvent") ||  
-+		 (protocol == "SNMPv2c" && *subscriptionType != "SNMPTrap") )
++	    if ( (protocol == "Redfish" && *subscriptionType != "RedfishEvent") ||
++	        (protocol == "SNMPv2c" && *subscriptionType != "SNMPTrap") )
 +	    {
 +		messages::propertyValueNotInList(
 +		    asyncResp->res, *subscriptionType, "SubscriptionType");
@@ -681,14 +673,14 @@ index 176720d8..354de349 100644
          else
          {
 -            subValue->subscriptionType = "RedfishEvent"; // Default
-+            if (protocol == "SNMPv2c")
-+            {
-+                subValue->subscriptionType = "SNMPTrap";
-+            }
-+            else
-+            {
++	    if (protocol == "SNMPv2c")
++	    {
++		subValue->subscriptionType = "SNMPTrap";
++	    }
++	    else
++	    {
 +                subValue->subscriptionType = "RedfishEvent"; // Default
-+            }
++	    }
          }
  
 -        if (protocol != "Redfish")
@@ -698,7 +690,6 @@ index 176720d8..354de349 100644
 -            return;
 -        }
 -        subValue->protocol = protocol;
-+
  
          if (eventFormatType2)
          {
@@ -713,7 +704,7 @@ index 176720d8..354de349 100644
 -            subValue->eventFormatType = *eventFormatType2;
 +	    if (protocol == "SNMPv2c")
 +	    {
-+		if(*eventFormatType2 != "Event")
++	        if(*eventFormatType2 != "Event")
 +		{
 +		    messages::propertyValueNotInList(
 +			asyncResp->res, *eventFormatType2, "EventFormatType");
@@ -725,7 +716,7 @@ index 176720d8..354de349 100644
 +            	if (std::find(supportedEvtFormatTypes.begin(),
 +                              supportedEvtFormatTypes.end(),
 +                              *eventFormatType2) == supportedEvtFormatTypes.end())
-+            	{
++                {
 +                    messages::propertyValueNotInList(
 +                        asyncResp->res, *eventFormatType2, "EventFormatType");
 +                    return;
@@ -735,67 +726,58 @@ index 176720d8..354de349 100644
          }
          else
          {
-@@ -609,9 +635,15 @@ inline void requestRoutesEventDestinationCollection(App& app)
-                 subValue->metricReportDefinitions.emplace_back(mrdUri);
+@@ -518,8 +546,14 @@ inline void requestRoutesEventDestinationCollection(App& app)
              }
          }
-+		
-+	if (protocol == "SNMPv2c")
-+        {
-+            addSnmpTrapClient(asyncResp, host, port, destUrl, subValue);
-+            return;
-+        }
  
 -        std::string id =
 -            EventServiceManager::getInstance().addSubscription(subValue);
++	if (protocol == "SNMPv2c")
++	{
++	    addSnmpTrapClient(asyncResp, host, port, destUrl, subValue);
++	    return;
++	}
++
 +        std::string id;
 +        EventServiceManager::getInstance().addSubscription(subValue, id);
          if (id.empty())
          {
              messages::internalError(asyncResp->res);
-@@ -673,6 +705,13 @@ inline void requestRoutesEventDestination(App& app)
-         {
-             return;
-         }
-+		
-+	if (param.starts_with("snmp"))
-+        {
-+            getSnmpTrapClient(asyncResp, param);
-+            return;
-+        }
-+
-         std::shared_ptr<Subscription> subValue =
-             EventServiceManager::getInstance().getSubscription(param);
-         if (subValue == nullptr)
-@@ -684,8 +723,8 @@ inline void requestRoutesEventDestination(App& app)
+@@ -592,8 +626,8 @@ inline void requestRoutesEventDestination(App& app)
          const std::string& id = param;
  
          asyncResp->res.jsonValue["@odata.type"] =
 -            "#EventDestination.v1_7_0.EventDestination";
 -        asyncResp->res.jsonValue["Protocol"] = "Redfish";
-+             "#EventDestination.v1_8_0.EventDestination";
++            "#EventDestination.v1_8_0.EventDestination";
 +        asyncResp->res.jsonValue["Protocol"] = subValue->protocol;
          asyncResp->res.jsonValue["@odata.id"] =
              "/redfish/v1/EventService/Subscriptions/" + id;
          asyncResp->res.jsonValue["Id"] = id;
-@@ -722,6 +761,7 @@ inline void requestRoutesEventDestination(App& app)
+@@ -630,6 +664,13 @@ inline void requestRoutesEventDestination(App& app)
          {
              return;
          }
 +
++	if (param.starts_with("snmp"))
++	{
++	    getSnmpTrapClient(asyncResp, param);
++	    return;
++	}
++
          std::shared_ptr<Subscription> subValue =
              EventServiceManager::getInstance().getSubscription(param);
          if (subValue == nullptr)
-@@ -818,6 +858,13 @@ inline void requestRoutesEventDestination(App& app)
+@@ -725,6 +766,13 @@ inline void requestRoutesEventDestination(App& app)
              return;
          }
  
 +	if (param.starts_with("snmp"))
-+        {
-+            deleteSnmpTrapClient(asyncResp, param);
-+            EventServiceManager::getInstance().deleteSubscription(param);
-+            return;
-+        }
++	{
++	    deleteSnmpTrapClient(asyncResp, param);
++	    EventServiceManager::getInstance().deleteSubscription(param);
++	    return;
++	}
 +
          EventServiceManager::getInstance().deleteSubscription(param);
          });

@@ -1,15 +1,15 @@
-From 9c1038cc76d6a8206629da34af3f1ae7d543469c Mon Sep 17 00:00:00 2001
+From 285f2e273ee8934fda20f6eec4b847bf92cce3e9 Mon Sep 17 00:00:00 2001
 From: Abinaya L <abinayal@ami.com>
-Date: Fri, 30 Dec 2022 15:24:26 +0530
-Subject: [PATCH] Added-OOB-Bios-Configuration-Support-in-Redfish
+Date: Tue, 18 Jul 2023 16:42:02 +0530
+Subject: [PATCH 16/16] 0016-Added-OOB-Bios-Configuration-Support-in-Redfish
 
 ---
  config/bmcweb.service.in             |    1 +
  config/pam-webserver                 |    2 +
  redfish-core/include/redfish.hpp     |    3 +-
- redfish-core/lib/account_service.hpp |   89 +-
- redfish-core/lib/bios.hpp            | 2244 ++++++++++++++++--------
- 5 files changed, 1642 insertions(+), 697 deletions(-)
+ redfish-core/lib/account_service.hpp |   88 +-
+ redfish-core/lib/bios.hpp            | 2233 ++++++++++++++++--------
+ 5 files changed, 1633 insertions(+), 694 deletions(-)
 
 diff --git a/config/bmcweb.service.in b/config/bmcweb.service.in
 index a0b6777..a07adbe 100644
@@ -36,28 +36,29 @@ index a5e7af4..b7755f5 100644
  account  include  common-account
  password include  common-password
 diff --git a/redfish-core/include/redfish.hpp b/redfish-core/include/redfish.hpp
-index d089d96..e39ddda 100644
+index 1f97d45..e8b8bc9 100644
 --- a/redfish-core/include/redfish.hpp
 +++ b/redfish-core/include/redfish.hpp
-@@ -221,8 +221,9 @@ class RedfishService
+@@ -240,8 +240,9 @@ class RedfishService
          requestRoutesSystemResetActionInfo(app);
          requestRoutesBiosService(app);
          requestRoutesBiosSettings(app);
 -        requestRoutesBiosAttributeRegistry(app);
-+        //requestRoutesBiosAttributeRegistry(app);
++	//requestRoutesBiosAttributeRegistry(app);
          requestRoutesBiosReset(app);
-+        requestRoutesBiosAttrRegistryService(app);
++	requestRoutesBiosAttrRegistryService(app);
          requestRoutesBiosChangePassword(app);
  
  #ifdef BMCWEB_ENABLE_VM_NBDPROXY
 diff --git a/redfish-core/lib/account_service.hpp b/redfish-core/lib/account_service.hpp
-index a2ae960..fcd1974 100644
+index 6b6e44a..a2f43fe 100644
 --- a/redfish-core/lib/account_service.hpp
 +++ b/redfish-core/lib/account_service.hpp
-@@ -1661,18 +1661,83 @@ inline void handleAccountCollectionGet(
+@@ -1676,19 +1676,81 @@ inline void handleAccountCollectionGet(
+ 
                  return;
              }
- 
+-
 -            // As clarified by Redfish here:
 -            // https://redfishforum.com/thread/281/manageraccountcollection-change-allows-account-enumeration
 -            // Users without ConfigureUsers, only see their own
@@ -66,11 +67,11 @@ index a2ae960..fcd1974 100644
 -            if (userCanSeeAllAccounts || (thisUser == user && userCanSeeSelf))
 -            {
 -                nlohmann::json::object_t member;
--                member["@odata.id"] =
--                    "/redfish/v1/AccountService/Accounts/" + user;
--                memberArray.push_back(std::move(member));
+-                member["@odata.id"] = "/redfish/v1/AccountService/Accounts/" +
+-                                      user;
+-                memberArray.emplace_back(std::move(member));
 -            }
-+                            crow::connections::systemBus->async_method_call(
++	crow::connections::systemBus->async_method_call(
 +                                [asyncResp, thisUser, userCanSeeAllAccounts,
 +                                 userCanSeeSelf, user, &memberArray](
 +                                    const boost::system::error_code ec,
@@ -85,8 +86,7 @@ index a2ae960..fcd1974 100644
 +                                        messages::internalError(asyncResp->res);
 +                                        return;
 +                                    }
-+
-+                                    const std::vector<std::string>*
++				   const std::vector<std::string>*
 +                                        userGroupPtr = nullptr;
 +                                   auto userInfoIter =
 +                                        userInfo.find("UserGroups");
@@ -146,15 +146,14 @@ index a2ae960..fcd1974 100644
 +                                "/xyz/openbmc_project/user",
 +                                "xyz.openbmc_project.User.Manager",
 +                                "GetUserInfo", user);
-+
          }
          asyncResp->res.jsonValue["Members@odata.count"] = memberArray.size();
          },
 diff --git a/redfish-core/lib/bios.hpp b/redfish-core/lib/bios.hpp
-index 0850667..78a02a4 100644
+index dd6c19a..e4eac42 100644
 --- a/redfish-core/lib/bios.hpp
 +++ b/redfish-core/lib/bios.hpp
-@@ -7,251 +7,1606 @@
+@@ -9,148 +9,1514 @@
  
  namespace redfish
  {
@@ -167,34 +166,26 @@ index 0850667..78a02a4 100644
 +    "/xyz/openbmc_project/bios_config/manager";
 +constexpr char const* biosConfigIface =
 +    "xyz.openbmc_project.BIOSConfig.Manager";
-+
-+using GetObjectType =
-+    std::vector<std::pair<std::string, std::vector<std::string>>>;
  
 -/*baseBIOSTable
 -map{attributeName,struct{attributeType,readonlyStatus,displayname,
 -              description,menuPath,current,default,
 -              array{struct{optionstring,optionvalue}}}}
 -*/
++using GetObjectType =
++    std::vector<std::pair<std::string, std::vector<std::string>>>;
+ 
+-using BiosBaseTableType = boost::container::flat_map<
 +/**
 + * BiosService DBus types
 + */
 +using BaseBIOSTable = boost::container::flat_map<
-+    std::string,
-+    std::tuple<std::string, bool, std::string, std::string, std::string,
-+               std::variant<int64_t, std::string, bool>,
-+               std::variant<int64_t, std::string, bool>,
-+               std::vector<std::tuple<std::string,
-+                                      std::variant<int64_t, std::string>>>>>;
- 
--using BiosBaseTableType = boost::container::flat_map<
-+using BaseBIOSTableItem = std::pair<
      std::string,
 -    std::tuple<
 -        std::string, bool, std::string, std::string, std::string,
 -        std::variant<int64_t, std::string>, std::variant<int64_t, std::string>,
--        std::vector<
--            std::tuple<std::string, std::variant<int64_t, std::string>>>>>;
+-        std::vector<std::tuple<std::string, std::variant<int64_t, std::string>,
+-                               std::string>>>>;
 +    std::tuple<std::string, bool, std::string, std::string, std::string,
 +               std::variant<int64_t, std::string, bool>,
 +               std::variant<int64_t, std::string, bool>,
@@ -202,15 +193,23 @@ index 0850667..78a02a4 100644
 +                                      std::variant<int64_t, std::string>>>>>;
  
 -using BiosBaseTableItemType = std::pair<
-+using PendingAttrType = boost::container::flat_map<
++using BaseBIOSTableItem = std::pair<
      std::string,
 -    std::tuple<
 -        std::string, bool, std::string, std::string, std::string,
 -        std::variant<int64_t, std::string>, std::variant<int64_t, std::string>,
--        std::vector<
--            std::tuple<std::string, std::variant<int64_t, std::string>>>>>;
+-        std::vector<std::tuple<std::string, std::variant<int64_t, std::string>,
+-                               std::string>>>>;
+-
 -using OptionsItemType =
--    std::tuple<std::string, std::variant<int64_t, std::string>>;
+-    std::tuple<std::string, std::variant<int64_t, std::string>, std::string>;
++    std::tuple<std::string, bool, std::string, std::string, std::string,
++               std::variant<int64_t, std::string, bool>,
++               std::variant<int64_t, std::string, bool>,
++               std::vector<std::tuple<std::string,
++                                      std::variant<int64_t, std::string>>>>>;
++using PendingAttrType = boost::container::flat_map<
++    std::string,
 +    std::tuple<std::string, std::variant<int64_t, std::string, bool>>>;
  
 -using PendingAttributesType = boost::container::flat_map<
@@ -250,7 +249,8 @@ index 0850667..78a02a4 100644
 +enum BaseBiosBoundIndex
  {
 -    optItemType = 0,
--    optItemValue
+-    optItemValue,
+-    optItemText
 +    baseBiosBoundType = 0,
 +    baseBiosBoundValue
  };
@@ -284,29 +284,29 @@ index 0850667..78a02a4 100644
 +    std::string type;
 +    if (attrType ==
 +        "xyz.openbmc_project.BIOSConfig.Manager.AttributeType.Enumeration")
-+    {
-+	type = "Enumeration";
-+    }
-+    else if (attrType ==
-+             "xyz.openbmc_project.BIOSConfig.Manager.AttributeType.String")
      {
 -        ret = "String";
-+	type = "String";
++	type = "Enumeration";
      }
 -    else if (typeDbus == "xyz.openbmc_project.BIOSConfig."
 -                         "Manager.AttributeType.Integer")
 +    else if (attrType ==
-+             "xyz.openbmc_project.BIOSConfig.Manager.AttributeType.Password")
++             "xyz.openbmc_project.BIOSConfig.Manager.AttributeType.String")
      {
 -        ret = "Integer";
-+        type = "Password";
++	type = "String";
      }
 -    else if (typeDbus == "xyz.openbmc_project.BIOSConfig."
 -                         "Manager.AttributeType.Enumeration")
 +    else if (attrType ==
-+             "xyz.openbmc_project.BIOSConfig.Manager.AttributeType.Integer")
++             "xyz.openbmc_project.BIOSConfig.Manager.AttributeType.Password")
      {
 -        ret = "Enumeration";
++        type = "Password";
++    }
++    else if (attrType ==
++             "xyz.openbmc_project.BIOSConfig.Manager.AttributeType.Integer")
++    {
 +        type = "Integer";
 +    }
 +    else if (attrType ==
@@ -319,12 +319,10 @@ index 0850667..78a02a4 100644
 -        ret = "UNKNOWN";
 +        type = "UNKNOWN";
      }
--
--    return ret;
 +    return type;
- }
++}
  
--static std::string mapBoundTypeToRedfish(const std::string_view typeDbus)
+-    return ret;
 +/**
 + *@brief Translates Base BIOS Table attribute type from Redfish string type to
 + *DBUS property value.
@@ -335,26 +333,17 @@ index 0850667..78a02a4 100644
 + *If attribute type didn't match, then returns 'UNKNOWN' string.
 + */
 +static std::string getDbusBiosAttrType(const std::string& attrType)
- {
--    std::string ret;
--    if (typeDbus ==
--        "xyz.openbmc_project.BIOSConfig.Manager.BoundType.ScalarIncrement")
++{
 +    std::string type;
 +    if (attrType == "Enumeration")
-     {
--        ret = "ScalarIncrement";
++    {
 +        type =
 +            "xyz.openbmc_project.BIOSConfig.Manager.AttributeType.Enumeration";
-     }
--    else if (typeDbus ==
--             "xyz.openbmc_project.BIOSConfig.Manager.BoundType.LowerBound")
++    }
 +    else if (attrType == "String")
-     {
--        ret = "LowerBound";
++    {
 +        type = "xyz.openbmc_project.BIOSConfig.Manager.AttributeType.String";
-     }
--    else if (typeDbus ==
--             "xyz.openbmc_project.BIOSConfig.Manager.BoundType.UpperBound")
++    }
 +    else if (attrType == "Password")
 +    {
 +        type = "xyz.openbmc_project.BIOSConfig.Manager.AttributeType.Password";
@@ -372,8 +361,9 @@ index 0850667..78a02a4 100644
 +        type = "UNKNOWN";
 +    }
 +    return type;
-+}
-+
+ }
+ 
+-static std::string mapBoundTypeToRedfish(const std::string_view typeDbus)
 +/**
 + *@brief Translates Base BIOS Table attribute bound value type from DBUS
 + *property value to Redfish string type.
@@ -384,49 +374,53 @@ index 0850667..78a02a4 100644
 + *Redfish. If attribute type didn't match, then returns 'UNKNOWN' string.
 + */
 +static std::string getBiosBoundValType(const std::string& boundValType)
-+{
+ {
+-    std::string ret;
+-    if (typeDbus ==
+-        "xyz.openbmc_project.BIOSConfig.Manager.BoundType.ScalarIncrement")
 +    std::string type;
 +    if (boundValType ==
 +	"xyz.openbmc_project.BIOSConfig.Manager.BoundType.ScalarIncrement")
      {
--        ret = "UpperBound";
+-        ret = "ScalarIncrement";
 +	type = "ScalarIncrement";
+     }
+-    else if (typeDbus ==
++    else if (boundValType ==
+              "xyz.openbmc_project.BIOSConfig.Manager.BoundType.LowerBound")
+     {
+-        ret = "LowerBound";
++	type = "LowerBound";
+     }
+-    else if (typeDbus ==
++    else if (boundValType ==
+              "xyz.openbmc_project.BIOSConfig.Manager.BoundType.UpperBound")
+     {
+-        ret = "UpperBound";
++	type = "UpperBound";
      }
 -    else if (typeDbus ==
 -             "xyz.openbmc_project.BIOSConfig.Manager.BoundType.MinStringLength")
 +    else if (boundValType ==
-+             "xyz.openbmc_project.BIOSConfig.Manager.BoundType.LowerBound")
++             "xyz.openbmc_project.BIOSConfig.Manager.BoundType.OneOf")
      {
 -        ret = "MinStringLength";
-+	type = "LowerBound";
++        type = "OneOf";
      }
 -    else if (typeDbus ==
 -             "xyz.openbmc_project.BIOSConfig.Manager.BoundType.MaxStringLength")
-+    else if (boundValType ==
-+             "xyz.openbmc_project.BIOSConfig.Manager.BoundType.UpperBound")
++    else
      {
 -        ret = "MaxStringLength";
-+	type = "UpperBound";
-     }
--    else if (typeDbus ==
-+    else if (boundValType ==
-              "xyz.openbmc_project.BIOSConfig.Manager.BoundType.OneOf")
-     {
--        ret = "OneOf";
-+        type = "OneOf";
-     }
-     else
-     {
--        ret = "UNKNOWN";
 +	type = "UNKNOWN";
      }
--
--    return ret;
+-    else if (typeDbus ==
+-             "xyz.openbmc_project.BIOSConfig.Manager.BoundType.OneOf")
++
 +    return type;
- }
- 
- /**
-- * BiosService class supports handle get method for bios.
++}
++
++/**
 + *@brief Translates Reset BIOS to Default Settings status type from DBUS
 + *property value to Redfish string type.
 + *
@@ -434,27 +428,18 @@ index 0850667..78a02a4 100644
 + *
 + *@return Returns as a string, the Reset BIOS Settings to default type required
 + *for Redfish. If attribute type didn't match, then returns 'UNKNOWN' string.
-  */
--inline void
--    handleBiosServiceGet(crow::App& app, const crow::Request& req,
--                         const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
--                         const std::string& systemName)
++ */
 +static std::string getBiosDefaultSettingsMode(const std::string& biosMode)
- {
--    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++{
 +    std::string mode;
 +    if (biosMode == "xyz.openbmc_project.BIOSConfig.Manager.ResetFlag.NoAction")
-     {
--        return;
++    {
 +        mode = "NoAction";
-     }
--    if (systemName != "system")
++    }
 +    else if (biosMode ==
 +             "xyz.openbmc_project.BIOSConfig.Manager.ResetFlag.FactoryDefaults")
      {
--        messages::resourceNotFound(asyncResp->res, "ComputerSystem",
--                                   systemName);
--        return;
+-        ret = "OneOf";
 +        mode = "FactoryDefaults";
 +    }
 +    else if (
@@ -462,28 +447,16 @@ index 0850667..78a02a4 100644
 +        "xyz.openbmc_project.BIOSConfig.Manager.ResetFlag.FailSafeDefaults")
 +    {
 +        mode = "FailSafeDefaults";
-+    }
-+    else
-+    {
+     }
+     else
+     {
+-        ret = "UNKNOWN";
 +        mode = "UNKNOWN";
      }
--    asyncResp->res.jsonValue["@odata.id"] = "/redfish/v1/Systems/system/Bios";
--    asyncResp->res.jsonValue["@odata.type"] = "#Bios.v1_1_0.Bios";
--    asyncResp->res.jsonValue["Name"] = "BIOS Configuration";
--    asyncResp->res.jsonValue["Description"] = "BIOS Configuration Service";
--    asyncResp->res.jsonValue["Id"] = "BIOS";
--    asyncResp->res.jsonValue["Actions"]["#Bios.ResetBios"] = {
--        {"target", "/redfish/v1/Systems/system/Bios/Actions/Bios.ResetBios"}};
- 
--    asyncResp->res.jsonValue["Actions"]["#Bios.ChangePassword"] = {
--        {"target", "/redfish/v1/Systems/system/Bios/Actions/"
--                   "Bios.ChangePassword"}};
++    
 +    return mode;
 +}
- 
--    // Get the ActiveSoftwareImage and SoftwareImages
--    sw_util::populateSoftwareInformation(asyncResp, sw_util::biosPurpose, "",
--                                         true);
++
 +/**
 + *@brief sets the Reset BIOS Settings to default property.
 + *
@@ -507,7 +480,8 @@ index 0850667..78a02a4 100644
 +                messages::internalError(asyncResp->res);
 +                return;
 +            }
-+
+ 
+-    return ret;
 +            const std::string& biosService = objType.begin()->first;
 +
 +            std::string biosMode;
@@ -521,13 +495,6 @@ index 0850667..78a02a4 100644
 +                biosMode =
 +                    "xyz.openbmc_project.BIOSConfig.Manager.ResetFlag.NoAction";
 +            }
- 
--    asyncResp->res.jsonValue["@Redfish.Settings"] = {
--        {"@odata.type", "#Settings.v1_3_0.Settings"},
--        {"SettingsObject",
--         {{"@odata.id", "/redfish/v1/Systems/system/Bios/Settings"}}}};
--    asyncResp->res.jsonValue["AttributeRegistry"] = "BiosAttributeRegistry";
--    asyncResp->res.jsonValue["Attributes"] = nlohmann::json::object();
 +            crow::connections::systemBus->async_method_call(
 +                [asyncResp](const boost::system::error_code ec) {
 +                    if (ec)
@@ -548,9 +515,10 @@ index 0850667..78a02a4 100644
 +        "/xyz/openbmc_project/object_mapper",
 +        "xyz.openbmc_project.ObjectMapper", "GetObject", biosConfigObj,
 +        std::array<const char*, 1>{biosConfigIface});
-+}
+ }
  
-+/**
+ /**
+- * BiosService class supports handle get method for bios.
 + *@brief Reads the Reset BIOS Settings to default property.
 + *
 + * @param[in,out]   asyncResp   Async HTTP response.
@@ -561,13 +529,10 @@ index 0850667..78a02a4 100644
 +    getResetBiosSettings(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
 +{
 +    BMCWEB_LOG_DEBUG << "Get Reset Bios Settings to Defaults Pending Status";
-     crow::connections::systemBus->async_method_call(
-         [asyncResp](const boost::system::error_code ec,
--                    const dbus::utility::MapperGetObject& getObjectType) {
--        if (ec)
--        {
--            BMCWEB_LOG_ERROR << "ObjectMapper::GetObject call failed: " << ec;
--            messages::internalError(asyncResp->res);
++ 
++    crow::connections::systemBus->async_method_call(
++        [asyncResp](const boost::system::error_code ec,
++
 +                    const GetObjectType& objType) {
 +            if (ec || objType.empty())
 +            {
@@ -644,7 +609,7 @@ index 0850667..78a02a4 100644
 +                    const GetObjectType& objType) {
 +            if (ec || objType.empty())
 +            {
-+                BMCWEB_LOG_ERROR << "GetObject for path " << biosConfigObj;
++               BMCWEB_LOG_ERROR << "GetObject for path " << biosConfigObj;
 +               messages::internalError(asyncResp->res);
 +                return;
 +            }
@@ -812,7 +777,7 @@ index 0850667..78a02a4 100644
 +    }
 +    return true;
 +}
- 
++
 +/**
 + *@brief Sets the BIOS Base Table DBUS property with requested BIOS default
 + *attributes.
@@ -832,10 +797,8 @@ index 0850667..78a02a4 100644
 +        if (!isValidAttrJson(asyncResp, attrJson))
 +        {
 +            BMCWEB_LOG_ERROR << "Req attributes are missing!";
-             return;
-         }
- 
--        if (getObjectType.empty())
++            return;
++        }
 +        std::string attr;
 +        std::string attrDispName;
 +        std::string attrDescr;
@@ -853,14 +816,11 @@ index 0850667..78a02a4 100644
 +        attrReadOnly = attrJson["ReadOnly"].get<bool>();
 +
 +        if ((attrType == "String") || (attrType == "Enumeration"))
-+
-         {
--            BMCWEB_LOG_ERROR << "getObjectType is empty.";
--            messages::internalError(asyncResp->res);
++        {
 +            std::string currVal = attrJson["CurrentValue"].get<std::string>();
 +            std::string defaultVal =
 +                attrJson["DefaultValue"].get<std::string>();
- 
++ 
 +            // read and update the bound values
 +            for (const auto& value :
 +                attrJson["Values"].get<std::vector<std::string>>())
@@ -924,14 +884,14 @@ index 0850667..78a02a4 100644
 +        {
 +            messages::propertyValueIncorrect(asyncResp->res, "Type", "UNKNOWN");
 +            BMCWEB_LOG_ERROR << "Attribute Type is not valid in req!";
-             return;
-         }
++            return;
++        }
 +    }
 +
 +    if (baseBiosTable.empty())
 +    {
 +        BMCWEB_LOG_ERROR << "Base Bios Table empty";
-+        messages::invalidObject(asyncResp->res, crow::utility::urlFromPieces("Attributes"));
++        messages::invalidObject(asyncResp->res, boost::urls::format("Attributes"));
 +    }
 +
 +    crow::connections::systemBus->async_method_call(
@@ -1121,7 +1081,7 @@ index 0850667..78a02a4 100644
 +                    {
 +                        BMCWEB_LOG_ERROR << "Empty BaseBIOSTable";
 +                       messages::internalError(asyncResp->res);
-+                       return;
++                      return;
 +                   }
 +
 +                   PendingAttrType pendingAttrs{};
@@ -1131,12 +1091,12 @@ index 0850667..78a02a4 100644
 +                        // Check whether the requested attribute is available
 +                        // inside BaseBIOSTable or not
 +                        auto attrIt = baseBiosTable->find(pendingAttrIt.key());
-+                        if (attrIt == baseBiosTable->end())
++                       if (attrIt == baseBiosTable->end())
 +                        {
 +                            BMCWEB_LOG_ERROR << "Not Found Attribute "
 +                                             << pendingAttrIt.key();
 +                            messages::propertyValueNotInList(
-+                                asyncResp->res, pendingAttrIt.key(),
++                               asyncResp->res, pendingAttrIt.key(),
 +                                "Attributes");
 +                            return;
 +                        }
@@ -1286,7 +1246,7 @@ index 0850667..78a02a4 100644
 +                    if (pendingAttrs.empty())
 +                    {
 +                        BMCWEB_LOG_ERROR << "PendingAttributes empty";
-+                        messages::invalidObject(asyncResp->res, crow::utility::urlFromPieces("Attributes"));
++                        messages::invalidObject(asyncResp->res, boost::urls::format("Attributes"));
 +                    }
 +
 +                    crow::connections::systemBus->async_method_call(
@@ -1473,7 +1433,7 @@ index 0850667..78a02a4 100644
 +                                    BaseBiosTableIndex::baseBiosDefaultValue>(
 +                                    attrIt.second));
 +                            if (attrDefaultValue != nullptr)
-+                            {
++                           {
 +                                if (attrType == "Boolean")
 +                                {
 +                                    if (*attrDefaultValue)
@@ -1573,7 +1533,7 @@ index 0850667..78a02a4 100644
 +                                        }
 +                                    }
 +                                    else
-+                                    {
++                                   {
 +                                        boundValJson["ValueName"] = false;
 +                                    }
 +                                }
@@ -1599,10 +1559,10 @@ index 0850667..78a02a4 100644
 +                                }
 +                            }
 +                            else if (boundValType == "UpperBound")
-+                            {
++                           {
 +                                const int64_t* currBoundVal = std::get_if<
 +                                    int64_t>(
-+                                    &std::get<
++                                   &std::get<
 +                                        BaseBiosBoundIndex::baseBiosBoundValue>(
 +                                        boundValueIt));
 +                                if (currBoundVal != nullptr)
@@ -1615,10 +1575,10 @@ index 0850667..78a02a4 100644
 +                                }
 +                            }
 +                            else if (boundValType == "ScalarIncrement")
-+                            {
++                           {
 +                                const int64_t* currBoundVal = std::get_if<
 +                                    int64_t>(
-+                                    &std::get<
++                                   &std::get<
 +                                        BaseBiosBoundIndex::baseBiosBoundValue>(
 +                                        boundValueIt));
 +                                if (currBoundVal != nullptr)
@@ -1633,11 +1593,11 @@ index 0850667..78a02a4 100644
 +                            }
 +                            else
 +                            {
-+                                // read the bound value  at 1st field
++                               // read the bound value  at 1st field
 +                                // for each entry
 +                                const int64_t* currBoundVal = std::get_if<
 +                                    int64_t>(
-+                                    &std::get<
++                                   &std::get<
 +                                        BaseBiosBoundIndex::baseBiosBoundValue>(
 +                                        boundValueIt));
 +                                if (currBoundVal != nullptr)
@@ -1677,11 +1637,15 @@ index 0850667..78a02a4 100644
 +
 +/**
 + * BiosService class supports handle put method for bios.
-+ */
-+inline void
+  */
+ inline void
+-    handleBiosServiceGet(crow::App& app, const crow::Request& req,
+-                         const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+-                         const std::string& systemName)
 +    handleBiosServicePut(const crow::Request& req,
 +                         const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
-+{
+ {
+-    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
 +    crow::connections::systemBus->async_method_call(
 +        [req,
 +         asyncResp](const boost::system::error_code ec,
@@ -1714,7 +1678,7 @@ index 0850667..78a02a4 100644
 +                userGroupPtr->begin(), userGroupPtr->end(),
 +                [](const auto& group) {
 +                    return (group == "redfish-hostiface") ? true : false;
-+                });
++               });
 +
 +            // Only Host Iface (redfish-hostiface) group user should
 +            // perform PUT operations
@@ -1735,13 +1699,13 @@ index 0850667..78a02a4 100644
 +
 +            if (baseBiosTableJson.empty())
 +            {
-+                messages::invalidObject(asyncResp->res, crow::utility::urlFromPieces("Attributes"));
++                messages::invalidObject(asyncResp->res, boost::urls::format("Attributes"));
 +                BMCWEB_LOG_ERROR << "No input in req!";
 +                return;
-+            }
++          }
 +
 +            // Set the BaseBIOSTable
-+            bios::fillBiosTable(asyncResp, baseBiosTableJson);
++           bios::fillBiosTable(asyncResp, baseBiosTableJson);
 +        },
 +        "xyz.openbmc_project.User.Manager", "/xyz/openbmc_project/user",
 +        "xyz.openbmc_project.User.Manager", "GetUserInfo",
@@ -1759,17 +1723,22 @@ index 0850667..78a02a4 100644
 +    std::optional<bool> resetBiosToDefaultsPending;
 +    if (!json_util::readJsonPatch(req, asyncResp->res, "ResetBiosToDefaultsPending",
 +                             resetBiosToDefaultsPending))
-+    {
+     {
 +        BMCWEB_LOG_ERROR << "No 'ResetBiosToDefaultsPending' found";
 +        messages::unrecognizedRequestBody(asyncResp->res);
-+        return;
-+    }
+         return;
+     }
+-    if (systemName != "system")
 +
 +    if (resetBiosToDefaultsPending)
-+    {
+     {
+-        messages::resourceNotFound(asyncResp->res, "ComputerSystem",
+-                                   systemName);
+-        return;
 +        // set the ResetBiosToDefaultsPending
 +        bios::setResetBiosSettings(asyncResp, *resetBiosToDefaultsPending);
-+    }
+     }
+-    asyncResp->res.jsonValue["@odata.id"] = "/redfish/v1/Systems/system/Bios";
 +}
 +
 +/**
@@ -1779,28 +1748,51 @@ index 0850667..78a02a4 100644
 +    handleBiosServiceGet(const crow::Request&,
 +                         const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
 +{
-+       asyncResp->res.jsonValue["@odata.id"] =
++      asyncResp->res.jsonValue["@odata.id"] =
 +        "/redfish/v1/Systems/system/Bios";
-+    asyncResp->res.jsonValue["@odata.type"] = "#Bios.v1_1_0.Bios";
-+    asyncResp->res.jsonValue["Name"] = "BIOS Configuration";
-+    asyncResp->res.jsonValue["Description"] = "BIOS Configuration Service";
-+    asyncResp->res.jsonValue["Id"] = "BIOS";
-+    asyncResp->res.jsonValue["Actions"]["#Bios.ResetBios"] = {
-+        {"target", "/redfish/v1/Systems/system/Bios/Actions/Bios.ResetBios"}};
-+
-+    // Get the ActiveSoftwareImage and SoftwareImages
-+    sw_util::populateSoftwareInformation(asyncResp, sw_util::biosPurpose, "",
-+                                         true);
-+
+     asyncResp->res.jsonValue["@odata.type"] = "#Bios.v1_1_0.Bios";
+     asyncResp->res.jsonValue["Name"] = "BIOS Configuration";
+     asyncResp->res.jsonValue["Description"] = "BIOS Configuration Service";
+@@ -158,104 +1524,90 @@ inline void
+     asyncResp->res.jsonValue["Actions"]["#Bios.ResetBios"] = {
+         {"target", "/redfish/v1/Systems/system/Bios/Actions/Bios.ResetBios"}};
+ 
+-    asyncResp->res.jsonValue["Actions"]["#Bios.ChangePassword"] = {
+-        {"target", "/redfish/v1/Systems/system/Bios/Actions/"
+-                   "Bios.ChangePassword"}};
+-
+     // Get the ActiveSoftwareImage and SoftwareImages
+     sw_util::populateSoftwareInformation(asyncResp, sw_util::biosPurpose, "",
+                                          true);
+ 
+-    asyncResp->res.jsonValue["@Redfish.Settings"] = {
+-        {"@odata.type", "#Settings.v1_3_0.Settings"},
+-        {"SettingsObject",
+-         {{"@odata.id", "/redfish/v1/Systems/system/Bios/Settings"}}}};
+-    asyncResp->res.jsonValue["AttributeRegistry"] = "BiosAttributeRegistry";
+-    asyncResp->res.jsonValue["Attributes"] = nlohmann::json::object();
 +    asyncResp->res.jsonValue["Attributes"] = {};
 +    // Get the BIOS Attributes
 +    bios::getBiosAttributes(asyncResp);
-+
+ 
+-    crow::connections::systemBus->async_method_call(
+-        [asyncResp](const boost::system::error_code ec,
+-                    const dbus::utility::MapperGetObject& getObjectType) {
+-        if (ec)
+-        {
+-            BMCWEB_LOG_ERROR << "ObjectMapper::GetObject call failed: " << ec;
+-            messages::internalError(asyncResp->res);
 +    // Get the ResetBiosToDefaultsPending
 +    bios::getResetBiosSettings(asyncResp);
-+
+ 
+-            return;
+-        }
 +}
-+
+ 
+-        if (getObjectType.empty())
+-        {
+-            BMCWEB_LOG_ERROR << "getObjectType is empty.";
+-            messages::internalError(asyncResp->res);
 +inline void requestRoutesBiosService(App& app)
 +{
 +    BMCWEB_ROUTE(app, "/redfish/v1/Systems/system/Bios/")
@@ -1809,7 +1801,9 @@ index 0850667..78a02a4 100644
 +        BMCWEB_ROUTE(app, "/redfish/v1/Systems/system/Bios/")
 +        .privileges(redfish::privileges::patchBios)
 +        .methods(boost::beast::http::verb::patch)(handleBiosServicePatch);
-+
+ 
+-            return;
+-        }
 +    BMCWEB_ROUTE(app, "/redfish/v1/Systems/system/Bios/")
 +        .privileges(redfish::privileges::putBios)
 +        .methods(boost::beast::http::verb::put)(handleBiosServicePut);
@@ -1817,7 +1811,7 @@ index 0850667..78a02a4 100644
 +
 +/**
 + * BiosSetting class supports handle patch method for Bios Settings.
-++ */
++ */
 +inline void
 +    handleBiosSettingsPatch(const crow::Request& req,
 +                            const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
@@ -1834,7 +1828,7 @@ index 0850667..78a02a4 100644
 +
 +    if (pendingAttrJson.empty())
 +    {
-+        messages::invalidObject(asyncResp->res, crow::utility::urlFromPieces("Attributes"));
++        messages::invalidObject(asyncResp->res, boost::urls::format("Attributes"));
 +        BMCWEB_LOG_ERROR << "No input in req!";
 +        return;
 +    }
@@ -1934,7 +1928,7 @@ index 0850667..78a02a4 100644
  }
  
  /**
-@@ -317,517 +1672,6 @@ inline void requestRoutesBiosChangePassword(App& app)
+@@ -321,517 +1673,6 @@ inline void requestRoutesBiosChangePassword(App& app)
          });
  }
  
@@ -1955,7 +1949,7 @@ index 0850667..78a02a4 100644
 -        asyncResp->res.jsonValue["Name"] = "Bios Settings Version 1";
 -        asyncResp->res.jsonValue["Id"] = "BiosSettingsV1";
 -        asyncResp->res.jsonValue["AttributeRegistry"] = "BiosAttributeRegistry";
--        asyncResp->res.jsonValue["Attributes"] = {};
+-        asyncResp->res.jsonValue["Attributes"] = nlohmann::json::array();
 -
 -        crow::connections::systemBus->async_method_call(
 -            [asyncResp](const boost::system::error_code ec,
@@ -2080,7 +2074,7 @@ index 0850667..78a02a4 100644
 -        if (inpJson.empty())
 -        {
 -            messages::invalidObject(asyncResp->res,
--                                    crow::utility::urlFromPieces("data"));
+-                                    boost::urls::format("data"));
 -            BMCWEB_LOG_ERROR << "No input in req!";
 -            return;
 -        }
@@ -2177,8 +2171,8 @@ index 0850667..78a02a4 100644
 -                if (pendingAttributes.empty())
 -                {
 -                    BMCWEB_LOG_ERROR << "pendingAttributes is empty.";
--                    messages::invalidObject(
--                        asyncResp->res, crow::utility::urlFromPieces("data"));
+-                    messages::invalidObject(asyncResp->res,
+-                                            boost::urls::format("data"));
 -                }
 -
 -                crow::connections::systemBus->async_method_call(
@@ -2400,7 +2394,7 @@ index 0850667..78a02a4 100644
 -                            }
 -
 -                            optItemJson["ValueDisplayName"] =
--                                currValue != nullptr ? *currValue : "";
+-                                std::get<optItemText>(optItem);
 -                            optItemJson["ValueName"] =
 -                                currValue != nullptr ? *currValue : "";
 -                        }
@@ -2452,7 +2446,7 @@ index 0850667..78a02a4 100644
  /**
   * BiosReset class supports handle POST method for Reset bios.
   * The class retrieves and sends data directly to D-Bus.
-@@ -879,4 +1723,36 @@ inline void requestRoutesBiosReset(App& app)
+@@ -883,4 +1724,36 @@ inline void requestRoutesBiosReset(App& app)
              std::bind_front(handleBiosResetPost, std::ref(app)));
  }
  
@@ -2490,5 +2484,5 @@ index 0850667..78a02a4 100644
 +
  } // namespace redfish
 -- 
-2.17.1
+2.25.1
 

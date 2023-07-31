@@ -10,24 +10,26 @@ Subject: [PATCH] Implement EIP 741000. DDNS-Nsupdate Feature 	modified:
  src/system_configuration.cpp 	modified:   src/system_configuration.hpp
 
 ---
- src/dhcp_configuration.cpp   |  62 +++
- src/dhcp_configuration.hpp   |  12 +
- src/dns_updater.cpp          | 797 ++++++++++++++++++++++++++++++++++-
+ nsupdate.sh                  |  50 +++
+ src/dhcp_configuration.cpp   |  49 +++
+ src/dhcp_configuration.hpp   |  11 +
+ src/dns_updater.cpp          | 790 ++++++++++++++++++++++++++++++++++-
  src/dns_updater.hpp          | 169 ++++++++
  src/ethernet_interface.cpp   |  52 ++-
  src/ethernet_interface.hpp   |  14 +
  src/network_manager.cpp      |   4 +
- src/network_manager.hpp      |  10 +-
+ src/network_manager.hpp      |   9 +
  src/system_configuration.cpp |  38 ++
  src/system_configuration.hpp |   8 +
- 10 files changed, 1163 insertions(+), 3 deletions(-)
+ 11 files changed, 1191 insertions(+), 3 deletions(-)
+ create mode 100644 nsupdate.sh
 
 diff --git a/src/dhcp_configuration.cpp b/src/dhcp_configuration.cpp
-index 154bbee..e70bb86 100644
+index 8843c7c..7067516 100644
 --- a/src/dhcp_configuration.cpp
 +++ b/src/dhcp_configuration.cpp
-@@ -22,6 +22,10 @@ using namespace phosphor::network;
- using namespace phosphor::logging;
+@@ -22,6 +22,10 @@ namespace dhcp
+ using namespace phosphor::network;
  using namespace sdbusplus::xyz::openbmc_project::Common::Error;
  
 +constexpr auto NETWORK_Service = "xyz.openbmc_project.Network";
@@ -35,14 +37,14 @@ index 154bbee..e70bb86 100644
 +constexpr auto DNS_INTERFACE = "xyz.openbmc_project.Network.DDNS";
 +
  Configuration::Configuration(sdbusplus::bus_t& bus,
-                              stdplus::const_zstring objPath, Manager& parent) :
-     Iface(bus, objPath.c_str(), Iface::action::defer_emit),
-@@ -53,9 +57,50 @@ Configuration::Configuration(sdbusplus::bus_t& bus,
+                              stdplus::const_zstring objPath,
+                              stdplus::PinnedRef<Manager> parent) :
+@@ -53,9 +57,51 @@ Configuration::Configuration(sdbusplus::bus_t& bus,
      ConfigIntf::ntpEnabled(getDHCPProp(conf, "UseNTP"), true);
      ConfigIntf::hostNameEnabled(getDHCPProp(conf, "UseHostname"), true);
      ConfigIntf::sendHostNameEnabled(getDHCPProp(conf, "SendHostname"), true);
-+
 +    ConfigIntf::sendNsupdateEnabled(getDHCPProp(conf, "SendNsupdate"), false);
++
 +    signals = initSignals();
 +    registerSignal(bus);
 +
@@ -73,7 +75,7 @@ index 154bbee..e70bb86 100644
 +                        {
 +                            value = std::get<bool>(t.second);
 +                            dnsEnabled(value);
-+                            auto [enabled, priority, domainName] = manager.getDNSConf().domainConf();
++                            auto [enabled, priority, domainName] = manager.get().getDNSConf().domainConf();
 +                            if (enabled && dnsEnabled() == true) {
 +                                domainEnabled(enabled);
 +                            }
@@ -85,19 +87,19 @@ index 154bbee..e70bb86 100644
 +    }
 +}
 +
++
  bool Configuration::sendHostNameEnabled(bool value)
  {
      if (value == sendHostNameEnabled())
-@@ -107,12 +152,29 @@ bool Configuration::dnsEnabled(bool value)
+@@ -107,12 +153,28 @@ bool Configuration::dnsEnabled(bool value)
      }
  
      auto dns = ConfigIntf::dnsEnabled(value);
 +    if (value == false) {
 +        ConfigIntf::domainEnabled(value);
 +    }
-+
-     manager.writeToConfigurationFile();
-     manager.reloadConfigs();
+     manager.get().writeToConfigurationFile();
+     manager.get().reloadConfigs();
  
      return dns;
  }
@@ -110,8 +112,8 @@ index 154bbee..e70bb86 100644
 +
 +    ConfigIntf::sendNsupdateEnabled(value);
 +
-+    manager.writeToConfigurationFile();
-+    manager.reloadConfigs();
++    manager.get().writeToConfigurationFile();
++    manager.get().reloadConfigs();
 +    return value;
 +}
 +
@@ -119,10 +121,10 @@ index 154bbee..e70bb86 100644
  } // namespace network
  } // namespace phosphor
 diff --git a/src/dhcp_configuration.hpp b/src/dhcp_configuration.hpp
-index 98f8e46..fb43c37 100644
+index 964b7d5..997af63 100644
 --- a/src/dhcp_configuration.hpp
 +++ b/src/dhcp_configuration.hpp
-@@ -72,6 +72,12 @@ class Configuration : public Iface
+@@ -66,6 +66,12 @@ class Configuration : public Iface
       */
      bool sendHostNameEnabled(bool value) override;
  
@@ -135,27 +137,26 @@ index 98f8e46..fb43c37 100644
      /* @brief Network Manager needed the below function to know the
       *        value of the properties (ntpEnabled,dnsEnabled,hostnameEnabled
                sendHostNameEnabled).
-@@ -81,6 +87,12 @@ class Configuration : public Iface
+@@ -75,6 +81,11 @@ class Configuration : public Iface
      using ConfigIntf::hostNameEnabled;
      using ConfigIntf::ntpEnabled;
      using ConfigIntf::sendHostNameEnabled;
 +    using ConfigIntf::sendNsupdateEnabled;
 +
 +  protected:
-+
 +    /** Signals to notify other service via dbus*/
 +    std::map<std::string, std::unique_ptr<sdbusplus::bus::match_t>> signals ;
  
    private:
-     /** @brief sdbusplus DBus bus connection. */
+     /** @brief Network Manager object. */
 diff --git a/src/dns_updater.cpp b/src/dns_updater.cpp
-index 22693f8..00ce926 100644
+index d2c1a28..dc7cd3e 100644
 --- a/src/dns_updater.cpp
 +++ b/src/dns_updater.cpp
-@@ -3,8 +3,20 @@
- #include <fstream>
+@@ -2,8 +2,20 @@
+ 
  #include <phosphor-logging/elog-errors.hpp>
- #include <phosphor-logging/log.hpp>
+ #include <phosphor-logging/lg2.hpp>
 -#include <sdbusplus/bus.hpp>
  #include <xyz/openbmc_project/Common/error.hpp>
 +#include <fmt/compile.h>
@@ -172,13 +173,12 @@ index 22693f8..00ce926 100644
 +#include <mutex>
 +#include <cstdlib>
  
- namespace phosphor
- {
-@@ -51,6 +63,789 @@ void updateDNSEntries(const fs::path& inFile, const fs::path& outFile)
+ #include <fstream>
+ 
+@@ -50,6 +61,781 @@ void updateDNSEntries(const fs::path& inFile, const fs::path& outFile)
  }
  
  } // namespace updater
-+
 +
 +using namespace phosphor::network;
 +using namespace phosphor::logging;
@@ -211,7 +211,7 @@ index 22693f8..00ce926 100644
 +{
 +    config::Parser conf;
 +    {
-+        ddnsIface::dnsEnabled(manager.getDHCPConf().dnsEnabled());
++        ddnsIface::dnsEnabled(manager.get().getDHCPConf().dnsEnabled());
 +    }
 +
 +    fs::path dnsDir(DNS_CONF_DIR);
@@ -219,8 +219,7 @@ index 22693f8..00ce926 100644
 +    {
 +        if (!fs::create_directories(dnsDir))
 +        {
-+            log<level::ERR>("Unable to create the dns conf dir",
-+                            entry("DIR=%s", dnsDir.c_str()));
++            lg2::error("Unable to create the dns conf dir");
 +            elog<InternalFailure>();
 +        }
 +    }
@@ -231,7 +230,7 @@ index 22693f8..00ce926 100644
 +    }
 +    else {
 +        {
-+            ddnsIface::hostConf(std::make_tuple(true, manager.getSystemConf().hostName()));
++            ddnsIface::hostConf(std::make_tuple(true, manager.get().getSystemConf().hostName()));
 +        }
 +        {
 +            if (getDHCPProp(conf, "UseDomains") && dnsEnabled()) {
@@ -303,7 +302,7 @@ index 22693f8..00ce926 100644
 +
 +int16_t Configuration::doNsupdate() {
 +    if (ddnsIface::setInProgress() == true) {
-+        log<level::INFO>("Nsupdate is now performed...\n");
++        lg2::info("Nsupdate is now performed...\n");
 +        return -1;
 +    }
 +    ddnsIface::setInProgress(true);
@@ -331,7 +330,7 @@ index 22693f8..00ce926 100644
 +    std::string info;
 +    std::ofstream ofs;
 +    if (!fs::exists(DNS_CONF_BAK)) {
-+        log<level::INFO>("No need to do reregister\n");
++        lg2::info("No need to do reregister\n");
 +        return 0;
 +    }
 +
@@ -354,9 +353,9 @@ index 22693f8..00ce926 100644
 +        bool doNsupdate, tsig;
 +        Method method;
 +        std::tie(iName, doNsupdate, tsig, method) = (*it);
-+        auto iface = manager.interfaces.find(iName);
-+        if (iface == manager.interfaces.end()) {
-+            log<level::INFO>(fmt::format("Interface not found: {} \n", iName).c_str());
++        auto iface = manager.get().interfaces.find(iName);
++        if (iface == manager.get().interfaces.end()) {
++            lg2::info("Interface not found: {IFACE}\n", "IFACE", iName);
 +        }
 +
 +        std::vector<std::string> dnsServers;
@@ -391,21 +390,20 @@ index 22693f8..00ce926 100644
 +            for (auto& ip : IPs) {
 +                ofs.open(fmt::format("{}-del-{}", NSUPDATE_TMP_FILE, i).c_str());
 +                if (!ofs.is_open()) {
-+                    info = fmt::format("Cannot create {}\n", fmt::format("{}-del-{}", NSUPDATE_TMP_FILE, i).c_str());
-+                    log<level::ERR>(info.c_str());
++                    lg2::error("Cannot create {NSUPDATE_TMP_FILE}-del-{INDEX}\n", "NSUPDATE_TMP_FILE", NSUPDATE_TMP_FILE, "INDEX",i);
 +                    return -1;
 +                }
 +                auto cmd = fmt::format("server {}\n", dns);
 +                ofs << cmd;
-+                log<level::INFO>(cmd.c_str());
++                lg2::info(cmd.c_str());
 +                bool ipv6 = ip.find(":") == std::string::npos ? false : true;
 +                std::string revIP = ipv6 == true ? getRevIPv6(ip): getRevIPv4(ip);
 +                cmd = fmt::format("update delete {}.{} {}\n", hostname, domainName, ipv6 ? "AAAA" : "A");
-+                log<level::INFO>(cmd.c_str());
++                lg2::info(cmd.c_str());
 +                // There must be a blank line between PTR and A/AAAA record
 +                ofs << cmd << std::endl;
 +                cmd = fmt::format("update delete {} {} PTR {}.{}\n", revIP, TTL, hostname, domainName);
-+                log<level::INFO>(cmd.c_str());
++                lg2::info(cmd.c_str());
 +                // There must be a blank line between PTR and A/AAAA record
 +                ofs << cmd << std::endl << "send" << std::endl;
 +                ofs.close();
@@ -424,8 +422,8 @@ index 22693f8..00ce926 100644
 +
 +    std::string info;
 +
-+    if (!manager.getDHCPConf().sendNsupdateEnabled()) {
-+        log<level::ERR>("sendNsupdateEnabled is not enabled...\n");
++    if (!manager.get().getDHCPConf().sendNsupdateEnabled()) {
++        lg2::error("sendNsupdateEnabled is not enabled...\n");
 +        return -1;
 +    }
 +
@@ -445,9 +443,9 @@ index 22693f8..00ce926 100644
 +        bool doNsupdate, tsig;
 +        Method method;
 +        std::tie(iName, doNsupdate, tsig, method) = (*it);
-+        auto iface = manager.interfaces.find(iName);
-+        if (iface == manager.interfaces.end()) {
-+            log<level::INFO>(fmt::format("Interface not found: {} \n", iName).c_str());
++        auto iface = manager.get().interfaces.find(iName);
++        if (iface == manager.get().interfaces.end()) {
++            lg2::info("Interface not found: {INAME} \n", "INAME", iName);
 +            return -1;
 +        } //
 +
@@ -457,7 +455,7 @@ index 22693f8..00ce926 100644
 +
 +        std::string domainName = getDomainName(iName);
 +        if (domainName == "") {
-+            log<level::INFO>("Domain Name isn't set.\n");
++            lg2::info("Domain Name isn't set.\n");
 +            return -1;
 +        }
 +
@@ -477,22 +475,21 @@ index 22693f8..00ce926 100644
 +                }
 +                ofs.open(fmt::format("{}-add-{}", NSUPDATE_TMP_FILE, i).c_str());
 +                if (!ofs.is_open()) {
-+                    info = fmt::format("Cannot create {}\n", fmt::format("{}-add-{}", NSUPDATE_TMP_FILE, i).c_str());
-+                    log<level::ERR>(info.c_str());
++                    lg2::error("Cannot create {NSUPDATE_TMP_FILE}-add-{INDEX}\n", "NSUPDATE_TMP_FILE", NSUPDATE_TMP_FILE, "INDEX", i);
 +                    return -1;
 +                }
 +                auto cmd = fmt::format("server {}\n", dns);
 +                ofs << cmd;
-+                log<level::INFO>(cmd.c_str());
++                lg2::info(cmd.c_str());
 +                cmd = fmt::format("update add {}.{} {} {} {}\n", hostname, domainName, TTL, ipv6 ? "AAAA" : "A", ip);
 +                // There must be a blank line between PTR and A/AAAA record
 +                ofs << cmd << std::endl;
-+                log<level::INFO>(cmd.c_str());
++                lg2::info(cmd.c_str());
 +                std::string revIP = ipv6 == true ? getRevIPv6(ip): getRevIPv4(ip);
 +                cmd = fmt::format("update add {} {} PTR {}.{}\n", revIP, TTL, hostname, domainName);
 +                // There must be a blank line between PTR and A/AAAA record
 +                ofs << cmd << std::endl << "send" << std::endl;
-+                log<level::INFO>(cmd.c_str());
++                lg2::info(cmd.c_str());
 +                ofs.close();
 +                i++;
 +            }
@@ -512,7 +509,7 @@ index 22693f8..00ce926 100644
 +            std::fstream inStream(DEFAULT_HOSTNAME_PATH, std::fstream::in);
 +            if (!inStream.is_open())
 +            {
-+                log<level::ERR>("Unable to open the input file.");
++                lg2::error("Unable to open the input file.");
 +                return -1;
 +            }
 +            else {
@@ -522,11 +519,11 @@ index 22693f8..00ce926 100644
 +        } // if
 +        else {
 +            if (hostName.size() > 63) {
-+                log<level::ERR>("Unable to hostname since hostname size isn't in range ( 0 - 64 )");
++                lg2::error("Unable to hostname since hostname size isn't in range ( 0 - 64 )");
 +                return -1;
 +            } // if
 +            else if (strstr(hostname.c_str(), "--") != NULL || strpbrk(hostName.c_str(), invalidChar) != NULL ) {
-+                log<level::ERR>("Unable to hostname since hostname contains invalid charactor\n");
++                lg2::error("Unable to hostname since hostname contains invalid charactor\n");
 +                return -1;
 +            }
 +
@@ -538,11 +535,11 @@ index 22693f8..00ce926 100644
 +    else if (!hostSetting) {
 +        if (std::get<1>(ddnsIface::hostConf()) != hostName ) {
 +            if (hostName.size() > 63) {
-+                log<level::ERR>("Unable to hostname since hostname size isn't in range ( 0 - 64 )");
++                lg2::error("Unable to hostname since hostname size isn't in range ( 0 - 64 )");
 +                return -1;
 +            } // if
 +            else if (strstr(hostname.c_str(), "--") != NULL || strpbrk(hostName.c_str(), invalidChar) != NULL) {
-+                log<level::ERR>("Unable to hostname since hostname contains invalid charactor\n");
++                lg2::error("Unable to hostname since hostname contains invalid charactor\n");
 +                return -1;
 +            }
 +            hostname = hostName;
@@ -552,7 +549,7 @@ index 22693f8..00ce926 100644
 +
 +    if (different) {
 +        hostConf(std::make_tuple(hostSetting, hostname));
-+        manager.getSystemConf().hostName(hostname);
++        manager.get().getSystemConf().hostName(hostname);
 +    }
 +
 +    return 0;
@@ -564,8 +561,8 @@ index 22693f8..00ce926 100644
 +    for(auto it = interfaceConf.begin(); it != interfaceConf.end(); it++) {
 +        auto [interface, doNsupdate, tsig, method] = (*it);
 +
-+        if (manager.interfaces.find(interface) == manager.interfaces.end()) {
-+            log<level::INFO>(fmt::format("Interface not found: {}\n", interface).c_str());
++        if (manager.get().interfaces.find(interface) == manager.get().interfaces.end()) {
++            lg2::error("Unable to hostname since hostname contains invalid charactor\n");
 +            return -1;
 +        }
 +
@@ -582,10 +579,10 @@ index 22693f8..00ce926 100644
 +    }
 +
 +    if (dnsEnabled() == false && dhcp == true) {
-+        log<level::INFO>("Cannot enable Domain DHCP\n");
++        lg2::info("Cannot enable Domain DHCP\n");
 +        return -1;
 +    }
-+    manager.getDHCPConf().domainEnabled(dhcp);
++    manager.get().getDHCPConf().domainEnabled(dhcp);
 +    if (domainName.size() > 0) {
 +        domainConf(std::make_tuple(dhcp, priority, domainName));
 +    }
@@ -597,7 +594,7 @@ index 22693f8..00ce926 100644
 +        tmpVec.push_back(domainName);
 +    }
 +
-+    for (auto i = manager.interfaces.begin(); i != manager.interfaces.end(); i++) {
++    for (auto i = manager.get().interfaces.begin(); i != manager.get().interfaces.end(); i++) {
 +        if (i->second->linkUp()) {
 +            i->second->domainName({});
 +        }
@@ -607,9 +604,9 @@ index 22693f8..00ce926 100644
 +}
 +
 +int16_t Configuration::setDNSServer(std::string interface, std::vector<std::string> servers) {
-+    auto iface = manager.interfaces.find(interface);
-+    if (iface == manager.interfaces.end()) {
-+        log<level::INFO>(fmt::format("Interface not found: {}\n", interface).c_str());
++    auto iface = manager.get().interfaces.find(interface);
++    if (iface == manager.get().interfaces.end()) {
++        lg2::info("Interface not found: {INTERFACE}\n", "INTERFACE", interface);
 +        return -1;
 +    }
 +
@@ -617,8 +614,7 @@ index 22693f8..00ce926 100644
 +        try {
 +            ToAddr<std::variant<in_addr, in6_addr>>{}(ipaddress);
 +        } catch (std::invalid_argument e) {
-+            auto msg = fmt::format("Invalid IP `{}`: invalid_argument\n", ipaddress);
-+            log<level::ERR>(msg.c_str());
++            lg2::error("Invalid IP `{IPADDRESS}`: invalid_argument\n", "IPADDRESS", ipaddress);
 +            return -1;
 +        }
 +    }
@@ -645,7 +641,7 @@ index 22693f8..00ce926 100644
 +    auto [_, priority, dn] =  domainConf();
 +    if (value) {
 +        std::vector<std::string> empty;
-+        for (auto iface = manager.interfaces.begin(); iface != manager.interfaces.end(); iface++) {
++        for (auto iface = manager.get().interfaces.begin(); iface != manager.get().interfaces.end(); iface++) {
 +            iface->second->staticNameServers(empty);
 +        }
 +        setDomainConf(true, priority, dn);
@@ -682,14 +678,13 @@ index 22693f8..00ce926 100644
 +    auto [DHCP, priority, name] = ddnsIface::domainConf();
 +    std::vector<std::string> DomainNames;
 +    if (DHCP && dnsEnabled()) {
-+        auto iface = manager.interfaces.find(interface);
-+        if (iface == manager.interfaces.end()) {
++        auto iface = manager.get().interfaces.find(interface);
++        if (iface == manager.get().interfaces.end()) {
 +            return "";
 +        }
 +
 +        uint8_t index = iface->second->getIfIdx();
 +        auto OBJ_PATH = fmt::format("{}{}", RESOLVED_SERVICE_PATH, index);
-+        log<level::ERR>(OBJ_PATH.c_str());
 +        using type = std::vector<std::tuple<std::string, bool>>;
 +        std::variant<type> names;
 +        auto method = bus.new_method_call(RESOLVED_SERVICE, OBJ_PATH.c_str(), PROPERTY_INTERFACE, GET);
@@ -703,7 +698,7 @@ index 22693f8..00ce926 100644
 +        }
 +        catch (const sdbusplus::exception_t& e)
 +        {
-+            log<level::ERR>(fmt::format("Failed to get DNS information from Systemd-Resolved. {}", e.what()).c_str());
++            lg2::error("Failed to get DNS information from Systemd-Resolved. {E}", "E", e.what());
 +            return "";
 +        }
 +        auto tupleVector = std::get_if<type>(&names);
@@ -732,15 +727,14 @@ index 22693f8..00ce926 100644
 +
 +std::vector<std::string> Configuration::getDNSServer(std::string interface) {
 +    std::vector<std::string> servers;
-+    auto iface = manager.interfaces.find(interface);
-+    if (iface == manager.interfaces.end()) {
-+        log<level::ERR>(fmt::format("Interface not found: {}\n", interface).c_str());
++    auto iface = manager.get().interfaces.find(interface);
++    if (iface == manager.get().interfaces.end()) {
++        lg2::error("Interface not found: {INTERFACE}\n", "INTERFACE", interface);
 +        return {};
 +    }
 +
 +    uint8_t index = iface->second->getIfIdx();
 +    auto OBJ_PATH = fmt::format("{}{}", RESOLVED_SERVICE_PATH, index);
-+    log<level::ERR>(OBJ_PATH.c_str());
 +    using type = std::vector<std::tuple<int32_t, std::vector<uint8_t>>>;
 +    std::variant<type> names;
 +    auto method = bus.new_method_call(RESOLVED_SERVICE, OBJ_PATH.c_str(),
@@ -755,7 +749,7 @@ index 22693f8..00ce926 100644
 +    }
 +    catch (const sdbusplus::exception_t& e)
 +    {
-+        log<level::ERR>("Failed to get DNS information from Systemd-Resolved");
++        lg2::error("Failed to get DNS information from Systemd-Resolved");
 +        return {};
 +    }
 +    auto tupleVector = std::get_if<type>(&names);
@@ -846,9 +840,9 @@ index 22693f8..00ce926 100644
 +        for (auto it = conf.begin(); it != conf.end(); it++) {
 +            auto [interface, doNsupdate, tsig, method] = (*it);
 +            auto& ifConf = config.map[interface].emplace_back();
-+            auto iface = manager.interfaces.find(interface);
-+            if (iface == manager.interfaces.end()) {
-+                 log<level::INFO>(fmt::format("No interface ({}) found\n", interface).c_str());
++            auto iface = manager.get().interfaces.find(interface);
++            if (iface == manager.get().interfaces.end()) {
++                 lg2::info("No interface ({INTERFACE}) found\n", "INTERFACE", interface);
 +                 return;
 +            }
 +            ifConf["Do"].emplace_back(method == ddnsIface::Method::Register ? "Register" : "De-Register");
@@ -880,8 +874,7 @@ index 22693f8..00ce926 100644
 +
 +    config.writeFile(DNS_CONF);
 +    // g_mutex.unlock();
-+    auto msg = fmt::format("Wrote dns file: {}", DNS_CONF);
-+    log<level::INFO>(msg.c_str());
++    lg2::info("Wrote dns file: {DNS_CONF}", "DNS_CONF", DNS_CONF);
 +
 +}
 +
@@ -965,7 +958,7 @@ index 22693f8..00ce926 100644
  } // namespace network
  } // namespace phosphor
 diff --git a/src/dns_updater.hpp b/src/dns_updater.hpp
-index 5d23b29..69c15ca 100644
+index 5d23b29..57d7fcc 100644
 --- a/src/dns_updater.hpp
 +++ b/src/dns_updater.hpp
 @@ -1,11 +1,19 @@
@@ -992,7 +985,6 @@ index 5d23b29..69c15ca 100644
  }
  
  } // namespace updater
-+
 +
 +using ddnsIface = sdbusplus::xyz::openbmc_project::Network::server::DDNS;
 +
@@ -1148,28 +1140,29 @@ index 5d23b29..69c15ca 100644
 +        sdbusplus::bus_t& bus;
 +
 +        /** @brief Network Manager object. */
-+        phosphor::network::Manager& manager;
++        stdplus::PinnedRef<Manager> manager;
 +
 +        DNS_PROGESS state;
 +}; // class Configuration
++
 +
  } // namespace dns
  } // namespace network
  } // namespace phosphor
 diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
-index 18238e5..a4e4779 100644
+index 7bcab07..381423b 100644
 --- a/src/ethernet_interface.cpp
 +++ b/src/ethernet_interface.cpp
-@@ -138,6 +138,8 @@ EthernetInterface::EthernetInterface(sdbusplus::bus_t& bus, Manager& manager,
+@@ -140,6 +140,8 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
      {
          addStaticNeigh(neigh);
      }
 +
-+    manager.getDNSConf().addInterfaceConf(interfaceName());
++    manager.get().getDNSConf().addInterfaceConf(interfaceName());
  }
  
  void EthernetInterface::updateInfo(const InterfaceInfo& info, bool skipSignal)
-@@ -392,6 +394,31 @@ bool EthernetInterface::dhcp6(bool value)
+@@ -391,6 +393,31 @@ bool EthernetInterface::dhcp6(bool value)
      return value;
  }
  
@@ -1190,7 +1183,7 @@ index 18238e5..a4e4779 100644
 +    if (different) {
 +        EthernetInterfaceIntf::domainName(value);
 +        writeConfigurationFile();
-+        manager.reloadConfigs();
++        manager.get().reloadConfigs();
 +        return value;
 +    }
 +    else {
@@ -1201,20 +1194,20 @@ index 18238e5..a4e4779 100644
  EthernetInterface::DHCPConf EthernetInterface::dhcpEnabled(DHCPConf value)
  {
      auto old4 = EthernetInterfaceIntf::dhcp4();
-@@ -475,6 +502,7 @@ ServerList EthernetInterface::staticNameServers(ServerList value)
-             log<level::ERR>(msg.c_str()), entry("ADDRESS=%s", ip.c_str());
+@@ -473,6 +500,7 @@ ServerList EthernetInterface::staticNameServers(ServerList value)
+                        "IP_ADDRESS", ip, "ERROR", e);
              elog<InvalidArgument>(Argument::ARGUMENT_NAME("StaticNameserver"),
                                    Argument::ARGUMENT_VALUE(ip.c_str()));
 +            return {};
          }
      }
      try
-@@ -500,11 +528,20 @@ void EthernetInterface::loadNTPServers(const config::Parser& config)
+@@ -498,11 +526,20 @@ void EthernetInterface::loadNTPServers(const config::Parser& config)
  
  void EthernetInterface::loadNameServers(const config::Parser& config)
  {
 -    EthernetInterfaceIntf::nameservers(getNameServerFromResolvd());
-+    if (manager.getDHCPConf().dnsEnabled())
++    if (manager.get().getDHCPConf().dnsEnabled())
 +        EthernetInterfaceIntf::nameservers(getNameServerFromResolvd());
      EthernetInterfaceIntf::staticNameServers(
          config.map.getValueStrings("Network", "DNS"));
@@ -1222,7 +1215,7 @@ index 18238e5..a4e4779 100644
  
 +void EthernetInterface::loadStaticDomainNames()
 +{
-+    auto [dhcp, priority, name] = manager.getDNSConf().domainConf();
++    auto [dhcp, priority, name] = manager.get().getDNSConf().domainConf();
 +    if (!dhcp) {
 +        EthernetInterfaceIntf::domainName(std::vector<std::string>{name});
 +    }
@@ -1242,7 +1235,7 @@ index 18238e5..a4e4779 100644
  ServerList EthernetInterface::getNameServerFromResolvd()
  {
      ServerList servers;
-@@ -689,6 +730,13 @@ void EthernetInterface::writeConfigurationFile()
+@@ -693,6 +734,13 @@ void EthernetInterface::writeConfigurationFile()
          network["IPv6AcceptRA"].emplace_back(ipv6AcceptRA() ? "true" : "false");
          network["DHCP"].emplace_back(dhcp4() ? (dhcp6() ? "true" : "ipv4")
                                               : (dhcp6() ? "ipv6" : "false"));
@@ -1255,21 +1248,21 @@ index 18238e5..a4e4779 100644
 +
          {
              auto& vlans = network["VLAN"];
-             for (const auto& [_, intf] : manager.interfaces)
-@@ -774,6 +822,8 @@ void EthernetInterface::writeConfigurationFile()
+             for (const auto& [_, intf] : manager.get().interfaces)
+@@ -778,6 +826,8 @@ void EthernetInterface::writeConfigurationFile()
                                                                  : "false");
          dhcp["SendHostname"].emplace_back(conf.sendHostNameEnabled() ? "true"
                                                                       : "false");
 +        dhcp["SendNsupdate"].emplace_back(conf.sendNsupdateEnabled() ? "true"
 +                                                                     : "false");
      }
-     auto path = config::pathForIntfConf(manager.getConfDir(), interfaceName());
-     config.writeFile(path);
+     auto path = config::pathForIntfConf(manager.get().getConfDir(),
+                                         interfaceName());
 diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
-index 94d0f05..b870a64 100644
+index a8fa7b0..724ebd2 100644
 --- a/src/ethernet_interface.hpp
 +++ b/src/ethernet_interface.hpp
-@@ -124,6 +124,10 @@ class EthernetInterface : public Ifaces
+@@ -123,6 +123,10 @@ class EthernetInterface : public Ifaces
       */
      void loadARPControl();
  
@@ -1280,7 +1273,7 @@ index 94d0f05..b870a64 100644
      /** @brief Function to create ipAddress dbus object.
       *  @param[in] addressType - Type of ip address.
       *  @param[in] ipAddress- IP address.
-@@ -141,6 +145,9 @@ class EthernetInterface : public Ifaces
+@@ -139,6 +143,9 @@ class EthernetInterface : public Ifaces
       */
      ObjectPath neighbor(std::string ipAddress, std::string macAddress, uint8_t prefixLength) override;
  
@@ -1290,7 +1283,7 @@ index 94d0f05..b870a64 100644
      /** Set value of DHCPEnabled */
      DHCPConf dhcpEnabled() const override;
      DHCPConf dhcpEnabled(DHCPConf value) override;
-@@ -243,6 +250,9 @@ class EthernetInterface : public Ifaces
+@@ -241,6 +248,9 @@ class EthernetInterface : public Ifaces
       */
      uint64_t gratuitousARPInterval(uint64_t interval) override;
  
@@ -1300,7 +1293,7 @@ index 94d0f05..b870a64 100644
  
      using ChannelAccessIntf::maxPrivilege;
      using EthernetInterfaceIntf::interfaceName;
-@@ -257,6 +267,10 @@ class EthernetInterface : public Ifaces
+@@ -255,6 +265,10 @@ class EthernetInterface : public Ifaces
      using EthernetInterfaceIntf::defaultGateway;
      using EthernetInterfaceIntf::defaultGateway6;
  
@@ -1312,10 +1305,10 @@ index 94d0f05..b870a64 100644
      /** @brief get the NTP server list from the timsyncd dbus obj
       *
 diff --git a/src/network_manager.cpp b/src/network_manager.cpp
-index 2932f33..8b3541f 100644
+index 0828219..7b75531 100644
 --- a/src/network_manager.cpp
 +++ b/src/network_manager.cpp
-@@ -25,6 +25,7 @@ constexpr char NETWORKD_BUSNAME[] = "org.freedesktop.network1";
+@@ -27,6 +27,7 @@ constexpr char NETWORKD_BUSNAME[] = "org.freedesktop.network1";
  constexpr char NETWORKD_PATH[] = "/org/freedesktop/network1";
  constexpr char NETWORKD_INTERFACE[] = "org.freedesktop.network1.Manager";
  constexpr char ARPCONTROL_CONF_DIR[] = "/etc/arpcontrol";
@@ -1323,7 +1316,7 @@ index 2932f33..8b3541f 100644
  
  namespace phosphor
  {
-@@ -161,6 +162,8 @@ Manager::Manager(sdbusplus::bus_t& bus, DelayedExecutor& reload,
+@@ -162,6 +163,8 @@ Manager::Manager(stdplus::PinnedRef<sdbusplus::bus_t> bus,
          bus, (this->objPath / "config").str);
      dhcpConf = std::make_unique<phosphor::network::dhcp::Configuration>(
          bus, (this->objPath / "dhcp").str, *this);
@@ -1341,26 +1334,18 @@ index 2932f33..8b3541f 100644
      interfaces.insert_or_assign(*info.intf.name, std::move(intf));
      interfacesByIdx.insert_or_assign(info.intf.idx, ptr);
 diff --git a/src/network_manager.hpp b/src/network_manager.hpp
-index 52e5a63..c1586fd 100644
+index 6ba8f2b..c4fa40e 100644
 --- a/src/network_manager.hpp
 +++ b/src/network_manager.hpp
-@@ -16,6 +16,7 @@
- #include <string_view>
- #include <vector>
+@@ -12,6 +12,7 @@
+ #include <stdplus/pinned.hpp>
+ #include <stdplus/zstring_view.hpp>
  #include <xyz/openbmc_project/Common/FactoryReset/server.hpp>
 +#include "dns_updater.hpp"
  
- namespace phosphor
- {
-@@ -37,7 +38,6 @@ class DelayedExecutor
- };
- 
- void writeARPControlDefault(const std::string& filename);
--
- /** @class Manager
-  *  @brief OpenBMC network manager implementation.
-  */
-@@ -116,6 +116,11 @@ class Manager : public ManagerIface
+ #include <filesystem>
+ #include <memory>
+@@ -116,6 +117,11 @@ class Manager : public ManagerIface
          return *dhcpConf;
      }
  
@@ -1372,7 +1357,7 @@ index 52e5a63..c1586fd 100644
      /** @brief Arms a timer to tell systemd-network to reload all of the network
       * configurations
       */
-@@ -169,6 +174,9 @@ class Manager : public ManagerIface
+@@ -169,6 +175,9 @@ class Manager : public ManagerIface
      /** @brief pointer to dhcp conf object. */
      std::unique_ptr<dhcp::Configuration> dhcpConf = nullptr;
  
@@ -1383,18 +1368,18 @@ index 52e5a63..c1586fd 100644
      std::filesystem::path confDir;
  
 diff --git a/src/system_configuration.cpp b/src/system_configuration.cpp
-index bccdb02..88a5986 100644
+index 7604eb9..b55b2e6 100644
 --- a/src/system_configuration.cpp
 +++ b/src/system_configuration.cpp
-@@ -3,6 +3,7 @@
- #include <phosphor-logging/elog-errors.hpp>
- #include <phosphor-logging/log.hpp>
+@@ -4,6 +4,7 @@
+ #include <phosphor-logging/lg2.hpp>
+ #include <stdplus/pinned.hpp>
  #include <xyz/openbmc_project/Common/error.hpp>
 +#include <filesystem>
  
  namespace phosphor
  {
-@@ -12,6 +13,10 @@ namespace network
+@@ -13,6 +14,10 @@ namespace network
  static constexpr char HOSTNAMED_SVC[] = "org.freedesktop.hostname1";
  static constexpr char HOSTNAMED_OBJ[] = "/org/freedesktop/hostname1";
  static constexpr char HOSTNAMED_INTF[] = "org.freedesktop.hostname1";
@@ -1403,10 +1388,10 @@ index bccdb02..88a5986 100644
 +
 +std::unique_ptr<sdbusplus::bus::match_t> hostNameSignal(nullptr);
  
- using namespace phosphor::logging;
  using namespace sdbusplus::xyz::openbmc_project::Common::Error;
-@@ -58,6 +63,14 @@ SystemConfiguration::SystemConfiguration(sdbusplus::bus_t& bus,
-         auto reply = bus.call(req);
+ 
+@@ -57,12 +62,21 @@ SystemConfiguration::SystemConfiguration(
+         auto reply = req.call();
          reply.read(name);
          SystemConfigIntf::hostName(std::get<std::string>(name), true);
 +        if (!std::filesystem::exists(DEFAULT_HOSTNAME_PATH)) {
@@ -1420,15 +1405,14 @@ index bccdb02..88a5986 100644
      }
      catch (const std::exception& e)
      {
-@@ -65,6 +78,7 @@ SystemConfiguration::SystemConfiguration(sdbusplus::bus_t& bus,
-         log<level::ERR>(msg.c_str(), entry("ERROR=%s", e.what()));
+         lg2::error("Failed to get hostname: {ERROR}", "ERROR", e);
      }
  
 +    registerSignal(bus);
      emit_object_added();
  }
  
-@@ -90,5 +104,29 @@ std::string SystemConfiguration::hostName(std::string name)
+@@ -87,5 +101,29 @@ std::string SystemConfiguration::hostName(std::string name)
      return SystemConfigIntf::hostName();
  }
  
@@ -1459,13 +1443,13 @@ index bccdb02..88a5986 100644
  } // namespace network
  } // namespace phosphor
 diff --git a/src/system_configuration.hpp b/src/system_configuration.hpp
-index b3d91d3..ee5d8d1 100644
+index 8f79bac..0d375a5 100644
 --- a/src/system_configuration.hpp
 +++ b/src/system_configuration.hpp
-@@ -6,6 +6,10 @@
- #include <stdplus/zstring.hpp>
- #include <string>
+@@ -8,6 +8,10 @@
  #include <xyz/openbmc_project/Network/SystemConfiguration/server.hpp>
+ 
+ #include <string>
 +#include <fstream>
 +#include "config.h"
 +
@@ -1473,7 +1457,7 @@ index b3d91d3..ee5d8d1 100644
  
  namespace phosphor
  {
-@@ -46,6 +50,10 @@ class SystemConfiguration : public Iface
+@@ -45,6 +49,10 @@ class SystemConfiguration : public Iface
       */
      std::string hostName(std::string name) override;
  
@@ -1483,7 +1467,7 @@ index b3d91d3..ee5d8d1 100644
 +
    private:
      /** @brief Persistent sdbusplus DBus bus connection. */
-     sdbusplus::bus_t& bus;
+     stdplus::PinnedRef<sdbusplus::bus_t> bus;
 -- 
 2.25.1
 

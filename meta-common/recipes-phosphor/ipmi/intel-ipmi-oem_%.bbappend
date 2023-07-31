@@ -1,6 +1,5 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRCREV = "7f819e8bff935f539086ceda2dcb6faa2cb57195"
 
 SRC_URI += "\
 	   file://0007-Change-Privilege-to-system-interface.patch \
