@@ -67,13 +67,8 @@ SRC_URI:append = " file://0001-managers-add-factory-restore.patch  \
             file://0082-IBMConfigFile-is-added-Event-Subscription-ResourceTy.patch \
             file://0084-Task-Delete-Implementation-Under-TaskService.patch \ 
         "
-SRC_URI_BHS:append ="file://0028-Adding-proper-path-to-get-the-cupsensors.patch \
-"
 SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
 "
-
-SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'bhs', "${@bb.utils.contains('BBFILE_COLLECTIONS', 'restricted', SRC_URI_BHS, '', d)}", '', d)}"
-
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'restricted', SRC_URI_NM, '', d)}"
 
 #EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '',' -Dhttp-body-limit=68 ', d)}"
