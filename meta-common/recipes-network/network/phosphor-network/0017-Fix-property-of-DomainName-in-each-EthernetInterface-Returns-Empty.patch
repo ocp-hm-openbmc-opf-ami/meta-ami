@@ -9,13 +9,13 @@ Subject: [PATCH] Fix property of DomainName in each EthernetInterface returns
 ---
  src/dhcp_configuration.cpp |   1 +
  src/dns_updater.cpp        |  26 ++++---
- src/ethernet_interface.cpp | 143 ++++++++++++++++++++++++++++++-------
+ src/ethernet_interface.cpp | 141 ++++++++++++++++++++++++++++++-------
  src/ethernet_interface.hpp |  13 +++-
  src/network_manager.cpp    |   2 +-
- 5 files changed, 150 insertions(+), 35 deletions(-)
+ 5 files changed, 148 insertions(+), 35 deletions(-)
 
 diff --git a/src/dhcp_configuration.cpp b/src/dhcp_configuration.cpp
-index e70bb86..4f64e18 100644
+index 7067516..7e36ccb 100644
 --- a/src/dhcp_configuration.cpp
 +++ b/src/dhcp_configuration.cpp
 @@ -55,6 +55,7 @@ Configuration::Configuration(sdbusplus::bus_t& bus,
@@ -25,12 +25,12 @@ index e70bb86..4f64e18 100644
 +    ConfigIntf::domainEnabled(getDHCPProp(conf, "UseDomains"), ConfigIntf::dnsEnabled());
      ConfigIntf::hostNameEnabled(getDHCPProp(conf, "UseHostname"), true);
      ConfigIntf::sendHostNameEnabled(getDHCPProp(conf, "SendHostname"), true);
- 
+     ConfigIntf::sendNsupdateEnabled(getDHCPProp(conf, "SendNsupdate"), false);
 diff --git a/src/dns_updater.cpp b/src/dns_updater.cpp
-index 00ce926..a2e6c88 100644
+index dc7cd3e..7447a73 100644
 --- a/src/dns_updater.cpp
 +++ b/src/dns_updater.cpp
-@@ -157,20 +157,16 @@ void Configuration::registerSignal(sdbusplus::bus_t& bus) {
+@@ -153,20 +153,16 @@ void Configuration::registerSignal(sdbusplus::bus_t& bus) {
                      msg.read(iface, props);
                      for (const auto& t : props)
                      {
@@ -53,9 +53,9 @@ index 00ce926..a2e6c88 100644
                          else if (t.first == "SendNsupdateEnabled")
                          {
                              value = std::get<bool>(t.second);
-@@ -484,7 +480,10 @@ int16_t Configuration::setDomainConf(bool dhcp, uint8_t priority,std::string dom
+@@ -478,7 +474,10 @@ int16_t Configuration::setDomainConf(bool dhcp, uint8_t priority,std::string dom
  
-     for (auto i = manager.interfaces.begin(); i != manager.interfaces.end(); i++) {
+     for (auto i = manager.get().interfaces.begin(); i != manager.get().interfaces.end(); i++) {
          if (i->second->linkUp()) {
 -            i->second->domainName({});
 +            if (!dhcp)
@@ -65,13 +65,13 @@ index 00ce926..a2e6c88 100644
          }
      }
  
-@@ -611,7 +610,16 @@ std::string Configuration::getDomainName(std::string interface) {
+@@ -603,7 +602,16 @@ std::string Configuration::getDomainName(std::string interface) {
          }
      }
      else {
 -        return name;
-+        auto iface = manager.interfaces.find(interface);
-+        if (iface != manager.interfaces.end() ) {
++        auto iface = manager.get().interfaces.find(interface);
++        if (iface != manager.get().interfaces.end() ) {
 +            if (iface->second->domainName().size() > 0) {
 +                return iface->second->domainName().at(0);
 +            }
@@ -83,7 +83,7 @@ index 00ce926..a2e6c88 100644
      }
  }
  
-@@ -650,7 +658,7 @@ std::vector<std::string> Configuration::getDNSServer(std::string interface) {
+@@ -641,7 +649,7 @@ std::vector<std::string> Configuration::getDNSServer(std::string interface) {
          servers.push_back(std::to_string(addrFromBuf(addrFamily, stdplus::raw::asView<char>(ipaddress))));
      }
  
@@ -93,10 +93,10 @@ index 00ce926..a2e6c88 100644
  
  
 diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
-index 912ddaa..6db9728 100644
+index ca59790..5504dfa 100644
 --- a/src/ethernet_interface.cpp
 +++ b/src/ethernet_interface.cpp
-@@ -40,7 +40,11 @@ using NotAllowedArgument = xyz::openbmc_project::Common::NotAllowed;
+@@ -41,7 +41,11 @@ using NotAllowedArgument = xyz::openbmc_project::Common::NotAllowed;
  using Argument = xyz::openbmc_project::Common::InvalidArgument;
  using std::literals::string_view_literals::operator""sv;
  constexpr auto RESOLVED_SERVICE = "org.freedesktop.resolve1";
@@ -108,32 +108,32 @@ index 912ddaa..6db9728 100644
  constexpr auto PROPERTY_INTERFACE = "org.freedesktop.DBus.Properties";
  constexpr auto RESOLVED_SERVICE_PATH = "/org/freedesktop/resolve1/link/";
  
-@@ -147,6 +151,8 @@ EthernetInterface::EthernetInterface(sdbusplus::bus_t& bus, Manager& manager,
+@@ -149,6 +153,8 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
          addStaticNeigh(neigh);
      }
  
 +    signals = initSignals();
 +    registerSignal(bus);
-     manager.getDNSConf().addInterfaceConf(interfaceName());
+     manager.get().getDNSConf().addInterfaceConf(interfaceName());
  }
  
-@@ -572,10 +578,13 @@ void EthernetInterface::loadNameServers(const config::Parser& config)
+@@ -570,10 +576,13 @@ void EthernetInterface::loadNameServers(const config::Parser& config)
          config.map.getValueStrings("Network", "DNS"));
  }
  
 -void EthernetInterface::loadStaticDomainNames()
 +void EthernetInterface::loadDomainNames()
  {
-     auto [dhcp, priority, name] = manager.getDNSConf().domainConf();
+     auto [dhcp, priority, name] = manager.get().getDNSConf().domainConf();
 -    if (!dhcp) {
-+    if (manager.getDHCPConf().domainEnabled() && manager.getDHCPConf().dnsEnabled() && dhcp) {
++    if (manager.get().getDHCPConf().domainEnabled() && manager.get().getDHCPConf().dnsEnabled() && dhcp) {
 +        EthernetInterfaceIntf::domainName(getDomainNamesFromResolvd());
 +    }
 +    else {
          EthernetInterfaceIntf::domainName(std::vector<std::string>{name});
      }
  }
-@@ -656,6 +665,37 @@ ServerList EthernetInterface::getNameServerFromResolvd()
+@@ -658,6 +667,37 @@ ServerList EthernetInterface::getNameServerFromResolvd()
      return servers;
  }
  
@@ -144,14 +144,14 @@ index 912ddaa..6db9728 100644
 +
 +    using type = std::vector<std::tuple<std::string, bool>>;
 +    std::variant<type> name; // Variable to capture the DNS property
-+    auto method = bus.new_method_call(RESOLVED_SERVICE, OBJ_PATH.c_str(),
++    auto method = bus.get().new_method_call(RESOLVED_SERVICE, OBJ_PATH.c_str(),
 +                                      PROPERTY_INTERFACE, METHOD_GET);
 +
 +    method.append(RESOLVED_INTERFACE, "Domains");
 +
 +    try
 +    {
-+        auto reply = bus.call(method);
++        auto reply = bus.get().call(method);
 +        reply.read(name);
 +    }
 +    catch (const sdbusplus::exception_t& e)
@@ -171,7 +171,7 @@ index 912ddaa..6db9728 100644
  ObjectPath EthernetInterface::createVLAN(uint16_t id)
  {
      auto intfName = fmt::format(FMT_COMPILE("{}.{}"), interfaceName(), id);
-@@ -755,9 +795,9 @@ void EthernetInterface::writeConfigurationFile()
+@@ -759,9 +799,9 @@ void EthernetInterface::writeConfigurationFile()
      }
      {
          auto& network = config.map["Network"].emplace_back();
@@ -183,7 +183,7 @@ index 912ddaa..6db9728 100644
              switch (EthernetInterfaceIntf::linkLocalAutoConf()) {
                  case EthernetInterface::LinkLocalConf::v4:
                      lla.emplace_back("ipv4");
-@@ -766,33 +806,39 @@ void EthernetInterface::writeConfigurationFile()
+@@ -770,33 +810,37 @@ void EthernetInterface::writeConfigurationFile()
                      lla.emplace_back("no");
                      break;
                  case EthernetInterface::LinkLocalConf::v6:
@@ -199,6 +199,7 @@ index 912ddaa..6db9728 100644
                      break;
              }
 -        }
++
  #else
 -        lla.emplace_back("no");
 +            lla.emplace_back("no");
@@ -207,7 +208,7 @@ index 912ddaa..6db9728 100644
 -        auto& state = IfaceState.map["Network"].emplace_back();
 -        state["IPv4Enable"].emplace_back(EthernetInterfaceIntf::ipv4Enable() ? "true" : "false");
 -        state["IPv6Enable"].emplace_back(EthernetInterfaceIntf::ipv6Enable() ? "true" : "false");
--        IfaceState.writeFile(fs::path{fmt::format("{}/{}", manager.ifaceConfDir.generic_string(), interfaceName()).c_str()});
+-        IfaceState.writeFile(fs::path{fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(), interfaceName()).c_str()});
 -
 -        network["IPv6AcceptRA"].emplace_back(EthernetInterfaceIntf::ipv6Enable() && ipv6AcceptRA() ? "true" : "false");
 -        network["DHCP"].emplace_back(dhcp4() ? (dhcp6() ? "true" : "ipv4")
@@ -224,7 +225,7 @@ index 912ddaa..6db9728 100644
 +            auto& state = IfaceState.map["Network"].emplace_back();
 +            state["IPv4Enable"].emplace_back(EthernetInterfaceIntf::ipv4Enable() ? "true" : "false");
 +            state["IPv6Enable"].emplace_back(EthernetInterfaceIntf::ipv6Enable() ? "true" : "false");
-+            IfaceState.writeFile(fs::path{fmt::format("{}/{}", manager.ifaceConfDir.generic_string(), interfaceName()).c_str()});
++            IfaceState.writeFile(fs::path{fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(), interfaceName()).c_str()});
 +
 +            network["IPv6AcceptRA"].emplace_back(EthernetInterfaceIntf::ipv6Enable() && ipv6AcceptRA() ? "true" : "false");
 +            network["DHCP"].emplace_back(dhcp4() ? (dhcp6() ? "true" : "ipv4")
@@ -232,18 +233,15 @@ index 912ddaa..6db9728 100644
 +        }
 +        {
 +            std::string s("");
-+            auto [dominaDHCP, domainPriority, DomainDN] = manager.getDNSConf().domainConf();
-+            if (!(manager.getDHCPConf().dnsEnabled() && manager.getDHCPConf().domainEnabled() && dominaDHCP)) {
-+                for (int i = 0; i < (int)domainName().size(); i++) {
-+                    s += domainName().at(i) + " ";
-+                }
-+                network["Domains"].emplace_back(s);
++            for (int i = 0; i < (int)domainName().size(); i++) {
++                s += domainName().at(i);
 +            }
++            network["Domains"].emplace_back(s);
 +        }
          {
              auto& vlans = network["VLAN"];
-             for (const auto& [_, intf] : manager.interfaces)
-@@ -1610,7 +1656,56 @@ end:
+             for (const auto& [_, intf] : manager.get().interfaces)
+@@ -1617,7 +1661,56 @@ end:
      return ret;
  }
  
@@ -301,10 +299,10 @@ index 912ddaa..6db9728 100644
  } // namespace network
  } // namespace phosphor
 diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
-index 506a5cf..88e2e33 100644
+index 13bd1c6..fd1f720 100644
 --- a/src/ethernet_interface.hpp
 +++ b/src/ethernet_interface.hpp
-@@ -126,7 +126,7 @@ class EthernetInterface : public Ifaces
+@@ -125,7 +125,7 @@ class EthernetInterface : public Ifaces
  
      /** @brief Function used to load the domainNames.
       */
@@ -313,7 +311,7 @@ index 506a5cf..88e2e33 100644
  
      /** @brief Function to create ipAddress dbus object.
       *  @param[in] addressType - Type of ip address.
-@@ -299,6 +299,15 @@ class EthernetInterface : public Ifaces
+@@ -297,6 +297,15 @@ class EthernetInterface : public Ifaces
       */
      virtual ServerList getNameServerFromResolvd();
  
@@ -327,9 +325,9 @@ index 506a5cf..88e2e33 100644
 +    void registerSignal(sdbusplus::bus::bus& bus);
 +
      /** @brief Persistent sdbusplus DBus bus connection. */
-     sdbusplus::bus_t& bus;
+     stdplus::PinnedRef<sdbusplus::bus_t> bus;
  
-@@ -318,6 +327,8 @@ class EthernetInterface : public Ifaces
+@@ -317,6 +326,8 @@ class EthernetInterface : public Ifaces
      };
      std::optional<VlanProperties> vlan;
  
@@ -339,7 +337,7 @@ index 506a5cf..88e2e33 100644
      friend class TestNetworkManager;
  
 diff --git a/src/network_manager.cpp b/src/network_manager.cpp
-index fff9e71..3cd1bfb 100644
+index 852b88f..2048ecb 100644
 --- a/src/network_manager.cpp
 +++ b/src/network_manager.cpp
 @@ -304,7 +304,7 @@ void Manager::createInterface(const AllIntfInfo& info, bool enabled)

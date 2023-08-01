@@ -1,0 +1,128 @@
+From e60b30a908f068d1e3d6cffe0d6d284a788f3283 Mon Sep 17 00:00:00 2001
+From: vamsikrishnak <vamsikrishnak@ami.com>
+Date: Mon, 24 Jul 2023 12:00:01 +0530
+Subject: [PATCH] Task Delete Implementation Under TaskService
+
+Signed-off-by: vamsikrishnak <vamsikrishnak@ami.com>
+---
+ redfish-core/include/redfish.hpp |  1 +
+ redfish-core/lib/task.hpp        | 72 +++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 72 insertions(+), 1 deletion(-)
+
+diff --git a/redfish-core/include/redfish.hpp b/redfish-core/include/redfish.hpp
+index c72a0f3..4591640 100644
+--- a/redfish-core/include/redfish.hpp
++++ b/redfish-core/include/redfish.hpp
+@@ -249,6 +249,7 @@ class RedfishService
+         requestRoutesSensor(app);
+         requestRoutesSensorPatching(app);
+ 
++	requestRoutesTaskDelete(app);
+         requestRoutesTaskMonitor(app);
+         requestRoutesTaskService(app);
+         requestRoutesTaskCollection(app);
+diff --git a/redfish-core/lib/task.hpp b/redfish-core/lib/task.hpp
+index e0058f5..e3680ba 100644
+--- a/redfish-core/lib/task.hpp
++++ b/redfish-core/lib/task.hpp
+@@ -43,6 +43,8 @@ constexpr size_t maxTaskCount = 100; // arbitrary limit
+ // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+ static std::deque<std::shared_ptr<struct TaskData>> tasks;
+ 
++static size_t lastTask = 1;
++
+ constexpr bool completed = true;
+ 
+ struct Payload
+@@ -112,7 +114,9 @@ struct TaskData : std::enable_shared_from_this<TaskData>
+                            const std::shared_ptr<TaskData>&)>&& handler,
+         const std::string& match)
+     {
+-        static size_t lastTask = 0;
++        if(tasks.size() == 0)
++            lastTask = 1;
++
+         struct MakeSharedHelper : public TaskData
+         {
+             MakeSharedHelper(
+@@ -323,6 +327,64 @@ struct TaskData : std::enable_shared_from_this<TaskData>
+ 
+ } // namespace task
+ 
++inline void setLastTask()
++{
++   for (const std::shared_ptr<task::TaskData>& task : task::tasks)
++   {
++      //Setting lastTask index after deleting task
++        task::lastTask = task->index +1;
++   }
++   return;
++}
++
++inline void handleTaskDelete(App& app, const crow::Request& req,
++                         const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                         const std::string& strParam)
++{
++
++        if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++        {
++            return;
++        }
++        int pos=0;
++        auto find = std::find_if(
++            task::tasks.begin(), task::tasks.end(),
++            [&strParam](const std::shared_ptr<task::TaskData>& task) {
++            if (!task)
++            {
++                return false;
++            }
++
++            // we compare against the string version as on failure
++            // strtoul returns 0
++            return std::to_string(task->index) == strParam;
++            });
++
++        if (find == task::tasks.end())
++        {
++            messages::resourceNotFound(asyncResp->res, "Task", strParam);
++            return;
++        }
++
++        for (const std::shared_ptr<task::TaskData>& task : task::tasks)
++        {
++                if(std::to_string(task->index) == strParam)
++                {
++                    auto taskToDelete = task::tasks.begin();
++                    advance(taskToDelete,pos);
++                    if(*taskToDelete != nullptr)
++                    {
++                        BMCWEB_LOG_ERROR << "Deleting Task" << strParam;
++                        task::tasks.erase(taskToDelete);
++                        setLastTask();
++                        asyncResp->res.result(boost::beast::http::status::no_content);
++                        return;
++                    }
++                }
++        pos++;
++        }
++}
++
+ inline void requestRoutesTaskMonitor(App& app)
+ {
+     BMCWEB_ROUTE(app, "/redfish/v1/TaskService/Tasks/<str>/Monitor/")
+@@ -496,4 +558,12 @@ inline void requestRoutesTaskService(App& app)
+         });
+ }
+ 
++inline void requestRoutesTaskDelete(App& app)
++{
++        BMCWEB_ROUTE(app, "/redfish/v1/TaskService/Tasks/<str>/")
++        .privileges(redfish::privileges::deleteTask)
++        .methods(boost::beast::http::verb::delete_)(
++           std::bind_front(handleTaskDelete, std::ref(app)));
++}
++
+ } // namespace redfish
+-- 
+2.9.5
+
