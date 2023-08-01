@@ -18,6 +18,7 @@ SRC_URI:append = " \
              file://0016-Add-Function-IPv4-IPv6-Enabled-Disabled.patch \
              file://0017-Fix-property-of-DomainName-in-each-EthernetInterface-Returns-Empty.patch \
              file://0018-Add-VLAN_MAX_NUM-for-not-creating-VLAN-interfaces-over-size.patch \
+             file://0019-Fix-Defaultgateway6-Is-Zero-When-Setting-More-Than-One_IPv6.patch \
            "
 
 do_install:append() {
