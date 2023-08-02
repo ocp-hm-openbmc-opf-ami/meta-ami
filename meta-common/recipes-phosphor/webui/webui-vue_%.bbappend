@@ -1,14 +1,14 @@
 # Enable downstream autobump
-# # The URI is required for the autobump script but keep it commented
+# The URI is required for the autobump script but keep it commented
 # to not override the upstream value
 # SRC_URI = "git://github.com/openbmc/webui-vue.git;branch=master;protocol=https"
-#SRCREV = "f763cd2e39ffce9b10191402243e8704794f08ff"
+# SRCREV = "f763cd2e39ffce9b10191402243e8704794f08ff"
 
 # AMI own repository for webui-vue with main branch
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/webui-vue.git;branch=master;protocol=https"
 
-# AMI own repository latest src rev id merged
-SRCREV = "f9477187539d08a87e9a773e056b972029bafed7"
+# Use AUTOREV to get the latest revision from the repository
+SRCREV = "${AUTOREV}"
 
 SRC_URI += " \
     file://login-company-logo.svg \
