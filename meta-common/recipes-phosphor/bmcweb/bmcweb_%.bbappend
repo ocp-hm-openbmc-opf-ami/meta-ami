@@ -66,6 +66,7 @@ SRC_URI:append = " file://0001-managers-add-factory-restore.patch  \
             file://0083-Fixed-201-response-code-appears-along-with-error-mes.patch \
             file://0082-IBMConfigFile-is-added-Event-Subscription-ResourceTy.patch \
             file://0084-Task-Delete-Implementation-Under-TaskService.patch \ 
+	    file://0080-Added-PasswordRestFailed-after-password-expired.patch \
         "
 SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
 "
