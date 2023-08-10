@@ -35,6 +35,7 @@ SRC_URI += " \
            file://0027-Get-Channel-Payload-Support-Detailed-Information-bel.patch \
            file://0034-Add-warm-reset-support.patch \
            file://0046-Fix-For-SOL.patch \
+	   file://0047-Fix-for-set-inprogress-ipmi-command-parameter-0x02.patch \
            "
 
 do_install:append(){
