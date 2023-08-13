@@ -1,7 +1,7 @@
-From c18a5423dc1d1d8ecc309ee44a1a092bdcc9853b Mon Sep 17 00:00:00 2001
-From: PranoyGoru <gorumanip@ami.com>
-Date: Fri, 2 Jun 2023 12:06:15 +0530
-Subject: [PATCH] Integrated RAID interface in redfish
+From 84c4d7d35b555573f78c1e9a6053bf053446ff84 Mon Sep 17 00:00:00 2001
+From: Pranoy Goru <gorumanip@ami.com>
+Date: Sun, 13 Aug 2023 15:34:15 +0530
+Subject: [PATCH 90/90] Integrated RAID interface in redfish
 
 Description
 Added RAID and HBA interface in redfish
@@ -52,7 +52,7 @@ https://localhost:2443/redfish/v1/Systems/system/Storage
     "Name": "Storage Collection"
 }
 
-2) Get RAID instance 
+2) Get RAID instance
 
 https://localhost:2443/redfish/v1/Systems/system/Storage/Raid_1
 {
@@ -110,7 +110,6 @@ https://localhost:2443/redfish/v1/Systems/system/Storage/Raid_1
 }
 
 3) Get Physical Drive Count
-
 
 https://localhost:2443/redfish/v1/Systems/system/Storage/Raid_1/Volumes
 {
@@ -193,8 +192,7 @@ https://localhost:2443/redfish/v1/Systems/system/Storage/Raid_1/Drives/0
     }
 }
 
-6) Get HBA instance 
-
+6) Get HBA instance
 
 https://localhost:2443/redfish/v1/Systems/system/Storage/HBA_0
 {
@@ -259,18 +257,19 @@ https://localhost:2443/redfish/v1/Systems/system/Storage/Raid_1/Drives/0
     }
 }
 
-Signed-off-by: PranoyGoru <gorumanip@ami.com>
+Signed-off-by: Pranoy Goru <gorumanip@ami.com>
 ---
  redfish-core/include/redfish.hpp  |    7 +
- redfish-core/lib/storage.hpp      |    2 +
- redfish-core/lib/storage_mctp.hpp | 1036 +++++++++++++++++++++++++++++++++++++
- 3 files changed, 1045 insertions(+)
+ redfish-core/lib/storage.hpp      |    3 +
+ redfish-core/lib/storage_raid.hpp | 1063 +++++++++++++++++++++++++++++
+ 3 files changed, 1073 insertions(+)
+ create mode 100644 redfish-core/lib/storage_raid.hpp
 
 diff --git a/redfish-core/include/redfish.hpp b/redfish-core/include/redfish.hpp
-index 7fb577d..4d3f3d6 100644
+index a14725bf..4591640c 100644
 --- a/redfish-core/include/redfish.hpp
 +++ b/redfish-core/include/redfish.hpp
-@@ -106,6 +106,13 @@ class RedfishService
+@@ -117,6 +117,13 @@ class RedfishService
          requestRoutesNvmeStorage(app);
          requestRoutesNvmeDrive(app);
  
@@ -284,15 +283,58 @@ index 7fb577d..4d3f3d6 100644
          requestRoutesCable(app);
          requestRoutesCableCollection(app);
  #ifdef BMCWEB_INSECURE_ENABLE_REDFISH_FW_TFTP_UPDATE
-  
-diff --git a/redfish-core/lib/storage_mctp.hpp b/redfish-core/lib/storage_mctp.hpp
-index 83e92f8..32feeec 100644
---- a/redfish-core/lib/storage_mctp.hpp
-+++ b/redfish-core/lib/storage_mctp.hpp
-@@ -594,4 +594,1040 @@ inline void requestRoutesNvmeDrive(App& app)
+diff --git a/redfish-core/lib/storage.hpp b/redfish-core/lib/storage.hpp
+index 885265fd..922405e3 100644
+--- a/redfish-core/lib/storage.hpp
++++ b/redfish-core/lib/storage.hpp
+@@ -26,6 +26,7 @@
+ #include "registries/privilege_registry.hpp"
+ #include "utils/dbus_utils.hpp"
+ #include "storage_nvme.hpp"
++#include "storage_raid.hpp"
+ 
+ #include <boost/system/error_code.hpp>
+ #include <boost/url/format.hpp>
+@@ -69,6 +70,8 @@ inline void requestRoutesStorageCollection(App& app)
+                asyncResp->res.jsonValue["Members@odata.count"];
+        count = 1;
+        getNvmeDevices(asyncResp, count, storageControllerArray);
++       getRaidDevices(asyncResp, count, storageControllerArray);
++       getHBADevices(asyncResp, count, storageControllerArray);
          });
  }
  
+diff --git a/redfish-core/lib/storage_raid.hpp b/redfish-core/lib/storage_raid.hpp
+new file mode 100644
+index 00000000..98fe1216
+--- /dev/null
++++ b/redfish-core/lib/storage_raid.hpp
+@@ -0,0 +1,1063 @@
++/*
++// Copyright (c) 2021 AMI Corporation
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//      http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++*/
++#pragma once
++
++#include "openbmc_dbus_rest.hpp"
++
++#include <app.hpp>
++#include <registries/privilege_registry.hpp>
++
++namespace redfish
++{
++
 +inline void getLogicalDrives(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
 +                             const std::string& raidName,
 +                             nlohmann::json& storageArray,
@@ -693,7 +735,7 @@ index 83e92f8..32feeec 100644
 +            {
 +                BMCWEB_LOG_ERROR << "DBUS error: no matched iface "
 +                                 << "\n";
-+                messages::internalError(asyncResp->res);
++            //    messages::internalError(asyncResp->res);
 +                return;
 +            }
 +            for (const std::string& objpath : storageList)
@@ -893,7 +935,7 @@ index 83e92f8..32feeec 100644
 +            {
 +                BMCWEB_LOG_ERROR << "DBUS error: no matched iface "
 +                                 << "\n";
-+                messages::internalError(asyncResp->res);
++            //    messages::internalError(asyncResp->res);
 +                return;
 +            }
 +            for (const std::string& objpath : storageList)
@@ -1329,17 +1371,8 @@ index 83e92f8..32feeec 100644
 +        });
 +}
 +
- } // namespace redfish
-diff --git a/redfish-core/lib/storage.hpp b/redfish-core/lib/storage.hpp
-index 885265fd..771d6750 100644
---- a/redfish-core/lib/storage.hpp
-+++ b/redfish-core/lib/storage.hpp
-@@ -69,6 +69,8 @@ inline void requestRoutesStorageCollection(App& app)
-                asyncResp->res.jsonValue["Members@odata.count"];
-        count = 1;
-        getNvmeDevices(asyncResp, count, storageControllerArray);
-+       getRaidDevices(asyncResp, count, storageControllerArray);
-+       getHBADevices(asyncResp, count, storageControllerArray);
-         });
- }
++} // namespace redfish
++
+-- 
+2.34.1
 
