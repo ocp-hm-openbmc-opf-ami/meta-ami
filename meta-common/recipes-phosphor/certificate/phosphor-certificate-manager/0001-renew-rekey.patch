@@ -1,0 +1,389 @@
+--- a/certs_manager.hpp	2023-07-03 16:56:39.923572396 -0400
++++ b/certs_manager.hpp	2023-07-03 16:56:24.543442026 -0400
+@@ -194,6 +194,28 @@
+         std::string organizationalUnit, std::string state, std::string surname,
+         std::string unstructuredName) override;
+ 
++    std::string reNew() override;
++     /** @brief Generate CSR with new key using current Certificate credentials
++     *
++     *  @param[in] keyBitLength - The length of the key in bits, if needed based
++     *      on the value of the KeyPairAlgorithm parameter.
++     *  @param[in] keyCurveId - The curve ID to be used with the key, if needed
++     *      based on the value of the KeyPairAlgorithm parameter.
++     *  @param[in] keyPairAlgorithm - The type of key pair for use with signing
++     *      algorithms. Valid built-in algorithm names for private key
++     *      generation are: RSA, DSA, DH and EC.
++     *  @return Reference to certificates' collection
++     */
++    std::string reKey(int64_t keyBitLength,
++		      std::string keyCurveId,
++		      std::string keyPairAlgorithm) override;
++  
++     /** @brief Generate CSR with current key and current Certificate credentials
++     *
++     *  @return Reference to certificates' collection
++     */
++     //std::string isRenew();
++  
+     /** @brief Get reference to certificates' collection
+      *
+      *  @return Reference to certificates' collection
+@@ -242,6 +264,14 @@
+         const std::unique_ptr<EVP_PKEY, decltype(&::EVP_PKEY_free)>& pKey,
+         const std::string& privKeyFileName);
+ 
++    /** @brief Get private key data from file
++     *
++     *  @param[in] privKeyFileName - private key filename
++     *  @return pKey - pointer to private key
++     */
++    std::unique_ptr<EVP_PKEY, decltype(&::EVP_PKEY_free)>
++    getPrivateKey(const std::string& privKeyFileName);
++
+     /** @brief Add the specified CSR field with the data
+      *  @param[in] x509Name - Structure used in setting certificate properties
+      *  @param[in] field - field name
+@@ -288,6 +318,13 @@
+     std::unique_ptr<EVP_PKEY, decltype(&::EVP_PKEY_free)>
+         getRSAKeyPair(const int64_t keyBitLength);
+ 
++     /** @brief Parsing Certificate Subject
++     *  Parsing Certificate Subject
++     *  @param[in]  subj - subject of certficate
++     *  @return     success/failure
++     */
++    int parseSSLCert(std::string subj);
++
+     /** @brief Update certificate storage (remove outdated files, recreate
+      * symbolic links, etc.).
+      */
+@@ -340,5 +377,25 @@
+ 
+     /** @brief Certificate ID pool */
+     uint64_t certIdCounter = 1;
++  struct {
++    std::vector<std::string> altName; //subjectAltName
++    std::string challengePassword;  //challengePassword
++    std::string city;               //L
++    std::string commonName;         //CN
++    std::string contactPerson;      //name
++    std::string country;            //C
++    std::string email;              //emailAddress
++    std::string givenName;          //GN
++    std::string initial;            //initial
++    uint64_t keyBitLength;          //
++    std::string keyCurveId;         //
++    std::string keyPairAlgorithm;   //algorithm
++    std::string organization;       //O
++    std::string organizationalUnit; //OU
++    std::string state;              //ST
++    std::string surname;            //SN
++    std::string unstructuredName;   //unstructuredName
++    std::vector<std::string> keyUsage; //keyUsage + extendedKeyUsage
++  } csrInfo;
+ };
+ } // namespace phosphor::certs
+--- a/certs_manager.cpp	2023-07-03 16:51:06.808805455 -0400
++++ b/certs_manager.cpp	2023-07-03 16:55:00.090729904 -0400
+@@ -15,6 +15,10 @@
+ #include <openssl/rsa.h>
+ #include <unistd.h>
+ 
++#include <openssl/bio.h>
++#include <openssl/err.h>
++#include <openssl/x509.h>
++
+ #include <algorithm>
+ #include <array>
+ #include <cerrno>
+@@ -74,6 +78,11 @@
+ constexpr std::string_view beginCertificate = "-----BEGIN CERTIFICATE-----";
+ constexpr std::string_view endCertificate = "-----END CERTIFICATE-----";
+ 
++// Smart pointers to wrap openssl C types that need explicit free
++using BIO_ptr = std::unique_ptr<BIO, decltype(&BIO_free)>;
++using X509_ptr = std::unique_ptr<X509, decltype(&X509_free)>;
++using ASN1_TIME_ptr = std::unique_ptr<ASN1_TIME, decltype(&ASN1_STRING_free)>;
++  
+ /**
+  * @brief Splits the given authorities list file and returns an array of
+  * individual PEM encoded x509 certificate.
+@@ -601,6 +610,10 @@
+     log<level::INFO>("Given Key pair algorithm",
+                      entry("KEYPAIRALGORITHM=%s", keyPairAlgorithm.c_str()));
+ 
++    if(isRenew() == true)
++      {
++	pKey = getPrivateKey( certInstallPath);
++      }
+     // Used EC algorithm as default if user did not give algorithm type.
+     if (keyPairAlgorithm == "RSA")
+         pKey = getRSAKeyPair(keyBitLength);
+@@ -852,6 +865,266 @@
+     }
+ }
+ 
++/***************************************
++ * reKey - Create new key for generateCSR
++ ***************************************/
++std::string Manager::reKey( int64_t keyBitLength,
++			    std::string keyCurveId,
++			    std::string keyPairAlgorithm)
++{
++  std::string csr;
++
++  // check if key info
++  if(keyPairAlgorithm == "RSA")
++    {
++      if(keyBitLength == supportedKeyBitLength)
++	{
++	  csrInfo.keyBitLength = keyBitLength;
++	}
++      else
++	{
++	  log<level::ERR>("Given Key bit length for RSA is not supported",
++			  entry("KEYBITLENGTH=%PRIu64", keyBitLength));
++	  elog<InternalFailure>();
++	}
++      csrInfo.keyCurveId = defaultKeyCurveID;
++    }
++  else if ((keyPairAlgorithm == "EC") || keyPairAlgorithm.empty())
++    {
++      if((keyCurveId == SN_secp384r1) || (keyCurveId == SN_secp521r1) || (keyCurveId == SN_X9_62_prime256v1) || keyCurveId == defaultKeyCurveID)
++	{
++	  csrInfo.keyCurveId = keyCurveId;
++	}
++      else
++	{
++	  log<level::ERR>("Given Key curve ID for EC is not supported. Supporting "
++			  "secp384r1, secp521r1, prime256v1, and secp224r1 only");
++	  elog<InvalidArgument>(Argument::ARGUMENT_NAME("KEYCURVEID"),
++				Argument::ARGUMENT_VALUE(keyCurveId.c_str()));
++	}
++      csrInfo.keyBitLength = defaultKeyBitLength;
++    }
++  else
++    {
++        log<level::ERR>("Given Key pair algorithm is not supported. Supporting "
++                        "RSA and EC only");
++        elog<InvalidArgument>(Argument::ARGUMENT_NAME("KEYPAIRALGORITHM"),
++			      Argument::ARGUMENT_VALUE(keyPairAlgorithm.c_str()));
++    }
++  
++  //load cert
++  X509_ptr cert(loadCert(certInstallPath));
++  //get the subject info from the current certificate
++  std::string subj = X509_NAME_oneline(X509_get_subject_name(cert.get()), NULL, 0);
++
++  //parse the subject
++  parseSSLCert(subj);
++
++  csrInfo.keyPairAlgorithm = keyPairAlgorithm;
++  
++  isRenew(false);
++  csr = generateCSR(csrInfo.altName, csrInfo.challengePassword,
++		    csrInfo.city, csrInfo.commonName, csrInfo.contactPerson,
++		    csrInfo.country, csrInfo.email, csrInfo.givenName,
++		    csrInfo.initial, csrInfo.keyBitLength, csrInfo.keyCurveId, csrInfo.keyPairAlgorithm,
++		    csrInfo.keyUsage,csrInfo.organization, csrInfo.organizationalUnit,
++		    csrInfo.state, csrInfo.surname, csrInfo.unstructuredName);
++  return csr;
++}
++
++/***************************************
++ * reNew - Renew for generateCSR
++ ***************************************/
++std::string Manager::reNew()
++{
++    std::string csr;
++
++    //Get certificate from file
++    BIO_ptr input(BIO_new(BIO_s_file()), BIO_free);
++    if (BIO_read_filename(input.get(), certInstallPath.c_str()) <= 0)
++    {
++      return NULL;
++    }
++    // Create an openssl certificate from the BIO
++    X509_ptr cert(PEM_read_bio_X509_AUX(input.get(), NULL, NULL, NULL), X509_free);
++
++    // Create a BIO to hold info from the cert
++    BIO_ptr output_bio(BIO_new(BIO_s_mem()), BIO_free);
++
++    X509_print_ex(output_bio.get(), cert.get(), 0, 0);
++
++    char buffer[32768];
++    int max_len = 32768;
++    memset(buffer, 0, max_len);
++    // Read one smaller than the buffer to make sure we end up with a null
++    // terminator no matter what
++    BIO_read(output_bio.get(), buffer, max_len - 1);
++    
++    // Put the contents of the BIO into a C++ string
++    std::string cert_details = std::string(buffer);
++    BIO_reset(output_bio.get());
++
++    //get the subject
++    std::string subj = X509_NAME_oneline(X509_get_subject_name(cert.get()), NULL, 0);
++    //get issuer
++    //auto iss  = X509_NAME_oneline(X509_get_issuer_name(cert.get()), NULL, 0);
++    
++    parseSSLCert(subj);
++
++    //get the key info
++    if(cert_details.find("rsaEncryption") != std::string::npos)
++      {
++	csrInfo.keyPairAlgorithm = "RSA";
++	csrInfo.keyBitLength = defaultKeyBitLength; //only have one choice
++      }
++    else if(cert_details.find("id-ecPublicKey") != std::string::npos)
++      {
++	csrInfo.keyPairAlgorithm = "EC";
++	if(cert_details.find(SN_secp384r1))
++	  {
++	    csrInfo.keyCurveId = SN_secp384r1;
++	  }
++	else if(cert_details.find(SN_secp521r1))
++	  {
++	    csrInfo.keyCurveId = SN_secp521r1;
++	  }
++	else if(cert_details.find(SN_X9_62_prime256v1))
++	  {
++	    csrInfo.keyCurveId = SN_X9_62_prime256v1;
++	  }
++	else
++	  {
++	    return NULL;
++	  }
++      }
++    else
++      {
++	return NULL;
++      }
++    isRenew(true);
++    csr = generateCSR(csrInfo.altName, csrInfo.challengePassword,
++		csrInfo.city, csrInfo.commonName, csrInfo.contactPerson,
++		csrInfo.country, csrInfo.email, csrInfo.givenName,
++		csrInfo.initial, csrInfo.keyBitLength, csrInfo.keyCurveId,
++		csrInfo.keyPairAlgorithm, csrInfo.keyUsage,csrInfo.organization, csrInfo.organizationalUnit, csrInfo.state,
++		csrInfo.surname, csrInfo.unstructuredName);
++    isRenew(false);    
++    return csr;
++}
++
++/***************************************
++ * parseSSLCert - parse Certificate Info
++ ***************************************/
++int Manager::parseSSLCert(std::string subj)
++{
++  char target=0x2f; // char '/'
++  unsigned int i,m=1,n=0;
++
++  // adding a '/' to the end so parsing will find the last element
++  subj.push_back('/');
++  // starting at 1 because 0 is already '/'
++  for(i=1;i<subj.size();++i)
++    {
++      if(subj[i] == target)
++	{
++	  n = i;
++	  if(subj.substr(m,n-m).find("L=") != std::string::npos)
++	    {
++	      csrInfo.city = subj.substr(m+2,n-m-2);
++	    }
++	  else if(subj.substr(m,n-m).find("CN=") != std::string::npos)
++	    {
++	      csrInfo.commonName = subj.substr(m+3,n-m-3);
++	    }
++	  else if(subj.substr(m,n-m).find("name=") != std::string::npos)
++	    {
++	      csrInfo.contactPerson = subj.substr(m+5,n-m-5);
++	    }
++	  else if(subj.substr(m,n-m).find("C=") != std::string::npos)
++	    {
++	      csrInfo.country = subj.substr(m+2,n-m-2);
++	    }
++	  else if(subj.substr(m,n-m).find("emailAddress=") != std::string::npos)
++	    {
++	      csrInfo.email = subj.substr(m+13,n-m-13);
++	    }
++	  else if(subj.substr(m,n-m).find("GN=") != std::string::npos)
++	    {
++	      csrInfo.givenName = subj.substr(m+3,n-m-3);
++	    }
++	  else if(subj.substr(m,n-m).find("initial=") != std::string::npos)
++	    {
++	      csrInfo.initial = subj.substr(m+8,n-m-8);
++	    }
++	  else if(subj.substr(m,n-m).find("extendedKeyUsage=") != std::string::npos)
++	    {
++	      csrInfo.keyUsage.push_back(subj.substr(m+17,n-m-17));
++	    }
++	  else if(subj.substr(m,n-m).find("keyUsage=") != std::string::npos)
++	    {
++	      csrInfo.keyUsage.push_back(subj.substr(m+9,n-m-9));
++	    }
++	  else if(subj.substr(m,n-m).find("O=") != std::string::npos)
++	    {
++	      csrInfo.organization = subj.substr(m+2,n-m-2);
++	    }
++	  else if(subj.substr(m,n-m).find("OU=") != std::string::npos)
++	    {
++	      csrInfo.organizationalUnit = subj.substr(m+3,n-m-3);
++	    }
++	  else if(subj.substr(m,n-m).find("ST=") != std::string::npos)
++	    {
++	      csrInfo.state = subj.substr(m+3,n-m-3);
++	    }
++	  else if(subj.substr(m,n-m).find("SN=") != std::string::npos)
++	    {
++	      csrInfo.surname = subj.substr(m+3,n-m-3);
++	    }
++	  else if(subj.substr(m,n-m).find("unstructuredName=") != std::string::npos)
++	    {
++	      csrInfo.unstructuredName = subj.substr(m+3,n-m-3);
++	    }
++	  //reset for next string
++	  m=n+1;
++	  n=0;
++	}
++    }
++  
++  return 0;
++
++}
++
++/***************************************
++ * getPrivateKey - get the private key
++ ***************************************/
++EVPPkeyPtr Manager::getPrivateKey(const std::string& privKeyFileName)
++{
++    log<level::INFO>("Get private key to file");
++
++    // get private key file
++    fs::path privKeyPath = certParentInstallPath / privKeyFileName;
++
++    FILE* fp = std::fopen(privKeyPath.c_str(), "r");
++    if (fp == nullptr)
++    {
++        log<level::ERR>("Error occurred getting private key file");
++        elog<InternalFailure>();
++    }
++    
++    // read private key
++    EVP_PKEY* pKey = nullptr;
++
++    if(! (pKey = PEM_read_PrivateKey(fp, nullptr, nullptr, nullptr)))
++    {
++        std::fclose(fp);
++        log<level::ERR>("Error occurred while reading private key");
++        elog<InternalFailure>();
++    }
++    std::fclose(fp);
++    
++    return {pKey, &::EVP_PKEY_free};
++}
++
+ void Manager::addEntry(X509_NAME* x509Name, const char* field,
+                        const std::string& bytes)
+ {

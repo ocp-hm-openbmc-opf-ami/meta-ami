@@ -14,5 +14,6 @@ SRC_URI += "file://0001-ARP-Control-property.patch\
             file://0010-Add-DBus-Property-IPv4-IPv6-Enabled-Disabled-And-Error-Handling.patch \
             file://0010-Added-TimeOut-for-managers.patch \
 	    file://0012-passwordChangeRequired.patch \
+	    file://0012-Certificate-dbus-renew-rekey.patch \
 	    "
 EXTRA_OEMESON += "-Ddata_com_ami=true"
