@@ -36,6 +36,7 @@ SRC_URI += " \
            file://0034-Add-warm-reset-support.patch \
            file://0046-Fix-For-SOL.patch \
 	   file://0047-Fix-for-set-inprogress-ipmi-command-parameter-0x02.patch \
+           file://0048-checking-Error-completion-code-for-DCMI-set-configur.patch \
            "
 
 do_install:append(){
