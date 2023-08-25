@@ -1,0 +1,58 @@
+From 5cfd853b551789af63d53c5189621447a597171f Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Tue, 22 Aug 2023 02:49:46 -0700
+Subject: [PATCH] Fix remove empty gateway and add gateway check condition 1.
+ Check if default gateway is empty before remove neighbor 2. Check if gateway
+ address and IP address are in the same subnet before set
+
+---
+ src/ethernet_interface.cpp | 26 ++++++++++++++++++++------
+ 1 file changed, 20 insertions(+), 6 deletions(-)
+
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index e5e1dab..911c4cd 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -1049,6 +1049,17 @@ std::string EthernetInterface::defaultGateway(std::string gateway)
+             gateway = std::to_string(ToAddr<in_addr>{}(gateway));
+             ip_address::isValidIPv4Addr(gateway, ip_address::Type::GATEWAY4_ADDRESS);
+         }
++
++        for (auto& addr : addrs) {
++            if (addr.second->type() == IP::Protocol::IPv4 && addr.second->origin() != IP::AddressOrigin::LinkLocal) {
++                auto prefixLength = addr.second->prefixLength();
++                auto netmask = htobe32(~UINT32_C(0) << (32 - prefixLength));
++                if (((ToAddr<in_addr>{}(addr.second->address())).s_addr & netmask) != ( (ToAddr<in_addr>{}(gateway)).s_addr & netmask)) {
++                    throw std::logic_error("Gateway address and IP address aren't in the same subnet.");
++                }
++                break;
++            }
++        }
+     }
+     catch (const std::exception& e)
+     {
+@@ -1063,12 +1074,15 @@ std::string EthernetInterface::defaultGateway(std::string gateway)
+         return gateway;
+     }
+ 
+-    manager.get().removeNeighbor(
+-        NeighborInfo{
+-            .ifidx=ifIdx,
+-             .addr=ToAddr<in_addr>{}(EthernetInterfaceIntf::defaultGateway())
+-       }
+-    );
++    if (!EthernetInterfaceIntf::defaultGateway().empty()) {
++        manager.get().removeNeighbor(
++            NeighborInfo{
++                .ifidx=ifIdx,
++                .addr=ToAddr<in_addr>{}(EthernetInterfaceIntf::defaultGateway())
++            }
++        );
++    }
++
+     EthernetInterfaceIntf::defaultGateway(gateway);
+     setDwMacAddrByIP(gateway);
+ 
+-- 
+2.25.1
+

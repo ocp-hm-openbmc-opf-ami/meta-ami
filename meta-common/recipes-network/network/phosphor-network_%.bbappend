@@ -19,6 +19,7 @@ SRC_URI:append = " \
              file://0017-Fix-property-of-DomainName-in-each-EthernetInterface-Returns-Empty.patch \
              file://0018-Add-VLAN_MAX_NUM-for-not-creating-VLAN-interfaces-over-size.patch \
              file://0019-Fix-Defaultgateway6-Is-Zero-When-Setting-More-Than-One_IPv6.patch \
+             file://0020-Fix-Remove-Empty-Gateway-and-Static-Gateway-Missing-and-Add-Gateway-Check-Condition.patch \
            "
 
 do_install:append() {

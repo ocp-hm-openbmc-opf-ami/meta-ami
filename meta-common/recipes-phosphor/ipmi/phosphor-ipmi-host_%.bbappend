@@ -37,6 +37,7 @@ SRC_URI += " \
            file://0046-Fix-For-SOL.patch \
 	   file://0047-Fix-for-set-inprogress-ipmi-command-parameter-0x02.patch \
            file://0048-checking-Error-completion-code-for-DCMI-set-configur.patch \
+           file://0048-Fix-MAC-Address-and-IP-Address-of-Neighbor-are-not-Matched.patch \
            "
 
 do_install:append(){
