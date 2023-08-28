@@ -12,6 +12,7 @@ SRC_URI += "file://nfs.cfg \
 	    file://0003-Fix-incorrect-MAC-address-in-RNDIS-driver.patch \
             file://0015-Adding-Threshols-support-for-NM-support.patch \
             file://0016-legacy-driver-support-for-pwm-driver.patch \
+            file://0002-i3c-mctp-workaround-for-wrong-DCR-value.patch \
            "
 
 NON_PFR_SRC_URI_AMI = "file://0012-Add-new-layout-as-per-AMI-requirements.patch"
