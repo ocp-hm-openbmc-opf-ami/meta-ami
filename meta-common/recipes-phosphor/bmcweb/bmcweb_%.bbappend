@@ -70,6 +70,7 @@ SRC_URI:append = " file://0001-managers-add-factory-restore.patch  \
             file://0086-Adding-SubordinateOverrides-privilege.patch \
             file://0091-Delete-Subscription-status-code-should-be-204-No-Con.patch \
             file://0092-Added-SessionType-as-Redfish-for-created-Redfish-Ses.patch \
+            file://0100-Adding-FRU-support-to-Redfish.patch \
         "
 SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
 "
