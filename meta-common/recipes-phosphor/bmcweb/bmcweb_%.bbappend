@@ -73,6 +73,7 @@ SRC_URI:append = " file://0001-managers-add-factory-restore.patch  \
             file://0100-Adding-FRU-support-to-Redfish.patch \
             file://0099-Adding-Error-Message-for-Invalid-HostName.patch \
             file://0101-Adding-Error-Message-for-Invalid-MTUSize.patch \
+            file://0098-Pass-address-and-gateway-values-in-proper-order-to-d.patch \
         "
 SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
 "
