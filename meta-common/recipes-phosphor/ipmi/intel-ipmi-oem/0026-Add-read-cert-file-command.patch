@@ -1,0 +1,156 @@
+From 56ccaf15faae8e80a42be374b40a6477236c3fdf Mon Sep 17 00:00:00 2001
+From: Connie Yin <conniey@ami.com>
+Date: Wed, 16 Aug 2023 12:15:02 -0400
+Subject: [PATCH] Add read cert file command
+
+Tested on a size of 1136 cert file
+
+Signed-off-by: Connie Yin <conniey@ami.com>
+---
+ include/oemcommands.hpp |  1 +
+ src/oemcommands.cpp     | 96 +++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 97 insertions(+)
+
+diff --git a/include/oemcommands.hpp b/include/oemcommands.hpp
+index 8d3ebc3..f135cf1 100644
+--- a/include/oemcommands.hpp
++++ b/include/oemcommands.hpp
+@@ -92,6 +92,7 @@ static constexpr Cmd cmdSetEfiBootOptions = 0xEA;
+ static constexpr Cmd cmdGetEfiBootOptions = 0xEB;
+ static constexpr Cmd cmdSetNmiStatus = 0xED;
+ static constexpr Cmd cmdGetPSUVersion = 0xEF;
++static constexpr Cmd cmdReadCertficate = 0x1C;
+ } // namespace general
+ 
+ namespace platform
+diff --git a/src/oemcommands.cpp b/src/oemcommands.cpp
+index 1ab9b8e..313fe1d 100644
+--- a/src/oemcommands.cpp
++++ b/src/oemcommands.cpp
+@@ -72,6 +72,7 @@
+ 
+ namespace ipmi
+ {
++constexpr size_t ipmbMaxDataSize = 256;
+ // IPMI OEM USB Linux Gadget info
+ static constexpr uint16_t USB_VENDOR_ID = 0x0525;
+ static constexpr uint16_t USB_PRODUCT_ID = 0xA4A2;
+@@ -132,6 +133,7 @@ static constexpr size_t maxFRUStringLength = 0x3F;
+ // HI Certificate FingerPrint error code
+ static constexpr Cc ipmiCCBootStrappingDisabled = 0x80;
+ static constexpr Cc ipmiCCCertificateNumberInvalid = 0xCB;
++static constexpr Cc ipmiCCFileSelectorOrOffsetAndLengthOutOfRange = 0x09;
+ 
+ static constexpr auto ethernetIntf =
+     "xyz.openbmc_project.Network.EthernetInterface";
+@@ -4976,6 +4978,96 @@ ipmi::RspType<std::vector<uint8_t>>
+     }
+ }
+ 
++ipmi::RspType<std::vector<uint8_t>> ipmiOEMReadCertficate(
++    ipmi::Context::ptr ctx, std::optional<uint8_t> MSBFileOffset,
++    std::optional<uint8_t> FileOffset2, std::optional<uint8_t> FileOffset1,
++    std::optional<uint8_t> LSBFileOffset,
++    std::optional<uint8_t> MSBNumberOfBytesToRead,
++    std::optional<uint8_t> NumberOfBytesToRead2,
++    std::optional<uint8_t> NumberOfBytesToRead1,
++    std::optional<uint8_t> LSBNumberOfBytesToRead)
++{
++    uint32_t offset = 0, nbytes = 0;
++    std::vector<uint8_t> readBuf(ipmbMaxDataSize);
++    std::vector<uint8_t> respBuf;
++    int fd = -1;
++
++    if (!MSBFileOffset || !FileOffset2 || !FileOffset1 || !LSBFileOffset ||
++        !MSBNumberOfBytesToRead || !NumberOfBytesToRead2 ||
++        !NumberOfBytesToRead1 || !LSBNumberOfBytesToRead)
++    {
++        return ipmi::responseReqDataLenInvalid();
++    }
++
++    offset = (*MSBFileOffset << 24 | *FileOffset2 << 16 | *FileOffset1 << 8 |
++              *LSBFileOffset);
++
++    nbytes = (*MSBNumberOfBytesToRead << 24 | *NumberOfBytesToRead2 << 16 |
++              *NumberOfBytesToRead1 << 8 | *LSBNumberOfBytesToRead);
++
++    if (nbytes == 0)
++    {
++        return ipmi::response(
++            ipmi::ipmiCCFileSelectorOrOffsetAndLengthOutOfRange);
++    }
++    if (nbytes > ipmbMaxDataSize)
++    {
++        return ipmi::response(
++            ipmi::ipmiCCFileSelectorOrOffsetAndLengthOutOfRange);
++    }
++
++    if ((access(defaultCertPath.c_str(), F_OK)) == -1)
++    {
++        return ipmi::responseResponseError();
++    }
++
++    fd = open(defaultCertPath.c_str(), O_RDONLY);
++    if (fd == -1)
++    {
++        return ipmi::responseResponseError();
++    }
++
++    if ((off_t)(offset + nbytes) > lseek(fd, 0, SEEK_END))
++    {
++        close(fd);
++        fd = -1;
++        return ipmi::responseResponseError();
++    }
++
++    if (lseek(fd, 0, SEEK_SET) == -1)
++    {
++        close(fd);
++        fd = -1;
++        return ipmi::responseResponseError();
++    }
++
++    if ((pread(fd, static_cast<void*>(readBuf.data()), nbytes, offset)) == -1)
++    {
++        close(fd);
++        fd = -1;
++        return ipmi::responseResponseError();
++    }
++
++    close(fd);
++    fd = -1;
++
++    readBuf.resize(nbytes);
++    try
++    {
++        for (const auto& data : readBuf)
++        {
++            respBuf.push_back(data);
++        }
++    }
++    catch (std::exception& e)
++    {
++        log<level::ERR>("Failed to get Root Cert",
++                        phosphor::logging::entry("EXCEPTION=%s", e.what()));
++        return ipmi::responseResponseError();
++    }
++
++    return ipmi::responseSuccess(respBuf);
++}
+ 
+ static void registerOEMFunctions(void)
+ {
+@@ -5034,6 +5126,10 @@ static void registerOEMFunctions(void)
+                     intel::general::cmdSetSpecialUserPassword,
+                     Privilege::Callback, ipmiOEMSetSpecialUserPassword);
+ 
++    registerHandler(prioOpenBmcBase, intel::netFnPlatform,
++                    intel::general::cmdReadCertficate, Privilege::Callback,
++                    ipmiOEMReadCertficate);
++
+     // <Get Processor Error Config>
+     registerHandler(prioOemBase, intel::netFnGeneral,
+                     intel::general::cmdGetProcessorErrConfig, Privilege::User,
+-- 
+2.34.1
+

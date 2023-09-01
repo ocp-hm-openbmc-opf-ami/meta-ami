@@ -20,5 +20,6 @@ SRC_URI += "\
        file://0023-Get-SDR-with-the-Invalid-Record-ID-shows-invalid-req.patch \
        file://0024-Fix-for-chassis-identify-ipmi-standard-commands-givi.patch \
        file://0025-SEL-entries-used-percentage-showing-unknown.patch \
+       file://0026-Add-read-cert-file-command.patch \
     "
 
