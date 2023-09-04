@@ -19,6 +19,7 @@ UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE=95
 UPDATE_PERCENT_SUCCESS=100
 UPDATE_PERCENT_FAIL=100
 SECURE_BOOT_STRAP_ENABLED=1
+update=/run/initramfs/update
 
 update_percentage() {
     if [ -n "$img_obj" ]; then
@@ -101,6 +102,7 @@ set_activation_status() {
     fi
 }
 
+
 get_requestedactivation_status() {
     local image="$1"
     if [ $local_file -eq 0 ]; then
@@ -111,11 +113,10 @@ get_requestedactivation_status() {
     fi
 }
 
-
 exit_fail() {
     set_activation_status Failed
     update_percentage $UPDATE_PERCENT_FAIL
-    log "${FWTYPE}:${FWVER} - SEAMLESS_UPDATE_FAILED"
+    log "${FWTYPE}:${FWVER} - UPDATE_FAILED"
     exit 1
 }
 
@@ -177,60 +178,58 @@ bmc_full_flash() {
     FWVER="NA"
 
     update_percentage $UPDATE_PERCENT_PRESTAGE_VERIFY_START
+    # Use update script to update Firmware for non-intel platforms
+    if test -x $update
+	then
+        cp $LOCAL_PATH /run/initramfs/
+        reboot
+        return 0
+    else
 
-    # # Verify: do a quick sanity check on image size(128MB)
-    # if [ $(stat -c "%s" "$LOCAL_PATH") -ne 134217728 ]; then
-    #     log "BMC full flash - Image verification failed: Size mismatch"
-    #     redfish_log_abort "BMC full flash - Image verification failed: Size mismatch"
-    #     set_activation_status Failed
-    #     update_percentage $UPDATE_PERCENT_FAIL
-    #     return 1
-    # fi
+        update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_START
+        local requestedactivationstate=$(get_requestedactivation_status bmc_bkup)
+        if [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
+            log "BMC Full Flash - Starting the SPI write on bkup CS1 spi . It will take ~8 minutes...."
+            local mtdPart=$( cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"alt-bmc\"" {print $1}')
+            echo "mtdPart=$mtdPart"
+            if [ -z "$mtdPart" ]; then
+                log "BMC Full Flash - alt-bmc mtd patition not found"
+                redfish_log_abort " BMC Full Flash - Image update failed"
+                set_activation_status Failed
+                set_requestedactivation_status None
+                update_percentage $UPDATE_PERCENT_FAIL
+                return 1
+            fi
+            local rc=$(mtd-util -d /dev/$mtdPart c $LOCAL_PATH 0)
+            # Log Event: Update percentage and log event
+            if [[ "$rc" -ne 0 ]]; then
+                log "BMC Full Flash - Image update failed"
+                redfish_log_abort " BMC Full Flash - Image update failed"
+                set_activation_status Failed
+                set_requestedactivation_status None
+                update_percentage $UPDATE_PERCENT_FAIL
+                return 1
+            fi
+            update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
+            log "BMC Full Flash - Image update successful on bkup spi"
+            redfish_log_fw_evt success
+            update_percentage $UPDATE_PERCENT_SUCCESS
+            set_activation_status Active 
+            reboot -f
+        fi    
+        # Flash: writing to BMC SPI device
+        log "BMC Full Flash - Starting the SPI write. It will take ~8 minutes...."
+        local rc=$(mtd-util -d /dev/mtd0 c $LOCAL_PATH 0)
 
-    update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_START
-    local requestedactivationstate=$(get_requestedactivation_status bmc_bkup)
-     if [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
-        log "BMC Full Flash - Starting the SPI write on bkup CS1 spi . It will take ~8 minutes...."
-        local mtdPart=$( cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"alt-bmc\"" {print $1}')
-        echo "mtdPart=$mtdPart"
-        if [ -z "$mtdPart" ]; then
-            log "BMC Full Flash - alt-bmc mtd patition not found"
-            redfish_log_abort " BMC Full Flash - Image update failed"
-            set_activation_status Failed
-            set_requestedactivation_status None
-            update_percentage $UPDATE_PERCENT_FAIL
-            return 1
-        fi
-        local rc=$(mtd-util -d /dev/$mtdPart c $LOCAL_PATH 0)
         # Log Event: Update percentage and log event
+        update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
         if [[ "$rc" -ne 0 ]]; then
             log "BMC Full Flash - Image update failed"
             redfish_log_abort " BMC Full Flash - Image update failed"
             set_activation_status Failed
-            set_requestedactivation_status None
             update_percentage $UPDATE_PERCENT_FAIL
             return 1
         fi
-        update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
-        log "BMC Full Flash - Image update successful on bkup spi"
-        redfish_log_fw_evt success
-        update_percentage $UPDATE_PERCENT_SUCCESS
-        set_activation_status Active 
-        reboot -f
-    fi    
-    # Flash: writing to BMC SPI device
-    log "BMC Full Flash - Starting the SPI write. It will take ~8 minutes...."
-    local rc=$(mtd-util -d /dev/mtd0 c $LOCAL_PATH 0)
-
-    # Log Event: Update percentage and log event
-    if [[ "$rc" -ne 0 ]]; then
-        log "BMC Full Flash - Image update failed"
-        redfish_log_abort " BMC Full Flash - Image update failed"
-        set_activation_status Failed
-        update_percentage $UPDATE_PERCENT_FAIL
-        return 1
-    fi
-        update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
         log "BMC Full Flash - Image update successful"
         redfish_log_fw_evt success
         update_percentage $UPDATE_PERCENT_SUCCESS
@@ -238,6 +237,7 @@ bmc_full_flash() {
         # reboot
         reboot -f
         return 0
+    fi
 }
 
 
@@ -260,6 +260,12 @@ ping_pong_update() {
         log "Update exited as non-PFR image is tried onto PFR image"
         redfish_log_abort "non-PFR image is tried onto PFR image"
         return 1
+    fi
+
+    if test -x $update
+	then
+        find $(dirname "$METAFILE_PATH") -type f -name "image-*" ! -name "*.sig" -exec cp {} /run/initramfs/ \;
+        reboot 
     fi
     # do a quick sanity check on the image
     if [ $(stat -c "%s" "$LOCAL_PATH") -lt 10000000 ]; then
@@ -395,8 +401,8 @@ update_fw() {
     # determine firmware file type
     # local componentName=$(cat $LOCAL_PATH | awk -F= '$1=="ComponentName"{print $2}')
     if [ -z "$COMPONENTNAME" ] ; then
-        if [ -f "$(dirname "$METAFILE_PATH")/image-runtime" ]; then
-            LOCAL_PATH="$(dirname "$METAFILE_PATH")/image-runtime" 
+        if [ -f "$(dirname "$METAFILE_PATH")/image-runtime" ] || [ -f "$(dirname "$METAFILE_PATH")/image-kernel" ]; then
+            if [ -f "$(dirname "$METAFILE_PATH")/image-runtime" ]; then LOCAL_PATH="$(dirname "$METAFILE_PATH")/image-runtime"; else LOCAL_PATH="$(dirname "$METAFILE_PATH")/image-kernel"; fi
             COMPONENTNAME="bmc"
             echo "Updating image $LOCAL_PATH"
             ping_pong_update
