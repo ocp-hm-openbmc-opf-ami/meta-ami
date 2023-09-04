@@ -68,7 +68,7 @@ SRC_URI:append = " file://0001-managers-add-factory-restore.patch  \
             file://0084-Task-Delete-Implementation-Under-TaskService.patch \ 
 	    file://0080-Added-PasswordRestFailed-after-password-expired.patch \
             file://0086-Adding-SubordinateOverrides-privilege.patch \
-            file://0091-Delete-Subscription-status-code-should-be-204-No-Con.patch \
+            file://0091-Recreating_Patch_For_Delete-Subscription-status-code.patch \
             file://0092-Added-SessionType-as-Redfish-for-created-Redfish-Ses.patch \
             file://0100-Adding-FRU-support-to-Redfish.patch \
             file://0099-Adding-Error-Message-for-Invalid-HostName.patch \
