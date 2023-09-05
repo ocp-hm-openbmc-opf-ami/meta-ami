@@ -8,6 +8,7 @@ SRC_URI += " \
 	     file://0003-Add-Host-Interface-User-Support.patch \
 	     file://0012-passwordpolicy.patch \
 	     file://0015-passwordchangerequired.patch \
+             file://0017-SSH-Active-User-Delete-Fix.patch \
            "
 
 FILES:${PN} += "${datadir}/dbus-1/system.d/phosphor-nslcd-cert-config.conf"
