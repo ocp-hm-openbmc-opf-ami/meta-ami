@@ -84,6 +84,7 @@ SRC_URI:append = " file://0001-managers-add-factory-restore.patch  \
 SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
 "
 SRC_URI_BHS:append = "file://0106-removing-cupservice-under-openbmc.patch \
+		     file://0108-Adding-condition-to-Patch-Min-Value-not-greater-than.patch \
                       file://0110-Fix-For-Pmt-Sensor-Not-listed-in-Redfish.patch \
 "
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'restricted', SRC_URI_NM, '', d)}"
