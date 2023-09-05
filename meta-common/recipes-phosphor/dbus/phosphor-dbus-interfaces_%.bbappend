@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-dbus-interfaces.git;branch=main;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "32999030d4f2f7e3964b3dfe3b150f5b188ef20e"
+SRCREV_override = "d04c1a17735f18c042b2ce32ab2f6574d6ec3418"
 
 SRC_URI += "file://0001-ARP-Control-property.patch\
 	    file://0003-ARP-VLAN-YAML.patch \
