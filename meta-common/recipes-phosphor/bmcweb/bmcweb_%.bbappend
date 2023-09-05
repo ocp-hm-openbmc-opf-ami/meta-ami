@@ -76,6 +76,7 @@ SRC_URI:append = " file://0001-managers-add-factory-restore.patch  \
             file://0098-Pass-address-and-gateway-values-in-proper-order-to-d.patch \
             file://0104-Fix-for-Display-Hostname-properly-in-NetworkProtocol.patch \
             file://0103-Added-the-support-for-Server-Power-Operations.patch \
+            file://0097-time-offset-patch.patch \
         "
 SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
 "
