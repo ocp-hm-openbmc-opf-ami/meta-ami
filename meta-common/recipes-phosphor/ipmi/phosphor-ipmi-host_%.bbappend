@@ -39,6 +39,7 @@ SRC_URI += " \
            file://0048-checking-Error-completion-code-for-DCMI-set-configur.patch \
            file://0048-Fix-MAC-Address-and-IP-Address-of-Neighbor-are-not-Matched.patch \
            file://0049-Not-Allowed-To-Change-IPv6_Router-Address-Control-When-In-DHCP-Mode.patch \
+           file://0050-Fix-rsp-error-code-when-attempting-to-write-read-only-parameter.patch \
            "
 
 do_install:append(){
