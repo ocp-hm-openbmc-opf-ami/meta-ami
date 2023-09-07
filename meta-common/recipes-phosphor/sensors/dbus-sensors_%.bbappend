@@ -10,6 +10,7 @@ SRC_URI:append = " \
             file://0010-Add-Processor-presence-support.patch \
             file://0011-Add-watchdog2-support.patch \
             file://0012-Adding-Sensor-threshold-support-for-nm-sensor.patch \
+            file://0013-Adding-ast2600-compatible-string-for-FanTypes-of-asp.patch \
             "
 
 PACKAGECONFIG[processorstatus] = "-Dprocstatus=enabled, -Dprocstatus=disabled"
