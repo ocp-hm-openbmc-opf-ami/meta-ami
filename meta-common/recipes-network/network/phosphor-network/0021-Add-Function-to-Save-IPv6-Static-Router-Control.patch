@@ -1,0 +1,403 @@
+From 17c936049ed4c379d7282d0780bf9dbda89e1d83 Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Wed, 23 Aug 2023 23:24:07 -0700
+Subject: [PATCH] Add Function to Save IPv6 Static Router Control
+
+	modified:   src/config_parser.cpp
+	modified:   src/config_parser.hpp
+	modified:   src/ethernet_interface.cpp
+	modified:   src/ethernet_interface.hpp
+	modified:   src/network_manager.cpp
+	modified:   src/util.cpp
+	modified:   src/util.hpp
+---
+ src/config_parser.cpp      | 11 +++++
+ src/config_parser.hpp      |  1 +
+ src/ethernet_interface.cpp | 92 +++++++++++++++++++++++++++++++-------
+ src/ethernet_interface.hpp | 10 ++++-
+ src/network_manager.cpp    | 12 ++++-
+ src/util.cpp               | 19 ++++++++
+ src/util.hpp               |  9 ++++
+ 7 files changed, 137 insertions(+), 17 deletions(-)
+
+diff --git a/src/config_parser.cpp b/src/config_parser.cpp
+index 3eaeb73..7fa0742 100644
+--- a/src/config_parser.cpp
++++ b/src/config_parser.cpp
+@@ -14,6 +14,7 @@
+ #include <stdexcept>
+ #include <string>
+ #include <utility>
++#include <charconv>
+ 
+ namespace phosphor
+ {
+@@ -45,6 +46,16 @@ std::optional<bool> parseBool(std::string_view in) noexcept
+     return std::nullopt;
+ }
+ 
++std::optional<int> parseInt(std::string_view in) noexcept {
++    int retVal = 0;
++    auto [ptr, ec] = std::from_chars(in.data(), in.data() + in.size(), retVal);
++    if (ec != std::errc{}) {
++        return std::nullopt;
++    }
++
++    return retVal;
++}
++
+ fs::path pathForIntfConf(const fs::path& dir, std::string_view intf)
+ {
+     return dir / fmt::format(FMT_COMPILE("00-bmc-{}.network"), intf);
+diff --git a/src/config_parser.hpp b/src/config_parser.hpp
+index 46b99d6..5ac378c 100644
+--- a/src/config_parser.hpp
++++ b/src/config_parser.hpp
+@@ -27,6 +27,7 @@ using ValueListstr = std::vector<std::string>;
+ bool icaseeq(std::string_view in, std::string_view expected) noexcept;
+ /** @brief Turns a systemd bool string into a c++ bool */
+ std::optional<bool> parseBool(std::string_view in) noexcept;
++std::optional<int> parseInt(std::string_view in) noexcept;
+ 
+ namespace fs = std::filesystem;
+ 
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index 911c4cd..325e914 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -134,6 +134,10 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+     const config::Parser& ifaceConfig(fs::path{fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(),interfaceName()).c_str()});
+     EthernetInterfaceIntf::ipv4Enable(getIP4Enable(ifaceConfig), true);
+     EthernetInterfaceIntf::ipv6Enable(getIP6Enable(ifaceConfig), true);
++    EthernetInterfaceIntf::ipv6EnableStaticRtr(getIP6StaticRtr(ifaceConfig), true);
++    if (EthernetInterfaceIntf::ipv6EnableStaticRtr()) {
++        EthernetInterfaceIntf::ipv6StaticRtrAddr(getIP6StaticRtrAddr(ifaceConfig), true);
++    }
+ 
+     this->loadARPControl();
+     emit_object_added();
+@@ -233,15 +237,24 @@ void EthernetInterface::addStaticNeigh(const NeighborInfo& info)
+         return;
+     }
+ 
++    uint8_t prefixLength = info.prefixLength;
++    const config::Parser& ifaceConfig(fs::path{fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(),interfaceName()).c_str()});
++    if (EthernetInterfaceIntf::ipv6EnableStaticRtr()) {
++        if (!EthernetInterfaceIntf::ipv6StaticRtrAddr().empty() && EthernetInterfaceIntf::ipv6StaticRtrAddr() == std::to_string(*info.addr)) {
++            prefixLength = getIP6StaticRtrPrefix(ifaceConfig);
++        }
++    }
++
+     if (auto it = staticNeighbors.find(*info.addr); it != staticNeighbors.end())
+     {
+         it->second->NeighborObj::macAddress(std::to_string(*info.mac));
++        it->second->NeighborObj::prefixLength(prefixLength);
+     }
+     else
+     {
+         staticNeighbors.emplace(*info.addr, std::make_unique<Neighbor>(
+                                                 bus, std::string_view(objPath),
+-                                                *this, *info.addr, *info.mac, info.prefixLength,
++                                                *this, *info.addr, *info.mac, prefixLength,
+                                                 Neighbor::State::Permanent));
+     }
+ }
+@@ -381,6 +394,7 @@ ObjectPath EthernetInterface::neighbor(std::string ipAddress,
+             return it->second->getObjPath();
+         }
+         it->second->NeighborObj::macAddress(str);
++        it->second->NeighborObj::prefixLength(prefixLength);
+     }
+ 
+     writeConfigurationFile();
+@@ -412,6 +426,7 @@ bool EthernetInterface::dhcp4(bool value)
+                 manager.get().removeNeighbor(
+                     NeighborInfo{
+                         .ifidx=ifIdx,
++                        .state=NUD_PERMANENT,
+                         .addr=ToAddr<in_addr>{}(EthernetInterfaceIntf::defaultGateway())
+                     }
+                 );
+@@ -835,6 +850,17 @@ void EthernetInterface::writeConfigurationFile()
+             auto& state = IfaceState.map["Network"].emplace_back();
+             state["IPv4Enable"].emplace_back(EthernetInterfaceIntf::ipv4Enable() ? "true" : "false");
+             state["IPv6Enable"].emplace_back(EthernetInterfaceIntf::ipv6Enable() ? "true" : "false");
++
++            auto& router = IfaceState.map["IPv6Router"].emplace_back();
++            router["IPv6EnableStaticRtr"].emplace_back(EthernetInterfaceIntf::ipv6EnableStaticRtr() ? "true" : "false");
++            if (EthernetInterfaceIntf::ipv6EnableStaticRtr()) {
++                router["IPv6StaticRtrAddr"].emplace_back(EthernetInterfaceIntf::ipv6StaticRtrAddr());
++                if (!EthernetInterfaceIntf::ipv6StaticRtrAddr().empty()) {
++                    if (auto it = staticNeighbors.find(ToAddr<in6_addr>{}(EthernetInterfaceIntf::ipv6StaticRtrAddr())); it != staticNeighbors.end()) {
++                        router["IPv6StaticRtrPrefix"].emplace_back(std::to_string(it->second->prefixLength()));
++                    }
++                }
++            }
+             IfaceState.writeFile(fs::path{fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(), interfaceName()).c_str()});
+ 
+             network["IPv6AcceptRA"].emplace_back(EthernetInterfaceIntf::ipv6Enable() && ipv6AcceptRA() ? "true" : "false");
+@@ -1078,13 +1104,23 @@ std::string EthernetInterface::defaultGateway(std::string gateway)
+         manager.get().removeNeighbor(
+             NeighborInfo{
+                 .ifidx=ifIdx,
++                .state=NUD_PERMANENT,
+                 .addr=ToAddr<in_addr>{}(EthernetInterfaceIntf::defaultGateway())
+             }
+         );
+     }
+ 
+     EthernetInterfaceIntf::defaultGateway(gateway);
+-    setDwMacAddrByIP(gateway);
++    auto [mac, prefixLength] = getDwMacAddrByIP(gateway);
++    manager.get().addNeighbor(
++        NeighborInfo{
++            .ifidx=ifIdx,
++            .state=NUD_PERMANENT,
++            .addr=ToAddr<in_addr>{}(EthernetInterfaceIntf::defaultGateway()),
++            .mac=ToAddr<ether_addr>{}(mac.value_or("00:00:00:00:00:00")),
++            .prefixLength=prefixLength
++        }
++    );
+ 
+     writeConfigurationFile();
+     manager.get().reloadConfigs();
+@@ -1448,6 +1484,35 @@ bool EthernetInterface::ipv4Enable(bool value) {
+     return value;
+ }
+ 
++
++/** Set value of IPv6EnableStaticRtr */
++bool EthernetInterface::ipv6EnableStaticRtr(bool value) {
++    if (value == EthernetInterfaceIntf::ipv6EnableStaticRtr()) {
++        log<level::INFO>("IPv6EnableStaticRtr no change\n");
++        return value;
++    }
++
++    EthernetInterfaceIntf::ipv6EnableStaticRtr(value);
++    writeConfigurationFile();
++    manager.get().reloadConfigs();
++
++    return value;
++}
++
++/** Set value of IPv6StaticRtrAddr */
++std::string EthernetInterface::ipv6StaticRtrAddr(std::string value) {
++    if (value == EthernetInterfaceIntf::ipv6StaticRtrAddr()) {
++        log<level::INFO>("ipv6StaticRtrAddr no change\n");
++        return value;
++    }
++
++    EthernetInterfaceIntf::ipv6StaticRtrAddr(value);
++    writeConfigurationFile();
++    manager.get().reloadConfigs();
++
++    return value;
++}
++
+ /** @brief write the ARPControl configuration into the conf file.
+  */
+ void EthernetInterface::writeConfiguration()
+@@ -1510,12 +1575,13 @@ int EthernetInterface::getCreatedVLANNum(fs::path confFile) {
+     return (config.map.getValueStrings("Network", "VLAN")).size();
+ }
+ 
+-int EthernetInterface::setDwMacAddrByIP(std::string gateway) {
++std::tuple<std::optional<std::string>, uint8_t> EthernetInterface::getDwMacAddrByIP(std::string gateway) {
+     int ret = 0;
++    std::tuple<std::optional<std::string>, uint8_t> retVal(std::nullopt, 0);
+     std::ifstream ifs("/proc/net/arp");
+     if (!ifs) {
+         log<level::INFO>("/proc/net/arp not opened\n");
+-        return std::string::npos;
++        return retVal;
+     }
+ 
+     auto prefixLength = 0;
+@@ -1531,8 +1597,9 @@ int EthernetInterface::setDwMacAddrByIP(std::string gateway) {
+         if (line == gateway) {
+             ifs >> line >> line >> mac >> line >> line;
+             if (line == interfaceName() && ether_aton(mac.c_str()) != nullptr) {
+-                neighbor(gateway, mac, prefixLength);
+-                return 0;
++                std::get<0>(retVal) = mac;
++                std::get<1>(retVal) = prefixLength;
++                return retVal;
+             }
+         }
+     }
+@@ -1556,7 +1623,6 @@ int EthernetInterface::setDwMacAddrByIP(std::string gateway) {
+ 
+     s = socket(PF_PACKET, SOCK_DGRAM, 0);
+     if (s < 0) {
+-        ret = std::string::npos;
+         goto end;
+     }
+ 
+@@ -1564,13 +1630,11 @@ int EthernetInterface::setDwMacAddrByIP(std::string gateway) {
+     ret = snprintf(ifr.ifr_name,sizeof(ifr.ifr_name),"%s",interfaceName().c_str());
+     if(ret < 0 || ret >= (signed int)sizeof(ifr.ifr_name)) {
+         lg2::error("Buffer Overflow\n");
+-        ret = std::string::npos;
+         goto close;
+     }
+ 
+     if (ioctl(s, SIOCGIFINDEX, &ifr) < 0) {
+         lg2::error("Interface {INTERFACENAME} not found\n", "INTERFACENAME", interfaceName());
+-        ret = std::string::npos;
+         goto close;
+     }
+ 
+@@ -1579,21 +1643,18 @@ int EthernetInterface::setDwMacAddrByIP(std::string gateway) {
+     srcsock.sll_protocol = htons(ETH_P_ARP);
+     if (bind(s, (struct sockaddr *)&srcsock, sizeof(srcsock)) == -1) {
+         lg2::error("Failure in Binding Interface {INTERFACENAME}'s index = {INDEX}\n", "INTERFACENAME", interfaceName(), "INDEX", srcsock.sll_ifindex);
+-        ret = std::string::npos;
+         goto close;
+     }
+ 
+     alen = sizeof(srcsock);
+     if (getsockname(s, (struct sockaddr *)& srcsock, &alen)) {
+         lg2::error("Failure in getsockname\n");
+-        ret = std::string::npos;
+         goto close;
+     }
+ 
+     if (srcsock.sll_halen == 0) {
+         log<level::ERR>(fmt::format("Interface {} is not able to communicate\n", interfaceName()).c_str());
+         lg2::error("Interface {INTERFACENAME} is not able to communicate\n", "INTERFACENAME", interfaceName());
+-        ret = std::string::npos;
+         goto close;
+     }
+ 
+@@ -1674,8 +1735,9 @@ int EthernetInterface::setDwMacAddrByIP(std::string gateway) {
+                 retry--;
+             }
+             if(0 == memcmp(p,preMAC,6)) {
+-                neighbor(gateway, fmt::format("{:0>2x}:{:0>2x}:{:0>2x}:{:0>2x}:{:0>2x}:{:0>2x}", p[0],p[1],p[2],p[3],p[4],p[5]), prefixLength);
+-                ret = 0;
++                mac = fmt::format("{:0>2x}:{:0>2x}:{:0>2x}:{:0>2x}:{:0>2x}:{:0>2x}", p[0],p[1],p[2],p[3],p[4],p[5]);
++                std::get<0>(retVal) = mac;
++                std::get<1>(retVal) = prefixLength;
+                 goto close;
+             } // if
+         }
+@@ -1684,7 +1746,7 @@ int EthernetInterface::setDwMacAddrByIP(std::string gateway) {
+ close:
+     close(s);
+ end:
+-    return ret;
++    return retVal;
+ }
+ 
+ std::map<std::string, std::unique_ptr<sdbusplus::bus::match_t>> EthernetInterface::initSignals() {
+diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
+index f9f7532..880d54a 100644
+--- a/src/ethernet_interface.hpp
++++ b/src/ethernet_interface.hpp
+@@ -251,7 +251,7 @@ class EthernetInterface : public Ifaces
+     /** @brief set the Default Gateway MAC Addess.
+      *  @param[in] gateway - Gateway4 address.
+      */
+-    int setDwMacAddrByIP(std::string gateway);
++    std::tuple<std::optional<std::string>, uint8_t> getDwMacAddrByIP(std::string gateway);
+ 
+     /** @brief Get current interface index.
+      */
+@@ -266,6 +266,12 @@ class EthernetInterface : public Ifaces
+     /** Set value of IPv4Enable */
+     bool ipv4Enable(bool value) override;
+ 
++    /** Set value of IPv6EnableStaticRtr */
++    bool ipv6EnableStaticRtr(bool value) override;
++
++    /** Set value of IPv6StaticRtrAddr */
++    std::string ipv6StaticRtrAddr(std::string value) override;
++
+     using ChannelAccessIntf::maxPrivilege;
+     using EthernetInterfaceIntf::interfaceName;
+     using EthernetInterfaceIntf::linkUp;
+@@ -281,6 +287,8 @@ class EthernetInterface : public Ifaces
+     using EthernetInterfaceIntf::linkLocalAutoConf;
+     using EthernetInterfaceIntf::ipv6Enable;
+     using EthernetInterfaceIntf::ipv4Enable;
++    using EthernetInterfaceIntf::ipv6EnableStaticRtr;
++    using EthernetInterfaceIntf::ipv6StaticRtrAddr;
+ 
+     using EthernetInterfaceIntf::domainName;
+     using EthernetInterfaceIntf::nameservers;
+diff --git a/src/network_manager.cpp b/src/network_manager.cpp
+index 8b629ab..6cebed9 100644
+--- a/src/network_manager.cpp
++++ b/src/network_manager.cpp
+@@ -494,7 +494,17 @@ void Manager::addDefGw(unsigned ifidx, InAddrAny addr)
+                 {
+                     it->second->EthernetInterfaceIntf::defaultGateway(
+                         std::to_string(addr));
+-                    it->second->setDwMacAddrByIP(std::to_string(addr));
++                    auto [mac, prefixLength] = it->second->getDwMacAddrByIP(std::to_string(addr));
++                    addNeighbor(
++                        NeighborInfo{
++                            .ifidx=ifidx,
++                            .state=NUD_PERMANENT,
++                            .addr=ToAddr<in_addr>{}(it->second->EthernetInterfaceIntf::defaultGateway()),
++                            .mac=ToAddr<ether_addr>{}(mac.value_or("00:00:00:00:00:00")),
++                            .prefixLength=prefixLength
++
++                        }
++                    );
+                 }
+                 else if constexpr (std::is_same_v<in6_addr, decltype(addr)>)
+                 {
+diff --git a/src/util.cpp b/src/util.cpp
+index 1e6b159..7d6535d 100644
+--- a/src/util.cpp
++++ b/src/util.cpp
+@@ -210,6 +210,25 @@ bool getIP6Enable(const config::Parser& config) {
+     return systemdParseLast(config, "Network", "IPv6Enable", config::parseBool).value_or(true);
+ }
+ 
++bool getIP6StaticRtr(const config::Parser& config) {
++    return systemdParseLast(config, "IPv6Router", "IPv6EnableStaticRtr", config::parseBool).value_or(false);
++}
++
++std::string getIP6StaticRtrAddr(const config::Parser& config) {
++    if (auto str = config.map.getLastValueString("IPv6Router","IPv6StaticRtrAddr"); str == nullptr)
++    {
++        return "";
++    }
++    else{
++        return *str;
++    }
++}
++
++int getIP6StaticRtrPrefix(const config::Parser& config) {
++    auto val = systemdParseLast(config, "IPv6Router", "IPv6StaticRtrPrefix", config::parseInt).value_or(0);
++    return val;
++}
++
+ DHCPVal getDHCPValue(const config::Parser& config)
+ {
+     return systemdParseLast(config, "Network", "DHCP", systemdParseDHCP)
+diff --git a/src/util.hpp b/src/util.hpp
+index 04598b7..cc30746 100644
+--- a/src/util.hpp
++++ b/src/util.hpp
+@@ -110,6 +110,15 @@ std::optional<std::string> interfaceToUbootEthAddr(std::string_view intf);
+  */
+ bool getIPv6AcceptRA(const config::Parser& config);
+ 
++/** @brief read the IPv6AcceptRA value from the configuration file
++ *  @param[in] config - The parsed configuration.
++ */
++bool getIP6StaticRtr(const config::Parser& config);
++
++std::string getIP6StaticRtrAddr(const config::Parser& config);
++
++int getIP6StaticRtrPrefix(const config::Parser& config);
++
+ /** @brief read the IPv4Enable value from the configuration file
+  *  @param[in] config - The parsed configuration.
+  */
+-- 
+2.25.1
+

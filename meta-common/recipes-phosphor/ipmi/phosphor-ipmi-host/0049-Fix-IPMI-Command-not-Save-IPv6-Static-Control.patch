@@ -1,0 +1,325 @@
+From 9d5f594aae3b7a791362e469bfe6382d723f3c28 Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Wed, 23 Aug 2023 23:22:20 -0700
+Subject: [PATCH] Fix IPMI Command not Save IPv6 Static Control
+
+	modified:   transporthandler.cpp
+---
+ transporthandler.cpp | 161 ++++++++++++++++++++++++++++++++-----------
+ 1 file changed, 122 insertions(+), 39 deletions(-)
+
+diff --git a/transporthandler.cpp b/transporthandler.cpp
+index 37223e1..379022a 100644
+--- a/transporthandler.cpp
++++ b/transporthandler.cpp
+@@ -427,15 +427,15 @@ template <int family>
+ void reconfigureGatewayMAC(sdbusplus::bus_t& bus, const ChannelParams& params,
+                            const ether_addr& mac)
+ {
+-    auto gateway = getGatewayProperty<family>(bus, params);
+-    if (!gateway)
++    auto oldStaticAddr = getStaticRtrAddr<family>(bus, params);
++    if (oldStaticAddr.empty())
+     {
+         log<level::ERR>("Tried to set Gateway MAC without Gateway");
+         elog<InternalFailure>();
+     }
+ 
+     ObjectLookupCache neighbors(bus, params, INTF_NEIGHBOR);
+-    auto neighbor = findStaticNeighbor<family>(bus, params, *gateway,
++    auto neighbor = findStaticNeighbor<family>(bus, params, maybeStringToAddr<AF_INET6>(oldStaticAddr.c_str()).value(),
+                                                neighbors);
+ 
+     auto prefixLength=neighbor->prefixLength;
+@@ -445,7 +445,7 @@ void reconfigureGatewayMAC(sdbusplus::bus_t& bus, const ChannelParams& params,
+         deleteObjectIfExists(bus, params.service, neighbor->path);
+     }
+ 
+-    createNeighbor<family>(bus, params, *gateway, mac, prefixLength);
++    createNeighbor<family>(bus, params, maybeStringToAddr<AF_INET6>(oldStaticAddr.c_str()).value(), mac, prefixLength);
+ }
+ 
+ 
+@@ -453,8 +453,8 @@ template <int family>
+ void reconfigureGatewayPrefixLength(sdbusplus::bus_t& bus, const ChannelParams& params,
+                            const uint8_t prefixLength)
+ {
+-    auto gateway = getGatewayProperty<family>(bus, params);
+-    if (!gateway)
++    auto oldStaticAddr = getStaticRtrAddr<family>(bus, params);
++    if (oldStaticAddr.empty())
+     {
+         log<level::ERR>("Tried to set Gateway MAC without Gateway");
+         elog<InternalFailure>();
+@@ -462,7 +462,7 @@ void reconfigureGatewayPrefixLength(sdbusplus::bus_t& bus, const ChannelParams&
+ 
+     ObjectLookupCache neighbors(bus, params, INTF_NEIGHBOR);
+     auto neighbor =
+-        findStaticNeighbor<family>(bus, params, *gateway, neighbors);
++        findStaticNeighbor<family>(bus, params, maybeStringToAddr<AF_INET6>(oldStaticAddr.c_str()).value(), neighbors);
+ 
+     auto mac=neighbor->mac;
+ 
+@@ -471,7 +471,7 @@ void reconfigureGatewayPrefixLength(sdbusplus::bus_t& bus, const ChannelParams&
+         deleteObjectIfExists(bus, params.service, neighbor->path);
+     }
+ 
+-    createNeighbor<family>(bus, params, *gateway, mac, prefixLength);
++    createNeighbor<family>(bus, params, maybeStringToAddr<AF_INET6>(oldStaticAddr.c_str()).value(), mac, prefixLength);
+ }
+ 
+ /** @brief Deconfigures the IPv6 address info configured for the interface
+@@ -811,6 +811,53 @@ static bool getIPv6AcceptRA(sdbusplus::bus_t& bus, const ChannelParams& params)
+     return raEnabled;
+ }
+ 
++/** @brief Gets the IPv6 Static Router value
++ *
++ *  @param[in] bus    - The bus object used for lookups
++ *  @param[in] params - The parameters for the channel
++ *  @return networkd IPv6EnableStaticRtr value
++ */
++static bool getIPv6StaticRtr(sdbusplus::bus_t& bus, const ChannelParams& params)
++{
++    auto enabled = std::get<bool>(getDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, "IPv6EnableStaticRtr"));
++    return enabled;
++}
++
++template <int family>
++std::string getStaticRtrAddr(sdbusplus::bus_t& bus, const ChannelParams& params)
++{
++    auto addr = std::get<std::string>(getDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, "IPv6StaticRtrAddr"));
++    return addr;
++}
++
++void setStaticRtrAddr(sdbusplus::bus_t& bus, const ChannelParams& params, in6_addr& address)
++{
++    // Save the old gateway MAC address if it exists so we can recreate it
++    auto oldStaticAddr = getStaticRtrAddr<AF_INET6>(bus, params);
++    std::optional<IfNeigh<AF_INET6>> neighbor;
++    if (!oldStaticAddr.empty())
++    {
++        ObjectLookupCache neighbors(bus, params, INTF_NEIGHBOR);
++        neighbor = findStaticNeighbor<AF_INET6>(bus, params, maybeStringToAddr<AF_INET6>(oldStaticAddr.c_str()).value(), neighbors);
++        if (neighbor)
++        {
++            deleteObjectIfExists(bus, params.service, neighbor->path);
++        }
++    }
++
++    setDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, "IPv6StaticRtrAddr", addrToString<AF_INET6>(address));
++    createNeighbor<AF_INET6>(bus, params, address, stringToMAC("00:00:00:00:00:00"), AddrFamily<AF_INET6>::defaultPrefix);
++}
++
++template <int family>
++std::optional<IfNeigh<family>> getStaticRtrNeighbor(sdbusplus::bus_t& bus, const ChannelParams& params) {
++    ObjectLookupCache neighbors(bus, params, INTF_NEIGHBOR);
++    auto routerAddr = getStaticRtrAddr<AF_INET6>(bus, params);
++    auto addr = maybeStringToAddr<AF_INET6>(routerAddr.c_str()).value_or(in6_addr{});
++    return findStaticNeighbor<AF_INET6>(bus, params, addr, neighbors);
++}
++
++
+ /** @brief Sets the IPv6AcceptRA flag
+  *
+  *  @param[in] bus           - The bus object used for lookups
+@@ -825,6 +872,33 @@ void setIPv6AcceptRA(sdbusplus::bus_t& bus, const ChannelParams& params,
+                     "IPv6AcceptRA", ipv6AcceptRA);
+ }
+ 
++/** @brief Sets the IPv6EnableStaticRtr flag
++ *
++ *  @param[in] bus           - The bus object used for lookups
++ *  @param[in] params        - The parameters for the channel
++ *  @param[in] enabled       - boolean to enable/disable IPv6 static router
++ */
++void setIPv6StaticRtr(sdbusplus::bus_t& bus, const ChannelParams& params,
++                     const bool enabled)
++{
++    setDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET,
++                    "IPv6EnableStaticRtr", enabled);
++
++    if (!enabled) {
++        auto oldStaticAddr = getStaticRtrAddr<AF_INET6>(bus, params);
++        std::optional<IfNeigh<AF_INET6>> neighbor;
++        if (!oldStaticAddr.empty())
++        {
++            ObjectLookupCache neighbors(bus, params, INTF_NEIGHBOR);
++            neighbor = findStaticNeighbor<AF_INET6>(bus, params, maybeStringToAddr<AF_INET6>(oldStaticAddr.c_str()).value(), neighbors);
++            if (neighbor)
++            {
++                deleteObjectIfExists(bus, params.service, neighbor->path);
++            }
++        }
++    }
++}
++
+ /**
+  * Define placeholder command handlers for the OEM Extension bytes for the Set
+  * LAN Configuration Parameters and Get LAN Configuration Parameters
+@@ -1413,7 +1487,7 @@ RspType<> setLan(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
+ 
+                 //We disable IPv6 Router Address Configuration static control field as only applicable when IPv6 is static
+                 IPv6RouterControlFlag::StaticControl=0;
+-
++                channelCall<setIPv6StaticRtr>(channel, IPv6RouterControlFlag::StaticControl);
+             }
+             return responseSuccess();
+         }
+@@ -1448,57 +1522,63 @@ RspType<> setLan(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
+ 
+             bool enableRA = control[IPv6RouterControlFlag::Dynamic];
+             channelCall<setIPv6AcceptRA>(channel, enableRA);
++
++            bool enableStaticRtr = IPv6RouterControlFlag::StaticControl;
++            channelCall<setIPv6StaticRtr>(channel, enableStaticRtr);
++
+             return responseSuccess();
+         }
+         case LanParam::IPv6StaticRouter1IP:
+         {
++            IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
+ 
+-            if(!IPv6RouterControlFlag::StaticControl)
+-            {
+-                return responseCommandNotAvailable();
+-            }
+-
+-            in6_addr gateway;
+-            std::array<uint8_t, sizeof(gateway)> bytes;
++            in6_addr routeAddr;
++            std::array<uint8_t, sizeof(routeAddr)> bytes;
+             if (req.unpack(bytes) != 0 || !req.fullyUnpacked())
+             {
+                 return responseReqDataLenInvalid();
+             }
+-            copyInto(gateway, bytes);
+-            channelCall<setGatewayProperty<AF_INET6>>(channel, gateway);
+-            return responseSuccess();
+-        }
+-        case LanParam::IPv6StaticRouter1MAC:
+-        {
+ 
+             if(!IPv6RouterControlFlag::StaticControl)
+             {
+                 return responseCommandNotAvailable();
+             }
+ 
++            copyInto(routeAddr, bytes);
++            channelCall<setStaticRtrAddr>(channel, routeAddr);
++            return responseSuccess();
++        }
++        case LanParam::IPv6StaticRouter1MAC:
++        {
++            IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
++
+             ether_addr mac;
+             std::array<uint8_t, sizeof(mac)> bytes;
+             if (req.unpack(bytes) != 0 || !req.fullyUnpacked())
+             {
+                 return responseReqDataLenInvalid();
+             }
++            if(!IPv6RouterControlFlag::StaticControl)
++            {
++                return responseCommandNotAvailable();
++            }
+             copyInto(mac, bytes);
+             channelCall<reconfigureGatewayMAC<AF_INET6>>(channel, mac);
+             return responseSuccess();
+         }
+         case LanParam::IPv6StaticRouter1PrefixLength:
+         {
+-
+-            if(!IPv6RouterControlFlag::StaticControl)
+-            {
+-                return responseCommandNotAvailable();
+-            }
++            IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
+ 
+             uint8_t prefix;
+             if (req.unpack(prefix) != 0 || !req.fullyUnpacked())
+             {
+                 return responseReqDataLenInvalid();
+             }
++            if(!IPv6RouterControlFlag::StaticControl)
++            {
++                return responseCommandNotAvailable();
++            }
+             if (prefix > MAX_IPV6_PREFIX_LENGTH)
+             {
+                 return responseInvalidFieldRequest();
+@@ -1509,17 +1589,17 @@ RspType<> setLan(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
+         }
+         case LanParam::IPv6StaticRouter1PrefixValue:
+         {
+-
+-            if(!IPv6RouterControlFlag::StaticControl)
+-            {
+-                return responseCommandNotAvailable();
+-            }
++            IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
+ 
+             std::array<uint8_t, sizeof(in6_addr)> bytes{};
+             if (req.unpack(bytes) != 0 || !req.fullyUnpacked())
+             {
+                 return responseReqDataLenInvalid();
+             }
++            if(!IPv6RouterControlFlag::StaticControl)
++            {
++                return responseCommandNotAvailable();
++            }
+ 
+             // Accept only null prefix value since currently not in use
+             in6_addr ip;
+@@ -1817,26 +1897,29 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
+             std::bitset<8> control;
+             control[IPv6RouterControlFlag::Dynamic] =
+                 channelCall<getIPv6AcceptRA>(channel);
++            IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
+             control[IPv6RouterControlFlag::Static] = IPv6RouterControlFlag::StaticControl;
+             ret.pack(control);
+             return responseSuccess(std::move(ret));
+         }
+         case LanParam::IPv6StaticRouter1IP:
+         {
+-            in6_addr gateway{};
++            std::string routerAddr;
++            IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
+             if(IPv6RouterControlFlag::StaticControl)
+             {
+-                gateway = channelCall<getGatewayProperty<AF_INET6>>(channel).value_or(in6_addr{});
++                routerAddr = channelCall<getStaticRtrAddr<AF_INET6>>(channel);
+             }
+-            ret.pack(dataRef(gateway));
++            ret.pack(dataRef(maybeStringToAddr<AF_INET6>(routerAddr.c_str()).value_or(in6_addr{})));
+             return responseSuccess(std::move(ret));
+         }
+         case LanParam::IPv6StaticRouter1MAC:
+         {
+             ether_addr mac{};
++            IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
+             if(IPv6RouterControlFlag::StaticControl)
+             {
+-                auto neighbor = channelCall<getGatewayNeighbor<AF_INET6>>(channel);
++                auto neighbor = channelCall<getStaticRtrNeighbor<AF_INET6>>(channel);
+                 if (neighbor)
+                 {
+                     mac = neighbor->mac;
+@@ -1847,11 +1930,11 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
+         }
+         case LanParam::IPv6StaticRouter1PrefixLength:
+         {
+-            uint8_t prefixLength;
+-
++            uint8_t prefixLength = 0;
++            IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
+             if(IPv6RouterControlFlag::StaticControl)
+             {
+-	    	auto neighbor = channelCall<getGatewayNeighbor<AF_INET6>>(channel);
++                auto neighbor = channelCall<getStaticRtrNeighbor<AF_INET6>>(channel);
+ 	    	if (neighbor)
+ 	    	{
+ 		    prefixLength = neighbor->prefixLength;
+-- 
+2.25.1
+
