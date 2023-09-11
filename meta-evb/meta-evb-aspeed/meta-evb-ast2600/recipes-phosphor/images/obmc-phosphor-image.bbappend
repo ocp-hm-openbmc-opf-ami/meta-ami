@@ -46,3 +46,12 @@ OBMC_IMAGE_EXTRA_INSTALL:append = " \
                                   phosphor-post-code-manager \
                                   entity-manager \
                                  "
+
+clean_pubkey() {
+    pubkeypath=$(find ${IMAGE_ROOTFS} -name publickey)
+    if [ -n "$pubkeypath" ]; then
+      rm -rf ${pubkeypath}
+    fi
+}
+
+ROOTFS_POSTPROCESS_COMMAND += " clean_pubkey; "

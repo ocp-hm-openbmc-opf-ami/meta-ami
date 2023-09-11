@@ -80,3 +80,12 @@ python() {
                 'do_build',
                 ' do_image_fitimage_rootfs ', d)
 }
+
+clean_pubkey() {
+    pubkeypath=$(find ${IMAGE_ROOTFS} -name publickey)
+    if [ -n "$pubkeypath" ]; then
+      rm -rf ${pubkeypath}
+    fi
+}
+
+ROOTFS_POSTPROCESS_COMMAND += " clean_pubkey; "
