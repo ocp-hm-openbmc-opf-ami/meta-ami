@@ -78,6 +78,7 @@ SRC_URI:append = " file://0001-managers-add-factory-restore.patch  \
             file://0104-Fix-for-Display-Hostname-properly-in-NetworkProtocol.patch \
             file://0103-Added-the-support-for-Server-Power-Operations.patch \
             file://0097-time-offset-patch.patch \
+	    file://0081-Closing-SSE-stream-when-Subscription-is-deleted.patch \
         "
 SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
 "
