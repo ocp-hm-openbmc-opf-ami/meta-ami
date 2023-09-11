@@ -20,16 +20,26 @@ SRC_URI:append = " \
              file://0019-Fix-Defaultgateway6-Is-Zero-When-Setting-More-Than-One_IPv6.patch \
              file://0020-Fix-Remove-Empty-Gateway-and-Static-Gateway-Missing-and-Add-Gateway-Check-Condition.patch \
              file://0021-Add-Function-to-Save-IPv6-Static-Router-Control.patch \
-           "
+             file://0022-Enable-Advanced-Route.patch \ 
+             file://ipv4-advanced-route.sh \
+             file://ipv6-advanced-route.sh \
+          "
+
 
 do_install:append() {
     install -d ${D}${bindir}
     install -m 0755 ${WORKDIR}/nsupdate.sh  ${D}${bindir}
+
+    install -m 0755 ${WORKDIR}/ipv6-advanced-route.sh ${D}${bindir}
+    install -m 0755 ${WORKDIR}/ipv4-advanced-route.sh ${D}${bindir}
+
 }
 
 
 EXTRA_OEMESON:append = " -Dpersist-mac=true"
 
 EXTRA_OEMESON:append = " -Ddefault-link-local-autoconf=ipv6"
+
+EXTRA_OEMESON:append = " -Denable-advanced-route=true"
 
 SYSTEMD_SERVICE:${PN} += "xyz.openbmc_project.GARPControl.service"

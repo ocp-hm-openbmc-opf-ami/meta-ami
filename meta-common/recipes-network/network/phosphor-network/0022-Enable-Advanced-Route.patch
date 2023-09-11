@@ -1,0 +1,192 @@
+From cc39174172eb9c44506d3ccf28294e2c6cac642d Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Fri, 28 Jul 2023 03:34:04 -0700
+Subject: [PATCH] Enable Advanced-Route. And Use Compilation Option to
+ Enable/Disable it. 	modified:   meson.build 	modified:  
+ meson_options.txt 	modified:   src/ipaddress.cpp 	modified:  
+ src/ipaddress.hpp 	modified:   src/network_manager.cpp 	modified:  
+ src/network_manager.hpp
+
+---
+ meson.build             |  1 +
+ meson_options.txt       |  2 +-
+ src/ipaddress.cpp       | 22 ++++++++++++++++++++++
+ src/ipaddress.hpp       |  2 +-
+ src/network_manager.cpp | 31 +++++++++++++++++++++++++++++++
+ src/network_manager.hpp | 17 ++++++++++++++++-
+ 6 files changed, 72 insertions(+), 3 deletions(-)
+
+diff --git a/meson.build b/meson.build
+index 03de95c..9fb4dcb 100644
+--- a/meson.build
++++ b/meson.build
+@@ -22,6 +22,7 @@ conf_data.set(
+ conf_data.set('SYNC_MAC_FROM_INVENTORY', get_option('sync-mac'))
+ conf_data.set('PERSIST_MAC', get_option('persist-mac'))
+ conf_data.set10('FORCE_SYNC_MAC_FROM_INVENTORY', get_option('force-sync-mac'))
++conf_data.set('AMI_IP_ADVANCED_ROUTING_SUPPORT', get_option('enable-advanced-route'))
+ 
+ sdbusplus_dep = dependency('sdbusplus')
+ sdbusplusplus_prog = find_program('sdbus++', native: true)
+diff --git a/meson_options.txt b/meson_options.txt
+index 735335b..d637f00 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -14,4 +14,4 @@ option('persist-mac', type: 'boolean',
+        description: 'Permit the MAC address to be written to the systemd.network config')
+ option('force-sync-mac', type: 'boolean',
+        description: 'Force sync mac address no matter is first boot or not')
+-
++option('enable-advanced-route', type: 'boolean', description: 'Enable advanced route or not')
+diff --git a/src/ipaddress.cpp b/src/ipaddress.cpp
+index 07e37e4..d637042 100644
+--- a/src/ipaddress.cpp
++++ b/src/ipaddress.cpp
+@@ -66,7 +66,29 @@ IPAddress::IPAddress(sdbusplus::bus_t& bus,
+              true);
+     IP::origin(origin, true);
+     emit_object_added();
++
++#ifdef AMI_IP_ADVANCED_ROUTING_SUPPORT
++    if (type() == IP::Protocol::IPv4 && IP::origin() != IP::AddressOrigin::LinkLocal) {
++        execute("/usr/bin/ipv4-advanced-route.sh", "ipv4-advanced-route.sh", parent.get().interfaceName().c_str(), "UP");
++    }
++    else if (type() == IP::Protocol::IPv6 && IP::origin() != IP::AddressOrigin::LinkLocal) {
++        execute("/usr/bin/ipv6-advanced-route.sh", "ipv6-advanced-route.sh", parent.get().interfaceName().c_str(), "UP");
++    }
++
++#endif
+ }
++
++IPAddress::~IPAddress() {
++#ifdef AMI_IP_ADVANCED_ROUTING_SUPPORT
++    if (type() == IP::Protocol::IPv4 && IP::origin() != IP::AddressOrigin::LinkLocal) {
++        execute("/usr/bin/ipv4-advanced-route.sh", "ipv4-advanced-route.sh", parent.get().interfaceName().c_str(), "DOWN");
++    }
++    else if (type() == IP::Protocol::IPv6 && IP::origin() != IP::AddressOrigin::LinkLocal) {
++        execute("/usr/bin/ipv6-advanced-route.sh", "ipv6-advanced-route.sh", parent.get().interfaceName().c_str(), "DOWN");
++    }
++#endif
++}
++
+ std::string IPAddress::address(std::string /*ipAddress*/)
+ {
+     elog<NotAllowed>(Reason("Property update is not allowed"));
+diff --git a/src/ipaddress.hpp b/src/ipaddress.hpp
+index 05aafbd..7d5b080 100644
+--- a/src/ipaddress.hpp
++++ b/src/ipaddress.hpp
+@@ -42,6 +42,7 @@ class IPAddress : public IPIfaces
+     IPAddress(sdbusplus::bus_t& bus, std::string_view objRoot,
+               stdplus::PinnedRef<EthernetInterface> parent, IfAddr addr,
+               IP::AddressOrigin origin);
++    ~IPAddress();
+ 
+     std::string address(std::string ipAddress) override;
+     uint8_t prefixLength(uint8_t) override;
+diff --git a/src/network_manager.cpp b/src/network_manager.cpp
+index 3cd1bfb..948752c 100644
+--- a/src/network_manager.cpp
++++ b/src/network_manager.cpp
+@@ -126,6 +126,10 @@ Manager::Manager(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+                            "ERROR", ex);
+             }
+         }
++
++#ifdef AMI_IP_ADVANCED_ROUTING_SUPPORT
++        advanced_route_cond_var.notify_one();
++#endif
+         reloadPostHooks.clear();
+     });
+     std::vector<
+@@ -167,6 +171,11 @@ Manager::Manager(sdbusplus::bus_t& bus, DelayedExecutor& reload,
+         bus, (this->objPath / "dns").str, *this);
+     setConfDir(confDir);
+     initSupportedPrivilges();
++
++#ifdef AMI_IP_ADVANCED_ROUTING_SUPPORT
++    advanced_route_lock = std::unique_lock(advanced_route_mutex);
++    advanced_route_worker = std::thread(&Manager::AdvancedRoute, this);
++#endif
+ }
+ 
+ std::string getUserService(sdbusplus::bus::bus& bus, const std::string& intf,
+@@ -757,5 +766,27 @@ void Manager::setConfDir(const fs::path& dir)
+     }
+ }
+ 
++Manager::~Manager() {
++#ifdef AMI_IP_ADVANCED_ROUTING_SUPPORT
++    advanced_route_worker.std::thread::~thread();
++#endif
++}
++
++#ifdef AMI_IP_ADVANCED_ROUTING_SUPPORT
++void Manager::AdvancedRoute() {
++    while (true) {
++        advanced_route_cond_var.wait(advanced_route_lock);
++        std::this_thread::sleep_for(std::chrono::seconds(5));
++
++        for (auto it = interfaces.begin(); it != interfaces.end(); it++) {
++            auto ifname = it->first;
++            execute("/usr/bin/ipv4-advanced-route.sh", "ipv4-advanced-route.sh", ifname.c_str(), it->second->linkUp() ? "UP" : "DOWN");
++
++            execute("/usr/bin/ipv6-advanced-route.sh", "ipv6-advanced-route.sh", ifname.c_str(), it->second->linkUp() ? "UP" : "DOWN");
++        }
++    }
++}
++#endif
++
+ } // namespace network
+ } // namespace phosphor
+diff --git a/src/network_manager.hpp b/src/network_manager.hpp
+index 4cf3431..48666dc 100644
+--- a/src/network_manager.hpp
++++ b/src/network_manager.hpp
+@@ -19,6 +19,9 @@
+ #include <string>
+ #include <string_view>
+ #include <vector>
++#include <condition_variable>
++#include <thread>
++#include <mutex>
+ 
+ namespace phosphor
+ {
+@@ -49,6 +49,7 @@ class Manager : public ManagerIface
+   public:
+     Manager(Manager&&) = delete;
+     Manager& operator=(Manager&&) = delete;
++    ~Manager();
+ 
+     /** @brief Constructor to put object onto bus at a dbus path.
+      *  @param[in] bus - Bus to attach to.
+@@ -165,6 +168,10 @@ class Manager : public ManagerIface
+     /** @brief initializes the supportedPrivilege List */
+     void initSupportedPrivilges();
+ 
++#ifdef AMI_IP_ADVANCED_ROUTING_SUPPORT
++    /** @brief Used to notify/wait to exexute advanced-route */
++    std::condition_variable advanced_route_cond_var;
++#endif
+   protected:
+     /** @brief Handle to the object used to trigger reloads of networkd. */
+     DelayedExecutor& reload;
+@@ -215,6 +222,14 @@ class Manager : public ManagerIface
+ 
+     /** Get the user management service name dynamically **/
+     std::string getUserServiceName();
++
++#ifdef AMI_IP_ADVANCED_ROUTING_SUPPORT
++  private:
++    std::thread advanced_route_worker;
++    void AdvancedRoute();
++    std::unique_lock<std::mutex> advanced_route_lock;
++    std::mutex advanced_route_mutex;
++#endif
+ };
+ 
+ } // namespace network
+-- 
+2.25.1
+
