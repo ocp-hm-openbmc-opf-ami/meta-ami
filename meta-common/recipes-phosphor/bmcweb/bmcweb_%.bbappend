@@ -89,6 +89,7 @@ SRC_URI:append = " file://0001-managers-add-factory-restore.patch  \
             file://0120-Removing-IBMConfigFile-ResourceType.patch \
             file://0085-Redfish-Service-validator-fixes.patch \
             file://0095-Added-BIOS-Settings-support.patch \
+            file://0114-powersubsystem-powersupply-properties.patch \
         "
 SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
 "

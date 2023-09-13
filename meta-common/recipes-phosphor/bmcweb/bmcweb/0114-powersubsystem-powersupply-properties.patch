@@ -1,0 +1,432 @@
+From 8e6fb1764b205f257d0dc56b57109f890694f890 Mon Sep 17 00:00:00 2001
+From: nibinc <nibinc@ami.com>
+Date: Tue, 26 Sep 2023 05:39:00 -0400
+Subject: [PATCH 114/114] powersubsystem-powersupply-properties
+
+---
+ redfish-core/lib/power_subsystem.hpp | 131 ++++++++++++++++++
+ redfish-core/lib/sensors.hpp         | 198 +++++++++++++++++++++++++--
+ 2 files changed, 321 insertions(+), 8 deletions(-)
+
+diff --git a/redfish-core/lib/power_subsystem.hpp b/redfish-core/lib/power_subsystem.hpp
+index d54fd183..13ea5554 100644
+--- a/redfish-core/lib/power_subsystem.hpp
++++ b/redfish-core/lib/power_subsystem.hpp
+@@ -15,6 +15,135 @@
+ namespace redfish
+ {
+ 
++inline void getPSUMonitorProperties(std::shared_ptr<bmcweb::AsyncResp> asyncResp)
++{
++    crow::connections::systemBus->async_method_call(
++                     [asyncResp](const boost::system::error_code ec2,
++                      const std::vector<std::pair<
++                      std::string,
++                      std::variant<uint8_t, uint16_t, std::string, std::vector<std::string>>>>&
++                      propertiesList) {
++                    if (ec2)
++                    {
++                        return;
++                    }
++                    for (const std::pair<std::string,
++                    std::variant<uint8_t, uint16_t, std::string, std::vector<std::string>>>& property :
++                    propertiesList)
++                    {
++                        const std::string& propertyName = property.first;
++                        if ((propertyName == "AllocatedWatts") || (propertyName == "RequestedWatts"))
++                        {
++                            const uint16_t* value = std::get_if<uint16_t>(
++                                                    &property.second);
++                            if(value != nullptr)
++                            {
++                                     asyncResp->res.jsonValue["Allocation"][propertyName] = *value;
++                            }
++                        }
++                    }
++                },
++                "xyz.openbmc_project.Power.PSUMonitor","/xyz/openbmc_project/inventory/system/powersupply",
++                "org.freedesktop.DBus.Properties", "GetAll",
++                "xyz.openbmc_project.PsuStatus");
++}
++inline void getCollectionOfPSUMembers(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
++                                      const boost::urls::url& collectionPath,
++                                      std::span<const std::string_view> interfaces,
++                                      const std::vector<std::pair<std::string, std::variant<uint8_t,
++                                       std::string, bool>>>& propertiesList,
++                                       const char* subtree = "/xyz/openbmc_project/inventory")
++{
++    dbus::utility::getSubTreePaths(
++        subtree, 0, interfaces,
++        [collectionPath, propertiesList, asyncResp](
++            const boost::system::error_code& ec,
++            const dbus::utility::MapperGetSubTreePathsResponse& objects) {
++        if (ec)
++        {
++            BMCWEB_LOG_DEBUG << "DBUS response error " << ec.value();
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        nlohmann::json redundancyGroup;
++        std::vector<std::string> pathNames;
++        for (const auto& object : objects)
++        {
++            sdbusplus::message::object_path path(object);
++            std::string leaf = path.filename();
++            if (leaf.empty())
++            {
++                continue;
++            }
++            pathNames.push_back(leaf);
++        }
++        std::sort(pathNames.begin(), pathNames.end(),
++                  AlphanumLess<std::string>());
++        nlohmann::json memberArray = nlohmann::json::array();
++        for (const std::string& leaf : pathNames)
++        {
++            boost::urls::url url = collectionPath;
++            crow::utility::appendUrlPieces(url, leaf);
++            nlohmann::json memberObject;
++            memberObject["@odata.id"] = std::move(url);
++            memberArray.push_back(memberObject);
++        }
++        redundancyGroup["RedundancyGroup"] = std::move(memberArray);
++        redundancyGroup["RedundancyType"] = "Failover";
++        redundancyGroup["Status"]["State"] = "UnavailableOffline";
++        redundancyGroup["Status"]["Health"] = "OK";
++        for (const std::pair<std::string,
++                    std::variant<uint8_t,std::string,bool>>& property :
++                    propertiesList)
++                    {
++                        const std::string& propertyName = property.first;
++                        if ((propertyName == "PSUNumber")|| (propertyName == "RedundantCount"))
++                        {
++                            const uint8_t* value = std::get_if<uint8_t>(
++                                                    &property.second);
++                            if(value != nullptr)
++                            {
++                                if(propertyName == "PSUNumber")
++                                {
++                     
++                                    redundancyGroup["MaxSupportedInGroup"] = *value;
++                                }
++                                else
++                                {
++
++                                    redundancyGroup["MinNeededInGroup"] = *value;
++                                }
++                            }
++                        }
++                    }
++            asyncResp->res.jsonValue["PowerSupplyRedundancy"].push_back(redundancyGroup);
++        });
++}
++inline void getPSURedundancy(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                              const std::string& chassisId,
++                              const std::optional<std::string>& validChassisPath)
++{
++    crow::connections::systemBus->async_method_call(
++                     [asyncResp, chassisId,
++                      validChassisPath](const boost::system::error_code ec2,
++                      const std::vector<std::pair<
++                      std::string,
++                      std::variant<uint8_t,std::string,bool>>>&
++                      propertiesList) {
++                    if (ec2)
++                    {
++                        return;
++                    }
++                    constexpr std::array<std::string_view, 1> interface {
++                        "xyz.openbmc_project.Inventory.Item.PowerSupply"};
++                    getCollectionOfPSUMembers(asyncResp,boost::urls::format("/redfish/v1/Chassis/{}/PowerSubsystem/PowerSupplies", chassisId),
++                      interface, propertiesList);
++                },
++                "xyz.openbmc_project.PSURedundancy","/xyz/openbmc_project/control/power_supply_redundancy",
++                "org.freedesktop.DBus.Properties", "GetAll",
++                "xyz.openbmc_project.Control.PowerSupplyRedundancy");
++}
++
+ inline void doPowerSubsystemCollection(
+     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+     const std::string& chassisId,
+@@ -40,6 +169,8 @@ inline void doPowerSubsystemCollection(
+     asyncResp->res.jsonValue["PowerSupplies"]["@odata.id"] =
+         boost::urls::format(
+             "/redfish/v1/Chassis/{}/PowerSubsystem/PowerSupplies", chassisId);
++    getPSURedundancy(asyncResp,chassisId, validChassisPath);
++    getPSUMonitorProperties(asyncResp);
+ }
+ 
+ inline void handlePowerSubsystemCollectionHead(
+diff --git a/redfish-core/lib/sensors.hpp b/redfish-core/lib/sensors.hpp
+index e495107f..465fe7fa 100644
+--- a/redfish-core/lib/sensors.hpp
++++ b/redfish-core/lib/sensors.hpp
+@@ -353,6 +353,15 @@ class InventoryItem
+     std::string serialNumber;
+     std::set<std::string> sensors;
+     std::string ledObjectPath;
++    std::string firmwareVersion;
++    std::string plugType;
++    std::string nominalVoltageType;
++    std::string powerSupplyType;
++    std::string sparePartNumber;
++    std::string psuState;
++    uint16_t powerCapacityWatts;
++    uint16_t efficiencyRatings;
++    std::map<double,std::string> outputRails;
+     LedState ledState = LedState::UNKNOWN;
+ };
+ 
+@@ -618,6 +627,51 @@ inline std::string getState(const InventoryItem* inventoryItem)
+     return "Enabled";
+ }
+ 
++inline void getPsuState(InventoryItem* inventoryItem)
++{
++    if(inventoryItem != nullptr)
++    {
++        size_t strPos = (inventoryItem->name).find_last_of('_');
++        sdbusplus::asio::getAllProperties(
++            *crow::connections::systemBus,"xyz.openbmc_project.PSUSensor",
++            "/xyz/openbmc_project/sensors/voltage/" + inventoryItem->name.substr(strPos + 1) 
++            + "_Input_Voltage","",[inventoryItem](const boost::system::error_code& ec,
++            const ::dbus::utility::DBusPropertiesMap& valuesDict) {
++                if(ec)
++                {
++                    return;
++                }
++                bool connected = false;
++                double value;
++                for (const auto& [valueName, valueVariant] : valuesDict) {
++                    if(valueName == "Functional"){
++                          connected = std::get<bool>(valueVariant); 
++                    }
++                    if(valueName == "Value"){
++                              value = std::get<double>(valueVariant);
++                    }
++                }
++                if(connected)
++                {
++                  if(value > 0)
++                  {
++                    inventoryItem->psuState = "Enabled";
++                  }
++                  else{
++                    inventoryItem->psuState = "UnavailableOffline";
++                  }
++                }
++                else
++                {
++                    inventoryItem->psuState = "Disabled";
++                }
++            });
++    }
++    else{
++	inventoryItem->psuState = "Disabled";
++    }
++}
++
+ /**
+  * @brief Returns the Redfish Health value for the specified sensor.
+  * @param sensorJson Sensor JSON object.
+@@ -1455,6 +1509,118 @@ inline void storeInventoryItemData(
+     }
+ }
+ 
++inline void StorePSUmonitorItemData(InventoryItem* inventoryItem)
++{
++     crow::connections::systemBus->async_method_call(
++                     [inventoryItem](const boost::system::error_code ec2,
++                      const std::vector<std::pair<
++                      std::string,
++                      std::variant<uint8_t, uint16_t, std::string, std::vector<std::string>>>>&
++                      propertiesList) {
++                    if (ec2)
++                    {
++                        return;
++                    }
++                    for (const std::pair<std::string,
++                    std::variant<uint8_t, uint16_t, std::string, std::vector<std::string>>>& property :
++                    propertiesList)
++                    {
++                        const std::string& propertyName = property.first;
++                        if(propertyName == "FirmwareVersion")
++                        {
++                            const std::string* value = std::get_if<std::string>(&property.second);
++                            if(value != nullptr)
++                            {
++                               inventoryItem->firmwareVersion = *value;
++                            }
++                        }
++                        if(propertyName == "InputNominalVoltageType")
++                        {
++                            const std::string* value = std::get_if<std::string>(&property.second);
++                            if(value != nullptr)
++                            {
++                               inventoryItem->nominalVoltageType = *value;
++                            }
++                        }
++                        if(propertyName == "PlugType")
++                        {
++                            const std::string* value = std::get_if<std::string>(&property.second);
++                            if(value != nullptr)
++                            {
++                               inventoryItem->plugType = *value;
++                            }
++                        }
++                        if(propertyName == "PowerSupplyType")
++                        {
++                            const std::string* value = std::get_if<std::string>(&property.second);
++                            if(value != nullptr)
++                            {
++                               inventoryItem->powerSupplyType = *value;
++                            }
++                        }
++                        if(propertyName == "SparePartNumber")
++                        {
++                            const std::string* value = std::get_if<std::string>(&property.second);
++                            if(value != nullptr)
++                            {
++                               inventoryItem->sparePartNumber = *value;
++                            }
++                        }
++                        if(propertyName == "PowerCapacityWatts")
++                        {
++                            const uint16_t* value = std::get_if<uint16_t>(&property.second);
++                            if(value != nullptr)
++                            {
++                               inventoryItem->powerCapacityWatts = *value;
++                            }
++                        }
++                        if(propertyName == "EfficiencyRatings")
++                        {
++                            const std::string* value = std::get_if<std::string>(&property.second);
++                            if(value != nullptr)
++                            {
++                                try{
++                                    int value1 = std::stoi(*value);
++                                    inventoryItem->efficiencyRatings =  static_cast<uint16_t>(value1);
++                                } catch(const std::exception& e){
++
++                                }
++                            }
++                        }
++                        if(propertyName == "OutputRails")
++                        {
++                            const auto& propertyValue = property.second;
++                            if (std::holds_alternative<std::vector<std::string>>(propertyValue))
++                            {
++                                const std::vector<std::string>& vectorValue = std::get<std::vector<std::string>>(propertyValue);
++                                for (const std::string& element : vectorValue) {
++                                    if(element == "12v")
++                                    {
++                                        inventoryItem->outputRails[12] = "StorageDevice";
++                                    }
++                                    if(element == "1.8v")
++                                    {
++                                        inventoryItem->outputRails[1.8] = "SystemBoard";
++                                    }
++                                    if(element == "3v")
++                                    {
++                                        inventoryItem->outputRails[3] = "SystemBoard";
++                                    }
++                                    if(element == "5v")
++                                    {
++                                        inventoryItem->outputRails[5] = "SystemBoard";
++                                    }
++                                    }
++                                }
++
++                            }
++                        }
++                      },
++                "xyz.openbmc_project.Power.PSUMonitor","/xyz/openbmc_project/inventory/system/powersupply",
++                "org.freedesktop.DBus.Properties", "GetAll",
++                "xyz.openbmc_project.PsuStatus");
++}
++
+ /**
+  * @brief Gets D-Bus data for inventory items associated with sensors.
+  *
+@@ -1537,6 +1703,8 @@ static void getInventoryItemsData(
+                 {
+                     // Store inventory data in InventoryItem
+                     storeInventoryItemData(*inventoryItem, objDictEntry.second);
++		    StorePSUmonitorItemData(inventoryItem);
++		    getPsuState(inventoryItem);
+                 }
+             }
+ 
+@@ -2270,6 +2438,7 @@ inline nlohmann::json& getPowerSupply(nlohmann::json& powerSupplyArray,
+ 
+     // Add new PowerSupply object to JSON array
+     powerSupplyArray.push_back({});
++    nlohmann::json railValues, inputRanges, efficiencyRatings;
+     nlohmann::json& powerSupply = powerSupplyArray.back();
+     boost::urls::url url = boost::urls::format("/redfish/v1/Chassis/{}/Power",
+                                                chassisId);
+@@ -2284,15 +2453,23 @@ inline nlohmann::json& getPowerSupply(nlohmann::json& powerSupplyArray,
+     powerSupply["Model"] = inventoryItem.model;
+     powerSupply["PartNumber"] = inventoryItem.partNumber;
+     powerSupply["SerialNumber"] = inventoryItem.serialNumber;
++    powerSupply["FirmwareVersion"] = inventoryItem.firmwareVersion;
++    powerSupply["PlugType"] = inventoryItem.plugType;
++    powerSupply["PowerSupplyType"] = inventoryItem.powerSupplyType;
++    powerSupply["SparePartNumber"] = inventoryItem.sparePartNumber;
++    powerSupply["PowerCapacityWatts"] = inventoryItem.powerCapacityWatts;
++    for (const auto& rail : inventoryItem.outputRails) {
++        railValues["NominalVoltage"] = rail.first;
++        railValues["PhysicalContext"] = rail.second;
++        powerSupply["OutputRails"].push_back(railValues);
++    }
++    efficiencyRatings["EfficiencyPercent"] = inventoryItem.efficiencyRatings;
++    powerSupply["EfficiencyRatings"].push_back(efficiencyRatings);
++    inputRanges["NominalVoltageType"] = inventoryItem.nominalVoltageType;
++    powerSupply["InputRanges"].push_back(inputRanges);
++    powerSupply["Status"]["State"] = inventoryItem.psuState;
+     setLedState(powerSupply, &inventoryItem);
+ 
+-    if (inventoryItem.powerSupplyEfficiencyPercent >= 0)
+-    {
+-        powerSupply["EfficiencyPercent"] =
+-            inventoryItem.powerSupplyEfficiencyPercent;
+-    }
+-
+-    powerSupply["Status"]["State"] = getState(&inventoryItem);
+     const char* health = inventoryItem.isFunctional ? "OK" : "Critical";
+     powerSupply["Status"]["Health"] = health;
+     return powerSupply;
+@@ -2387,6 +2564,7 @@ inline void getSensorData(
+                     sensorsAsyncResp->chassisSubNode;
+ 
+                 nlohmann::json* sensorJson = nullptr;
++		std::string checkPowersupply;
+ 
+                 if (sensorSchema == sensors::node::sensors &&
+                     !sensorsAsyncResp->efficientExpand)
+@@ -2441,6 +2619,7 @@ inline void getSensorData(
+                                     .jsonValue["Id"])
+                             {
+                                 fieldName = "PowerSupplies";
++				checkPowersupply = "PowerSupplies";
+                             }
+                             else
+                             {
+@@ -2526,10 +2705,13 @@ inline void getSensorData(
+ 
+                 if (sensorJson != nullptr)
+                 {
+-                    objectInterfacesToJson(sensorName, sensorType,
++		   if ((sensorJson != nullptr) && (checkPowersupply != "PowerSupplies"))
++		   {
++                     objectInterfacesToJson(sensorName, sensorType,
+                                            sensorsAsyncResp->chassisSubNode,
+                                            objDictEntry.second, *sensorJson,
+                                            inventoryItem);
++		   }
+ 
+                     std::string path = "/xyz/openbmc_project/sensors/";
+                     path += sensorType;
+-- 
+2.34.1
+
