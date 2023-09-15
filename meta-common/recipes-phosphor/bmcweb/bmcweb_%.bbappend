@@ -81,6 +81,7 @@ SRC_URI:append = " file://0001-managers-add-factory-restore.patch  \
 	    file://0081-Closing-SSE-stream-when-Subscription-is-deleted.patch \
             file://0094-Fixed-Apache-Benchmark-tool-timeout-issue.patch \
             file://0107-Adding-error-message-for-LDAPService.patch \
+            file://0115-Added-204-resp-code-Patch-MetricReportDefinitions.patch \
         "
 SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
 "
