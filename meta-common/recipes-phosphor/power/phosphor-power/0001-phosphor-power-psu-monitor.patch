@@ -1,0 +1,873 @@
+From a400ec49d9005a47756b215f84f9d05c1d4a9cd7 Mon Sep 17 00:00:00 2001
+From: Dillibabu <dillibabug@ami.com>
+Date: Thu, 24 Aug 2023 17:22:49 +0530
+Subject: [PATCH] Signed-off-by: Dillibabu <dillibabug@ami.com>
+
+    This patch will used in the phosphor-power package which will monitor the psu and update the status in dbus properties.
+
+    Following properties are created,
+
+    InputRanges             -- supported
+    PowerCapacityWatts      -- supported
+    InputNominalVoltageType -- supported
+    OutputRails             -- supported
+    PowerSupplyType         -- supported
+    SerialNumber            -- suppopted
+    SparePartNumber         -- supported
+    Fwversion               -- supported
+
+In pmbus.cpp file readstring function modified because in file any space there means it will treat as new line so ifstream won't read for that used
+
+rdbuf method to read all the data in file.
+
+JSON file will have the data which we can't read from psu or inforamtion about psu.
+
+added read product name from JSON file then it will compare with FRU property once it found psu added in the list.
+
+AllocatedWattes/RequestedWatts properties will return only fixex values it won't create any impact on backend/harware.
+---
+ phosphor-power-supply/main.cpp         |  10 +-
+ phosphor-power-supply/power_supply.cpp | 150 ++++++++++++++++++----
+ phosphor-power-supply/power_supply.hpp | 116 ++++++++++++++++-
+ phosphor-power-supply/psu_manager.cpp  | 166 ++++++++++++++++++++-----
+ phosphor-power-supply/psu_manager.hpp  |  17 ++-
+ pmbus.cpp                              |   8 +-
+ pmbus.hpp                              |   1 -
+ types.hpp                              |   4 +-
+ 8 files changed, 407 insertions(+), 65 deletions(-)
+
+diff --git a/phosphor-power-supply/main.cpp b/phosphor-power-supply/main.cpp
+index c48c73a..0a10559 100644
+--- a/phosphor-power-supply/main.cpp
++++ b/phosphor-power-supply/main.cpp
+@@ -22,6 +22,8 @@
+ 
+ #include <filesystem>
+ 
++#define SOLUM_PSU
++
+ using namespace phosphor::power;
+ 
+ int main(void)
+@@ -40,8 +42,12 @@ int main(void)
+         bus.attach_event(event.get(), SD_EVENT_PRIORITY_NORMAL);
+ 
+         manager::PSUManager manager(bus, event);
+-
+-        return manager.run();
++        #ifdef SOLUM_PSU
++        manager.io_run();
++#else
++        manager.run();
++#endif
++        return -1;
+     }
+     catch (const std::exception& e)
+     {
+diff --git a/phosphor-power-supply/power_supply.cpp b/phosphor-power-supply/power_supply.cpp
+index 7389e3a..1fc1bc2 100644
+--- a/phosphor-power-supply/power_supply.cpp
++++ b/phosphor-power-supply/power_supply.cpp
+@@ -16,6 +16,7 @@
+ #include <regex>
+ #include <thread> // sleep_for()
+ 
++#define SOLUM_PSU
+ namespace phosphor::power::psu
+ {
+ // Amount of time in milliseconds to delay between power supply going from
+@@ -27,6 +28,7 @@ constexpr auto bindDelay = 1000;
+ // cover a minute of time. If we want one (1) hour of data, that would be 120
+ // records.
+ constexpr auto INPUT_HISTORY_MAX_RECORDS = 120;
++constexpr auto DIVIDER = 1000000;
+ 
+ using namespace phosphor::logging;
+ using namespace sdbusplus::xyz::openbmc_project::Common::Device::Error;
+@@ -40,6 +42,13 @@ PowerSupply::PowerSupply(sdbusplus::bus_t& bus, const std::string& invpath,
+     inventoryPath(invpath), bindPath("/sys/bus/i2c/drivers/" + driver),
+     isPowerOn(std::move(callback)), driverName(driver)
+ {
++    #ifdef SOLUM_PSU
++    if (getPsuDetails())
++    {
++        log<level::DEBUG>("Reading JSON error");
++    }
++    #endif 
++
+     if (inventoryPath.empty())
+     {
+         throw std::invalid_argument{"Invalid empty inventoryPath"};
+@@ -537,11 +546,6 @@ void PowerSupply::analyze()
+ {
+     using namespace phosphor::pmbus;
+ 
+-    if (presenceGPIO)
+-    {
+-        updatePresenceGPIO();
+-    }
+-
+     if (present)
+     {
+         try
+@@ -793,6 +797,66 @@ void PowerSupply::inventoryChanged(sdbusplus::message_t& msg)
+         checkAvailability();
+     }
+ }
++#ifdef SOLUM_PSU
++uint16_t PowerSupply::getMaxPowerPsu()
++{
++    /*divider value for convert micro watts to  watts */
++    int maxPowerOut = getMaxPowerOut();
++    maxPowerOut /= DIVIDER;
++    return maxPowerOut;
++}
++
++uint16_t PowerSupply::getAllocatedWatts()
++{
++    /*Dummy value simply it will deploy on properties it won't create any impact on H/W */
++    int allocatedWattes = 800;
++    return allocatedWattes;
++}
++
++uint16_t PowerSupply::getRequestedWatts()
++{
++    /*Dummy value simply it will deploy on properties it won't create any impact on H/W */
++    int requestedWattes = 400;
++    return requestedWattes;    
++}
++
++std::string PowerSupply::powerSupplyType()
++{
++    return supplyType;
++}
++
++std::string PowerSupply::inputNominalVoltageType()
++{
++    return nominalVolt;
++}
++
++std::string PowerSupply::plugType()
++{
++    return plugtype;
++}
++std::string PowerSupply::getPsuEfficiency()
++{
++    return psuEfficiency;
++}
++
++uint8_t PowerSupply::inputVoltType()
++{
++    using namespace phosphor::pmbus;
++    double act_voltage = 0.0;
++    int rounded_voltage = 0;
++    getInputVoltage(act_voltage, rounded_voltage);
++
++    if (rounded_voltage == in_input::VIN_VOLTAGE_220)
++    {
++        return static_cast<uint8_t>(in_input::VIN_VOLTAGE_220);
++    }
++    else if (rounded_voltage == in_input::VIN_VOLTAGE_110)
++    {
++        return static_cast<uint8_t>(in_input::VIN_VOLTAGE_110);
++    }
++    return 0;
++}
++#endif
+ 
+ void PowerSupply::inventoryAdded(sdbusplus::message_t& msg)
+ {
+@@ -900,6 +964,11 @@ void PowerSupply::updateInventory()
+     log<level::DEBUG>(
+         fmt::format("updateInventory() inventoryPath: {}", inventoryPath)
+             .c_str());
++#ifdef SOLUM_PSU
++    fwVersion = pmbusIntf->readString("mfr_revision", Type::HwmonDeviceDebug);
++    modelName = pmbusIntf->readString("mfr_model", Type::HwmonDeviceDebug);
++    sparePart = pmbusIntf->readString("mfr_serial", Type::HwmonDeviceDebug);
++#endif
+ 
+     if (present)
+     {
+@@ -1008,23 +1077,22 @@ void PowerSupply::updateInventory()
+     }
+ }
+ 
+-auto PowerSupply::getMaxPowerOut() const
++int PowerSupply::getMaxPowerOut() const
+ {
+     using namespace phosphor::pmbus;
+ 
+-    auto maxPowerOut = 0;
++    int maxPowerOut = 0;
++    std::string power_out_max = "power2_rated_max";
+ 
+-    if (present)
++    try
+     {
+-        try
+-        {
+-            // Read max_power_out, should be direct format
+-            auto maxPowerOutStr = pmbusIntf->readString(MFR_POUT_MAX,
+-                                                        Type::HwmonDeviceDebug);
+-            log<level::INFO>(fmt::format("{} MFR_POUT_MAX read {}", shortName,
+-                                         maxPowerOutStr)
+-                                 .c_str());
+-            maxPowerOut = std::stod(maxPowerOutStr);
++        // Read max_power_out, should be direct format
++        auto maxPowerOutStr = pmbusIntf->readString(power_out_max, Type::Hwmon);
++
++        log<level::INFO>(
++            fmt::format("{} MFR_POUT_MAX read {}", shortName, maxPowerOutStr)
++                .c_str());
++        maxPowerOut = std::stod(maxPowerOutStr);
+         }
+         catch (const std::exception& e)
+         {
+@@ -1032,8 +1100,6 @@ auto PowerSupply::getMaxPowerOut() const
+                                         shortName, e.what())
+                                 .c_str());
+         }
+-    }
+-
+     return maxPowerOut;
+ }
+ 
+@@ -1145,8 +1211,6 @@ void PowerSupply::getInputVoltage(double& actualInputVoltage,
+     actualInputVoltage = in_input::VIN_VOLTAGE_0;
+     inputVoltage = in_input::VIN_VOLTAGE_0;
+ 
+-    if (present)
+-    {
+         try
+         {
+             // Read input voltage in millivolts
+@@ -1175,7 +1239,6 @@ void PowerSupply::getInputVoltage(double& actualInputVoltage,
+                 fmt::format("{} READ_VIN read error: {}", shortName, e.what())
+                     .c_str());
+         }
+-    }
+ }
+ 
+ void PowerSupply::checkAvailability()
+@@ -1254,4 +1317,47 @@ void PowerSupply::getPsuVpdFromDbus(const std::string& keyword,
+             fmt::format("Failed getProperty error: {}", e.what()).c_str());
+     }
+ }
++
++#ifdef SOLUM_PSU
++using BasicVariantType =
++    std::variant<std::vector<std::string>, std::string, int64_t, uint64_t,
++                 double, int32_t, uint32_t, int16_t, uint16_t, uint8_t, bool>;
++
++int PowerSupply::getPsuDetails()
++{
++    auto data = phosphor::power::util::loadJSONFromFile(PSU_JSON_PATH);
++
++    if (data == nullptr)
++    {
++        log<level::WARNING>("Unable to find JSON file..");
++        return -1;
++    }
++    try
++    {
++        for (const auto& channelConfig : data["PowerSupplies"])
++        {
++            nominalVolt     = channelConfig["InputNominalVoltageType"];
++            supplyType      = channelConfig["PowerSupplyType"];
++            plugtype        = channelConfig["PlugType"];
++            psuEfficiency   = channelConfig["EfficiencyRatings"];
++            pmBusNumber     = channelConfig["Bus"];
++            pmBusAddress    = channelConfig["Address"];
++            psuVrails       = channelConfig["OutputRails"];
++        }     
++    }
++    catch (const nlohmann::json::exception& e)
++    {
++        return -1;
++    }
++
++    return 0;
++}
++
++std::vector<std::string> PowerSupply::getPsuVoltRail()
++{
++   return psuVrails;
++}
++
++#endif 
++
+ } // namespace phosphor::power::psu
+diff --git a/phosphor-power-supply/power_supply.hpp b/phosphor-power-supply/power_supply.hpp
+index 304185e..46866a0 100644
+--- a/phosphor-power-supply/power_supply.hpp
++++ b/phosphor-power-supply/power_supply.hpp
+@@ -8,13 +8,18 @@
+ #include "util.hpp"
+ #include "utility.hpp"
+ 
++#include <boost/asio/io_context.hpp>
++#include <boost/asio/steady_timer.hpp>
+ #include <gpiod.hpp>
++#include <sdbusplus/asio/object_server.hpp>
+ #include <sdbusplus/bus/match.hpp>
+ #include <xyz/openbmc_project/Sensor/Value/server.hpp>
+ 
+ #include <filesystem>
+ #include <stdexcept>
+ 
++#define SOLUM_PSU
++
+ namespace phosphor::power::psu
+ {
+ 
+@@ -49,6 +54,7 @@ constexpr auto PGOOD_DEGLITCH_LIMIT = 5;
+ // Number of polls to remember that an AC fault occured. Should remain greater
+ // than PGOOD_DEGLITCH_LIMIT.
+ constexpr auto AC_FAULT_LIMIT = 6;
++static constexpr auto HW_SW_REV_LENGTH = 26;
+ 
+ constexpr auto IBMCFFPS_DD_NAME = "ibm-cffps";
+ 
+@@ -446,6 +452,30 @@ class PowerSupply
+         return modelName;
+     }
+ 
++    /**
++     * @brief Returns the spare part number of the power supply
++     */
++    const std::string& getSparePart() const
++    {
++        return sparePart;
++    }
++
++    /**
++     * @brief Returns the PMbus number of the power supply
++     */
++    uint8_t getI2cBusNumber() const
++    {
++        return pmBusNumber;
++    }
++
++    /**
++     * @brief Returns the PMbus address of the power supply
++     */
++    const std::string& getI2CAddress() const
++    {
++        return pmBusAddress;
++    }
++
+     /**
+      * @brief Returns true if the number of failed reads exceeds limit
+      * TODO: or CML bit on.
+@@ -536,15 +566,93 @@ class PowerSupply
+     {
+         syncHistoryRequired = false;
+     }
+-
++    #ifdef SOLUM_PSU
+     /**
+      * @brief Puts the input voltage rating on D-Bus.
+      *
+      * The rating is like 0, 110, 220.
+      */
+     void setInputVoltageRating();
++    /**
++     * @brief Gets the input voltage from PMBUS.
++     */
++    uint8_t inputVoltType();
++    /**
++     * @brief Gets Maximum psu power capacity in watts .
++     */
++    uint16_t getMaxPowerPsu();
++    /**
++     * @brief get Allocated watts from PSU/NM
++     */
++    uint16_t getAllocatedWatts();
++    /**
++     * @brief get Requested power from PSU/NM
++     */
++    uint16_t getRequestedWatts();
++    /**
++     * @brief Gets nominal volatge from JSON file and set on dbus properties.
++     */
++    std::string inputNominalVoltageType();
++    /**
++     * @brief Gets power supply type like AC/DC from JSON file and set on dbus
++     * properties.
++     */
++    std::string powerSupplyType();
++    /**
++     * @brief Return connecting plug type.
++     */
++    std::string plugType();
++    /**
++     * @brief return psu efficiency.
++     */
++    std::string getPsuEfficiency();
++    /**
++     * @brief Read all the PSU related data from JSON file and set on DBUS
++     * 
++     */
++    int getPsuDetails();
++    /**
++     * @brief Read all the PSU Voltage Rail data from JSON file and set on DBUS 
++     * .
++     */
++    std::vector<std::string> getPsuVoltRail();
++
++    #endif
+ 
+   private:
++
++    #ifdef SOLUM_PSU
++    /**
++     * @brief to store nominal voltage
++     */
++    std::string nominalVolt;
++
++    /**
++     * @brief contains supply type which read from JSON
++     */
++    std::string supplyType;
++    /**
++     * @brief contains Plug type  which read from JSON
++     */
++    std::string plugtype;
++    /**
++     * @brief contains PSU efficiency which read from JSON
++     */
++    std::string psuEfficiency;
++    /**
++     * @brief contains pmbus number which read from JSON
++     */
++    uint8_t pmBusNumber;
++    /**
++     * @brief contains pmbus address which read from JSON
++     */
++    std::string pmBusAddress;
++    /**
++     * @brief contains PSU VRails data
++     */
++    std::vector<std::string> psuVrails;
++
++    #endif
+     /**
+      * @brief systemd bus member
+      */
+@@ -851,6 +959,10 @@ class PowerSupply
+      * @brief Power supply model name.
+      */
+     std::string modelName;
++    /**
++     * @brief Power supply sparepart number.
++     */
++    std::string sparePart;
+ 
+     /**
+      * @brief D-Bus match variable used to subscribe to Present property
+@@ -953,7 +1065,7 @@ class PowerSupply
+      *
+      * @return max_power_out value converted from string.
+      */
+-    auto getMaxPowerOut() const;
++    int getMaxPowerOut() const;
+ 
+     /**
+      * @brief Reads a VPD value from PMBus, correct size, and contents.
+diff --git a/phosphor-power-supply/psu_manager.cpp b/phosphor-power-supply/psu_manager.cpp
+index d456ebf..28d7669 100644
+--- a/phosphor-power-supply/psu_manager.cpp
++++ b/phosphor-power-supply/psu_manager.cpp
+@@ -11,8 +11,11 @@
+ #include <xyz/openbmc_project/State/Chassis/server.hpp>
+ 
+ #include <algorithm>
++#include <iostream>
+ #include <regex>
+ #include <set>
++/*enable or include SOLUM psu related implementation */
++#define SOLUM_PSU
+ 
+ using namespace phosphor::logging;
+ 
+@@ -24,12 +27,34 @@ constexpr auto objectManagerObjPath =
+ constexpr auto powerSystemsInputsObjPath =
+     "/xyz/openbmc_project/power/power_supplies/chassis0/psus";
+ 
++#ifndef SOLUM_PSU
+ constexpr auto IBMCFFPSInterface =
+     "xyz.openbmc_project.Configuration.IBMCFFPSConnector";
++#else
++constexpr auto IBMCFFPSInterface =
++    "xyz.openbmc_project.FruDevice"; // SOLUM power supply
++constexpr auto psuFruObjPath = "/xyz/openbmc_project/FruDevice/";
++static uint64_t i2cbus = 0;
++static uint64_t i2caddr = 0;
++static std::string psuProduct;
++#endif
++
++#ifndef SOLUM_PSU
+ constexpr auto i2cBusProp = "I2CBus";
+ constexpr auto i2cAddressProp = "I2CAddress";
+ constexpr auto psuNameProp = "Name";
+ constexpr auto presLineName = "NamedPresenceGpio";
++#else
++constexpr auto i2cBusProp = "BUS";
++constexpr auto i2cAddressProp = "ADDRESS";
++constexpr auto psuNameProp = "PRODUCT_PRODUCT_NAME";
++constexpr auto presLineName = "NamedPresenceGpio";
++std::string phosphor_power_inventory = "xyz.openbmc_project.Psu.Status";
++
++static boost::asio::io_context io;
++std::shared_ptr<sdbusplus::asio::connection> conn;
++std::shared_ptr<sdbusplus::asio::dbus_interface> powerIface;
++#endif
+ 
+ constexpr auto supportedConfIntf =
+     "xyz.openbmc_project.Configuration.SupportedConfiguration";
+@@ -42,7 +67,6 @@ constexpr auto INPUT_HISTORY_SYNC_DELAY = 5;
+ PSUManager::PSUManager(sdbusplus::bus_t& bus, const sdeventplus::Event& e) :
+     bus(bus), powerSystemInputs(bus, powerSystemsInputsObjPath),
+     objectManager(bus, objectManagerObjPath),
+-    historyManager(bus, "/org/open_power/sensors"),
+     sensorsObjManager(bus, "/xyz/openbmc_project/sensors")
+ {
+     // Subscribe to InterfacesAdded before doing a property read, otherwise
+@@ -55,6 +79,24 @@ PSUManager::PSUManager(sdbusplus::bus_t& bus, const sdeventplus::Event& e) :
+                 "xyz.openbmc_project.EntityManager"),
+         std::bind(&PSUManager::entityManagerIfaceAdded, this,
+                   std::placeholders::_1));
++    /*read the PMBUS address and bus number from JSON file*/
++    auto data = phosphor::power::util::loadJSONFromFile(PSU_JSON_PATH);
++    if (data == nullptr)
++    {
++        log<level::WARNING>("Unable to find JSON file");
++    }
++    try
++    {
++        for (const auto& channelConfig : data["PowerSupplies"])
++        {
++            i2cbus = channelConfig["Bus"];
++            std::string tmp = channelConfig["Address"];
++            psuProduct = channelConfig["Product"];
++            i2caddr = stoi(tmp);
++        }
++    }
++    catch (const nlohmann::json::exception& e)
++    {}
+     getPSUConfiguration();
+     getSystemProperties();
+ 
+@@ -81,7 +123,7 @@ PSUManager::PSUManager(sdbusplus::bus_t& bus, const sdeventplus::Event& e) :
+     }
+ 
+     // Subscribe to power state changes
+-    powerService = util::getService(POWER_OBJ_PATH, POWER_IFACE, bus);
++    powerService = "xyz.openbmc_project.State.Host";
+     powerOnMatch = std::make_unique<sdbusplus::bus::match_t>(
+         bus,
+         sdbusplus::bus::match::rules::propertiesChanged(POWER_OBJ_PATH,
+@@ -91,23 +133,70 @@ PSUManager::PSUManager(sdbusplus::bus_t& bus, const sdeventplus::Event& e) :
+     initialize();
+ }
+ 
++#ifdef SOLUM_PSU
++void PSUManager::createPsuProperty()
++{
++    // init dbus
++    conn = std::make_shared<sdbusplus::asio::connection>(io);
++    // Bus name
++    conn->request_name(phosphor_power_inventory.c_str());
++    sdbusplus::asio::object_server inventory =
++        sdbusplus::asio::object_server(conn);
++    // create new interface undr power supply
++    powerIface = inventory.add_interface(
++        "/xyz/openbmc_project/inventory/system/powersupply",
++        "xyz.openbmc_project.PsuStatus");
++    for (auto& psu : psus)
++    {
++        powerIface->register_property("InputRanges", psu->inputVoltType());
++        powerIface->register_property("PowerCapacityWatts",
++                                      psu->getMaxPowerPsu());
++        powerIface->register_property("FirmwareVersion", psu->getFWVersion());
++        powerIface->register_property("InputNominalVoltageType",
++                                      psu->inputNominalVoltageType());
++        powerIface->register_property("PowerSupplyType",
++                                      psu->powerSupplyType());
++        powerIface->register_property("SparePartNumber", psu->getModelName());
++        powerIface->register_property("SerialNumber", psu->getSparePart());
++        powerIface->register_property("PlugType", psu->plugType());
++        powerIface->register_property("EfficiencyRatings",
++                                      psu->getPsuEfficiency());
++        powerIface->register_property("OutputRails",
++                                      psu->getPsuVoltRail());
++        powerIface->register_property("AllocatedWatts",
++                                      psu->getAllocatedWatts());
++        powerIface->register_property("RequestedWatts",
++                                      psu->getRequestedWatts());                              
++    }
++    powerIface->initialize();
++}
++void PSUManager::io_run()
++{
++    io.run();
++}
++#endif
++
+ void PSUManager::initialize()
+ {
+     try
+     {
+         // pgood is the latest read of the chassis pgood
+         int pgood = 0;
+-        util::getProperty<int>(POWER_IFACE, "pgood", POWER_OBJ_PATH,
+-                               powerService, bus, pgood);
+-
+-        // state is the latest requested power on / off transition
++        std::string state = "";
++        phosphor::power::util::DbusPropertyMap properties;
+         auto method = bus.new_method_call(powerService.c_str(), POWER_OBJ_PATH,
+-                                          POWER_IFACE, "getPowerState");
++                                          POWER_IFACE, "GetAll");
++        method.append("xyz.openbmc_project.State.Host");
+         auto reply = bus.call(method);
+-        int state = 0;
+-        reply.read(state);
+-
+-        if (state)
++        reply.read(properties);
++        for (const auto& property : properties)
++        {
++            if (property.first.compare("CurrentHostState") == 0)
++            {
++                state = std::get<std::string>(property.second);
++            }
++        }
++        if (state == "xyz.openbmc_project.State.Host.HostState.Running")
+         {
+             // Monitor PSUs anytime state is on
+             powerOn = true;
+@@ -140,6 +229,10 @@ void PSUManager::initialize()
+     updateMissingPSUs();
+     setPowerConfigGPIO();
+ 
++#ifdef SOLUM_PSU
++    createPsuProperty();
++#endif
++
+     log<level::INFO>(
+         fmt::format("initialize: power on: {}, power fault occurring: {}",
+                     powerOn, powerFaultOccurring)
+@@ -165,13 +258,20 @@ void PSUManager::getPSUConfiguration()
+         {
+             continue;
+         }
+-
+         // For each object in the array of objects, I want to get properties
+         // from the service, path, and interface.
+-        auto properties = getAllProperties(bus, path, IBMCFFPSInterface,
+-                                           service);
+ 
+-        getPSUProperties(properties);
++        // below implementation is get the product from JSON and compare with
++        // Fru then PSU will add in the list
++        std::string psuFruPath = psuFruObjPath + psuProduct;
++
++        if ((path.compare(psuFruPath) == 0) &&
++            (service == "xyz.openbmc_project.FruDevice"))
++        {
++            auto properties = getAllProperties(bus, path, IBMCFFPSInterface,
++                                               service);
++            getPSUProperties(properties);
++        }
+     }
+ 
+     if (psus.empty())
+@@ -187,10 +287,15 @@ void PSUManager::getPSUProperties(util::DbusPropertyMap& properties)
+     // From passed in properties, I want to get: I2CBus, I2CAddress,
+     // and Name. Create a power supply object, using Name to build the inventory
+     // path.
++
++#ifdef SOLUM_PSU
++    const auto basePSUInvPath =
++        "/xyz/openbmc_project/inventory/system/powersupply";
++#else
+     const auto basePSUInvPath =
+         "/xyz/openbmc_project/inventory/system/chassis/motherboard/powersupply";
+-    uint64_t* i2cbus = nullptr;
+-    uint64_t* i2caddr = nullptr;
++#endif
++
+     std::string* psuname = nullptr;
+     std::string* preslineptr = nullptr;
+ 
+@@ -198,22 +303,13 @@ void PSUManager::getPSUProperties(util::DbusPropertyMap& properties)
+     {
+         try
+         {
+-            if (property.first == i2cBusProp)
+-            {
+-                i2cbus = std::get_if<uint64_t>(&properties[i2cBusProp]);
+-            }
+-            else if (property.first == i2cAddressProp)
+-            {
+-                i2caddr = std::get_if<uint64_t>(&properties[i2cAddressProp]);
+-            }
+-            else if (property.first == psuNameProp)
++            if (property.first == psuNameProp)
+             {
+                 psuname = std::get_if<std::string>(&properties[psuNameProp]);
+             }
+             else if (property.first == presLineName)
+             {
+-                preslineptr =
+-                    std::get_if<std::string>(&properties[presLineName]);
++                *preslineptr = "PS_PWROK";
+             }
+         }
+         catch (const std::exception& e)
+@@ -248,13 +344,21 @@ void PSUManager::getPSUProperties(util::DbusPropertyMap& properties)
+             return;
+         }
+ 
+-        buildDriverName(*i2cbus, *i2caddr);
++        buildDriverName(i2cbus, i2caddr);
++
++#ifdef SOLUM_PSU
++        constexpr auto driver = "pmbus";
++#else
++        constexpr auto driver = "ibm-cffps";
++#endif
++
++        presline = "PS_PWROK";
+         log<level::DEBUG>(
+             fmt::format("make PowerSupply bus: {} addr: {} presline: {}",
+-                        *i2cbus, *i2caddr, presline)
++                        i2cbus, i2caddr, presline)
+                 .c_str());
+         auto psu = std::make_unique<PowerSupply>(
+-            bus, invpath, *i2cbus, *i2caddr, driverName, presline,
++            bus, invpath, i2cbus, i2caddr, driver, presline,
+             std::bind(
+                 std::mem_fn(&phosphor::power::manager::PSUManager::isPowerOn),
+                 this));
+diff --git a/phosphor-power-supply/psu_manager.hpp b/phosphor-power-supply/psu_manager.hpp
+index 7bee9f7..9b81ba3 100644
+--- a/phosphor-power-supply/psu_manager.hpp
++++ b/phosphor-power-supply/psu_manager.hpp
+@@ -104,7 +104,12 @@ class PSUManager
+     {
+         return timer->get_event().loop();
+     }
+-
++    /**
++     * start io contex to monitoring dbus properties
++     */
++    #ifdef SOLUM_PSU
++    void io_run();
++    #endif
+     /**
+      * Write PMBus ON_OFF_CONFIG
+      *
+@@ -367,7 +372,7 @@ class PSUManager
+      * communicate updates to the Average and Maximum interface properties on
+      * the /org/open_power/sensors root D-Bus path.
+      */
+-    sdbusplus::server::manager_t historyManager;
++    // sdbusplus::server::manager_t historyManager;
+ 
+     /**
+      * @brief Implement the ObjectManager for the input voltage rating.
+@@ -417,6 +422,14 @@ class PSUManager
+      */
+     void buildDriverName(uint64_t i2cbus, uint64_t i2caddr);
+ 
++    #ifdef SOLUM_PSU
++    /**
++     * @brief Will create the properties for PSU
++     *
++     */
++    void createPsuProperty();
++    #endif
++    
+     /**
+      * @brief The device driver name for all power supplies.
+      */
+diff --git a/pmbus.cpp b/pmbus.cpp
+index 9424ee6..bd887cb 100644
+--- a/pmbus.cpp
++++ b/pmbus.cpp
+@@ -80,7 +80,7 @@ fs::path PMBus::getPath(Type type)
+             break;
+         }
+         case Type::HwmonDeviceDebug:
+-            return debugPath / "pmbus" / hwmonDir / getDeviceName();
++            return debugPath / "pmbus" / hwmonDir;
+             break;
+     }
+ }
+@@ -219,6 +219,7 @@ std::string PMBus::readString(const std::string& name, Type type)
+ {
+     std::string data;
+     std::ifstream file;
++    std::ostringstream ss;
+     auto path = getPath(type);
+     path /= name;
+ 
+@@ -228,7 +229,9 @@ std::string PMBus::readString(const std::string& name, Type type)
+     try
+     {
+         file.open(path);
+-        file >> data;
++        ss << file.rdbuf();
++        /* length -1 is used to remove \n from the file end */
++        data = ss.str().substr(0, ss.str().length() - 1);
+     }
+     catch (const std::exception& e)
+     {
+@@ -244,7 +247,6 @@ std::string PMBus::readString(const std::string& name, Type type)
+             metadata::CALLOUT_ERRNO(rc),
+             metadata::CALLOUT_DEVICE_PATH(fs::canonical(basePath).c_str()));
+     }
+-
+     return data;
+ }
+ 
+diff --git a/pmbus.hpp b/pmbus.hpp
+index be352b6..00b3557 100644
+--- a/pmbus.hpp
++++ b/pmbus.hpp
+@@ -309,7 +309,6 @@ class PMBus : public PMBusBase
+      * @return string - The data read from the file.
+      */
+     std::string readString(const std::string& name, Type type) override;
+-
+     /**
+      * Read data from a binary file in sysfs.
+      *
+diff --git a/types.hpp b/types.hpp
+index b682d9b..4279230 100644
+--- a/types.hpp
++++ b/types.hpp
+@@ -5,7 +5,7 @@
+ constexpr auto ASSOCIATION_IFACE = "xyz.openbmc_project.Association";
+ constexpr auto LOGGING_IFACE = "xyz.openbmc_project.Logging.Entry";
+ constexpr auto INVENTORY_IFACE = "xyz.openbmc_project.Inventory.Item";
+-constexpr auto POWER_IFACE = "org.openbmc.control.Power";
++constexpr auto POWER_IFACE = "org.freedesktop.DBus.Properties";
+ constexpr auto INVENTORY_MGR_IFACE = "xyz.openbmc_project.Inventory.Manager";
+ constexpr auto ASSET_IFACE = "xyz.openbmc_project.Inventory.Decorator.Asset";
+ constexpr auto PSU_INVENTORY_IFACE =
+@@ -31,7 +31,7 @@ constexpr auto AVAILABLE_PROP = "Available";
+ constexpr auto ASSOC_PROP = "Associations";
+ 
+ constexpr auto INVENTORY_OBJ_PATH = "/xyz/openbmc_project/inventory";
+-constexpr auto POWER_OBJ_PATH = "/org/openbmc/control/power0";
++constexpr auto POWER_OBJ_PATH = "/xyz/openbmc_project/state/host0";
+ 
+ constexpr auto INPUT_HISTORY = "input_history";
+ 
+-- 
+2.41.0
+
