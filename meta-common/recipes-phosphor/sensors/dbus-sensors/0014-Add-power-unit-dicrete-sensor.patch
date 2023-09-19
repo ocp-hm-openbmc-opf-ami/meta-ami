@@ -1,0 +1,451 @@
+From 77e4e906832cec8da8d29ce1882f52e8de2ae08b Mon Sep 17 00:00:00 2001
+From: selvaganapathi <selvaganapathim@ami.com>
+Date: Fri, 11 Aug 2023 14:56:31 +0530
+Subject: [PATCH] Add power unit dicrete sensor
+
+- Commit adding new service under dbus-sensors
+- Power Unit service used to monitor power unit
+State and show the status over discrete sensor.
+- As per IPMI spec, when chassis powered OFF assert
+state 0x01 and deassert when powered ON.
+
+Tested:
+Successfully building.
+Validated in archercity platform.
+
+Signed-off-by: selvaganapathi <selvaganapathim@ami.com>
+---
+ meson_options.txt                             |   1 +
+ service_files/meson.build                     |   1 +
+ ...yz.openbmc_project.powerunitstatus.service |  13 ++
+ src/Discrete.hpp                              |  80 +++++++++
+ src/PowerUnit.cpp                             |  59 +++++++
+ src/PowerUnit.hpp                             |  37 +++++
+ src/PowerUnitMain.cpp                         | 153 ++++++++++++++++++
+ src/meson.build                               |  14 ++
+ 8 files changed, 358 insertions(+)
+ create mode 100644 service_files/xyz.openbmc_project.powerunitstatus.service
+ create mode 100644 src/Discrete.hpp
+ create mode 100644 src/PowerUnit.cpp
+ create mode 100644 src/PowerUnit.hpp
+ create mode 100644 src/PowerUnitMain.cpp
+
+diff --git a/meson_options.txt b/meson_options.txt
+index 0b646ba..e0da6cc 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -9,6 +9,7 @@ option('mcu', type: 'feature', value: 'enabled', description: 'Enable MCU sensor
+ option('nvme', type: 'feature', value: 'enabled', description: 'Enable NVMe sensor.',)
+ option('psu', type: 'feature', value: 'enabled', description: 'Enable PSU sensor.',)
+ option('external', type: 'feature', value: 'enabled', description: 'Enable External sensor.',)
++option('powerunit', type: 'feature', value: 'disabled', description: 'Enable powerunit status sensor.',)
+ option('tests', type: 'feature', value: 'enabled', description: 'Build tests.',)
+ option('validate-unsecure-feature', type : 'feature', value : 'disabled', description : 'Enables unsecure features required by validation. Note: mustbe turned off for production images.',)
+ option('insecure-sensor-override', type : 'feature', value : 'disabled', description : 'Enables Sensor override feature without any check.',)
+diff --git a/service_files/meson.build b/service_files/meson.build
+index acf6fb6..bd1728a 100644
+--- a/service_files/meson.build
++++ b/service_files/meson.build
+@@ -12,6 +12,7 @@ unit_files = [
+     ['external', 'xyz.openbmc_project.externalsensor.service'],
+     ['procstatus', 'xyz.openbmc_project.processorstatus.service'],
+     ['system', 'xyz.openbmc_project.systemsensor.service'],
++    ['powerunit', 'xyz.openbmc_project.powerunitstatus.service'],
+ ]
+ 
+ foreach tuple : unit_files
+diff --git a/service_files/xyz.openbmc_project.powerunitstatus.service b/service_files/xyz.openbmc_project.powerunitstatus.service
+new file mode 100644
+index 0000000..2c86a0f
+--- /dev/null
++++ b/service_files/xyz.openbmc_project.powerunitstatus.service
+@@ -0,0 +1,13 @@
++[Unit]
++Description=Power Unit Status
++StopWhenUnneeded=false
++Requires=xyz.openbmc_project.EntityManager.service
++After=xyz.openbmc_project.EntityManager.service
++
++[Service]
++Restart=always
++RestartSec=5
++ExecStart=/usr/bin/powerunitstatus
++
++[Install]
++WantedBy=multi-user.target
+\ No newline at end of file
+diff --git a/src/Discrete.hpp b/src/Discrete.hpp
+new file mode 100644
+index 0000000..4570e98
+--- /dev/null
++++ b/src/Discrete.hpp
+@@ -0,0 +1,80 @@
++#pragma once
++
++#include <SensorPaths.hpp>
++#include <Utils.hpp>
++#include <sdbusplus/asio/object_server.hpp>
++#include <sdbusplus/bus/match.hpp>
++
++#include <iostream>
++#include <limits>
++#include <memory>
++#include <string>
++#include <vector>
++
++constexpr const char* sensorStateInterface = "xyz.openbmc_project.Sensor.State";
++
++struct Discrete
++{
++    Discrete(const std::string& name, const std::string& configurationPath,
++             std::shared_ptr<sdbusplus::asio::connection>& conn) :
++        name(sensor_paths::escapePathForDbus(name)),
++        configurationPath(configurationPath), dbusConnection(conn)
++
++    {}
++    virtual ~Discrete() = default;
++    std::string name;
++    std::string configurationPath;
++
++    std::shared_ptr<sdbusplus::asio::dbus_interface> sensorInterface;
++    std::shared_ptr<sdbusplus::asio::dbus_interface> association;
++
++    uint16_t state = 0;
++
++    std::shared_ptr<sdbusplus::asio::connection> dbusConnection;
++
++    int updateState(std::shared_ptr<sdbusplus::asio::dbus_interface>& interface,
++                    const uint16_t& newState)
++    {
++        if (interface && !(interface->set_property("State", newState)))
++        {
++            std::cerr << "error setting State \n";
++        }
++        return 1;
++    }
++
++    int setSensorState(const uint16_t& newState, uint16_t& oldState)
++    {
++        oldState = newState;
++        state = newState;
++
++        return 1;
++    }
++
++    void setInitialProperties()
++    {
++        createAssociation(association, configurationPath);
++
++        sensorInterface->register_property(
++            "State", state,
++            [this](const uint16_t& newState, uint16_t& oldState) {
++                return setSensorState(newState, oldState);
++            });
++
++        if (!sensorInterface->initialize())
++        {
++            std::cerr << "error initializing state interface\n";
++        }
++    }
++
++    std::shared_ptr<sdbusplus::bus::match_t> setupDbusMatch(
++        std::string path, std::string interface,
++        std::function<void(sdbusplus::message_t& msg)>&& statusCallback)
++    {
++        return std::make_shared<sdbusplus::bus::match_t>(
++            static_cast<sdbusplus::bus_t&>(*dbusConnection),
++            "type='signal',interface='" +
++                std::string("org.freedesktop.DBus.Properties") + "',path='" +
++                std::string(path) + "',arg0='" + std::string(interface) + "'",
++            std::move(statusCallback));
++    }
++};
+diff --git a/src/PowerUnit.cpp b/src/PowerUnit.cpp
+new file mode 100644
+index 0000000..9eadba7
+--- /dev/null
++++ b/src/PowerUnit.cpp
+@@ -0,0 +1,59 @@
++#include <unistd.h>
++
++#include <PowerUnit.hpp>
++
++#include <exception>
++#include <fstream>
++#include <iostream>
++#include <optional>
++#include <string>
++#include <vector>
++
++PowerUnit::PowerUnit(sdbusplus::asio::object_server& objectServer,
++                     std::shared_ptr<sdbusplus::asio::connection>& conn,
++                     boost::asio::io_context& io __attribute__((unused)),
++                     const std::string& sensorName,
++                     const std::string& sensorConfiguration) :
++    Discrete(escapeName(sensorName), sensorConfiguration, conn),
++    objServer(objectServer)
++{
++    sensorInterface = objectServer.add_interface(
++        "/xyz/openbmc_project/sensors/powerunit/" + name,
++        "xyz.openbmc_project.Sensor.State");
++
++    association = objectServer.add_interface(
++        "/xyz/openbmc_project/sensors/powerunit/" + name,
++        association::interface);
++    setInitialProperties();
++
++    // write sensor specific code
++    auto powerStatusMatcherCallback = [this, conn](sdbusplus::message_t& msg) {
++        std::cerr << "power state changed\n";
++        std::string objectName;
++        boost::container::flat_map<std::string, std::variant<std::string>>
++            values;
++        msg.read(objectName, values);
++        auto findState = values.find(powerProperty);
++        if (findState != values.end())
++        {
++            if (std::get<std::string>(findState->second) ==
++                "xyz.openbmc_project.State.Host.HostState.Off")
++            {
++                updateState(sensorInterface, 0x01);
++            }
++            else
++            {
++                updateState(sensorInterface, 0x00);
++            }
++        }
++    };
++
++    powerMonitor =
++        setupDbusMatch(powerPath, powerInterface, powerStatusMatcherCallback);
++}
++
++PowerUnit::~PowerUnit()
++{
++    objServer.remove_interface(sensorInterface);
++    objServer.remove_interface(association);
++}
+diff --git a/src/PowerUnit.hpp b/src/PowerUnit.hpp
+new file mode 100644
+index 0000000..6e215ab
+--- /dev/null
++++ b/src/PowerUnit.hpp
+@@ -0,0 +1,37 @@
++#pragma once
++
++#include <Discrete.hpp>
++#include <Utils.hpp>
++#include <boost/asio/deadline_timer.hpp>
++#include <boost/asio/io_service.hpp>
++#include <boost/container/flat_map.hpp>
++#include <sdbusplus/asio/object_server.hpp>
++
++#include <memory>
++#include <optional>
++#include <stdexcept>
++#include <string>
++#include <vector>
++
++namespace fs = std::filesystem;
++
++class PowerUnit :
++    public Discrete,
++    public std::enable_shared_from_this<PowerUnit>
++{
++  public:
++    PowerUnit(sdbusplus::asio::object_server& objectServer,
++              std::shared_ptr<sdbusplus::asio::connection>& conn,
++              boost::asio::io_context& io, const std::string& sensorName,
++              const std::string& sensorConfiguration);
++    ~PowerUnit() override;
++
++  private:
++    sdbusplus::asio::object_server& objServer;
++    std::shared_ptr<sdbusplus::bus::match_t> powerMonitor;
++
++    const static constexpr char* powerInterface =
++        "xyz.openbmc_project.State.Host";
++    const static constexpr char* powerPath = "/xyz/openbmc_project/state/host0";
++    const static constexpr char* powerProperty = "CurrentHostState";
++};
+diff --git a/src/PowerUnitMain.cpp b/src/PowerUnitMain.cpp
+new file mode 100644
+index 0000000..2e430b4
+--- /dev/null
++++ b/src/PowerUnitMain.cpp
+@@ -0,0 +1,153 @@
++#include <PowerUnit.hpp>
++#include <VariantVisitors.hpp>
++#include <boost/algorithm/string/case_conv.hpp>
++#include <boost/algorithm/string/predicate.hpp>
++#include <boost/algorithm/string/replace.hpp>
++#include <boost/container/flat_set.hpp>
++#include <sdbusplus/bus/match.hpp>
++
++#include <functional>
++#include <memory>
++#include <optional>
++#include <regex>
++#include <string>
++#include <variant>
++#include <vector>
++
++// static constexpr const char* sensorType = "Powerunit";
++static constexpr auto sensorTypes{std::to_array<const char*>({"Powerunit"})};
++
++void createSensors(
++    boost::asio::io_context& io, sdbusplus::asio::object_server& objectServer,
++    boost::container::flat_map<std::string, std::shared_ptr<PowerUnit>>&
++        sensors,
++    std::shared_ptr<sdbusplus::asio::connection>& dbusConnection,
++    const std::shared_ptr<boost::container::flat_set<std::string>>&
++        sensorsChanged)
++{
++    auto getter = std::make_shared<GetSensorConfiguration>(
++        dbusConnection,
++        [&io, &objectServer, &sensors, &dbusConnection,
++         sensorsChanged](const ManagedObjectType& sensorConfigurations) {
++            bool firstScan = sensorsChanged == nullptr;
++            const std::string* interfacePath = nullptr;
++            const std::pair<std::string, SensorBaseConfigMap>*
++                baseConfiguration = nullptr;
++
++            for (const auto& [path, cfgData] : sensorConfigurations)
++            {
++                // clear it out each loop
++                baseConfiguration = nullptr;
++                // find base configuration
++                for (const char* type : sensorTypes)
++                {
++                    auto sensorBase = cfgData.find(configInterfaceName(type));
++                    if (sensorBase != cfgData.end())
++                    {
++                        baseConfiguration = &(*sensorBase);
++                        break;
++                    }
++                }
++                interfacePath = &path.str;
++
++                if (baseConfiguration == nullptr)
++                {
++                    std::cerr
++                        << "error finding base configuration for sensor types"
++                        << "\n";
++                    continue;
++                }
++                auto findSensorName = baseConfiguration->second.find("Name");
++                if (findSensorName == baseConfiguration->second.end())
++                {
++                    std::cerr << "could not determine configuration name"
++                              << "\n";
++                    continue;
++                }
++                std::string sensorName =
++                    std::get<std::string>(findSensorName->second);
++
++                // on rescans, only update sensors we were signaled by
++                auto findSensor = sensors.find(sensorName);
++                if (!firstScan && findSensor != sensors.end())
++                {
++                    bool found = false;
++                    for (auto it = sensorsChanged->begin();
++                         it != sensorsChanged->end(); it++)
++                    {
++                        if (findSensor->second &&
++                            boost::ends_with(*it, findSensor->second->name))
++                        {
++                            sensorsChanged->erase(it);
++                            findSensor->second = nullptr;
++                            found = true;
++                            break;
++                        }
++                    }
++                    if (!found)
++                    {
++                        continue;
++                    }
++                }
++
++                auto& sensorConstruct = sensors[sensorName];
++                sensorConstruct = nullptr;
++
++                sensorConstruct =
++                    std::make_shared<PowerUnit>(objectServer, dbusConnection,
++                                                io, sensorName, *interfacePath);
++            }
++        });
++
++    getter->getConfiguration(
++        std::vector<std::string>{sensorTypes.begin(), sensorTypes.end()});
++}
++
++int main()
++{
++    boost::asio::io_context io;
++    auto systemBus = std::make_shared<sdbusplus::asio::connection>(io);
++    sdbusplus::asio::object_server objectServer(systemBus, true);
++    objectServer.add_manager("/xyz/openbmc_project/sensors");
++    systemBus->request_name("xyz.openbmc_project.PowerUnit");
++    boost::container::flat_map<std::string, std::shared_ptr<PowerUnit>> sensors;
++    auto sensorsChanged =
++        std::make_shared<boost::container::flat_set<std::string>>();
++
++    boost::asio::post(io, [&]() {
++        createSensors(io, objectServer, sensors, systemBus, nullptr);
++    });
++
++    boost::asio::steady_timer filterTimer(io);
++    std::function<void(sdbusplus::message_t&)> eventHandler =
++        [&](sdbusplus::message_t& message) {
++            if (message.is_method_error())
++            {
++                std::cerr << "callback method error\n";
++                return;
++            }
++            sensorsChanged->insert(message.get_path());
++            // this implicitly cancels the timer
++            filterTimer.expires_after(std::chrono::seconds(1));
++
++            filterTimer.async_wait([&](const boost::system::error_code& ec) {
++                if (ec == boost::asio::error::operation_aborted)
++                {
++                    /* we were canceled*/
++                    return;
++                }
++                if (ec)
++                {
++                    std::cerr << "timer error\n";
++                    return;
++                }
++                createSensors(io, objectServer, sensors, systemBus,
++                              sensorsChanged);
++            });
++        };
++
++    std::vector<std::unique_ptr<sdbusplus::bus::match_t>> matches =
++        setupPropertiesChangedMatches(*systemBus, sensorTypes, eventHandler);
++
++    io.run();
++}
+diff --git a/src/meson.build b/src/meson.build
+index d47e599..e24c05a 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -274,3 +274,17 @@ if get_option('system').enabled()
+     )
+ endif
+ 
++if get_option('powerunit').enabled()
++    executable(
++        'powerunitstatus',
++        'PowerUnit.cpp',
++        'PowerUnitMain.cpp',
++        dependencies: [
++            default_deps,
++            utils_dep,
++        ],
++        cpp_args: uring_args,
++        install: true,
++    )
++endif
++

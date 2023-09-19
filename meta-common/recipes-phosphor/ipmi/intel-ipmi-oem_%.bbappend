@@ -22,5 +22,8 @@ SRC_URI += "\
        file://0025-SEL-entries-used-percentage-showing-unknown.patch \
        file://0026-Add-read-cert-file-command.patch \
        file://0027-Support-Inband-Firmware-Update.patch \
+       file://0028-Generic-discrete-sensor.patch \
+       file://0029-add-acpi-system-power-discrete-sensor-type.patch \
+       file://0030-Add-IPMI-Support-for-Power-Supply-Discrete-Sensor.patch \
     "
 

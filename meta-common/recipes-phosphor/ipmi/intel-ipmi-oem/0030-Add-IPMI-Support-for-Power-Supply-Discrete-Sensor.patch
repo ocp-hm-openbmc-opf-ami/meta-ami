@@ -1,0 +1,111 @@
+From 22d94f43678ebc6286b46e9c4772a44055cc1d84 Mon Sep 17 00:00:00 2001
+From: vipinc <vipinc@ami.com>
+Date: Fri, 25 Aug 2023 14:29:16 +0530
+Subject: [PATCH] Add IPMI Support for Power Supply Discrete Sensor
+
+This patch add support to get the proper status of Discrete
+Power Supply sensor over ipmi
+
+Tested and Verified in Archrecity:
+- Power Supply Sensor successfully listed in IPMI
+root@AMIOT-fafe25edbb4f:~# ipmitool sensor | grep -i "Status PSU"
+Status PSU1      | 0x0        | discrete   | 0x0100| na        | na        | na        | na        | na        | na
+Status PSU2      | 0x0        | discrete   | 0x0100| na        | na        | na        | na        | na        | na
+root@AMIOT-fafe25edbb4f:~#
+root@AMIOT-fafe25edbb4f:~#
+root@AMIOT-fafe25edbb4f:~# ipmitool sdr elist | grep -i "Status PSU"
+Status PSU1      | 32h | ok  | 10.1 | Presence detected
+Status PSU2      | 33h | ok  | 10.1 | Presence detected
+root@AMIOT-fafe25edbb4f:~#
+
+Signed-off-by: vipinc <vipinc@ami.com>
+---
+ include/sdrutils.hpp   |  5 ++++-
+ src/sensorcommands.cpp | 15 +++++++++------
+ 2 files changed, 13 insertions(+), 7 deletions(-)
+
+diff --git a/include/sdrutils.hpp b/include/sdrutils.hpp
+index f0a8288..b850c38 100644
+--- a/include/sdrutils.hpp
++++ b/include/sdrutils.hpp
+@@ -365,6 +365,7 @@ enum class SensorTypeCodes : uint8_t
+     current = 0x3,
+     fan = 0x4,
+     processor = 0x07,
++    powersupply = 0x08,
+     powerunit = 0x09,
+     acpisystem = 0x22,
+     watchdog2 = 0x23,
+@@ -378,6 +379,7 @@ const static boost::container::flat_map<const char*, SensorTypeCodes, CmpStr>
+                  {"fan_tach", SensorTypeCodes::fan},
+                  {"fan_pwm", SensorTypeCodes::fan},
+                  {"cpu", SensorTypeCodes::processor},
++                 {"powersupply", SensorTypeCodes::powersupply},
+                  {"powerunit", SensorTypeCodes::powerunit},
+                  {"acpisystem", SensorTypeCodes::acpisystem},
+                  {"watchdog", SensorTypeCodes::watchdog2},
+@@ -441,7 +443,8 @@ inline static uint8_t getSensorEventTypeFromPath(const std::string& path)
+     if (sensorType == static_cast<uint8_t>(SensorTypeCodes::processor) ||
+         sensorType == static_cast<uint8_t>(SensorTypeCodes::watchdog2) ||
+         sensorType == static_cast<uint8_t>(SensorTypeCodes::powerunit) ||
+-        sensorType == static_cast<uint8_t>(SensorTypeCodes::acpisystem))
++        sensorType == static_cast<uint8_t>(SensorTypeCodes::acpisystem) ||
++        sensorType == static_cast<uint8_t>(SensorTypeCodes::powersupply))
+     {
+         return 0x6f; // reading type = Sensor Specific
+     }
+diff --git a/src/sensorcommands.cpp b/src/sensorcommands.cpp
+index 47ccf1e..1325a04 100644
+--- a/src/sensorcommands.cpp
++++ b/src/sensorcommands.cpp
+@@ -227,7 +227,7 @@ bool getwd2Status(const SensorMap& sensorMap, uint8_t& assertions)
+ }
+ 
+ bool getDiscreteStatus(const SensorMap& sensorMap, const std::string path,
+-                       uint8_t& assertions)
++                       uint16_t& assertions)
+ {
+     auto statusObject = sensorMap.find("xyz.openbmc_project.Sensor.State");
+     if (statusObject != sensorMap.end())
+@@ -235,10 +235,11 @@ bool getDiscreteStatus(const SensorMap& sensorMap, const std::string path,
+         auto status = statusObject->second.find("State");
+         if (status != statusObject->second.end())
+         {
+-            uint16_t state = std::get<uint8_t>(status->second);
+-            assertions |= static_cast<uint8_t>(state);
++            uint16_t state = std::get<uint16_t>(status->second);
++            assertions |= state;
+         }
+     }
++    return true;
+ }
+ 
+ } // namespace sensor
+@@ -863,7 +864,7 @@ ipmi::RspType<uint8_t, uint8_t, uint8_t, std::optional<uint8_t>>
+     auto discInterface = sensorMap.find(sensor::discreteInterface);
+     if (discInterface != sensorMap.end())
+     {
+-        uint8_t assertions = 0;
++        uint16_t assertions = 0;
+ 
+         if (!sensor::getDiscreteStatus(sensorMap, path, assertions))
+         {
+@@ -872,11 +873,13 @@ ipmi::RspType<uint8_t, uint8_t, uint8_t, std::optional<uint8_t>>
+ 
+         uint8_t value = 0;
+         uint8_t operation = 0;
++        uint8_t eventByte1 = (assertions & 0xFF);
++        uint8_t eventByte2 = (assertions >> 8);
+         operation |=
+             static_cast<uint8_t>(IPMISensorReadingByte2::sensorScanningEnable);
+ 
+-        return ipmi::responseSuccess(value, operation, assertions,
+-                                     std::nullopt);
++        return ipmi::responseSuccess(value, operation, eventByte1,
++                                     eventByte2);
+     }
+ 
+     auto sensorObject = sensorMap.find("xyz.openbmc_project.Sensor.Value");
+-- 
+2.25.1
+

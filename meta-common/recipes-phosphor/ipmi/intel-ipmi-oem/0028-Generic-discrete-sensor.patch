@@ -1,0 +1,207 @@
+From 97af694a2da39faf24481f7258e8f9c229594f8e Mon Sep 17 00:00:00 2001
+From: selvaganapathi <selvaganapathim@ami.com>
+Date: Wed, 16 Aug 2023 16:53:59 +0530
+Subject: [PATCH] Generic discrete sensor
+
+- Based on the xyz.openbmc_project.Sensor.State
+interface, discrete sensor's parsed and dynamic
+sdr populated
+- Also, using State proprty, sensor state
+readings are shown
+
+Tested:
+Succesfully built and sensor listed.
+
+Signed-off-by: selvaganapathi <selvaganapathim@ami.com>
+---
+ include/sdrutils.hpp   |   8 +++-
+ src/sensorcommands.cpp | 105 +++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 111 insertions(+), 2 deletions(-)
+
+diff --git a/include/sdrutils.hpp b/include/sdrutils.hpp
+index 046fc0f..cf8feff 100644
+--- a/include/sdrutils.hpp
++++ b/include/sdrutils.hpp
+@@ -260,10 +260,11 @@ inline static uint16_t getSensorSubtree(std::shared_ptr<SensorSubTree>& subtree)
+                                            "xyz.openbmc_project.ObjectMapper",
+                                            "GetSubTree");
+     static constexpr const auto depth = 2;
+-    static constexpr std::array<const char*, 5> interfaces = {
++    static constexpr std::array<const char*, 6> interfaces = {
+         "xyz.openbmc_project.Sensor.Value",
+         "xyz.openbmc_project.Inventory.Item.Cpu",
+         "xyz.openbmc_project.Inventory.Item.Watchdog",
++        "xyz.openbmc_project.Sensor.State",
+         "xyz.openbmc_project.Sensor.Threshold.Warning",
+         "xyz.openbmc_project.Sensor.Threshold.Critical"};
+     mapperCall.append("/xyz/openbmc_project/sensors", depth, interfaces);
+@@ -364,6 +365,7 @@ enum class SensorTypeCodes : uint8_t
+     current = 0x3,
+     fan = 0x4,
+     processor = 0x07,
++    powerunit = 0x09,
+     watchdog2 = 0x23,
+     other = 0xB,
+ };
+@@ -375,6 +377,7 @@ const static boost::container::flat_map<const char*, SensorTypeCodes, CmpStr>
+                  {"fan_tach", SensorTypeCodes::fan},
+                  {"fan_pwm", SensorTypeCodes::fan},
+                  {"cpu", SensorTypeCodes::processor},
++                 {"powerunit", SensorTypeCodes::powerunit},
+                  {"watchdog", SensorTypeCodes::watchdog2},
+                  {"power", SensorTypeCodes::other}}};
+ 
+@@ -434,7 +437,8 @@ inline static uint8_t getSensorEventTypeFromPath(const std::string& path)
+ {
+     uint8_t sensorType = (getSensorTypeFromPath(path));
+     if (sensorType == static_cast<uint8_t>(SensorTypeCodes::processor) ||
+-        sensorType == static_cast<uint8_t>(SensorTypeCodes::watchdog2))
++        sensorType == static_cast<uint8_t>(SensorTypeCodes::watchdog2) ||
++        sensorType == static_cast<uint8_t>(SensorTypeCodes::powerunit))
+     {
+         return 0x6f; // reading type = Sensor Specific
+     }
+diff --git a/src/sensorcommands.cpp b/src/sensorcommands.cpp
+index 6275ef7..47ccf1e 100644
+--- a/src/sensorcommands.cpp
++++ b/src/sensorcommands.cpp
+@@ -167,6 +167,8 @@ static constexpr const char* cpuInterface =
+     "xyz.openbmc_project.Inventory.Item.Cpu";
+ static constexpr const char* watchdog2Interface =
+     "xyz.openbmc_project.Inventory.Item.Watchdog";
++static constexpr const char* discreteInterface =
++    "xyz.openbmc_project.Sensor.State";
+ /**
+  * @brief Gets assertion status for Processor type sensor
+  *
+@@ -224,6 +226,21 @@ bool getwd2Status(const SensorMap& sensorMap, uint8_t& assertions)
+     return true;
+ }
+ 
++bool getDiscreteStatus(const SensorMap& sensorMap, const std::string path,
++                       uint8_t& assertions)
++{
++    auto statusObject = sensorMap.find("xyz.openbmc_project.Sensor.State");
++    if (statusObject != sensorMap.end())
++    {
++        auto status = statusObject->second.find("State");
++        if (status != statusObject->second.end())
++        {
++            uint16_t state = std::get<uint8_t>(status->second);
++            assertions |= static_cast<uint8_t>(state);
++        }
++    }
++}
++
+ } // namespace sensor
+ 
+ static void getSensorMaxMin(const SensorMap& sensorMap, double& max,
+@@ -583,6 +600,60 @@ bool constructWatchdog2Sdr(ipmi::Context::ptr ctx, uint16_t sensorNum,
+     return true;
+ }
+ 
++bool constructDiscreteSdr(ipmi::Context::ptr ctx, uint16_t sensorNum,
++                          uint16_t recordID, const std::string& service,
++                          const std::string& path,
++                          get_sdr::SensorDataCompactRecord& record)
++{
++    uint8_t sensorNumber = static_cast<uint8_t>(sensorNum);
++    uint8_t lun = static_cast<uint8_t>(sensorNum >> 8);
++
++    get_sdr::header::set_record_id(
++        recordID, reinterpret_cast<get_sdr::SensorDataRecordHeader*>(&record));
++    record.header.sdr_version = ipmiSdrVersion;
++    record.header.record_type = get_sdr::SENSOR_DATA_COMPACT_RECORD;
++    record.header.record_length = sizeof(get_sdr::SensorDataCompactRecord) -
++                                  sizeof(get_sdr::SensorDataRecordHeader);
++    record.key.owner_id = bmcI2CAddr;
++    record.key.owner_lun = lun;
++    record.key.sensor_number = sensorNumber;
++    record.body.sensor_type = getSensorTypeFromPath(path);
++
++    record.body.event_reading_type = getSensorEventTypeFromPath(path);
++    SensorMap sensorMap;
++
++    if (!getSensorMap(ctx->yield, service, path, sensorMap,
++                      sensorMapSdrUpdatePeriod))
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Failed to update sensor map for discrete sensor",
++            phosphor::logging::entry("SERVICE=%s", service.c_str()),
++            phosphor::logging::entry("PATH=%s", path.c_str()));
++        return false;
++    }
++    uint8_t entityId = 0;
++    uint8_t entityInstance = 0x01;
++
++    // follow the association chain to get the parent board's entityid and
++    // entityInstance
++    updateIpmiFromAssociation(path, sensorMap, entityId, entityInstance);
++
++    record.body.entity_id = entityId;
++    record.body.entity_instance = entityInstance;
++    std::string name;
++    size_t nameStart = path.rfind("/");
++    if (nameStart != std::string::npos)
++    {
++        name = path.substr(nameStart + 1, std::string::npos - nameStart);
++    }
++    std::replace(name.begin(), name.end(), '_', ' ');
++    record.body.id_string_info = name.size();
++    std::strncpy(record.body.id_string, name.c_str(),
++                 sizeof(record.body.id_string));
++    details::sdrStatsTable.updateName(sensorNumber, name);
++    return true;
++}
++
+ ipmi::RspType<> ipmiSenPlatformEvent(ipmi::Context::ptr ctx,
+                                      ipmi::message::Payload& p)
+ {
+@@ -788,6 +859,26 @@ ipmi::RspType<uint8_t, uint8_t, uint8_t, std::optional<uint8_t>>
+                                      std::nullopt);
+     }
+ 
++    // To handle Discrete sensor
++    auto discInterface = sensorMap.find(sensor::discreteInterface);
++    if (discInterface != sensorMap.end())
++    {
++        uint8_t assertions = 0;
++
++        if (!sensor::getDiscreteStatus(sensorMap, path, assertions))
++        {
++            return ipmi::responseResponseError();
++        }
++
++        uint8_t value = 0;
++        uint8_t operation = 0;
++        operation |=
++            static_cast<uint8_t>(IPMISensorReadingByte2::sensorScanningEnable);
++
++        return ipmi::responseSuccess(value, operation, assertions,
++                                     std::nullopt);
++    }
++
+     auto sensorObject = sensorMap.find("xyz.openbmc_project.Sensor.Value");
+ 
+     if (sensorObject == sensorMap.end() ||
+@@ -1929,6 +2020,20 @@ static int
+                           ((uint8_t*)&record) + sizeof(record));
+     }
+ 
++    // handle discrete senosrs
++    if (std::find(interfaces.begin(), interfaces.end(),
++                  sensor::discreteInterface) != interfaces.end())
++    {
++        get_sdr::SensorDataCompactRecord record = {0};
++        if (!constructDiscreteSdr(ctx, sensorNum, recordID, connection, path,
++                                  record))
++        {
++            return GENERAL_ERROR;
++        }
++        recordData.insert(recordData.end(), (uint8_t*)&record,
++                          ((uint8_t*)&record) + sizeof(record));
++    }
++
+     return 0;
+ }
+ 
