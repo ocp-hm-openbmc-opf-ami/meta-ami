@@ -68,7 +68,6 @@ SRC_URI:append = " file://0001-managers-add-factory-restore.patch  \
             file://0084-Task-Delete-Implementation-Under-TaskService.patch \ 
 	    file://0080-Added-PasswordRestFailed-after-password-expired.patch \
             file://0086-Adding-SubordinateOverrides-privilege.patch \
-            file://0091-Delete-Subscription-status-code-should-be-204-No-Con.patch \
             file://0092-Added-SessionType-as-Redfish-for-created-Redfish-Ses.patch \
             file://0093-Generating-logs-takes-a-long-time-set-timeout-to-20.patch \
 	    file://0100-Adding-FRU-support-to-Redfish.patch \
