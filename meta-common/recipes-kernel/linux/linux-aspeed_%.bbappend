@@ -23,3 +23,9 @@ SRC_URI += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '',NON_PFR_SRC_UR
 SRC_URI_NON_PFR_DUAL:append = "file://0013-Added-dts-configuration-for-dual-image-support.patch \
                               "
 SRC_URI:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'dual-image', SRC_URI_NON_PFR_DUAL,'', d)}"
+
+NETWORK_BONDING_SRC_URI += "file://bond.cfg \
+                            file://0017-Disable-Default-Network-Bonding.patch \
+                           "
+SRC_URI += "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
+

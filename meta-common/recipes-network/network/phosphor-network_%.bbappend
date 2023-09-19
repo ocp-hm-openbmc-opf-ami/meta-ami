@@ -24,7 +24,9 @@ SRC_URI:append = " \
              file://ipv4-advanced-route.sh \
              file://ipv6-advanced-route.sh \
           "
+NETWORK_BONDING_SRC_URI += "file://0023-Support-Network-Bonding.patch"
 
+SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
 
 do_install:append() {
     install -d ${D}${bindir}
@@ -43,3 +45,5 @@ EXTRA_OEMESON:append = " -Ddefault-link-local-autoconf=ipv6"
 EXTRA_OEMESON:append = " -Denable-advanced-route=true"
 
 SYSTEMD_SERVICE:${PN} += "xyz.openbmc_project.GARPControl.service"
+
+

@@ -1,0 +1,752 @@
+From 8b36bd1d0dcd435355d4bc281ce33ce64b6bfa08 Mon Sep 17 00:00:00 2001
+From: vaibhavs <vaibhavs@ami.com>
+Date: Tue, 19 Sep 2023 03:58:51 +0000
+Subject: [PATCH] Support Network Bonding
+
+---
+ .../Network/Bond/Create/meson.build           |  14 ++
+ .../openbmc_project/Network/Bond/meson.build  |  15 ++
+ gen/xyz/openbmc_project/Network/meson.build   |   1 +
+ src/bond.cpp                                  | 125 +++++++++++++++++
+ src/bond.hpp                                  |  83 +++++++++++
+ src/ethernet_interface.cpp                    | 129 +++++++++++++++++-
+ src/ethernet_interface.hpp                    |  11 ++
+ src/meson.build                               |   1 +
+ src/network_manager.cpp                       |  25 ++++
+ src/network_manager.hpp                       |   7 +-
+ src/rtnetlink.cpp                             |  53 +++++++
+ src/rtnetlink.hpp                             |   6 +
+ src/types.hpp                                 |  18 ++-
+ .../Network/Bond/Create.interface.yaml        |  22 +++
+ 14 files changed, 507 insertions(+), 3 deletions(-)
+ create mode 100644 gen/xyz/openbmc_project/Network/Bond/Create/meson.build
+ create mode 100644 gen/xyz/openbmc_project/Network/Bond/meson.build
+ create mode 100644 src/bond.cpp
+ create mode 100644 src/bond.hpp
+ create mode 100644 yaml/xyz/openbmc_project/Network/Bond/Create.interface.yaml
+
+diff --git a/gen/xyz/openbmc_project/Network/Bond/Create/meson.build b/gen/xyz/openbmc_project/Network/Bond/Create/meson.build
+new file mode 100644
+index 0000000..754f321
+--- /dev/null
++++ b/gen/xyz/openbmc_project/Network/Bond/Create/meson.build
+@@ -0,0 +1,14 @@
++# Generated file; do not modify.
++generated_sources += custom_target(
++    'xyz/openbmc_project/Network/Bond/Create__cpp'.underscorify(),
++    input: [ '../../../../../../yaml/xyz/openbmc_project/Network/Bond/Create.interface.yaml',  ],
++    output: [ 'server.cpp', 'server.hpp', 'client.hpp',  ],
++    depend_files: sdbusplusplus_depfiles,
++    command: [
++        sdbuspp_gen_meson_prog, '--command', 'cpp',
++        '--output', meson.current_build_dir(),
++        '--tool', sdbusplusplus_prog,
++        '--directory', meson.current_source_dir() / '../../../../../../yaml',
++        'xyz/openbmc_project/Network/Bond/Create',
++    ],
++)
+diff --git a/gen/xyz/openbmc_project/Network/Bond/meson.build b/gen/xyz/openbmc_project/Network/Bond/meson.build
+new file mode 100644
+index 0000000..254bec3
+--- /dev/null
++++ b/gen/xyz/openbmc_project/Network/Bond/meson.build
+@@ -0,0 +1,15 @@
++# Generated file; do not modify.
++subdir('Create')
++generated_others += custom_target(
++    'xyz/openbmc_project/Network/Bond/Create__markdown'.underscorify(),
++    input: [ '../../../../../yaml/xyz/openbmc_project/Network/Bond/Create.interface.yaml',  ],
++    output: [ 'Create.md' ],
++    depend_files: sdbusplusplus_depfiles,
++    command: [
++        sdbuspp_gen_meson_prog, '--command', 'markdown',
++        '--output', meson.current_build_dir(),
++        '--tool', sdbusplusplus_prog,
++        '--directory', meson.current_source_dir() / '../../../../../yaml',
++        'xyz/openbmc_project/Network/Bond/Create',
++    ],
++)
+diff --git a/gen/xyz/openbmc_project/Network/meson.build b/gen/xyz/openbmc_project/Network/meson.build
+index 3151cc9..a0ccfb7 100644
+--- a/gen/xyz/openbmc_project/Network/meson.build
++++ b/gen/xyz/openbmc_project/Network/meson.build
+@@ -2,3 +2,4 @@
+ subdir('IP')
+ subdir('Neighbor')
+ subdir('VLAN')
++subdir('Bond')
+diff --git a/src/bond.cpp b/src/bond.cpp
+new file mode 100644
+index 0000000..5f7b47a
+--- /dev/null
++++ b/src/bond.cpp
+@@ -0,0 +1,125 @@
++#include "bond.hpp"
++#include <iostream>
++#include "ethernet_interface.hpp"
++#include "network_manager.hpp"
++#include "system_queries.hpp"
++#include <phosphor-logging/elog-errors.hpp>
++#include <phosphor-logging/elog.hpp>
++#include <phosphor-logging/lg2.hpp>
++#include <phosphor-logging/log.hpp>
++
++#include <string>
++#include <xyz/openbmc_project/Common/error.hpp>
++#include <cstdlib>
++
++namespace phosphor
++{
++namespace network
++{
++using namespace phosphor::logging;
++using namespace sdbusplus::xyz::openbmc_project::Common::Error;
++using sdbusplus::xyz::openbmc_project::Common::Error::NotAllowed;
++using REASON =
++    phosphor::logging::xyz::openbmc_project::Common::NotAllowed::REASON;
++using phosphor::logging::elog;
++
++using Argument = phosphor::logging::xyz::openbmc_project::Common::InvalidArgument;
++
++static auto makeObjPath(std::string_view root)
++{
++    auto ret = sdbusplus::message::object_path(std::string(root));
++    return ret;
++}
++
++Bond::Bond(sdbusplus::bus_t& bus, std::string_view objRoot,
++              EthernetInterface& eth, std::string activeSlave,
++              uint8_t miiMonitor, Mode mode) :
++Bond(bus, makeObjPath(objRoot), eth, activeSlave, miiMonitor, mode)
++{
++}
++
++Bond::Bond(sdbusplus::bus_t& bus, sdbusplus::message::object_path objPath,
++              EthernetInterface& eth, std::string activeSlave,
++              uint8_t miiMonitor, Mode mode) :
++BondObj(bus, objPath.str.c_str(), BondObj::action::defer_emit),
++        eth(eth), objPath(std::move(objPath))
++{
++  BondIntf::activeSlave(activeSlave,true);
++  BondIntf::miiMonitor(miiMonitor,true);
++  BondIntf::mode(mode,true);
++  emit_object_added();
++}
++
++void Bond::delete_()
++{
++    auto intf = eth.interfaceName();
++    std::string parentIfName;
++    // Remove all configs for the current interface
++    const auto& confDir = eth.manager.get().getConfDir();
++    std::error_code ec;
++    std::filesystem::remove(config::pathForIntfConf(confDir, intf), ec);
++    std::filesystem::remove(config::pathForIntfDev(confDir, intf), ec);
++
++    auto ifidx = eth.getIfIdx();
++
++    if (ifidx > 0)
++    {
++        eth.manager.get().interfacesByIdx.erase(ifidx);
++    }
++    auto it = eth.manager.get().interfaces.find(intf);
++    auto obj = std::move(it->second);
++    eth.manager.get().interfaces.erase(it);
++
++    if (ifidx > 0)
++    {
++        // We need to forcibly delete the interface as systemd does not
++        eth.manager.get().addReloadPostHook(
++            [idx = ifidx]() { system::deleteIntf(idx); });
++
++        // Ignore the interface so the reload doesn't re-query it
++        eth.manager.get().ignoredIntf.emplace(ifidx);
++    }
++
++    eth.manager.get().writeToConfigurationFile();
++    eth.manager.get().reloadConfigs();
++
++    execute("/bin/systemctl", "systemctl", "restart", "systemd-networkd.service");
++
++}
++
++std::string Bond::activeSlave(std::string activeSlave)
++{
++    auto it = eth.manager.get().interfaces.find(activeSlave);
++    if(it == eth.manager.get().interfaces.end())
++    {
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("ActiveSlave"),
++            Argument::ARGUMENT_VALUE(activeSlave.c_str()));
++
++    }
++    else if((activeSlave.compare("bond0") == 0) || (activeSlave.compare("usb0") == 0))
++    {
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("ActiveSlave"),
++            Argument::ARGUMENT_VALUE(activeSlave.c_str()));
++    }
++
++    if(BondIntf::activeSlave() != activeSlave)
++    {
++        BondIntf::activeSlave(activeSlave);
++        std::system(fmt::format("/bin/echo {} > /sys/class/net/bond0/bonding/active_slave",activeSlave.c_str()).c_str());
++    }
++    return BondIntf::activeSlave();
++}
++uint8_t Bond::miiMonitor(uint8_t /*MIIMonitor*/)
++{
++    elog<NotAllowed>(REASON("Property update is not allowed"));
++}
++Bond::Mode Bond::mode(Mode /*Bonding Mode*/)
++{
++    elog<NotAllowed>(REASON("Property update is not allowed"));
++}
++
++} //namespace network
++} //namespace phosphor
++
+diff --git a/src/bond.hpp b/src/bond.hpp
+new file mode 100644
+index 0000000..0328e14
+--- /dev/null
++++ b/src/bond.hpp
+@@ -0,0 +1,83 @@
++#pragma once
++
++#include "types.hpp"
++
++#include <sdbusplus/bus.hpp>
++#include <sdbusplus/message/native_types.hpp>
++#include <sdbusplus/server/object.hpp>
++#include <string_view>
++#include <xyz/openbmc_project/Network/Bond/server.hpp>
++#include <xyz/openbmc_project/Object/Delete/server.hpp>
++
++namespace phosphor
++{
++namespace network
++{
++
++using BondIntf = sdbusplus::xyz::openbmc_project::Network::server::Bond;
++
++using BondObj = sdbusplus::server::object_t<
++    BondIntf, sdbusplus::xyz::openbmc_project::Object::server::Delete>;
++
++class EthernetInterface;
++
++/** @class Bond
++ *  @brief OpenBMC network bond implementation.
++ *  @details A concrete implementation for the
++ *  xyz.openbmc_project.Network.Bond dbus interface.
++ */
++class Bond : public BondObj
++{
++ public:
++   using Mode = BondIntf::BondingMode;
++
++   Bond() = delete;
++   Bond(const Bond&) = delete;
++   Bond& operator=(const Bond&) = delete;
++   Bond(Bond&&) = delete;
++   Bond& operator=(Bond&&) = delete;
++   virtual ~Bond() = default;
++
++    /** @brief Constructor to put object onto bus at a dbus path.
++     *  @param[in] bus - Bus to attach to.
++     *  @param[in] objRoot - Path to attach at.
++     *  @param[in] eth - Parent object.
++     *  @param[in] activeSlave - Active Slave.
++     *  @param[in] miiMonitor - MII Monitor.
++     *  @param[in] Mode - Bonding Mode.
++     */
++
++     Bond(sdbusplus::bus_t& bus, std::string_view objRoot,
++             EthernetInterface& eth, std::string activeSlave,
++	     uint8_t miiMonitor, Mode mode);
++
++    /** @brief Delete this d-bus object.
++     */
++    void delete_() override;
++
++    using BondIntf::mode;
++    Mode mode(Mode) override;
++    using BondIntf::miiMonitor;
++    uint8_t miiMonitor(uint8_t) override;
++    using BondIntf::activeSlave;
++    std::string activeSlave(std::string) override;
++
++    inline const auto& getObjPath() const
++    {
++        return objPath;
++    }
++
++ private:
++    /** @brief Parent Object. */
++    EthernetInterface& eth;
++
++    /** @brief Dbus object path */
++    sdbusplus::message::object_path objPath;
++
++    Bond(sdbusplus::bus_t& bus, sdbusplus::message::object_path objPath,
++            EthernetInterface& eth, std::string activeSlave,
++            uint8_t miiMonitor, Mode mode);
++};
++
++}// namespace network
++}// namespace phosphor
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index 325e914..eecd7ba 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -27,7 +27,6 @@
+ #include <sys/ioctl.h>        /* macro ioctl is defined */
+ #include <linux/if_packet.h>  /* struct sockaddr_ll (see man 7 packet) */
+ #include <netinet/ether.h>
+-
+ namespace phosphor
+ {
+ namespace network
+@@ -67,6 +66,8 @@ static constexpr const char* networkChannelCfgFile =
+     "/var/channel_intf_data.json";
+ static constexpr const char* defaultChannelPriv = "priv-admin";
+ 
++const std::string bondIfcName = "bond0";
++
+ template <typename Func>
+ inline decltype(std::declval<Func>()())
+     ignoreError(std::string_view msg, stdplus::zstring_view intf,
+@@ -150,6 +151,17 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+         }
+         vlan.emplace(bus, this->objPath.c_str(), info.intf, *this);
+     }
++
++    if (info.intf.bondInfo)
++    {
++        if (!info.intf.parent_idx)
++        {
++            std::runtime_error("Missing parent link");
++        }
++        bonding.emplace(bus, this->objPath.c_str(), *this, info.intf.bondInfo->activeSlave,
++                                info.intf.bondInfo->miiMonitor, Bond::Mode::ActiveBackup);
++    }
++
+     for (const auto& [_, addr] : info.addrs)
+     {
+         addAddr(addr);
+@@ -176,6 +188,14 @@ void EthernetInterface::updateInfo(const InterfaceInfo& info, bool skipSignal)
+     {
+         EthernetInterfaceIntf::mtu(*info.mtu, skipSignal);
+     }
++    if(info.bondInfo)
++    {
++	auto it = manager.get().interfaces.find(bondIfcName);
++	if(it != manager.get().interfaces.end())
++	{
++	    it->second->bonding->activeSlave(info.bondInfo->activeSlave,skipSignal);
++	}
++    }
+     if (ifIdx > 0)
+     {
+         auto ethInfo = ignoreError("GetEthInfo", *info.name, {}, [&] {
+@@ -777,6 +797,76 @@ ObjectPath EthernetInterface::createVLAN(uint16_t id)
+     return ret;
+ }
+ 
++ObjectPath EthernetInterface::createBond(std::string activeSlave, uint8_t miiMonitor)
++{
++    auto intfName = bondIfcName;
++    std::string macStr{};
++    if (manager.get().interfaces.find(intfName) != manager.get().interfaces.end())
++    {
++        log<level::ERR>("Bond already exists");
++    }
++
++    auto objRoot = std::string_view(objPath).substr(0, objPath.rfind('/'));
++
++    for (const auto& [_, intf] : manager.get().interfaces)
++    {
++        if(intf->interfaceName().compare(activeSlave.c_str()) == 0)
++        {
++            /*Get MAC Address of Active Slave*/
++            macStr = intf->macAddress();
++        }
++    }
++
++    manager.get().writeToConfigurationFile();
++
++    std::optional<ether_addr> mac;
++    if (!macStr.empty())
++    {
++        mac.emplace(ToAddr<ether_addr>{}(macStr));
++    }
++
++    std::optional<BondInfo> bondinfo;
++    bondinfo.emplace(activeSlave,1,miiMonitor); /*Mode - active-backup = 1*/
++
++    auto info = AllIntfInfo{InterfaceInfo{
++        .idx = 0, // TODO: Query the correct value after creation
++        .flags = 0,
++        .name = intfName,
++        .mac = std::move(mac),
++        .mtu = mtu(),
++        .parent_idx = ifIdx,
++        .bondInfo = std::move(bondinfo),
++        }};
++
++    // Pass the parents nicEnabled property, so that the child
++    // Bond interface can inherit.
++    auto bondIntf = std::make_unique<EthernetInterface>(
++        bus, manager, info, objRoot, config::Parser(), nicEnabled());
++
++    ObjectPath ret = bondIntf->objPath;
++
++    manager.get().interfaces.emplace(intfName, std::move(bondIntf));
++
++    // write the device file for the bond interface.
++    config::Parser config;
++    auto& netdev = config.map["NetDev"].emplace_back();
++    netdev["Name"].emplace_back(intfName);
++    netdev["Kind"].emplace_back("bond");
++    netdev["MACAddress"].emplace_back(macStr);
++    auto& bond = config.map["Bond"].emplace_back();
++    bond["Mode"].emplace_back("active-backup");
++    bond["MIIMonitorSec"].emplace_back(fmt::format("{}ms",miiMonitor));
++
++    config.writeFile(config::pathForIntfDev(manager.get().getConfDir(), intfName));
++
++    manager.get().writeToConfigurationFile();
++
++    execute("/bin/systemctl", "systemctl", "restart", "systemd-networkd.service");
++
++    return ret;
++}
++
++
+ ServerList EthernetInterface::staticNTPServers(ServerList value)
+ {
+     try
+@@ -804,6 +894,42 @@ ServerList EthernetInterface::ntpServers(ServerList /*servers*/)
+ void EthernetInterface::writeConfigurationFile()
+ {
+     config::Parser config;
++
++    auto it = manager.get().interfaces.find(bondIfcName);
++
++    if((it != manager.get().interfaces.end()) && (interfaceName().compare(bondIfcName) != 0) && (interfaceName().compare("usb0") != 0))
++    {
++        config.map["Match"].emplace_back()["Name"].emplace_back(interfaceName());
++        {
++            auto& link = config.map["Link"].emplace_back();
++#ifdef PERSIST_MAC
++
++            config::Parser parser(config::pathForIntfConf(manager.get().getConfDir(), interfaceName()));
++            auto str1 = parser.map.getLastValueString("Link", "MACAddress");
++
++            if (!str1->empty())
++            {
++                link["MACAddress"].emplace_back(str1->c_str());
++            }
++
++#endif
++            if (!EthernetInterfaceIntf::nicEnabled())
++            {
++                link["Unmanaged"].emplace_back("yes");
++            }
++        }
++        auto& network = config.map["Network"].emplace_back();
++        {
++            auto& bond = network["Bond"];
++            bond.emplace_back(bondIfcName);
++            if(interfaceName().compare(it->second->bonding->activeSlave()) == 0)
++            {
++                network["PrimarySlave"].emplace_back("true");
++            }
++        }
++    }
++    else {
++
+     config.map["Match"].emplace_back()["Name"].emplace_back(interfaceName());
+     {
+         auto& link = config.map["Link"].emplace_back();
+@@ -963,6 +1089,7 @@ void EthernetInterface::writeConfigurationFile()
+         dhcp["SendNsupdate"].emplace_back(conf.sendNsupdateEnabled() ? "true"
+                                                                      : "false");
+     }
++    }
+     auto path = config::pathForIntfConf(manager.get().getConfDir(),
+                                         interfaceName());
+     config.writeFile(path);
+diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
+index 880d54a..9897a19 100644
+--- a/src/ethernet_interface.hpp
++++ b/src/ethernet_interface.hpp
+@@ -24,6 +24,8 @@
+ #include <vector>
+ #include "config_parser.hpp"
+ #include "util.hpp"
++#include "bond.hpp"
++#include <xyz/openbmc_project/Network/Bond/server.hpp>
+ 
+ namespace phosphor
+ {
+@@ -105,6 +107,9 @@ class EthernetInterface : public Ifaces
+     /** @brief Persistent map of Neighbor dbus objects and their names */
+     std::unordered_map<InAddrAny, std::unique_ptr<Neighbor>> staticNeighbors;
+ 
++    /** @brief Bonding dbus object */
++    std::optional<Bond> bonding = std::nullopt;
++
+     void addAddr(const AddressInfo& info);
+     void addStaticNeigh(const NeighborInfo& info);
+ 
+@@ -206,6 +211,12 @@ class EthernetInterface : public Ifaces
+      */
+     ObjectPath createVLAN(uint16_t id);
+ 
++    /** @brief create bond interface.
++     *  @param[in] activeSlave- active slave.
++     *  @param[in] miiMonitor- MII Monitor.
++     */
++    ObjectPath createBond(std::string activeSlave, uint8_t miiMonitor);
++
+     /** @brief write the network conf file with the in-memory objects.
+      */
+     void writeConfigurationFile();
+diff --git a/src/meson.build b/src/meson.build
+index 051120c..ba6805d 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -76,6 +76,7 @@ networkd_lib = static_library(
+   'config_parser.cpp',
+   'dhcp_configuration.cpp',
+   'dns_updater.cpp',
++  'bond.cpp',
+   implicit_include_directories: false,
+   include_directories: src_includes,
+   dependencies: networkd_deps)
+diff --git a/src/network_manager.cpp b/src/network_manager.cpp
+index b8602bd..f1c0df3 100644
+--- a/src/network_manager.cpp
++++ b/src/network_manager.cpp
+@@ -788,5 +788,30 @@ void Manager::AdvancedRoute() {
+ }
+ #endif
+ 
++ObjectPath Manager::bond(std::string activeSlave, uint8_t miiMonitor)
++{
++    if(miiMonitor == 0 || miiMonitor > 100)
++    {
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("MIIMonitor"),
++            Argument::ARGUMENT_VALUE(std::to_string(miiMonitor).c_str()));
++    }
++
++    auto it = interfaces.find(activeSlave);
++    if(it == interfaces.end())
++    {
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("ActiveSlave"),
++            Argument::ARGUMENT_VALUE(activeSlave.c_str()));
++    }
++    else if((activeSlave.compare("bond0") == 0) || (activeSlave.compare("usb0") == 0))
++    {
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("ActiveSlave"),
++            Argument::ARGUMENT_VALUE(activeSlave.c_str()));
++    }
++    return it->second->createBond(activeSlave,miiMonitor);
++}
++
+ } // namespace network
+ } // namespace phosphor
+diff --git a/src/network_manager.hpp b/src/network_manager.hpp
+index 359e90e..10033fb 100644
+--- a/src/network_manager.hpp
++++ b/src/network_manager.hpp
+@@ -23,6 +23,8 @@
+ #include <thread>
+ #include <mutex>
+ 
++#include "xyz/openbmc_project/Network/Bond/Create/server.hpp"
++
+ namespace phosphor
+ {
+ namespace network
+@@ -31,7 +33,8 @@ namespace network
+ namespace fs = std::filesystem;
+ using ManagerIface = sdbusplus::server::object_t<
+     sdbusplus::xyz::openbmc_project::Network::VLAN::server::Create,
+-    sdbusplus::xyz::openbmc_project::Common::server::FactoryReset>;
++    sdbusplus::xyz::openbmc_project::Common::server::FactoryReset,
++    sdbusplus::xyz::openbmc_project::Network::Bond::server::Create>;
+ 
+ class DelayedExecutor
+ {
+@@ -66,6 +69,8 @@ class Manager : public ManagerIface
+ 
+     ObjectPath vlan(std::string interfaceName, uint32_t id) override;
+ 
++    ObjectPath bond(std::string activeSlave, uint8_t miiMonitor) override;
++
+     /** @brief write the network conf file with the in-memory objects.
+      */
+     void writeToConfigurationFile();
+diff --git a/src/rtnetlink.cpp b/src/rtnetlink.cpp
+index fd68671..d428a74 100644
+--- a/src/rtnetlink.cpp
++++ b/src/rtnetlink.cpp
+@@ -28,6 +28,54 @@ static void parseVlanInfo(InterfaceInfo& info, std::string_view msg)
+     }
+ }
+ 
++static void parseBondInfo(InterfaceInfo& info, std::string_view msg)
++{
++
++    uint32_t ifindex=0;
++
++    if (msg.data() == nullptr)
++    {
++        throw std::runtime_error("Missing Bond data");
++    }
++    while (!msg.empty())
++    {
++        auto [hdr, data] = netlink::extractRtAttr(msg);
++        switch (hdr.rta_type)
++        {
++            case IFLA_BOND_ACTIVE_SLAVE:
++
++                if(!data.empty()){
++                    ifindex = stdplus::raw::copyFrom<uint32_t>(data);
++                }
++                else
++                {
++                    throw std::runtime_error("Missing Bond data");
++                }
++                switch (ifindex)
++                {
++                    case IFINDEX_ETH1:
++
++                        info.bondInfo.emplace("eth1");
++                        break;
++                    case IFINDEX_ETH2:
++                        info.bondInfo.emplace("eth2");
++                        break;
++                    case IFINDEX_ETH3:
++                        info.bondInfo.emplace("eth3");
++                        break;
++                    case IFINDEX_ETH0:
++                    default:
++                        info.bondInfo.emplace("eth0");
++                        break;
++                }
++                break;
++            case IFLA_BOND_MIIMON:
++                info.bondInfo->miiMonitor = static_cast<uint8_t>(stdplus::raw::copyFrom<uint32_t>(data));
++                break;
++        }
++    }
++}
++
+ static void parseLinkInfo(InterfaceInfo& info, std::string_view msg)
+ {
+     std::string_view submsg;
+@@ -49,6 +97,11 @@ static void parseLinkInfo(InterfaceInfo& info, std::string_view msg)
+     {
+         parseVlanInfo(info, submsg);
+     }
++
++    if (info.kind == "bond"sv)
++    {
++        parseBondInfo(info, submsg);
++    }
+ }
+ 
+ InterfaceInfo intfFromRtm(std::string_view msg)
+diff --git a/src/rtnetlink.hpp b/src/rtnetlink.hpp
+index 5436e9d..32c022b 100644
+--- a/src/rtnetlink.hpp
++++ b/src/rtnetlink.hpp
+@@ -8,6 +8,12 @@
+ namespace phosphor::network::netlink
+ {
+ 
++/* Define constants for ifindex of interfaces */
++#define IFINDEX_ETH0      2
++#define IFINDEX_ETH1      3
++#define IFINDEX_ETH2      4
++#define IFINDEX_ETH3      5
++
+ InterfaceInfo intfFromRtm(std::string_view msg);
+ 
+ std::optional<std::tuple<unsigned, InAddrAny>>
+diff --git a/src/types.hpp b/src/types.hpp
+index c0100e6..ac3ef49 100644
+--- a/src/types.hpp
++++ b/src/types.hpp
+@@ -76,6 +76,21 @@ class IfAddr
+     }
+ };
+ 
++/*@class BondInfo
++ * @brief Information about a bond from the kernel
++ */
++struct BondInfo
++{
++    std::string activeSlave {};
++    uint8_t mode ;
++    uint8_t miiMonitor;
++
++    constexpr bool operator==(const BondInfo& rhs) const noexcept
++    {
++        return activeSlave == rhs.activeSlave && mode == rhs.mode && miiMonitor == rhs.miiMonitor;
++    }
++};
++
+ /** @class InterfaceInfo
+  *  @brief Information about interfaces from the kernel
+  */
+@@ -89,13 +104,14 @@ struct InterfaceInfo
+     std::optional<unsigned> parent_idx = std::nullopt;
+     std::optional<std::string> kind = std::nullopt;
+     std::optional<uint16_t> vlan_id = std::nullopt;
++    std::optional<BondInfo> bondInfo = std::nullopt;
+ 
+     constexpr bool operator==(const InterfaceInfo& rhs) const noexcept
+     {
+         return idx == rhs.idx && flags == rhs.flags && name == rhs.name &&
+                mac == rhs.mac && mtu == rhs.mtu &&
+                parent_idx == rhs.parent_idx && kind == rhs.kind &&
+-               vlan_id == rhs.vlan_id;
++               vlan_id == rhs.vlan_id && bondInfo == rhs.bondInfo;
+     }
+ };
+ 
+diff --git a/yaml/xyz/openbmc_project/Network/Bond/Create.interface.yaml b/yaml/xyz/openbmc_project/Network/Bond/Create.interface.yaml
+new file mode 100644
+index 0000000..68a49a2
+--- /dev/null
++++ b/yaml/xyz/openbmc_project/Network/Bond/Create.interface.yaml
+@@ -0,0 +1,22 @@
++description: >
++methods:
++    - name: Bond
++      description: >
++          Create BondInterface Object.
++      parameters:
++          - name: ActiveSlave
++            type: string
++            description: >
++                Name of Active Slave Interface.
++          - name: MIIMonitor
++            type: byte
++            description: >
++                Specifies the frequency that Media Independent Interface link monitoring will occur.
++      returns:
++          - name: Path
++            type: object_path
++            description: >
++                The path for the created Bond object.
++      errors:
++          - xyz.openbmc_project.Common.Error.InvalidArgument
++          - xyz.openbmc_project.Common.Error.NotAllowed

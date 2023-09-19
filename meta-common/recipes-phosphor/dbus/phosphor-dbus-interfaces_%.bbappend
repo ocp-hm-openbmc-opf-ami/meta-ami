@@ -20,3 +20,7 @@ SRC_URI += "file://0001-ARP-Control-property.patch\
 EXTRA_OEMESON += "-Ddata_com_ami=true"
 EXTRA_OEMESON += "-Ddata_org_open_power=true"
 
+NETWORK_BONDING_SRC_URI += "file://0014-Support-Network-Bonding.patch"
+
+SRC_URI += "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
+
