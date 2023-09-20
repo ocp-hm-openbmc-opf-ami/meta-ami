@@ -23,7 +23,9 @@ SRC_URI:append = " \
              file://0022-Enable-Advanced-Route.patch \ 
              file://ipv4-advanced-route.sh \
              file://ipv6-advanced-route.sh \
+             file://0022-Re-Design-the-RA-part-in-DHCPEnabled.patch \
           "
+
 NETWORK_BONDING_SRC_URI += "file://0023-Support-Network-Bonding.patch"
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
