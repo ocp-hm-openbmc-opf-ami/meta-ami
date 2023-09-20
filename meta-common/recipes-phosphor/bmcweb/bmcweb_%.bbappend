@@ -83,6 +83,7 @@ SRC_URI:append = " file://0001-managers-add-factory-restore.patch  \
             file://0115-Added-204-resp-code-Patch-MetricReportDefinitions.patch \
             file://0109-Adding-Nvme-Oem-Schema.patch \
             file://0116-Redfish-Support-for-BSOD-Feature.patch \
+            file://0117-Add-OS-Critical-Stop-Sensor-Redfish-Registry.patch \
         "
 SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
 "

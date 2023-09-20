@@ -25,5 +25,7 @@ SRC_URI += "\
        file://0028-Generic-discrete-sensor.patch \
        file://0029-add-acpi-system-power-discrete-sensor-type.patch \
        file://0030-Add-IPMI-Support-for-Power-Supply-Discrete-Sensor.patch \
+       file://0031-Remove-legacy-Discrete-sensors-dead-code.patch \
+       file://0032-Add-Support-for-OS-Critical-Discrete-Sensor.patch \
     "
 

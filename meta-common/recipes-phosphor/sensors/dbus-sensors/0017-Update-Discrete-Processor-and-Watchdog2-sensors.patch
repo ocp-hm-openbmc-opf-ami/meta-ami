@@ -1,0 +1,333 @@
+From 368780c127bdb09e23bbd2daeb4b32b9cb82be08 Mon Sep 17 00:00:00 2001
+From: vipinc <vipinc@ami.com>
+Date: Tue, 29 Aug 2023 15:25:16 +0530
+Subject: [PATCH] Update Discrete Processor and Watchdog2 sensors
+
+This patch update the Processor and Watchdog2 sensor as per the new
+OneTree generic discrete sensor design.
+
+Tested and Verified in Archrecity
+- Status CPU[0-1] Processor sensors are listing in IPMI sensor & SDR list
+- Watchdog2 sensor is listing and the events are updated as expected
+
+Signed-off-by: vipinc <vipinc@ami.com>
+---
+ src/ProcessorStatus.cpp | 36 +++++++------------
+ src/ProcessorStatus.hpp | 19 ++++------
+ src/WatchdogSensor.cpp  | 78 ++++++++++-------------------------------
+ src/WatchdogSensor.hpp  | 27 ++++++++++----
+ 4 files changed, 58 insertions(+), 102 deletions(-)
+
+diff --git a/src/ProcessorStatus.cpp b/src/ProcessorStatus.cpp
+index 514488a..0a4f06d 100644
+--- a/src/ProcessorStatus.cpp
++++ b/src/ProcessorStatus.cpp
+@@ -14,29 +14,18 @@ ProcessorStatus::ProcessorStatus(
+     std::shared_ptr<sdbusplus::asio::connection>& conn,
+     boost::asio::io_context& io, const std::string& sensorName,
+     const std::string& gpioName, const std::string& sensorConfiguration) :
+-    ItemInterface(
+-        static_cast<sdbusplus::bus::bus&>(*conn),
+-        ("/xyz/openbmc_project/sensors/cpu/" + escapeName(sensorName)).c_str(),
+-        ItemInterface::action::defer_emit),
+-    std::enable_shared_from_this<ProcessorStatus>(),
+-    name(escapeName(sensorName)), gpio(gpioName), objServer(objectServer),
+-    procPresentEvent(io)
++    Discrete(escapeName(sensorName), sensorConfiguration, conn),
++    gpio(gpioName), objServer(objectServer),procPresentEvent(io)
+ {
+     sensorInterface = objectServer.add_interface(
+-        ("/xyz/openbmc_project/sensors/cpu/" + escapeName(sensorName)).c_str(),
+-        CpuInterface::interface);
++        "/xyz/openbmc_project/sensors/cpu/" + name,
++        "xyz.openbmc_project.Sensor.State");
+ 
+-    fs::path p(sensorConfiguration);
+-    AssociationList assocs = {};
+-    assocs.emplace_back(
+-        std::make_tuple("chassis", "all_sensors", p.parent_path().string()));
+-    sdbusplus::xyz::openbmc_project::Association::server::Definitions::
+-        associations(assocs);
++    association = objectServer.add_interface(
++        "/xyz/openbmc_project/sensors/cpu/" + name,
++        association::interface);
++    setInitialProperties();
+ 
+-    if (!sensorInterface->initialize())
+-    {
+-        std::cerr << "error initializing sensor interface\n";
+-    }
+     setupEvent(conn, gpioName, procPresentLine, procPresentEvent);
+ }
+ 
+@@ -72,7 +61,6 @@ bool ProcessorStatus::setupEvent(
+ 
+     bool state = (gpioLine.get_value() == 1);
+     std::vector<std::string> logData;
+-    sdbusplus::xyz::openbmc_project::Inventory::server::Item::present(state);
+ 
+     int gpioLineFd = gpioLine.event_get_fd();
+     if (gpioLineFd < 0)
+@@ -90,6 +78,7 @@ bool ProcessorStatus::setupEvent(
+     if (state)
+     {
+         addSelEntry(conn, logData, procPresence, state);
++        updateState(sensorInterface,(static_cast<uint16_t>(1 << static_cast<uint16_t>(CpuEvent::PresenceDetected))));
+     }
+ 
+     monitor(conn, logData, procPresence, gpioEventDescriptor, gpioLine);
+@@ -114,12 +103,13 @@ void ProcessorStatus::monitor(
+                 return;
+             }
+             gpiod::line_event lineEvent = line.event_read();
+-            sdbusplus::xyz::openbmc_project::Inventory::server::Item::present(
+-                lineEvent.event_type == gpiod::line_event::FALLING_EDGE);
+-
++            if( lineEvent.event_type == gpiod::line_event::FALLING_EDGE)
++            {
++            updateState(sensorInterface,(static_cast<uint16_t>(1 << static_cast<uint16_t>(CpuEvent::PresenceDetected))));
+             addSelEntry(conn, logData, procPresence,
+                         lineEvent.event_type ==
+                             gpiod::line_event::FALLING_EDGE);
++            }
+             // Start monitoring for next event
+             monitor(conn, logData, procPresence, event, line);
+         });
+diff --git a/src/ProcessorStatus.hpp b/src/ProcessorStatus.hpp
+index 71f8013..6ddaa8d 100644
+--- a/src/ProcessorStatus.hpp
++++ b/src/ProcessorStatus.hpp
+@@ -1,5 +1,6 @@
+ #pragma once
+ 
++#include <Discrete.hpp>
+ #include <Utils.hpp>
+ #include <boost/asio/deadline_timer.hpp>
+ #include <boost/asio/io_service.hpp>
+@@ -7,9 +8,6 @@
+ #include <boost/asio/streambuf.hpp>
+ #include <gpiod.hpp>
+ #include <sdbusplus/asio/object_server.hpp>
+-#include <xyz/openbmc_project/Association/Definitions/server.hpp>
+-#include <xyz/openbmc_project/Inventory/Item/Cpu/server.hpp>
+-#include <xyz/openbmc_project/Inventory/Item/server.hpp>
+ 
+ #include <memory>
+ #include <optional>
+@@ -19,15 +17,13 @@
+ 
+ namespace fs = std::filesystem;
+ 
+-using ItemInterface = sdbusplus::server::object::object<
+-    sdbusplus::xyz::openbmc_project::Inventory::server::Item,
+-    sdbusplus::xyz::openbmc_project::Association::server::Definitions>;
+-
+-using CpuInterface =
+-    sdbusplus::xyz::openbmc_project::Inventory::Item::server::Cpu;
++enum class  CpuEvent : uint16_t
++{
++    PresenceDetected = 0x07,
++};
+ 
+ class ProcessorStatus :
+-    public ItemInterface,
++    public Discrete,
+     public std::enable_shared_from_this<ProcessorStatus>
+ {
+   public:
+@@ -38,13 +34,10 @@ class ProcessorStatus :
+                     const std::string& sensorConfiguration);
+     ~ProcessorStatus() override;
+ 
+-    std::string name;
+     std::string gpio;
+ 
+   private:
+     sdbusplus::asio::object_server& objServer;
+-    std::shared_ptr<sdbusplus::asio::dbus_interface> sensorInterface;
+-    std::shared_ptr<sdbusplus::asio::dbus_interface> association;
+     // GPIO Lines and Event Descriptors
+     gpiod::line procPresentLine;
+     boost::asio::posix::stream_descriptor procPresentEvent;
+diff --git a/src/WatchdogSensor.cpp b/src/WatchdogSensor.cpp
+index 48b84d0..aa1b53b 100644
+--- a/src/WatchdogSensor.cpp
++++ b/src/WatchdogSensor.cpp
+@@ -16,36 +16,18 @@ WatchdogSensor::WatchdogSensor(
+     std::shared_ptr<sdbusplus::asio::connection>& conn,
+     /*boost::asio::io_service& io,*/
+     const std::string& sensorName, const std::string& sensorConfiguration) :
+-    AssocInterface(
+-        static_cast<sdbusplus::bus::bus&>(*conn),
+-        ("/xyz/openbmc_project/sensors/watchdog/" + escapeName(sensorName))
+-            .c_str(),
+-        AssocInterface::action::defer_emit),
+-    std::enable_shared_from_this<WatchdogSensor>(), name(sensorName),
++    Discrete(escapeName(sensorName), sensorConfiguration, conn),
+     objServer(objectServer)
+ {
+-    sensorInterface = objectServer.add_interface(
+-        ("/xyz/openbmc_project/sensors/watchdog/" + escapeName(sensorName))
+-            .c_str(),
+-        "xyz.openbmc_project.Inventory.Item.Watchdog");
+-    sensorInterface->register_property(
+-        "Status", status,
+-        [&](const std::string& newStatus, std::string& oldStatus) {
+-            oldStatus = newStatus;
+-            status = newStatus;
+-            return 1;
+-        });
++   sensorInterface = objectServer.add_interface(
++        "/xyz/openbmc_project/sensors/watchdog/" + name,
++        "xyz.openbmc_project.Sensor.State");
+ 
+-    fs::path p(sensorConfiguration);
+-    AssociationList assocs = {};
+-    assocs.emplace_back(
+-        std::make_tuple("chassis", "all_sensors", p.parent_path().string()));
+-    sdbusplus::xyz::openbmc_project::Association::server::Definitions::
+-        associations(assocs);
+-    if (!sensorInterface->initialize())
+-    {
+-        std::cerr << "error initializing value interface\n";
+-    }
++    association = objectServer.add_interface(
++        "/xyz/openbmc_project/sensors/watchdog/" + name,
++        association::interface);
++    std::cout<<"Calling setinitalprocperites\n";
++    setInitialProperties();
+ 
+     const std::string objPath = "/xyz/openbmc_project/sensors/watchdog/" + name;
+     auto watchdogEventMatcherCallback = [this, &conn, objPath](
+@@ -56,7 +38,6 @@ WatchdogSensor::WatchdogSensor(
+         // unspecifiedselEvtDataMaxSize
+         std::vector<uint8_t> eventData(selEvtDataMaxSize, 0xFF);
+         std::vector<std::string> logData;
+-        bool state = true;
+ 
+         sdbusplus::message::message getWatchdogStatus =
+             conn->new_method_call(msg.get_sender(), msg.get_path(),
+@@ -87,45 +68,22 @@ WatchdogSensor::WatchdogSensor(
+                 expireAction->find_last_of(".") + 1, expireAction->size()));
+         }
+ 
+-        if (*expireAction == "HardReset")
+-        {
+-            eventData[0] =
+-                static_cast<uint8_t>(watchdogEventOffsets::hardReset);
+-            sensorInterface->set_property(
+-                "Status", static_cast<std::string>("HardReset"));
+-        }
+-        else if (*expireAction == "PowerOff")
+-        {
+-            eventData[0] =
+-                static_cast<uint8_t>(watchdogEventOffsets::powerDown);
+-            sensorInterface->set_property("Status",
+-                                          static_cast<std::string>("PowerOff"));
+-        }
+-        else if (*expireAction == "PowerCycle")
+-        {
+-            eventData[0] =
+-                static_cast<uint8_t>(watchdogEventOffsets::powerCycle);
+-            sensorInterface->set_property(
+-                "Status", static_cast<std::string>("PowerCycle"));
+-        }
+-        else if (*expireAction == "None")
+-        {
+-            eventData[0] = static_cast<uint8_t>(watchdogEventOffsets::noAction);
+-            sensorInterface->set_property(
+-                "Status", static_cast<std::string>("TimerExpired"));
+-        }
+-        else if (*expireAction == "TimerInterrupt")
++        std::string action{*expireAction};
++        uint16_t offset;
++        auto findEvent = eventType.find(action.c_str());
++        if(findEvent != eventType.end())
+         {
+-            sensorInterface->set_property(
+-                "Status", static_cast<std::string>("TimerInterrupt"));
++            offset = static_cast<uint16_t> (findEvent->second);
++            updateState(sensorInterface, static_cast<uint16_t>(1 << offset));
++            eventData[0] = static_cast<uint8_t>(offset);
+         }
+-        std::string action{*expireAction};
++
+         logData.push_back(name);
+         logData.push_back(action);
+         logData.push_back(objPath);
+         logData.push_back("SensorWatchdog2");
+ 
+-        addSelEntry(conn, logData, eventData, state);
++        addSelEntry(conn, logData, eventData, true);
+     };
+ 
+     watchdogEventMatcher = std::make_shared<sdbusplus::bus::match::match>(
+diff --git a/src/WatchdogSensor.hpp b/src/WatchdogSensor.hpp
+index ca7275b..cfc3f22 100644
+--- a/src/WatchdogSensor.hpp
++++ b/src/WatchdogSensor.hpp
+@@ -1,5 +1,6 @@
+ #pragma once
+ 
++#include <Discrete.hpp>
+ #include <Utils.hpp>
+ #include <boost/asio/deadline_timer.hpp>
+ #include <boost/asio/io_service.hpp>
+@@ -13,22 +14,38 @@
+ #include <string>
+ #include <vector>
+ 
+-enum class watchdogEventOffsets : uint8_t
++enum class watchdogEvents : uint8_t
+ {
+     noAction = 0x00,
+     hardReset = 0x01,
+     powerDown = 0x02,
+     powerCycle = 0x03,
+ };
++
++
+ static constexpr size_t selEvtDataMaxSize = 3;
+ 
+ namespace fs = std::filesystem;
+ 
+-using AssocInterface = sdbusplus::server::object::object<
+-    sdbusplus::xyz::openbmc_project::Association::server::Definitions>;
++struct CmpStr
++{
++    bool operator()(const char* a, const char* b) const
++    {
++        return std::strcmp(a, b) < 0;
++    }
++};
++
++const static boost::container::flat_map<const char*, watchdogEvents, CmpStr>
++    eventType{{
++        {"None", watchdogEvents::noAction},
++        {"HardReset", watchdogEvents::hardReset},
++        {"PowerOff", watchdogEvents::powerDown},
++        {"PowerCycle", watchdogEvents::powerCycle},
++    }};
++
+ 
+ class WatchdogSensor :
+-    public AssocInterface,
++    public Discrete,
+     public std::enable_shared_from_this<WatchdogSensor>
+ {
+   public:
+@@ -39,11 +56,9 @@ class WatchdogSensor :
+         const std::string& sensorConfiguration);
+     ~WatchdogSensor() override;
+ 
+-    std::string name;
+     std::string status;
+ 
+   private:
+-    std::shared_ptr<sdbusplus::asio::dbus_interface> sensorInterface;
+     sdbusplus::asio::object_server& objServer;
+     std::shared_ptr<sdbusplus::bus::match::match> watchdogEventMatcher;
+ };
+-- 
+2.25.1
+

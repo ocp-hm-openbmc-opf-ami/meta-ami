@@ -14,6 +14,8 @@ SRC_URI:append = " \
             file://0014-Add-power-unit-dicrete-sensor.patch \
             file://0015-ACPI-System-discrete-sensor.patch \
             file://0016-Add-Power-Supply-Sensor-Support.patch \
+            file://0017-Update-Discrete-Processor-and-Watchdog2-sensors.patch \
+            file://0018-Add-OS-Critical-Stop-DS-Support.patch \
             "
 
 PACKAGECONFIG[processorstatus] = "-Dprocstatus=enabled, -Dprocstatus=disabled"
@@ -21,12 +23,14 @@ PACKAGECONFIG[systemsensor] = "-Dsystem=enabled, -Dsystem=enabled"
 PACKAGECONFIG[powerunitstatus] = "-Dpowerunit=enabled, -Dpowerunit=disabled"
 PACKAGECONFIG[acpisystemstatus] = "-Dacpisystem=enabled, -Dacpisystem=disabled"
 PACKAGECONFIG[psustatus] = "-Dpsustatus=enabled, -Dpsustatus=disabled"
+PACKAGECONFIG[osstatus] = "-Dosstatus=enabled, -Dosstatus=disabled"
 
 PACKAGECONFIG:append = "processorstatus \
             systemsensor \
             powerunitstatus \
             acpisystemstatus \
             psustatus \
+            osstatus \
 "
 
 SYSTEMD_SERVICE:${PN}:append = " ${@bb.utils.contains('PACKAGECONFIG', 'processorstatus', \
@@ -49,4 +53,6 @@ SYSTEMD_SERVICE:${PN}:append = " ${@bb.utils.contains('PACKAGECONFIG', 'psustatu
                                                'xyz.openbmc_project.psustatus.service', \
                                                '', d)}"
 
-
+SYSTEMD_SERVICE:${PN}:append = " ${@bb.utils.contains('PACKAGECONFIG', 'osstatus', \
+                                               'xyz.openbmc_project.osstatus.service', \
+                                               '', d)}"
