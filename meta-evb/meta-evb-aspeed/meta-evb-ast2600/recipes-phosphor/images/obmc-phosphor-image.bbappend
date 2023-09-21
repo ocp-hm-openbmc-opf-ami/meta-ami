@@ -45,6 +45,7 @@ OBMC_IMAGE_EXTRA_INSTALL:append = " \
                                   phosphor-host-postd \
                                   phosphor-post-code-manager \
                                   entity-manager \
+                                  phosphor-ipmi-ipmb \
                                  "
 
 clean_pubkey() {
