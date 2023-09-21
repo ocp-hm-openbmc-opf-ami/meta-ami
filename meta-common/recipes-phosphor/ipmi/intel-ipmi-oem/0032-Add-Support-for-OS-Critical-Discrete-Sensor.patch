@@ -1,13 +1,13 @@
-From dbf4acdae676401cecfd5f7fdc934ea8c7c56c18 Mon Sep 17 00:00:00 2001
+From d39520851aeb7e9533de60b889f8f9e521f1c44b Mon Sep 17 00:00:00 2001
 From: vipinc <vipinc@ami.com>
-Date: Mon, 11 Sep 2023 17:37:46 +0530
+Date: Thu, 14 Sep 2023 21:45:52 +0530
 Subject: [PATCH] Add Support to handle OS-Critical Sensor Event
 
 OS Critical Stop sensor per IPMI Spec. can be used to identify critical
 event occurs in the Host Operating System. As the event will be informed
-to BMC over IPMI Add SEL entry command. This patch add support to update
-OS Critical Discrete sensor its state based on the Add SEL Entry command
-and successfully log the event to RedFish and IPMI SEL.
+to BMC over IPMI  command. This patch add support to update
+OS Critical Discrete sensor its state based on the Add SEL Entry and Platform
+Event command and successfully log the event to RedFish and IPMI SEL.
 
 Tested in INTEL Archrecity:
 1) Verified the Sensor state is updated when Add SEL entry command is triggered
@@ -27,13 +27,17 @@ root@AMIOT-c208ad8319c9:~# ipmitool sel list
    5 | 09/11/23 | 06:19:12 UTC | OS Critical Stop #0x10 | Run-time critical stop | Asserted
 root@AMIOT-c208ad8319c9:~#
 
+2) From the Host Windows OS triggered BSOD using command promt and
+confirm the events are successfully logged
+
 Signed-off-by: vipinc <vipinc@ami.com>
 ---
  include/ipmi_to_redfish_hooks.hpp |  6 +++
  include/sdrutils.hpp              | 20 +++++++-
- src/ipmi_to_redfish_hooks.cpp     | 78 +++++++++++++++++++++++++++++++
+ src/ipmi_to_redfish_hooks.cpp     | 79 +++++++++++++++++++++++++++++++
+ src/sensorcommands.cpp            |  6 +--
  src/storagecommands.cpp           |  2 +-
- 4 files changed, 104 insertions(+), 2 deletions(-)
+ 5 files changed, 107 insertions(+), 6 deletions(-)
 
 diff --git a/include/ipmi_to_redfish_hooks.hpp b/include/ipmi_to_redfish_hooks.hpp
 index aefc85c..37342ca 100644
@@ -126,7 +130,7 @@ index 337d985..c238235 100644
      }
      catch (const std::out_of_range& e)
 diff --git a/src/ipmi_to_redfish_hooks.cpp b/src/ipmi_to_redfish_hooks.cpp
-index 98ee532..4971951 100644
+index 98ee532..b753947 100644
 --- a/src/ipmi_to_redfish_hooks.cpp
 +++ b/src/ipmi_to_redfish_hooks.cpp
 @@ -40,6 +40,79 @@ static void toHexStr(const boost::beast::span<uint8_t> bytes,
@@ -228,6 +232,38 @@ index 98ee532..4971951 100644
                                        .eventType = eventType,
                                        .offset = eventData1 & 0x0F,
                                        .eventData2 = eventData2,
+@@ -926,6 +1004,7 @@ bool checkRedfishHooks(uint16_t generatorID, uint8_t evmRev, uint8_t sensorType,
+     // Extract the SEL data for the hook
+     redfish_hooks::SELData selData = {.generatorID = generatorID,
+                                       .sensorNum = sensorNum,
++                                      .sensorType = sensorType,
+                                       .eventType = eventType,
+                                       .offset = eventData1 & 0x0F,
+                                       .eventData2 = eventData2,
+diff --git a/src/sensorcommands.cpp b/src/sensorcommands.cpp
+index f62039e..d545160 100644
+--- a/src/sensorcommands.cpp
++++ b/src/sensorcommands.cpp
+@@ -475,8 +475,7 @@ ipmi::RspType<> ipmiSenPlatformEvent(ipmi::Context::ptr ctx,
+                       | sysgeneratorID;
+ 
+ 	 assert = eventType & directionMask ? false : true;
+-        sensorPath = getPathFromSensorNumber(sensorNum);
+-
++     sensorPath = getPathFromSensorNumber(sensorNum, sensorType);
+     }
+     else
+     {
+@@ -489,8 +488,7 @@ ipmi::RspType<> ipmiSenPlatformEvent(ipmi::Context::ptr ctx,
+                       | (ctx->rqSA << 1);
+ 
+ 	 assert = eventType & directionMask ? false : true;
+-        sensorPath = getPathFromSensorNumber(sensorNum);
+-
++     sensorPath = getPathFromSensorNumber(sensorNum, sensorType);
+     }
+ 
+     if (!p.fullyUnpacked())
 diff --git a/src/storagecommands.cpp b/src/storagecommands.cpp
 index 0880ba9..258fd3c 100644
 --- a/src/storagecommands.cpp
