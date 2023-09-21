@@ -41,6 +41,7 @@ SRC_URI += " \
            file://0049-Fix-IPMI-Command-not-Save-IPv6-Static-Control.patch \
            file://0049-Not-Allowed-To-Change-IPv6_Router-Address-Control-When-In-DHCP-Mode.patch \
            file://0050-Fix-rsp-error-code-when-attempting-to-write-read-only-parameter.patch \
+           file://0051-Changing-unsigned-to-signed-8-bit-sensor_min-variabl.patch \
            "
 
 do_install:append(){

@@ -27,5 +27,6 @@ SRC_URI += "\
        file://0030-Add-IPMI-Support-for-Power-Supply-Discrete-Sensor.patch \
        file://0031-Remove-legacy-Discrete-sensors-dead-code.patch \
        file://0032-Add-Support-for-OS-Critical-Discrete-Sensor.patch \
+       file://0033-Added-sensor_min-sensor_max-values-to-sdr-record.patch \
     "
 
