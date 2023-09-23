@@ -469,9 +469,13 @@ if [ $# -eq 0 ]; then
     # set DEFURI in $HOME/.fwupd.defaults
     URI="$DEFURI"
 else
+    echo "path=$1"
     if [[ "$1" == *"/"* ]]; then
         URI=$1 # local file
         local_file=1 ;
+        mkdir -p /tmp/updateImage;
+        tar -xvf $1 -C "/tmp/updateImage";
+        URI="file:///tmp/updateImage/MANIFEST";
     else
         path=$(find / -name "$1")
 	URI="file://$path/MANIFEST"
