@@ -180,7 +180,7 @@ bmc_full_flash() {
     update_percentage $UPDATE_PERCENT_PRESTAGE_VERIFY_START
     # Use update script to update Firmware for non-intel platforms
     if test -x $update
-	then
+    then
         cp $LOCAL_PATH /run/initramfs/
         reboot
         return 0
@@ -216,7 +216,12 @@ bmc_full_flash() {
             update_percentage $UPDATE_PERCENT_SUCCESS
             set_activation_status Active 
             reboot -f
-        fi    
+        fi
+        #stop nv sync
+        systemctl stop nv-sync.service
+        #unmount rwfs  
+        umount /tmp/.rwfs
+
         # Flash: writing to BMC SPI device
         log "BMC Full Flash - Starting the SPI write. It will take ~8 minutes...."
         local rc=$(mtd-util -d /dev/mtd0 c $LOCAL_PATH 0)
@@ -231,6 +236,17 @@ bmc_full_flash() {
             return 1
         fi
         log "BMC Full Flash - Image update successful"
+
+        log "BMC Full Flash - Start Preserve Config"
+        #mount nv rwfs mtd partition
+        mount -t jffs2 -o sync,ro mtd:rwfs /tmp/.rwfs
+        #start nv sync
+        systemctl start nv-sync.service
+        #stop nv sync to dump overlay files to nv storage
+        wait_for_log_sync
+        systemctl stop nv-sync.service
+        log "BMC Full Flash - Preserve Config Done"
+
         redfish_log_fw_evt success
         update_percentage $UPDATE_PERCENT_SUCCESS
         set_activation_status Active 
