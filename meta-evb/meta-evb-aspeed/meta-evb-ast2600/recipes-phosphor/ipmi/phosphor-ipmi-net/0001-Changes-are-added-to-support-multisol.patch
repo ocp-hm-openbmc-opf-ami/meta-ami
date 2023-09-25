@@ -1,0 +1,164 @@
+From 08d0241463fc97b9a468e2aa3c8566b674411164 Mon Sep 17 00:00:00 2001
+From: pandiarajt <pandiarajt@ami.com>
+Date: Thu, 31 Aug 2023 22:12:32 +0530
+Subject: [PATCH 292/292] Changes are added to support multisol
+
+---
+ command/payload_cmds.cpp | 20 +++++++++++---------
+ command/payload_cmds.hpp | 11 ++++++++++-
+ meson.build              |  1 +
+ meson_options.txt        |  7 +++++++
+ sol/sol_manager.cpp      |  8 ++++++++
+ 5 files changed, 37 insertions(+), 10 deletions(-)
+
+diff --git a/command/payload_cmds.cpp b/command/payload_cmds.cpp
+index b3bcca2..7b921f0 100644
+--- a/command/payload_cmds.cpp
++++ b/command/payload_cmds.cpp
+@@ -47,8 +47,7 @@ std::vector<uint8_t> activatePayload(const std::vector<uint8_t>& inPayload,
+         return outPayload;
+     }
+ 
+-    // Only one instance of SOL is currently supported.
+-    if (request->payloadInstance != 1)
++    if (request->payloadInstance > MAX_PAYLOAD_INSTANCE )
+     {
+         response->completionCode = IPMI_CC_INVALID_FIELD_REQUEST;
+         return outPayload;
+@@ -131,8 +130,7 @@ std::vector<uint8_t>
+         return outPayload;
+     }
+ 
+-    // Only one instance of SOL is supported
+-    if (request->payloadInstance != 1)
++    if (request->payloadInstance > MAX_PAYLOAD_INSTANCE)
+     {
+         response->completionCode = IPMI_CC_INVALID_FIELD_REQUEST;
+         return outPayload;
+@@ -205,12 +203,17 @@ std::vector<uint8_t>
+ 
+     response->completionCode = IPMI_CC_OK;
+ 
+-    constexpr size_t maxSolPayloadInstances = 1;
+-    response->capacity = maxSolPayloadInstances;
++    response->capacity = MAX_PAYLOAD_INSTANCE;
+ 
+     // Currently we support only one SOL session
+     response->instance1 = sol::Manager::get().isPayloadActive(1);
+ 
++#ifdef MULTI_SOL
++    response->instance2 = sol::Manager::get().isPayloadActive(2);
++    response->instance3 = sol::Manager::get().isPayloadActive(3);
++    response->instance4 = sol::Manager::get().isPayloadActive(4);
++#endif
++
+     return outPayload;
+ }
+ 
+@@ -231,11 +234,10 @@ std::vector<uint8_t>
+     auto response =
+         reinterpret_cast<GetPayloadInfoResponse*>(outPayload.data());
+ 
+-    // SOL is the payload currently supported for payload status & only one
+-    // instance of SOL is supported.
++    // SOL is the payload currently supported for payload status
+     if (static_cast<uint8_t>(message::PayloadType::SOL) !=
+             request->payloadType ||
+-        request->payloadInstance != 1)
++        request->payloadInstance > MAX_PAYLOAD_INSTANCE)
+     {
+         response->completionCode = IPMI_CC_INVALID_FIELD_REQUEST;
+         return outPayload;
+diff --git a/command/payload_cmds.hpp b/command/payload_cmds.hpp
+index bbd220a..9ec0d96 100644
+--- a/command/payload_cmds.hpp
++++ b/command/payload_cmds.hpp
+@@ -1,15 +1,24 @@
+ #pragma once
+ 
+ #include "message_handler.hpp"
+-
++#include "config.h"
+ #include <vector>
+ 
++#ifdef MULTI_SOL
++#define MAX_PAYLOAD_INSTANCE 4
++#else
++#define MAX_PAYLOAD_INSTANCE 1
++#endif
++
++
++
+ namespace sol
+ {
+ 
+ namespace command
+ {
+ 
++
+ constexpr uint8_t IPMI_CC_PAYLOAD_ALREADY_ACTIVE = 0x80;
+ constexpr uint8_t IPMI_CC_PAYLOAD_TYPE_DISABLED = 0x81;
+ constexpr uint8_t IPMI_CC_PAYLOAD_ACTIVATION_LIMIT = 0x82;
+diff --git a/meson.build b/meson.build
+index b36917b..ce5528d 100644
+--- a/meson.build
++++ b/meson.build
+@@ -13,6 +13,7 @@ project(
+ conf_data = configuration_data()
+ conf_data.set('RMCP_PING', get_option('rmcp_ping').enabled())
+ conf_data.set('PAM_AUTHENTICATE', get_option('pam_authenticate').enabled())
++conf_data.set('MULTI_SOL', get_option('multi_sol').enabled())
+ 
+ configure_file(output: 'config.h',
+     configuration: conf_data
+diff --git a/meson_options.txt b/meson_options.txt
+index bad5e62..d94f32e 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -18,3 +18,10 @@ option(
+     value: 'enabled',
+     description : 'Enable Pam Authenticate'
+ )
++
++option(
++    'multi_sol',
++    type : 'feature',
++    value: 'enabled' ,
++    description : 'Enable Multi SOL'
++)
+diff --git a/sol/sol_manager.cpp b/sol/sol_manager.cpp
+index fd5ad2f..7fe0f98 100644
+--- a/sol/sol_manager.cpp
++++ b/sol/sol_manager.cpp
+@@ -24,6 +24,8 @@ constexpr const char* PROP_INTF = "org.freedesktop.DBus.Properties";
+ namespace sol
+ {
+ 
++uint8_t instance = 0; 
++
+ std::unique_ptr<sdbusplus::bus::match_t> matchPtrSOL(nullptr);
+ std::unique_ptr<sdbusplus::bus::match_t> solConfPropertiesSignal(nullptr);
+ 
+@@ -31,6 +33,11 @@ void Manager::initConsoleSocket()
+ {
+     // explicit length constructor for NUL-prefixed abstract path
+     std::string path(CONSOLE_SOCKET_PATH, CONSOLE_SOCKET_PATH_LEN);
++    if (instance > 1)
++    {
++            std::string CONSOLE_PATH_SUFFIX = std::string(".ttyS") + std::to_string(instance - 1);
++            path.append(CONSOLE_PATH_SUFFIX);
++    }
+     boost::asio::local::stream_protocol::endpoint ep(path);
+     consoleSocket =
+         std::make_unique<boost::asio::local::stream_protocol::socket>(*io);
+@@ -179,6 +186,7 @@ void Manager::updateSOLParameter(uint8_t channelNum)
+ void Manager::startPayloadInstance(uint8_t payloadInstance,
+                                    session::SessionID sessionID)
+ {
++    instance = payloadInstance;
+     if (payloadMap.empty())
+     {
+         try
+-- 
+2.25.1
+
