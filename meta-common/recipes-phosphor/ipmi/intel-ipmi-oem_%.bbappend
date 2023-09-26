@@ -27,14 +27,8 @@ SRC_URI += "\
        file://0030-Add-IPMI-Support-for-Power-Supply-Discrete-Sensor.patch \
        file://0031-Remove-legacy-Discrete-sensors-dead-code.patch \
        file://0033-Added-sensor_min-sensor_max-values-to-sdr-record.patch \
-           file://0001-accessing-Chassis-Force-Identity-reserved-bits.patch \
-           file://0021-Fix-add-SEL-entry-IPMI-command-response.patch \
-      	   file://0022-Add-IPMI-Get-Set-SEL-Policy-OEM-command.patch \
-      	   file://0023-Get-SDR-with-the-Invalid-Record-ID-shows-invalid-req.patch \
-      	   file://0024-Fix-for-chassis-identify-ipmi-standard-commands-givi.patch \
-      	   file://0025-SEL-entries-used-percentage-showing-unknown.patch \
-      	   file://0026-Add-read-cert-file-command.patch \
-           file://0034-Fix-for-GetSMTP-ConfigParam5.patch \
+       file://0034-Fix-for-GetSMTP-ConfigParam5.patch \
+       file://0034-SDR-Info-Free-space-support.patch \
     "
 
 SRC_URI_CORE:append = "file://0032-Add-Support-for-OS-Critical-Discrete-Sensor.patch"
