@@ -26,7 +26,9 @@ SRC_URI += "\
        file://0029-add-acpi-system-power-discrete-sensor-type.patch \
        file://0030-Add-IPMI-Support-for-Power-Supply-Discrete-Sensor.patch \
        file://0031-Remove-legacy-Discrete-sensors-dead-code.patch \
-       file://0032-Add-Support-for-OS-Critical-Discrete-Sensor.patch \
        file://0033-Added-sensor_min-sensor_max-values-to-sdr-record.patch \
     "
 
+SRC_URI_CORE:append = "file://0032-Add-Support-for-OS-Critical-Discrete-Sensor.patch"
+SRC_URI_RESTRICTED:append = "file://0032-Rest-Add-Support-for-OS-Critical-Discrete-Sensor.patch"
+SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'restricted', SRC_URI_RESTRICTED, SRC_URI_CORE, d)}"

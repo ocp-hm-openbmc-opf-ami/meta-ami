@@ -1,0 +1,281 @@
+From 1a29316a221746d8acd1d461a1e86971e32f0e71 Mon Sep 17 00:00:00 2001
+From: vipinc <vipinc@ami.com>
+Date: Mon, 25 Sep 2023 20:56:19 +0530
+Subject: [PATCH] Add Support to handle OS-Critical Sensor Event
+
+OS Critical Stop sensor per IPMI Spec. can be used to identify critical
+event occurs in the Host Operating System. As the event will be informed
+to BMC over IPMI  command. This patch add support to update
+OS Critical Discrete sensor its state based on the Add SEL Entry and Platform
+Event command and successfully log the event to RedFish and IPMI SEL.
+
+Tested in INTEL Archrecity:
+1) Verified the Sensor state is updated when Add SEL entry command is triggered
+for OS Critical Stop sensor
+
+// Before triggering add SEL command:
+root@AMIOT-c208ad8319c9:~# ipmitool sdr elist | grep "OS Stop Status"
+OS Stop Status   | 10h | ok  | 35.1 |
+// After triggering add SEL command:
+root@AMIOT-c208ad8319c9:~# ipmitool raw 0x0a 0x44 0x00 0x00 0x02 0x00 0x00 0x00 0x00 0x41 0x00 0x04 0x20 0x00 0x6f 0x01 0xff 0xff
+ 05 00
+root@AMIOT-c208ad8319c9:~#
+root@AMIOT-c208ad8319c9:~# ipmitool sdr elist | grep "OS Stop Status"
+OS Stop Status   | 10h | ok  | 35.1 | Run-time critical stop
+root@AMIOT-c208ad8319c9:~#
+root@AMIOT-c208ad8319c9:~# ipmitool sel list
+   5 | 09/11/23 | 06:19:12 UTC | OS Critical Stop #0x10 | Run-time critical stop | Asserted
+root@AMIOT-c208ad8319c9:~#
+
+2) From the Host Windows OS triggered BSOD using command promt and
+confirm the events are successfully logged
+
+Signed-off-by: vipinc <vipinc@ami.com>
+---
+ include/ipmi_to_redfish_hooks.hpp |  6 +++
+ include/sdrutils.hpp              | 19 +++++++-
+ src/ipmi_to_redfish_hooks.cpp     | 79 +++++++++++++++++++++++++++++++
+ src/sensorcommands.cpp            |  6 +--
+ src/storagecommands.cpp           |  2 +-
+ 5 files changed, 106 insertions(+), 6 deletions(-)
+
+diff --git a/include/ipmi_to_redfish_hooks.hpp b/include/ipmi_to_redfish_hooks.hpp
+index 3e28fed..2da4e93 100644
+--- a/include/ipmi_to_redfish_hooks.hpp
++++ b/include/ipmi_to_redfish_hooks.hpp
+@@ -35,6 +35,7 @@ struct SELData
+ {
+     int generatorID;
+     int sensorNum;
++    int sensorType;
+     int eventType;
+     int offset;
+     int eventData2;
+@@ -78,6 +79,11 @@ enum class BIOSEventTypes
+     reservedF0 = 0xf0,
+ };
+ 
++enum class BIOSSensorTypes
++{
++    osCriticalStop = 0x20,
++};
++
+ static inline bool defaultMessageHook(const std::string& ipmiRaw)
+ {
+     // Log the record as a default Redfish message instead of a SEL record
+diff --git a/include/sdrutils.hpp b/include/sdrutils.hpp
+index 337d985..c8fa288 100644
+--- a/include/sdrutils.hpp
++++ b/include/sdrutils.hpp
+@@ -61,6 +61,7 @@ static constexpr uint8_t eidReserved = 0x00;
+ static constexpr uint8_t processorSensorType = 0x07;
+ static constexpr uint8_t sensorSpecificEvent = 0x6f;
+ static constexpr uint8_t watchdog2SensorType = 0x23;
++static constexpr uint8_t osCriticalStop = 0x20;
+ 
+ namespace details
+ {
+@@ -365,6 +366,7 @@ enum class SensorTypeCodes : uint8_t
+     processor = 0x07,
+     powersupply = 0x08,
+     powerunit = 0x09,
++    os = 0x20,
+     acpisystem = 0x22,
+     watchdog2 = 0x23,
+     other = 0xB,
+@@ -379,6 +381,7 @@ const static boost::container::flat_map<const char*, SensorTypeCodes, CmpStr>
+                  {"cpu", SensorTypeCodes::processor},
+                  {"powersupply", SensorTypeCodes::powersupply},
+                  {"powerunit", SensorTypeCodes::powerunit},
++                 {"os", SensorTypeCodes::os},
+                  {"acpisystem", SensorTypeCodes::acpisystem},
+                  {"watchdog", SensorTypeCodes::watchdog2},
+                  {"power", SensorTypeCodes::other}}};
+@@ -442,6 +445,7 @@ inline static uint8_t getSensorEventTypeFromPath(const std::string& path)
+         sensorType == static_cast<uint8_t>(SensorTypeCodes::watchdog2) ||
+         sensorType == static_cast<uint8_t>(SensorTypeCodes::powerunit) ||
+         sensorType == static_cast<uint8_t>(SensorTypeCodes::acpisystem) ||
++        sensorType == static_cast<uint8_t>(SensorTypeCodes::os) ||
+         sensorType == static_cast<uint8_t>(SensorTypeCodes::powersupply))
+     {
+         return 0x6f; // reading type = Sensor Specific
+@@ -451,7 +455,8 @@ inline static uint8_t getSensorEventTypeFromPath(const std::string& path)
+ 
+ }
+ 
+-inline static std::string getPathFromSensorNumber(uint16_t sensorNum)
++inline static std::string getPathFromSensorNumber(uint16_t sensorNum,
++                                                  uint8_t senType = 0xff)
+ {
+     std::shared_ptr<SensorNumMap> sensorNumMapPtr;
+     details::getSensorNumMap(sensorNumMapPtr);
+@@ -462,6 +467,18 @@ inline static std::string getPathFromSensorNumber(uint16_t sensorNum)
+ 
+     try
+     {
++        if (senType == osCriticalStop) // check for os critical stop sensor type
++        {
++            for (auto it = sensorNumMapPtr->begin();
++                 it != sensorNumMapPtr->end(); ++it)
++            {
++                size_t found = it->right.find("/os/");
++                if (found != std::string::npos)
++                {
++                    return it->right;
++                }
++            }
++        }
+         return sensorNumMapPtr->left.at(sensorNum);
+     }
+     catch (const std::out_of_range& e)
+diff --git a/src/ipmi_to_redfish_hooks.cpp b/src/ipmi_to_redfish_hooks.cpp
+index 118fd05..a8120c5 100644
+--- a/src/ipmi_to_redfish_hooks.cpp
++++ b/src/ipmi_to_redfish_hooks.cpp
+@@ -40,6 +40,79 @@ static void toHexStr(const boost::beast::span<uint8_t> bytes,
+     hexStr = stream.str();
+ }
+ 
++static bool AMIBiosMessageHook(const SELData& selData,
++                               const std::string& ipmiRaw)
++{
++    static constexpr std::string_view openBMCMessageRegistryVersion = "0.1";
++    std::string messageID =
++        "OpenBMC." + std::string(openBMCMessageRegistryVersion);
++    std::vector<std::string> messageArgs;
++
++    BIOSSensorTypes sensorType =
++        static_cast<BIOSSensorTypes>(selData.sensorType);
++    BIOSEventTypes eventType = static_cast<BIOSEventTypes>(selData.eventType);
++    switch (sensorType)
++    {
++        case BIOSSensorTypes::osCriticalStop:
++            messageID += ".OSCriticalStop";
++            switch (eventType)
++            {
++                case BIOSEventTypes::sensorSpecificOffset:
++                {
++                    switch (selData.offset)
++                    {
++                        case 0x00:
++                            messageArgs.push_back(
++                                "Error during system startup");
++                            break;
++                        case 0x01:
++                            messageArgs.push_back("Run-time Critical Stop");
++                            break;
++                        case 0x02:
++                            messageArgs.push_back("OS Graceful Stop");
++                            break;
++                        case 0x03:
++                            messageArgs.push_back("OS Graceful Shutdown");
++                            break;
++                        case 0x04:
++                            messageArgs.push_back(
++                                "PEF initiated soft shutdown");
++                            break;
++                        case 0x05:
++                            messageArgs.push_back("Agent not responding");
++                            break;
++                    }
++                    break;
++                }
++                default:
++                    return defaultMessageHook(ipmiRaw);
++                    break;
++            }
++            break;
++    }
++    // Log the Redfish message to the journal with the appropriate metadata
++    std::string journalMsg = "AMI BIOS IPMI event: " + ipmiRaw;
++    if (messageArgs.empty())
++    {
++        phosphor::logging::log<phosphor::logging::level::INFO>(
++            journalMsg.c_str(),
++            phosphor::logging::entry("REDFISH_MESSAGE_ID=%s",
++                                     messageID.c_str()));
++    }
++    else
++    {
++        std::string messageArgsString =
++            boost::algorithm::join(messageArgs, ",");
++        phosphor::logging::log<phosphor::logging::level::INFO>(
++            journalMsg.c_str(),
++            phosphor::logging::entry("REDFISH_MESSAGE_ID=%s",
++                                     messageID.c_str()),
++            phosphor::logging::entry("REDFISH_MESSAGE_ARGS=%s",
++                                     messageArgsString.c_str()));
++    }
++    return true;
++}
++
+ static bool getFeatureSpecificMessage(const SELData& selData,
+                                       std::string& messageID,
+                                       std::vector<std::string>& messageArgs)
+@@ -906,6 +979,10 @@ static bool startRedfishHook(const SELData& selData, const std::string& ipmiRaw)
+             return biosSMIMessageHook(selData, ipmiRaw);
+             break;
+ 
++        case 0x41: // Check if this message is from AMI BIOS Generatied ID
++            return AMIBiosMessageHook(selData, ipmiRaw);
++            break;
++
+         case 0x2C: // Message from Intel ME
+             return me::messageHook(selData, ipmiRaw);
+             break;
+@@ -953,6 +1030,7 @@ bool checkRedfishHooks(uint16_t recordID, uint8_t recordType,
+     // Extract the SEL data for the hook
+     redfish_hooks::SELData selData = {.generatorID = generatorID,
+                                       .sensorNum = sensorNum,
++                                      .sensorType = sensorType,
+                                       .eventType = eventType,
+                                       .offset = eventData1 & 0x0F,
+                                       .eventData2 = eventData2,
+@@ -981,6 +1059,7 @@ bool checkRedfishHooks(uint16_t generatorID, uint8_t evmRev, uint8_t sensorType,
+     // Extract the SEL data for the hook
+     redfish_hooks::SELData selData = {.generatorID = generatorID,
+                                       .sensorNum = sensorNum,
++                                      .sensorType = sensorType,
+                                       .eventType = eventType,
+                                       .offset = eventData1 & 0x0F,
+                                       .eventData2 = eventData2,
+diff --git a/src/sensorcommands.cpp b/src/sensorcommands.cpp
+index 7713546..6c9d678 100644
+--- a/src/sensorcommands.cpp
++++ b/src/sensorcommands.cpp
+@@ -475,8 +475,7 @@ ipmi::RspType<> ipmiSenPlatformEvent(ipmi::Context::ptr ctx,
+                       | sysgeneratorID;
+ 
+ 	 assert = eventType & directionMask ? false : true;
+-        sensorPath = getPathFromSensorNumber(sensorNum);
+-
++     sensorPath = getPathFromSensorNumber(sensorNum, sensorType);
+     }
+     else
+     {
+@@ -489,8 +488,7 @@ ipmi::RspType<> ipmiSenPlatformEvent(ipmi::Context::ptr ctx,
+                       | (ctx->rqSA << 1);
+ 
+ 	 assert = eventType & directionMask ? false : true;
+-        sensorPath = getPathFromSensorNumber(sensorNum);
+-
++     sensorPath = getPathFromSensorNumber(sensorNum, sensorType);
+     }
+ 
+     if (!p.fullyUnpacked())
+diff --git a/src/storagecommands.cpp b/src/storagecommands.cpp
+index 0880ba9..258fd3c 100644
+--- a/src/storagecommands.cpp
++++ b/src/storagecommands.cpp
+@@ -1226,7 +1226,7 @@ ipmi::RspType<uint16_t> ipmiStorageAddSELEntry(
+     bool assert = false;
+     assert = eventType & directionMask ? false : true;
+     std::string sensorPath("");
+-    sensorPath = getPathFromSensorNumber(sensorNum);
++    sensorPath = getPathFromSensorNumber(sensorNum, sensorType);
+ 
+     std::vector<uint8_t> eventData = {eventData1, eventData2, eventData3};
+     std::shared_ptr<sdbusplus::asio::connection> bus = getSdBus();
+-- 
+2.25.1
+
