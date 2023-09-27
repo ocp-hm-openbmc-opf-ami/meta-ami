@@ -87,6 +87,8 @@ SRC_URI:append = " file://0001-managers-add-factory-restore.patch  \
             file://0117-Added-the-Task-States-New-Running-Completed.patch \
             file://0111-Adding-the-OEM-property-support-for-discrete-sensor.patch \
             file://0120-Removing-IBMConfigFile-ResourceType.patch \
+            file://0085-Redfish-Service-validator-fixes.patch \
+            file://0095-Added-BIOS-Settings-support.patch \
         "
 SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
 "

@@ -1,0 +1,229 @@
+From ea66c967f59b3c71b50202cf7436e4b055336eb5 Mon Sep 17 00:00:00 2001
+From: vamsikrishnak <vamsikrishnak@ami.com>
+Date: Thu, 21 Sep 2023 14:43:18 +0530
+Subject: [PATCH] Redfish Service Validator Fix
+
+Signed-off-by: vamsikrishnak <vamsikrishnak@ami.com>
+---
+ .../include/registries/base_message_registry.hpp   |  4 +-
+ redfish-core/lib/bios.hpp                          |  4 +-
+ redfish-core/lib/managers.hpp                      | 64 +++++++++++-----------
+ redfish-core/lib/redfish_sessions.hpp              |  2 +
+ redfish-core/lib/sensors.hpp                       |  2 +-
+ static/redfish/v1/schema/OemComputerSystem_v1.xml  | 25 ++++++++-
+ .../redfish/v1/schema/OpenBMCAccountService_v1.xml |  8 +++
+ 7 files changed, 70 insertions(+), 39 deletions(-)
+
+diff --git a/redfish-core/include/registries/base_message_registry.hpp b/redfish-core/include/registries/base_message_registry.hpp
+index 36f7c0a..7617533 100644
+--- a/redfish-core/include/registries/base_message_registry.hpp
++++ b/redfish-core/include/registries/base_message_registry.hpp
+@@ -1252,10 +1252,10 @@ constexpr std::array registry =
+ 	    {
+ 		"Indicates that a given IP address is invalid",
+ 		"The Requested IP address  is invalid",
+-		"warning",
++		"Warning",
+ 		2,
+ 		{
+-			"string"
++			"string",
+ 			"string",
+ 		},
+ 		"Provide Valid IP address",
+diff --git a/redfish-core/lib/bios.hpp b/redfish-core/lib/bios.hpp
+index f301a91..560bc98 100644
+--- a/redfish-core/lib/bios.hpp
++++ b/redfish-core/lib/bios.hpp
+@@ -1517,7 +1517,7 @@ inline void
+ {
+       asyncResp->res.jsonValue["@odata.id"] =
+         "/redfish/v1/Systems/system/Bios";
+-    asyncResp->res.jsonValue["@odata.type"] = "#Bios.v1_1_0.Bios";
++    asyncResp->res.jsonValue["@odata.type"] = "#Bios.v1_2_0.Bios";
+     asyncResp->res.jsonValue["Name"] = "BIOS Configuration";
+     asyncResp->res.jsonValue["Description"] = "BIOS Configuration Service";
+     asyncResp->res.jsonValue["Id"] = "BIOS";
+@@ -1531,7 +1531,7 @@ inline void
+     sw_util::populateSoftwareInformation(asyncResp, sw_util::biosPurpose, "",
+                                          true);
+ 
+-    asyncResp->res.jsonValue["Attributes"] = {};
++    asyncResp->res.jsonValue["Attributes"] = nlohmann::json({});
+     // Get the BIOS Attributes
+     bios::getBiosAttributes(asyncResp);
+ 
+diff --git a/redfish-core/lib/managers.hpp b/redfish-core/lib/managers.hpp
+index ba662a3..891acda 100644
+--- a/redfish-core/lib/managers.hpp
++++ b/redfish-core/lib/managers.hpp
+@@ -2324,10 +2324,10 @@ inline void requestRoutesManager(App& app)
+         managerDiagnosticData["@odata.id"] =
+             "/redfish/v1/Managers/bmc/ManagerDiagnosticData";
+ 
+-#ifdef BMCWEB_ENABLE_REDFISH_OEM_MANAGER_FAN_DATA
+-        auto pids = std::make_shared<GetPIDValues>(asyncResp);
+-        pids->run();
+-#endif
++//#ifdef BMCWEB_ENABLE_REDFISH_OEM_MANAGER_FAN_DATA
++//        auto pids = std::make_shared<GetPIDValues>(asyncResp);
++//        pids->run();
++//#endif
+ 
+         getMainChassisId(asyncResp,
+                          [](const std::string& chassisId,
+@@ -2513,34 +2513,34 @@ inline void requestRoutesManager(App& app)
+             return;
+ 	}
+         asyncResp->res.result(boost::beast::http::status::no_content);
+-        if (oem)
+-        {
+-#ifdef BMCWEB_ENABLE_REDFISH_OEM_MANAGER_FAN_DATA
+-            std::optional<nlohmann::json> openbmc;
+-            if (!redfish::json_util::readJson(*oem, asyncResp->res, "OpenBmc",
+-                                              openbmc))
+-            {
+-                return;
+-            }
+-            if (openbmc)
+-            {
+-                std::optional<nlohmann::json> fan;
+-                if (!redfish::json_util::readJson(*openbmc, asyncResp->res,
+-                                                  "Fan", fan))
+-                {
+-                    return;
+-                }
+-                if (fan)
+-                {
+-                    auto pid = std::make_shared<SetPIDValues>(asyncResp, *fan);
+-                    pid->run();
+-                }
+-            }
+-#else
+-            messages::propertyUnknown(asyncResp->res, "Oem");
+-            return;
+-#endif
+-        }
++//        if (oem)
++//        {
++//#ifdef BMCWEB_ENABLE_REDFISH_OEM_MANAGER_FAN_DATA
++//            std::optional<nlohmann::json> openbmc;
++//            if (!redfish::json_util::readJson(*oem, asyncResp->res, "OpenBmc",
++//                                              openbmc))
++//            {
++//                return;
++//            }
++//            if (openbmc)
++//            {
++//                std::optional<nlohmann::json> fan;
++//                if (!redfish::json_util::readJson(*openbmc, asyncResp->res,
++//                                                  "Fan", fan))
++//                {
++//                    return;
++//                }
++//                if (fan)
++//                {
++//                    auto pid = std::make_shared<SetPIDValues>(asyncResp, *fan);
++//                    pid->run();
++//                }
++//            }
++//#else
++//            messages::propertyUnknown(asyncResp->res, "Oem");
++//            return;
++//#endif
++//        }
+         if (links)
+         {
+             std::optional<nlohmann::json> activeSoftwareImage;
+diff --git a/redfish-core/lib/redfish_sessions.hpp b/redfish-core/lib/redfish_sessions.hpp
+index 5e4c747..698e6e0 100644
+--- a/redfish-core/lib/redfish_sessions.hpp
++++ b/redfish-core/lib/redfish_sessions.hpp
+@@ -41,6 +41,8 @@ inline void fillSessionObject(crow::Response& res,
+     res.jsonValue["Description"] = "Manager User Session";
+     res.jsonValue["ClientOriginIPAddress"] = session.clientIp;
+     res.jsonValue["SessionType"] = session.sessionType;
++    res.jsonValue["Oem"]["AMI_WebSession"]["@odata.id"]= boost::urls::format(
++         "/redfish/v1/SessionService/Sessions/{}#/Oem/AMI_WebSession",session.uniqueId);
+     res.jsonValue["Oem"]["AMI_WebSession"]["@odata.type"] =
+         "#AMIWebSession.v1_0_0.WebSession";
+     res.jsonValue["Oem"]["AMI_WebSession"]["KvmActive"] =
+diff --git a/redfish-core/lib/sensors.hpp b/redfish-core/lib/sensors.hpp
+index 4543f98..d42fe8a 100644
+--- a/redfish-core/lib/sensors.hpp
++++ b/redfish-core/lib/sensors.hpp
+@@ -2230,7 +2230,7 @@ inline nlohmann::json& getPowerSupply(nlohmann::json& powerSupplyArray,
+                                "/PowerSubsystem/PowerSupplies/" +
+                                inventoryItem.name;
+     powerSupply["@odata.type"] = "#PowerSupply.v1_5_0.PowerSupply";
+-    powerSupply["Id"] = boost::replace_all_copy(inventoryItem.name, "_", " ");
++    powerSupply["Id"] = inventoryItem.name;
+     powerSupply["Name"] = boost::replace_all_copy(inventoryItem.name, "_", " ");
+     powerSupply["Manufacturer"] = inventoryItem.manufacturer;
+     powerSupply["Model"] = inventoryItem.model;
+diff --git a/static/redfish/v1/schema/OemComputerSystem_v1.xml b/static/redfish/v1/schema/OemComputerSystem_v1.xml
+index 6588f0a..70ac594 100644
+--- a/static/redfish/v1/schema/OemComputerSystem_v1.xml
++++ b/static/redfish/v1/schema/OemComputerSystem_v1.xml
+@@ -34,7 +34,12 @@
+                             <Annotation Term="OData.AutoExpand"/>
+                             <PropertyValue Property="Pattern" String="[A-Za-z0-9_.:]+" />
+                             <PropertyValue Property="Type" String="OemComputerSystem.FirmwareProvisioning" />
+-                        </NavigationProperty>
++		        </NavigationProperty>
++			<NavigationProperty Type="OemComputerSystem.PhysicalLED">
++                            <Annotation Term="OData.AutoExpand"/>
++                            <PropertyValue Property="Pattern" String="[A-Za-z0-9_.:]+" />
++                            <PropertyValue Property="Type" String="OemComputerSystem.PhysicalLED" />
++                       </NavigationProperty>
+                     </Collection>
+                 </Annotation>
+             </ComplexType>
+@@ -47,8 +52,24 @@
+                     <Annotation Term="OData.Description" String="This indicates platform firmware provisioning state."/>
+                     <Annotation Term="OData.LongDescription" String="The value of this property indicating provisioning status of platform firmware."/>
+                 </Property>
++           </ComplexType>
++           <ComplexType Name="PhysicalLED" BaseType="Resource.OemObject">
++                <Annotation Term="OData.AdditionalProperties" Bool="false" />
++                <Annotation Term="OData.Description" String="physical leds to display status of server." />
++                <Property Name="AmberLED" Type="Edm.String" Nullable="false">
++                   <Annotation Term="OData.Description" String="physical leds to display status of server." />
++                   <Annotation Term="OData.LongDescription" String="physical leds to display status of server." />
++                </Property>
++                <Property Name="GreenLED" Type="Edm.String" Nullable="false">
++                   <Annotation Term="OData.Description" String="physical leds to display status of server." />
++                   <Annotation Term="OData.LongDescription" String="physical leds to display status of server." />
++                </Property>
++                <Property Name="SusackLED" Type="Edm.String" Nullable="false">
++                   <Annotation Term="OData.Description" String="physical leds to display status of server." />
++                   <Annotation Term="OData.LongDescription" String="physical leds to display status of server." />
++                </Property>
+             </ComplexType>
+-
++	
+             <EnumType Name="FirmwareProvisioningStatus">
+                 <Member Name="NotProvisioned">
+                     <Annotation Term="OData.Description" String="Platform firmware is not provisioned."/>
+diff --git a/static/redfish/v1/schema/OpenBMCAccountService_v1.xml b/static/redfish/v1/schema/OpenBMCAccountService_v1.xml
+index 66b00bb..e6c94d2 100644
+--- a/static/redfish/v1/schema/OpenBMCAccountService_v1.xml
++++ b/static/redfish/v1/schema/OpenBMCAccountService_v1.xml
+@@ -38,6 +38,14 @@
+           <Annotation Term="OData.Description" String="Authorization Methods configuration."/>
+           <Annotation Term="OData.LongDescription" String="Configuration describing which auth methods are enabled."/>
+         </Property>
++	<Property Name="PasswordPolicyComplexity" Type="Edm.String">
++          <Annotation Term="OData.Description" String="It indicates complexity of the password" />
++          <Annotation Term="OData.LongDescription" String="It indicates complexity of the password" />
++        </Property>
++        <Property Name="RememberOldPasswordTimes" Type="Edm.Decimal">
++          <Annotation Term="OData.Description" String="It indicates the old password count" />
++          <Annotation Term="OData.LongDescription" String="It indicates the old password count" />
++        </Property>
+       </ComplexType>
+ 
+       <ComplexType Name="AuthMethodsConfig">
+-- 
+2.9.5
+
