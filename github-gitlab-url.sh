@@ -12,6 +12,8 @@ sed -i 's/git@github.com\/intel-bmc\/os.linux.kernel.openbmc.linux.git;protocol=
 
 sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.node-manager-proxy.git;protocol=ssh;branch=main/git@git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.node-manager-proxy.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/ipmi/phosphor-node-manager-proxy_git.bb
 
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.node-manager-proxy.git;protocol=ssh;branch=main/git@git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.node-manager-proxy.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/ipmi/phosphor-node-manager-proxy_git.bb
+
 sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.libmctp.git;protocol=ssh;branch=main/git@git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.libraries.libmctp.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/pmci/libmctp-intel_git.bb
 
 sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.libpldm.git;protocol=ssh;branch=main/git@git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.libraries.libpldm.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/pmci/libpldm-intel_git.bb
@@ -39,6 +41,8 @@ sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.special-m
 sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.virtual-media.git;protocol=ssh;branch=main/git@git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.virtual-media.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/virtual-media/virtual-media.bb
 
 sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.mctp-emulator.git;protocol=ssh;branch=main/git@git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.mctp-emulator.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/pmci/mctp-emulator.bb
+
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.mctp-emulator.git;protocol=ssh;branch=main/git@git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.mctp-emulator.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/pmci/mctp-emulator.bb
 
 sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.secure-control-module-i2c-memory-map.git;protocol=ssh;branch=main/git@git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.secure-control-module-i2c-memory-map.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-intel/scm-i2c-memory-map/scm-i2c-memory-map.bb
 
