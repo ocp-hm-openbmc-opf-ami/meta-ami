@@ -11,6 +11,7 @@ SRC_URI += " \
            file://0006-AutType-ErrorMsg.patch \
            file://0008-Enabled-SetSelTime-ipmi-Command.patch \
            file://phosphor-ipmi-host-ami.service \
+           file://phosphor-ipmi-host-evb-ami.service \
 	   file://0037-Systemd_Restart_Wrappper.patch \
            file://dcmi-getActive-command.patch \
            file://0013-Enable-Ipv6-static-address-and-disable-ipv6-dynamic-address.patch \   
@@ -51,6 +52,9 @@ do_install:append(){
   install -m 0644 -D ${S}/selutility.hpp ${D}${includedir}/phosphor-ipmi-host
   install -m 0644 -D ${S}/phosphor-ipmi-warm-reset.target ${D}${systemd_system_unitdir}
   install -m 0644 -D ${WORKDIR}/phosphor-ipmi-host-ami.service ${D}${systemd_system_unitdir}/phosphor-ipmi-host.service
+  if [ "${MACHINE}" = "evb-ast2600" ]; then
+      install -m 0644 -D ${WORKDIR}/phosphor-ipmi-host-evb-ami.service ${D}${systemd_system_unitdir}/phosphor-ipmi-host.service
+  fi
 }
 
 FILES:${PN} += "${systemd_system_unitdir}/*"
