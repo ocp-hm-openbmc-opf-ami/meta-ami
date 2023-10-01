@@ -8,4 +8,6 @@ SRC_URI += " \
     file://0003-Support-to-Enable-SPS-NM-at-BMC-NM-Init-Mode-3.patch \
     file://0004-Fix-for-NM-Log-level.patch \
     file://0005-Removed-srf-support-for-build-error-fix.patch \
+    file://0006-Removed-Multi-PsysSupport.patch \ 
+    file://0007-Fix-for-Policy-Creation-with-Busctl.patch \
     "
