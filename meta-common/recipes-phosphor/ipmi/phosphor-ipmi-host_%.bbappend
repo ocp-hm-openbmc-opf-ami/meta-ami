@@ -13,7 +13,6 @@ SRC_URI += " \
            file://phosphor-ipmi-host-ami.service \
            file://phosphor-ipmi-host-evb-ami.service \
 	   file://0037-Systemd_Restart_Wrappper.patch \
-           file://dcmi-getActive-command.patch \
            file://0013-Enable-Ipv6-static-address-and-disable-ipv6-dynamic-address.patch \   
            file://0014-master-write-read-shows-wrong-response-for-invalid-d.patch \
            file://0038-alongwith-fix-in-ethernet-interface-enable-disable-ipv6-static-IP.patch \
