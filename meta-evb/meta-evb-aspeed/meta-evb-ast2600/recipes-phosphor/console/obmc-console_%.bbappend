@@ -43,10 +43,6 @@ if [ "${MULTI_SOL_ENABLED}" = "1" ]; then
 
     rm -rf $socket_drop_in
     rm -rf $service_drop_in
-
-    #Rules to automatically start services for multiple TTY
-    install -d ${D}${base_libdir}/udev/rules.d
-    install -m 0644 ${S}/conf/80-obmc-console-uart.rules.in ${D}${base_libdir}/udev/rules.d/80-obmc-console-uart.rules
     
     #Install the console client configurations
     install -m 0644 ${WORKDIR}/client.*.conf ${D}${sysconfdir}/${BPN}/
