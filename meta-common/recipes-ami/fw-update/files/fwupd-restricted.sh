@@ -182,6 +182,9 @@ bmc_full_flash() {
     if test -x $update
     then
         cp $LOCAL_PATH /run/initramfs/
+        redfish_log_fw_evt success
+        update_percentage $UPDATE_PERCENT_SUCCESS
+        set_activation_status Active
         reboot
         return 0
     else
@@ -215,6 +218,7 @@ bmc_full_flash() {
             redfish_log_fw_evt success
             update_percentage $UPDATE_PERCENT_SUCCESS
             set_activation_status Active 
+            sleep 5
             reboot -f
         fi
         #stop nv sync
@@ -251,6 +255,7 @@ bmc_full_flash() {
         update_percentage $UPDATE_PERCENT_SUCCESS
         set_activation_status Active 
         # reboot
+        sleep 5
         reboot -f
         return 0
     fi

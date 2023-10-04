@@ -16,7 +16,8 @@ SRC_URI += "file://nfs.cfg \
             file://0017-Add-write-public-key-in-image-support.patch \
            "
 
-NON_PFR_SRC_URI_AMI = "file://0012-Add-new-layout-as-per-AMI-requirements.patch"
+NON_PFR_SRC_URI_AMI = "file://0012-Add-new-layout-as-per-AMI-requirements.patch \
+                      "
 
 SRC_URI += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '',NON_PFR_SRC_URI_AMI, d)}"
 
