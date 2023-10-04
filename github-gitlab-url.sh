@@ -98,3 +98,5 @@ sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.ondemand.
 
 sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.dimm-devices-accessor.git;protocol=ssh;branch=main/git@git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.dimm-devices-accessor.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-intel/dimm-devices-accessor/dimm-devices-accessor.bb
 
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.dimm-devices-accessor.git;protocol=ssh;branch=main/git@git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.dimm-devices-accessor.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-intel/dimm-devices-accessor/dimm-devices-accessor.bb
+
