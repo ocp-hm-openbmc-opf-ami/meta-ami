@@ -356,6 +356,14 @@ cpld_full_flash()
         return 0
 }
 
+pldm_update() {
+    busctl call xyz.openbmc_project.pldm /xyz/openbmc_project/pldm/fwu \
+        xyz.openbmc_project.PLDM.FWU.FWUBase StartFWUpdate s "$LOCAL_PATH"
+    if [ $? -ne 0 ]; then
+        log "initialising PLDM update failed"
+        exit_fail
+    fi
+}
 
 
 fetch_fw() {
@@ -437,7 +445,10 @@ update_fw() {
         elif [ -f "$(dirname "$METAFILE_PATH")/image-cpld" ]; then
             LOCAL_PATH="$(dirname "$METAFILE_PATH")/image-cpld" 
             COMPONENTNAME="cpld"
-        fi     
+        elif [ -f "$(dirname "$METAFILE_PATH")/image-pldm" ]; then
+            LOCAL_PATH="$(dirname "$METAFILE_PATH")/image-pldm" 
+            COMPONENTNAME="pldm"
+        fi    
     fi  
     echo "Updating image $LOCAL_PATH"
     case "$COMPONENTNAME" in
@@ -458,6 +469,18 @@ update_fw() {
             log "BMC CPLD Flash update request"
             cpld_full_flash
             ;;
+        "pldm")
+            log "PLDM update request"
+            local magicPLDM=$(hexdump -n 16 -v -e '/1 "%02x"' "$LOCAL_PATH")
+            if [[ "$magicPLDM" = "f018878ccb7d49439800a02f059aca02" ]]; then
+                log "PLDM magic matched "
+                pldm_update
+                return 0
+            else
+                log "Unknown pldm file type Magic ${magicPLDM}"   
+                return 1 
+            fi
+            ;;            
         *)       
             log "Unknown component name ${componentName}"
             return 1
