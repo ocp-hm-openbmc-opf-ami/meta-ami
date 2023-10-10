@@ -22,10 +22,13 @@ SRC_URI:append = " ${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', SR
 FILES:${PN}-updater:append:intel-ast2600 = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/intel-flash-bmc ', '', d)}" 
 FILES:${PN}-updater:append:intel-ast2600 = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${systemd_unitdir}/system/obmc-flash-bmc-static-mount-alt.service ', '', d)}" 
 
-do_install:append:intel-ast2600 () {
-   if ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', 'false', 'true', d)}; then
+do_install:append () {
+      if ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', 'false', 'true', d)}; then
          install -m 0644 ${WORKDIR}/fwupdinband@.service ${D}${systemd_unitdir}/system/fwupd@.service
-   fi
+      fi
+}
+
+do_install:append:intel-ast2600 () {
    if ${@bb.utils.contains('PACKAGECONFIG','static-dual-image','true','false',d)}; then
         install -m 0644 ${WORKDIR}/obmc-flash-bmc-static-mount-alt.service.in  ${D}${systemd_unitdir}/system/obmc-flash-bmc-static-mount-alt.service
         install -m 0755 ${WORKDIR}/intel-flash-bmc ${D}${bindir}/intel-flash-bmc
