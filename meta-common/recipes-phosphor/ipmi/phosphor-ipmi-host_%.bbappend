@@ -44,6 +44,7 @@ SRC_URI += " \
            file://0051-Fix-for-setting-SOL-Conf-Parameter-0-3-and-4.patch \
            file://0051-Changing-unsigned-to-signed-8-bit-sensor_min-variabl.patch \
            file://0052-Fix_For_Set_systemboot_option-0.patch \
+           file://0053-Add-Index-for-IP-Address.patch \
            "
 
 do_install:append(){

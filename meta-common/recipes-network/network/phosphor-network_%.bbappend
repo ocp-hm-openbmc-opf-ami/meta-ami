@@ -30,6 +30,10 @@ NETWORK_BONDING_SRC_URI += "file://0023-Support-Network-Bonding.patch"
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
 
+SRC_URI:append = " \
+                   file://0024-Add-Index-of-IPAddress-and-its-Related-Function.patch \
+                 "
+
 do_install:append() {
     install -d ${D}${bindir}
     install -m 0755 ${WORKDIR}/nsupdate.sh  ${D}${bindir}

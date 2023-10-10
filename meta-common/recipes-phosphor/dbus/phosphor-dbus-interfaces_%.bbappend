@@ -16,6 +16,7 @@ SRC_URI += "file://0001-ARP-Control-property.patch\
 	    file://0012-passwordChangeRequired.patch \
 	    file://0012-Certificate-dbus-renew-rekey.patch \
             file://0013-Add-DBus-properties-to-Save-IPv6-Static-Router-Control.patch \
+            file://0015-Add-Index-property-for-IPAddress-Object.patch \
 	    "
 EXTRA_OEMESON += "-Ddata_com_ami=true"
 EXTRA_OEMESON += "-Ddata_org_open_power=true"
