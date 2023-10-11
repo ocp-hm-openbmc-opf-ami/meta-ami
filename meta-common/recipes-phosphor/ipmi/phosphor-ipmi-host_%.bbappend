@@ -47,6 +47,7 @@ SRC_URI += " \
            file://0053-Add-Index-for-IP-Address.patch \
            file://0053-Fix-the-Info-of-IPv6-Static-Route-Missing-after-Changing_To_Dynamic_Route.patch \
            file://0053-Fix-For-Asset_Tag.patch \
+           file://0053-Fix-for-setting-SOL-Conf-Parameter-2.patch \
            "
 
 do_install:append(){
