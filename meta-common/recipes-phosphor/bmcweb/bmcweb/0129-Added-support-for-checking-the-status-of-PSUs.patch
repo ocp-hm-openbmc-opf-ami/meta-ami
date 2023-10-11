@@ -1,0 +1,125 @@
+From 0c33dfdcb3e9792fbb6b30a80569581145992afd Mon Sep 17 00:00:00 2001
+From: nibinc <nibinc@ami.com>
+Date: Tue, 10 Oct 2023 02:33:59 -0400
+Subject: [PATCH 129/129] Added support for checking the status of PSUs
+
+---
+ redfish-core/lib/power_subsystem.hpp | 94 +++++++++++++++++++++-------
+ 1 file changed, 73 insertions(+), 21 deletions(-)
+
+diff --git a/redfish-core/lib/power_subsystem.hpp b/redfish-core/lib/power_subsystem.hpp
+index 13ea5554..5c9d55ad 100644
+--- a/redfish-core/lib/power_subsystem.hpp
++++ b/redfish-core/lib/power_subsystem.hpp
+@@ -88,35 +88,87 @@ inline void getCollectionOfPSUMembers(std::shared_ptr<bmcweb::AsyncResp> asyncRe
+             memberObject["@odata.id"] = std::move(url);
+             memberArray.push_back(memberObject);
+         }
+-        redundancyGroup["RedundancyGroup"] = std::move(memberArray);
+-        redundancyGroup["RedundancyType"] = "Failover";
+-        redundancyGroup["Status"]["State"] = "UnavailableOffline";
+-        redundancyGroup["Status"]["Health"] = "OK";
+-        for (const std::pair<std::string,
+-                    std::variant<uint8_t,std::string,bool>>& property :
+-                    propertiesList)
+-                    {
+-                        const std::string& propertyName = property.first;
+-                        if ((propertyName == "PSUNumber")|| (propertyName == "RedundantCount"))
++        crow::connections::systemBus->async_method_call(
++            [asyncResp{std::move(asyncResp)},memberArray,propertiesList]
++                (const boost::system::error_code& ec,
++                const dbus::utility::ManagedObjectType& dbusData) {
++                   if (ec)
++                   {
++                        BMCWEB_LOG_DEBUG << "DBUS response error " << ec.value();
++                        messages::internalError(asyncResp->res);
++                        return;
++                   }
++                   std::string psuEnd = "Input_Voltage";
++                   std::vector<double> values;
++                   for (const auto& objData : dbusData)
++                   {
++                        const std::string& objectPath = objData.first.str;
++                        if (objectPath.length() >= psuEnd.length() &&
++                            objectPath.compare(objectPath.length() - psuEnd.length(),
++                             psuEnd.length(), psuEnd) == 0) {
++                                for (const auto& interface : objData.second)
++                                {
++                                    if (interface.first == "xyz.openbmc_project.Sensor.Value")
++                                    {
++                                        for (const auto& property : interface.second)
++                                        {
++                                            if (property.first == "Value")
++                                            {
++                                                const double* value =
++                                                        std::get_if<double>(&property.second);
++                                                values.push_back(*value);
++                                            }
++                                        }
++                                    }
++                                }
++                             }
++                    }
++            nlohmann::json redundancyGroup;
++            std::string status;
++            for(const auto& itr : values)
++            {
++                if(itr == 0)
++                {
++                    status = "UnavailableOffline";
++                    break;
++                }
++                else
++                {
++                    status = "Enabled";
++                }
++            }
++            redundancyGroup["RedundancyGroup"] = std::move(memberArray);
++            redundancyGroup["RedundancyType"] = "Failover";
++            redundancyGroup["Status"]["State"] = status;
++            redundancyGroup["Status"]["Health"] = "OK";
++            for (const std::pair<std::string,
++                        std::variant<uint8_t,std::string,bool>>& property :
++                        propertiesList)
+                         {
+-                            const uint8_t* value = std::get_if<uint8_t>(
+-                                                    &property.second);
+-                            if(value != nullptr)
++                         const std::string& propertyName = property.first;
++                            if ((propertyName == "PSUNumber")|| (propertyName == "RedundantCount"))
+                             {
+-                                if(propertyName == "PSUNumber")
++                                const uint8_t* value = std::get_if<uint8_t>(
++                                                        &property.second);
++                                if(value != nullptr)
+                                 {
++                                  if(propertyName == "PSUNumber")
++                                  {
+                      
+-                                    redundancyGroup["MaxSupportedInGroup"] = *value;
+-                                }
+-                                else
+-                                {
++                                        redundancyGroup["MaxSupportedInGroup"] = *value;
++                                    }
++                                    else
++                                    {
+ 
+-                                    redundancyGroup["MinNeededInGroup"] = *value;
++                                        redundancyGroup["MinNeededInGroup"] = *value;
++                                    }
+                                 }
+                             }
+                         }
+-                    }
+-            asyncResp->res.jsonValue["PowerSupplyRedundancy"].push_back(redundancyGroup);
++                asyncResp->res.jsonValue["PowerSupplyRedundancy"].push_back(redundancyGroup);
++                },
++                "xyz.openbmc_project.PSUSensor","/xyz/openbmc_project/sensors",
++                "org.freedesktop.DBus.ObjectManager","GetManagedObjects");
+         });
+ }
+ inline void getPSURedundancy(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+-- 
+2.34.1
+

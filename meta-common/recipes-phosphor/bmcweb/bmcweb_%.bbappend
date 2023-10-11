@@ -96,6 +96,7 @@ SRC_URI:append = " file://0001-managers-add-factory-restore.patch  \
             file://0124-Added-Success-Message-For-Clearing-Dump-Logs.patch \
             file://0125-Invalid-Error-message-and-code-when-delete-the-subcr.patch \
 	    file://0127-Fixed-IP-Address-showing-as-SessionType-and-vice-ver.patch \
+            file://0129-Added-support-for-checking-the-status-of-PSUs.patch \
         "
 SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
 "
