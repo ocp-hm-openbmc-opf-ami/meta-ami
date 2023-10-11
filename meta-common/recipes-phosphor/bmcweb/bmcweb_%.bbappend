@@ -93,6 +93,7 @@ SRC_URI:append = " file://0001-managers-add-factory-restore.patch  \
             file://0114-powersubsystem-powersupply-properties.patch \
             file://0113-Added-NCSI-OEM-commads-for-NIC-MCTP.patch \
 	    file://0131-Added-BIOS-Put-Call-Support-in-Redfish.patch \
+            file://0124-Added-Success-Message-For-Clearing-Dump-Logs.patch \
         "
 SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
 "
