@@ -24,6 +24,7 @@ SRC_URI:append = " \
              file://ipv4-advanced-route.sh \
              file://ipv6-advanced-route.sh \
              file://0022-Re-Design-the-RA-part-in-DHCPEnabled.patch \
+             file://0024-Check-if-IPv4-and-Default-Gateway-are-in-the-Same-Series.patch \
              file://0026-Catch-More-Exceptions-to-Avoid-Invalid-MACAddress-while-Decoding.patch \
           "
 
