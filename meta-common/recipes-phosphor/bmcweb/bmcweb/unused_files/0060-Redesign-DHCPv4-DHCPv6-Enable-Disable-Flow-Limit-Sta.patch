@@ -1,37 +1,32 @@
-From d8ab236964cee56e48fa59662eeabd371c6ec467 Mon Sep 17 00:00:00 2001
+From c2422c91a51300c00e0d44ebe39fe1ca6328d5b0 Mon Sep 17 00:00:00 2001
 From: ginugeorge <ginugeorge@ami.com>
-Date: Tue, 17 Oct 2023 19:53:27 +0530
+Date: Tue, 17 Oct 2023 14:22:23 +0530
 Subject: [PATCH 60/60] Redesign DHCPv4,DHCPv6 Enable/Disable Flow, Limit
- Static IPv6, Restrict IPv4 PATCH from DHCP to Static and vice versa, Pass
- address and gateway values in proper order to deleteAndCreateIPAddress method
- for both IPv4 & IPv6
+ Static IPv6, Restrict IPv4 PATCH from DHCP to Static and vice versa
 
 ---
- redfish-core/lib/ethernet.hpp | 145 +++++++++++++++++++++++++++-------
- 1 file changed, 116 insertions(+), 29 deletions(-)
+ redfish-core/lib/ethernet.hpp | 118 ++++++++++++++++++++++++++++------
+ 1 file changed, 97 insertions(+), 21 deletions(-)
 
 diff --git a/redfish-core/lib/ethernet.hpp b/redfish-core/lib/ethernet.hpp
-index 70e49816..9551b19c 100644
+index 79447f9b..8cdde0b7 100644
 --- a/redfish-core/lib/ethernet.hpp
 +++ b/redfish-core/lib/ethernet.hpp
-@@ -1157,6 +1157,44 @@ inline void handleSLAACAutoConfigPatch(
+@@ -1139,6 +1139,40 @@ inline void handleSLAACAutoConfigPatch(
      });
  }
  
-+inline void triggerDHCPDisable(
-+    const std::string& ifaceId, const EthernetInterfaceData& ethData,
-+    const DHCPParameters& v4dhcpParms, const DHCPParameters& v6dhcpParms,
-+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp, const bool flag)
++inline void triggerDHCPDisable(const std::string& ifaceId, const EthernetInterfaceData& ethData, const DHCPParameters& v4dhcpParms, const DHCPParameters& v6dhcpParms, const std::shared_ptr<bmcweb::AsyncResp>& asyncResp, const bool flag)
 +{
 +    bool ipv4Active = translateDhcpEnabledToBool(ethData.dhcpEnabled, true);
 +    bool ipv6Active = translateDhcpEnabledToBool(ethData.dhcpEnabled, false);
 +
 +    bool nextv4DHCPState{};
-+    if (flag)
++    if(flag)
 +    {
 +        nextv4DHCPState = false;
 +    }
-+    else if (v4dhcpParms.dhcpv4Enabled)
++    else if(v4dhcpParms.dhcpv4Enabled)
 +    {
 +        nextv4DHCPState = *v4dhcpParms.dhcpv4Enabled;
 +    }
@@ -40,11 +35,11 @@ index 70e49816..9551b19c 100644
 +        nextv4DHCPState = ipv4Active;
 +    }
 +    bool nextv6DHCPState{};
-+    if (!flag)
++    if(!flag)
 +    {
 +        nextv6DHCPState = false;
 +    }
-+    else if (v6dhcpParms.dhcpv6OperatingMode)
++    else if(v6dhcpParms.dhcpv6OperatingMode)
 +    {
 +        nextv6DHCPState = (*v6dhcpParms.dhcpv6OperatingMode == "Enabled");
 +    }
@@ -52,124 +47,86 @@ index 70e49816..9551b19c 100644
 +    {
 +        nextv6DHCPState = ipv6Active;
 +    }
-+    setDHCPEnabled(ifaceId, "DHCPEnabled", nextv4DHCPState, nextv6DHCPState,
-+                   asyncResp);
++    setDHCPEnabled(ifaceId, "DHCPEnabled", nextv4DHCPState, nextv6DHCPState, asyncResp);
 +}
 +
  inline void handleDHCPPatch(const std::string& ifaceId,
                              const EthernetInterfaceData& ethData,
                              const DHCPParameters& v4dhcpParms,
-@@ -1285,11 +1323,12 @@ inline std::vector<IPv6AddressData>::const_iterator getNextStaticIpEntry(
-     });
- }
- 
--inline void
--    handleIPv4StaticPatch(const std::string& ifaceId,
--                          nlohmann::json::array_t& input,
--                          const std::vector<IPv4AddressData>& ipv4Data,
--                          const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
-+inline void handleIPv4StaticPatch(
-+    const std::string& ifaceId, nlohmann::json::array_t& input,
-+    const std::vector<IPv4AddressData>& ipv4Data,
-+    const EthernetInterfaceData& ethData, const DHCPParameters& v4dhcpParms,
-+    const DHCPParameters& v6dhcpParms,
-+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
+@@ -1271,6 +1305,7 @@ inline void
+     handleIPv4StaticPatch(const std::string& ifaceId,
+                           nlohmann::json::array_t& input,
+                           const std::vector<IPv4AddressData>& ipv4Data,
++                          const EthernetInterfaceData& ethData, const DHCPParameters& v4dhcpParms, const DHCPParameters& v6dhcpParms,
+                           const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
  {
      if (input.empty())
-     {
-@@ -1299,6 +1338,11 @@ inline void
+@@ -1281,6 +1316,10 @@ inline void
      }
      else if (input.size() > 1)
      {
-+        if (!v4dhcpParms.dhcpv4Enabled)
++        if(!v4dhcpParms.dhcpv4Enabled)
 +        {
-+            messages::arraySizeTooLong(asyncResp->res, "IPv4StaticAddresses",
-+                                       1);
++            messages::propertySizeExceeded(asyncResp->res, "IPv4StaticAddresses");
 +        }
          return;
      }
  
-@@ -1423,8 +1467,8 @@ inline void
-             if (nicIpEntry != ipv4Data.cend())
-             {
-                 deleteAndCreateIPAddress(IpVersion::IpV4, ifaceId,
--                                         nicIpEntry->id, prefixLength, *gw,
--                                         *addr, asyncResp);
-+                                         nicIpEntry->id, prefixLength, *addr,
-+                                         *gw, asyncResp);
-                 nicIpEntry = getNextStaticIpEntry(++nicIpEntry,
-                                                   ipv4Data.cend());
-             }
-@@ -1464,6 +1508,12 @@ inline void
+@@ -1446,6 +1485,10 @@ inline void
              entryIdx++;
          }
      }
-+    if (!v4dhcpParms.dhcpv4Enabled) // Invoke triggerDHCPDisable when DHCPv4 ->
-+                                    // DHCPEnabled not present
++    if(!v4dhcpParms.dhcpv4Enabled) // Invoke triggerDHCPDisable when DHCPv4 -> DHCPEnabled not present
 +    {
-+        triggerDHCPDisable(ifaceId, ethData, v4dhcpParms, v6dhcpParms,
-+                           asyncResp, true);
++        triggerDHCPDisable(ifaceId, ethData, v4dhcpParms, v6dhcpParms, asyncResp, true);
 +    }
  }
  
  inline void handleStaticNameServersPatch(
-@@ -1581,6 +1631,8 @@ inline void handleIPv6StaticDefaultGatewaysPatch(
+@@ -1470,6 +1513,7 @@ inline void handleStaticNameServersPatch(
  inline void handleIPv6StaticAddressesPatch(
      const std::string& ifaceId, const nlohmann::json::array_t& input,
      const std::vector<IPv6AddressData>& ipv6Data,
-+    const EthernetInterfaceData& ethData, const DHCPParameters& v4dhcpParms,
-+    const DHCPParameters& v6dhcpParms,
++    const EthernetInterfaceData& ethData, const DHCPParameters& v4dhcpParms, const DHCPParameters& v6dhcpParms,
      const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
  {
      if (input.empty())
-@@ -1589,6 +1641,15 @@ inline void handleIPv6StaticAddressesPatch(
+@@ -1478,6 +1522,14 @@ inline void handleIPv6StaticAddressesPatch(
                                           "IPv6StaticAddresses");
          return;
      }
-+    else if (input.size() > 16)
++    else if(input.size() > 16)
 +    {
-+        if (!v6dhcpParms.dhcpv6OperatingMode)
++        if(!v6dhcpParms.dhcpv6OperatingMode)
 +        {
-+            messages::arraySizeTooLong(asyncResp->res, "IPv6StaticAddresses",
-+                                       16);
++            messages::propertySizeExceeded(asyncResp->res, "IPv6StaticAddresses");
 +        }
 +        return;
 +    }
      size_t entryIdx = 1;
      std::vector<IPv6AddressData>::const_iterator nicIpEntry =
          getNextStaticIpEntry(ipv6Data.cbegin(), ipv6Data.cend());
-@@ -1650,7 +1711,7 @@ inline void handleIPv6StaticAddressesPatch(
-             if (nicIpEntry != ipv6Data.end())
-             {
-                 deleteAndCreateIPAddress(IpVersion::IpV6, ifaceId,
--                                         nicIpEntry->id, prefix, "", *addr,
-+                                         nicIpEntry->id, prefix, *addr, "",
-                                          asyncResp);
-                 nicIpEntry = getNextStaticIpEntry(++nicIpEntry,
-                                                   ipv6Data.cend());
-@@ -1690,6 +1751,12 @@ inline void handleIPv6StaticAddressesPatch(
+@@ -1579,6 +1631,10 @@ inline void handleIPv6StaticAddressesPatch(
              entryIdx++;
          }
      }
-+    if (!v6dhcpParms.dhcpv6OperatingMode) // Invoke triggerDHCPDisable when
-+                                          // DHCPv6 -> OperatingMode not present
++    if(!v6dhcpParms.dhcpv6OperatingMode) // Invoke triggerDHCPDisable when DHCPv6 -> OperatingMode not present
 +    {
-+        triggerDHCPDisable(ifaceId, ethData, v4dhcpParms, v6dhcpParms,
-+                           asyncResp, false);
++        triggerDHCPDisable(ifaceId, ethData, v4dhcpParms, v6dhcpParms, asyncResp, false);
 +    }
  }
  
  inline std::string extractParentInterfaceName(const std::string& ifaceId)
-@@ -2222,7 +2289,7 @@ inline void requestEthernetInterfacesRoutes(App& app)
+@@ -2107,7 +2163,7 @@ inline void requestEthernetInterfacesRoutes(App& app)
                                  nlohmann::json IPv4Static = *ipv4StaticAddresses;
                                  if(IPv4Static.size() > 1)
                                  {
 -                                    messages::invalidIndex(asyncResp->res, 1);
-+                                    messages::arraySizeTooLong(asyncResp->res,"IPv4StaticAddresses", 1);
++                                    messages::propertySizeExceeded(asyncResp->res, "IPv4StaticAddresses");
                                      return;
                                  }
                              }
-@@ -2233,8 +2300,36 @@ inline void requestEthernetInterfacesRoutes(App& app)
+@@ -2118,8 +2174,36 @@ inline void requestEthernetInterfacesRoutes(App& app)
                              return;
                          }
                      }
@@ -180,7 +137,7 @@ index 70e49816..9551b19c 100644
 +                {
 +                    if (v6dhcpParms.dhcpv6OperatingMode) // DHCPv6 -> OperatingMode is present
 +                    {
-+                        if ((*v6dhcpParms.dhcpv6OperatingMode == "Enabled") && ipv6StaticAddresses)
++                        if (((*v6dhcpParms.dhcpv6OperatingMode == "Stateful") || (*v6dhcpParms.dhcpv6OperatingMode == "Stateless")) && ipv6StaticAddresses)
 +                        {
 +                            messages::propertyValueConflict(asyncResp->res, "DHCPv6.OperatingMode","IPv6StaticAddresses");
 +                            return;
@@ -197,7 +154,7 @@ index 70e49816..9551b19c 100644
 +                                nlohmann::json IPv6Static = *ipv6StaticAddresses;
 +                                if(IPv6Static.size() > 16)
 +                                {
-+                                    messages::arraySizeTooLong(asyncResp->res,"IPv6StaticAddresses", 16);
++                                    messages::propertySizeExceeded(asyncResp->res, "IPv6StaticAddresses");
 +                                    return;
 +                                }
 +                            }
@@ -207,7 +164,7 @@ index 70e49816..9551b19c 100644
  
                  handleDHCPPatch(ifaceId, ethData, v4dhcpParms, v6dhcpParms,
                                  asyncResp);
-@@ -2263,23 +2358,15 @@ inline void requestEthernetInterfacesRoutes(App& app)
+@@ -2148,23 +2232,15 @@ inline void requestEthernetInterfacesRoutes(App& app)
  
              if (ipv4StaticAddresses)
              {
@@ -239,8 +196,8 @@ index 70e49816..9551b19c 100644
 +                handleIPv4StaticPatch(ifaceId, ipv4Static, ipv4Data, ethData, v4dhcpParms, v6dhcpParms, asyncResp);
              }
  
-             if (ipv6StaticDefaultGateways)
-@@ -2303,8 +2390,8 @@ inline void requestEthernetInterfacesRoutes(App& app)
+             if (staticNameServers)
+@@ -2181,8 +2257,8 @@ inline void requestEthernetInterfacesRoutes(App& app)
  
              if (ipv6StaticAddresses)
              {

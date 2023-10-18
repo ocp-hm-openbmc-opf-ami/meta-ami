@@ -1,0 +1,849 @@
+From cd381d4cc28e04bb30e7cb45f3e18e4f59175ce4 Mon Sep 17 00:00:00 2001
+From: Abinaya L <abinayal@ami.com>
+Date: Tue, 17 Oct 2023 14:54:14 +0530
+Subject: [PATCH 133/133] Add Download BMCDump Support in Debug Collector
+
+---
+ http/http_connection.hpp             |  40 +++-
+ http/http_response.hpp               | 116 +++++++++++
+ http/http_stream.hpp                 | 156 ++++++++++++++
+ http/routing.hpp                     |   1 +
+ http/routing/ruleparametertraits.hpp |  10 +
+ http/routing/streamingrule.hpp       | 101 +++++++++
+ include/dump_offload.hpp             | 298 +++++++++++++++++++++++++++
+ src/webserver_main.cpp               |   6 +
+ 8 files changed, 727 insertions(+), 1 deletion(-)
+ create mode 100644 http/http_stream.hpp
+ create mode 100644 http/routing/streamingrule.hpp
+ create mode 100644 include/dump_offload.hpp
+
+diff --git a/http/http_connection.hpp b/http/http_connection.hpp
+index 66a3ede2..3b86271d 100644
+--- a/http/http_connection.hpp
++++ b/http/http_connection.hpp
+@@ -298,6 +298,43 @@ class Connection :
+             handler->handleUpgrade(thisReq, asyncResp, std::move(adaptor));
+             return;
+         }
++
++        std::string url(thisReq.target());
++        std::size_t dumpPos = url.rfind("Dump");
++        std::size_t attachmentPos = url.rfind("attachment");
++        if ((dumpPos != std::string::npos) &&
++            (attachmentPos != std::string::npos))
++        {
++            BMCWEB_LOG_DEBUG("upgrade stream connection");
++            BMCWEB_LOG_DEBUG("Request: this is getting upgraded");
++            asyncResp->res.setCompleteRequestHandler(
++                [self(shared_from_this())](crow::Response& thisRes) {
++                if (self->res.resultInt() != 200)
++                {
++                    // When any error occurs during handle upgradation,
++                    // the result in response will be set to respective
++                    // error. By default the Result will be OK (200),
++                    // which implies successful handle upgrade. Response
++                    // needs to be sent over this connection only on
++                    // failure.
++                    boost::asio::post(
++                        self->adaptor.get_executor(),
++                        [self, &thisRes] { self->completeRequest(thisRes); });
++                }
++                else
++                {
++                    // Set Complete request handler to NULL to remove
++                    // the shared pointer of connection to enable
++                    // connection destruction. As the connection would
++                    // get upgraded, we wouldn't need this connection
++                    // any longer
++                    self->res.setCompleteRequestHandler(nullptr);
++                }
++            });
++            handler->handleUpgrade(thisReq, asyncResp, std::move(adaptor));
++            return;
++        }
++
+         std::string_view expected =
+             req->getHeaderValue(boost::beast::http::field::if_none_match);
+         if (!expected.empty())
+@@ -553,7 +590,8 @@ class Connection :
+                 crow::Request& Req = req.emplace(parser->release(), reqEc);
+                 if (reqEc)
+                 {
+-                    BMCWEB_LOG_DEBUG("Request failed to construct", reqEc.message());
++                    BMCWEB_LOG_DEBUG("Request failed to construct",
++                                     reqEc.message());
+                     return;
+                 }
+                 // close the request connection from HTTP 1.0
+diff --git a/http/http_response.hpp b/http/http_response.hpp
+index 31164d6e..d7b589d0 100644
+--- a/http/http_response.hpp
++++ b/http/http_response.hpp
+@@ -2,6 +2,9 @@
+ #include "logging.hpp"
+ #include "utils/hex_utils.hpp"
+ 
++#include <boost/asio/buffer.hpp>
++#include <boost/beast/core/flat_static_buffer.hpp>
++#include <boost/beast/http/basic_dynamic_body.hpp>
+ #include <boost/beast/http/message.hpp>
+ #include <boost/beast/http/string_body.hpp>
+ #include <nlohmann/json.hpp>
+@@ -301,4 +304,117 @@ struct Response
+     std::function<void(Response&)> completeRequestHandler;
+     std::function<bool()> isAliveHelper;
+ };
++
++struct DynamicResponse
++{
++    using response_type = boost::beast::http::response<
++        boost::beast::http::basic_dynamic_body<boost::beast::flat_static_buffer<
++            static_cast<std::size_t>(1024 * 1024)>>>;
++
++    std::optional<response_type> bufferResponse;
++
++    void addHeader(const std::string_view key, const std::string_view value)
++    {
++        bufferResponse->set(key, value);
++    }
++
++    void addHeader(boost::beast::http::field key, std::string_view value)
++    {
++        bufferResponse->set(key, value);
++    }
++
++    DynamicResponse() : bufferResponse(response_type{}) {}
++    DynamicResponse(const DynamicResponse&) = delete;
++
++    DynamicResponse(const DynamicResponse&&) = delete;
++
++    DynamicResponse& operator=(const DynamicResponse& r) = delete;
++
++    DynamicResponse& operator=(DynamicResponse&& r) noexcept
++    {
++        BMCWEB_LOG_DEBUG("Moving response containers");
++        bufferResponse = std::move(r.bufferResponse);
++        r.bufferResponse.emplace(response_type{});
++        completed = r.completed;
++        return *this;
++    }
++
++    ~DynamicResponse() = default;
++
++    void result(boost::beast::http::status v)
++    {
++        bufferResponse->result(v);
++    }
++
++    boost::beast::http::status result()
++    {
++        return bufferResponse->result();
++    }
++
++    unsigned resultInt()
++    {
++        return bufferResponse->result_int();
++    }
++
++    std::string_view reason()
++    {
++        return bufferResponse->reason();
++    }
++
++    bool isCompleted() const noexcept
++    {
++        return completed;
++    }
++    void keepAlive(bool k)
++    {
++        bufferResponse->keep_alive(k);
++    }
++
++    bool keepAlive()
++    {
++        return bufferResponse->keep_alive();
++    }
++
++    void preparePayload()
++    {
++        bufferResponse->prepare_payload();
++    }
++
++    void clear()
++    {
++        BMCWEB_LOG_DEBUG(" Clearing response containers");
++        bufferResponse.emplace(response_type{});
++        completed = false;
++    }
++
++    void end()
++    {
++        if (completed)
++        {
++            BMCWEB_LOG_DEBUG("Dynamic response was ended twice");
++            return;
++        }
++        completed = true;
++        if (completeRequestHandler)
++        {
++            BMCWEB_LOG_DEBUG("calling completion handler");
++            completeRequestHandler();
++        }
++        else
++        {
++            BMCWEB_LOG_DEBUG("completion was NULL, skipping");
++        }
++    }
++
++    bool isAlive()
++    {
++        return isAliveHelper && isAliveHelper();
++    }
++    std::function<void()> completeRequestHandler;
++
++  private:
++    bool completed{};
++    std::function<bool()> isAliveHelper;
++};
++
+ } // namespace crow
+diff --git a/http/http_stream.hpp b/http/http_stream.hpp
+new file mode 100644
+index 00000000..0cf62395
+--- /dev/null
++++ b/http/http_stream.hpp
+@@ -0,0 +1,156 @@
++#pragma once
++#include "http/http_request.hpp"
++#include "http/http_response.hpp"
++
++#include <boost/algorithm/string/predicate.hpp>
++#include <boost/asio/io_context.hpp>
++#include <boost/asio/steady_timer.hpp>
++#include <boost/beast/core/ostream.hpp>
++#include <boost/beast/http/basic_dynamic_body.hpp>
++
++namespace crow
++{
++
++namespace streaming_response
++{
++
++struct Connection : std::enable_shared_from_this<Connection>
++{
++  public:
++    explicit Connection(const crow::Request& reqIn) : req(reqIn.req) {}
++    virtual void sendMessage(const boost::asio::mutable_buffer& buffer,
++                             std::function<void()> handler) = 0;
++    virtual void close() = 0;
++    virtual boost::asio::io_context* getIoContext() = 0;
++    virtual void sendStreamHeaders(const std::string& streamDataSize,
++                                   const std::string& contentType) = 0;
++    virtual void sendStreamErrorStatus(boost::beast::http::status status) = 0;
++
++    Connection(const Connection&) = delete;
++    Connection(const Connection&&) = delete;
++    Connection& operator=(const Connection&) = delete;
++    Connection& operator=(const Connection&&) = delete;
++    virtual ~Connection() = default;
++
++    boost::beast::http::request<boost::beast::http::string_body> req;
++    crow::DynamicResponse streamres;
++};
++
++template <typename Adaptor>
++class ConnectionImpl : public Connection
++{
++  public:
++    ConnectionImpl(const crow::Request& reqIn, Adaptor&& adaptorIn,
++                   std::function<void(Connection&)> openHandler,
++                   std::function<void(Connection&, const std::string&, bool)>
++                       messageHandler,
++                   std::function<void(Connection&)> closeHandler,
++                   std::function<void(Connection&)> errorHandler) :
++
++        Connection(reqIn),
++        adaptor(std::move(adaptorIn)), waitTimer(*reqIn.ioService),
++        openHandler(std::move(openHandler)),
++        messageHandler(std::move(messageHandler)),
++        closeHandler(std::move(closeHandler)),
++        errorHandler(std::move(errorHandler)), req(reqIn)
++    {}
++
++    boost::asio::io_context* getIoContext() override
++    {
++        return req.ioService;
++    }
++
++    void start()
++    {
++        streamres.completeRequestHandler = [this, self(shared_from_this())] {
++            BMCWEB_LOG_DEBUG("running completeRequestHandler");
++            this->close();
++        };
++        openHandler(*this);
++    }
++
++    void sendStreamErrorStatus(boost::beast::http::status status) override
++    {
++        streamres.result(status);
++        boost::beast::http::async_write(
++            adaptor, *streamres.bufferResponse,
++            [this, self(shared_from_this())](
++                const boost::system::error_code& ec2, std::size_t) {
++            if (ec2)
++            {
++                BMCWEB_LOG_DEBUG("Error while writing on socket");
++                close();
++                return;
++            }
++        });
++    }
++
++    void sendStreamHeaders(const std::string& streamDataSize,
++                           const std::string& contentType) override
++    {
++        streamres.addHeader("Content-Length", streamDataSize);
++        streamres.addHeader("Content-Type", contentType);
++        boost::beast::http::async_write(
++            adaptor, *streamres.bufferResponse,
++            [this, self(shared_from_this())](
++                const boost::system::error_code& ec2, std::size_t) {
++            if (ec2)
++            {
++                BMCWEB_LOG_DEBUG("Error while writing on socket");
++                close();
++                return;
++            }
++        });
++    }
++    void sendMessage(const boost::asio::mutable_buffer& buffer,
++                     std::function<void()> handler) override
++    {
++        if (buffer.size())
++        {
++            this->handlerFunc = handler;
++            auto bytes = boost::asio::buffer_copy(
++                streamres.bufferResponse->body().prepare(buffer.size()),
++                buffer);
++            streamres.bufferResponse->body().commit(bytes);
++            doWrite();
++        }
++    }
++
++    void close() override
++    {
++        streamres.end();
++        boost::beast::get_lowest_layer(adaptor).close();
++        closeHandler(*this);
++    }
++
++    void doWrite()
++    {
++        boost::asio::async_write(
++            adaptor, streamres.bufferResponse->body().data(),
++            [this, self(shared_from_this())](boost::beast::error_code ec,
++                                             std::size_t bytesWritten) {
++            streamres.bufferResponse->body().consume(bytesWritten);
++
++            if (ec)
++            {
++                BMCWEB_LOG_DEBUG("Error in async_write ");
++                close();
++                return;
++            }
++            (handlerFunc)();
++        });
++    }
++
++  private:
++    Adaptor adaptor;
++    boost::asio::steady_timer waitTimer;
++    bool doingWrite = false;
++    std::function<void(Connection&)> openHandler;
++    std::function<void(Connection&, const std::string&, bool)> messageHandler;
++    std::function<void(Connection&)> closeHandler;
++    std::function<void(Connection&)> errorHandler;
++    std::function<void()> handlerFunc;
++    crow::Request req;
++};
++} // namespace streaming_response
++} // namespace crow
+diff --git a/http/routing.hpp b/http/routing.hpp
+index 77dd96b5..e8bf9d25 100644
+--- a/http/routing.hpp
++++ b/http/routing.hpp
+@@ -7,6 +7,7 @@
+ #include "error_messages.hpp"
+ #include "http_request.hpp"
+ #include "http_response.hpp"
++#include "http_stream.hpp"
+ #include "logging.hpp"
+ #include "privileges.hpp"
+ #include "routing/baserule.hpp"
+diff --git a/http/routing/ruleparametertraits.hpp b/http/routing/ruleparametertraits.hpp
+index 660d61b3..5b26f5ca 100644
+--- a/http/routing/ruleparametertraits.hpp
++++ b/http/routing/ruleparametertraits.hpp
+@@ -2,6 +2,7 @@
+ 
+ #include "privilegeparametertraits.hpp"
+ #include "sserule.hpp"
++#include "streamingrule.hpp"
+ #include "websocketrule.hpp"
+ 
+ #include <boost/beast/http/verb.hpp>
+@@ -32,6 +33,15 @@ struct RuleParameterTraits : public PrivilegeParameterTraits<T>
+         return *p;
+     }
+ 
++    StreamingResponseRule& streamingResponse()
++    {
++        BMCWEB_LOG_DEBUG("Invoking stream response rule");
++        self_t* self = static_cast<self_t*>(this);
++        StreamingResponseRule* p = new StreamingResponseRule(self->rule);
++        self->ruleToUpgrade.reset(p);
++        return *p;
++    }
++
+     self_t& methods(boost::beast::http::verb method)
+     {
+         self_t* self = static_cast<self_t*>(this);
+diff --git a/http/routing/streamingrule.hpp b/http/routing/streamingrule.hpp
+new file mode 100644
+index 00000000..80c0354b
+--- /dev/null
++++ b/http/routing/streamingrule.hpp
+@@ -0,0 +1,101 @@
++#pragma once
++
++#include "baserule.hpp"
++#include "privilegeparametertraits.hpp"
++#include "server_sent_event.hpp"
++
++#include <functional>
++
++namespace crow
++{
++class StreamingResponseRule :
++    public BaseRule,
++    public PrivilegeParameterTraits<StreamingResponseRule>
++{
++    using self_t = StreamingResponseRule;
++
++  public:
++    explicit StreamingResponseRule(const std::string& ruleIn) : BaseRule(ruleIn)
++    {}
++
++    void validate() override {}
++
++    void handle(const Request&,
++                const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                const std::vector<std::string>&) override
++    {
++        asyncResp->res.result(boost::beast::http::status::not_found);
++    }
++
++    void handleUpgrade(const Request& req,
++                       const std::shared_ptr<bmcweb::AsyncResp>& /*asyncResp*/,
++                       boost::asio::ip::tcp::socket&& adaptor)
++    {
++        std::shared_ptr<crow::streaming_response::ConnectionImpl<
++            boost::asio::ip::tcp::socket>>
++            myConnection =
++                std::make_shared<crow::streaming_response::ConnectionImpl<
++                    boost::asio::ip::tcp::socket>>(req, std::move(adaptor),
++                                                   openHandler, messageHandler,
++                                                   closeHandler, errorHandler);
++
++        myConnection->start();
++        myConnection.reset();
++        myConnection = nullptr;
++    }
++
++#ifdef BMCWEB_ENABLE_SSL
++    void handleUpgrade(const Request& req,
++                       const std::shared_ptr<bmcweb::AsyncResp>& /*asyncResp*/,
++                       boost::beast::ssl_stream<boost::asio::ip::tcp::socket>&&
++                           adaptor) override
++    {
++        std::shared_ptr<crow::streaming_response::ConnectionImpl<
++            boost::beast::ssl_stream<boost::asio::ip::tcp::socket>>>
++            myConnection =
++                std::make_shared<crow::streaming_response::ConnectionImpl<
++                    boost::beast::ssl_stream<boost::asio::ip::tcp::socket>>>(
++                    req, std::move(adaptor), openHandler, messageHandler,
++                    closeHandler, errorHandler);
++        myConnection->start();
++        myConnection.reset();
++        myConnection = nullptr;
++    }
++#endif
++    template <typename Func>
++    self_t& onopen(Func f)
++    {
++        openHandler = f;
++        return *this;
++    }
++    template <typename Func>
++    self_t& onmessage(Func f)
++    {
++        messageHandler = f;
++        return *this;
++    }
++
++    template <typename Func>
++    self_t& onclose(Func f)
++    {
++        closeHandler = f;
++        return *this;
++    }
++
++    template <typename Func>
++    self_t& onerror(Func f)
++    {
++        errorHandler = f;
++        return *this;
++    }
++
++  protected:
++    std::function<void(crow::streaming_response::Connection&)> openHandler;
++    std::function<void(crow::streaming_response::Connection&,
++                       const std::string&, bool)>
++        messageHandler;
++    std::function<void(crow::streaming_response::Connection&)> closeHandler;
++    std::function<void(crow::streaming_response::Connection&)> errorHandler;
++};
++
++} // namespace crow
+diff --git a/include/dump_offload.hpp b/include/dump_offload.hpp
+new file mode 100644
+index 00000000..7329f272
+--- /dev/null
++++ b/include/dump_offload.hpp
+@@ -0,0 +1,298 @@
++#pragma once
++
++#include <sys/select.h>
++
++#include <boost/asio.hpp>
++#include <boost/asio/basic_socket_acceptor.hpp>
++#include <boost/asio/basic_stream_socket.hpp>
++#include <boost/asio/local/stream_protocol.hpp>
++#include <boost/beast/core/flat_static_buffer.hpp>
++#include <boost/beast/http.hpp>
++#include <http_stream.hpp>
++
++namespace crow
++{
++namespace obmc_dump
++{
++
++std::string unixSocketPathDir = "/var/lib/bmcweb/";
++
++inline void handleDumpOffloadUrl(const crow::Request& req, crow::Response& res,
++                                 const std::string& entryId,
++                                 const std::string& dumpEntryType);
++inline void resetHandler();
++
++static constexpr size_t socketBufferSize = static_cast<size_t>(10 * 64 * 1024);
++static constexpr uint8_t maxConnectRetryCount = 3;
++
++/** class Handler
++ *  Handles data transfer between unix domain socket and http connection socket.
++ *  This handler invokes dump offload reads data from unix domain socket
++ *  and writes on to http stream connection socket.
++ */
++class Handler : public std::enable_shared_from_this<Handler>
++{
++  public:
++    Handler(boost::asio::io_context& ios, const std::string& entryIDIn,
++            const std::string& dumpTypeIn,
++            const std::string& unixSocketPathIn) :
++        entryID(entryIDIn),
++        dumpType(dumpTypeIn),
++        outputBuffer(boost::beast::flat_static_buffer<socketBufferSize>()),
++        unixSocketPath(unixSocketPathIn), unixSocket(ios), dumpSize(0),
++        waitTimer(ios), connectRetryCount(0)
++    {}
++
++    /**
++     * @brief Connects to unix socket to read dump data
++     *
++     * @return void
++     */
++    void doConnect()
++    {
++        this->unixSocket.async_connect(
++            unixSocketPath.c_str(),
++            [this, self(shared_from_this())](boost::system::error_code ec) {
++            if (ec)
++            {
++                // TODO:
++                // right now we don't have dbus method which can make sure
++                // unix socket is ready to accept connection so its possible
++                // that bmcweb can try to connect to socket before even
++                // socket setup, so using retry mechanism with timeout.
++                if (ec == boost::system::errc::no_such_file_or_directory ||
++                    ec == boost::system::errc::connection_refused)
++                {
++                    BMCWEB_LOG_DEBUG("UNIX Socket: async_connect error");
++                    retrySocketConnect();
++                    return;
++                }
++                BMCWEB_LOG_ERROR("UNIX Socket: async_connect error");
++                waitTimer.cancel();
++                this->connection->sendStreamErrorStatus(
++                    boost::beast::http::status::internal_server_error);
++                this->connection->close();
++                return;
++            }
++            waitTimer.cancel();
++            this->connection->sendStreamHeaders(std::to_string(this->dumpSize),
++                                                "application/octet-stream");
++            this->doReadStream();
++        });
++    }
++
++    /**
++     * @brief  Invokes InitiateOffload method of dump manager which
++     *         directs dump manager to start writing on unix domain socket.
++     *
++     * @return void
++     */
++    void initiateOffload()
++    {
++        crow::connections::systemBus->async_method_call(
++            [this,
++             self(shared_from_this())](const boost::system::error_code ec) {
++            if (ec)
++            {
++                BMCWEB_LOG_ERROR("DBUS response error: ");
++                this->connection->sendStreamErrorStatus(
++                    boost::beast::http::status::internal_server_error);
++                this->connection->close();
++                return;
++            }
++        },
++            "xyz.openbmc_project.Dump.Manager",
++            "/xyz/openbmc_project/dump/" + dumpType + "/entry/" + entryID,
++            "xyz.openbmc_project.Dump.Entry", "InitiateOffload",
++            unixSocketPath.c_str());
++    }
++
++    /**
++     * @brief  This function setup a timer for retrying unix socket connect.
++     *
++     * @return void
++     */
++    void retrySocketConnect()
++    {
++        waitTimer.expires_after(std::chrono::milliseconds(500));
++        waitTimer.async_wait([this, self(shared_from_this())](
++                                 const boost::system::error_code& ec) {
++            if (ec)
++            {
++                BMCWEB_LOG_ERROR("Async_wait failed ");
++                return;
++            }
++
++            if (connectRetryCount < maxConnectRetryCount)
++            {
++                BMCWEB_LOG_DEBUG(
++                    "Calling doConnect() by checking retry count:");
++                connectRetryCount++;
++                doConnect();
++            }
++            else
++            {
++                BMCWEB_LOG_ERROR(
++                    "Failed to connect, reached max retry count: ");
++                waitTimer.cancel();
++                this->connection->sendStreamErrorStatus(
++                    boost::beast::http::status::internal_server_error);
++                this->connection->close();
++                return;
++            }
++        });
++    }
++
++    void getDumpSize(const std::string& entryID, const std::string& dumpType)
++    {
++        crow::connections::systemBus->async_method_call(
++            [this,
++             self(shared_from_this())](const boost::system::error_code ec,
++                                       const std::variant<uint64_t>& size) {
++            if (ec)
++            {
++                BMCWEB_LOG_ERROR(
++                    "DBUS response error: Unable to get the dump size ");
++                this->connection->sendStreamErrorStatus(
++                    boost::beast::http::status::internal_server_error);
++                this->connection->close();
++                return;
++            }
++            const uint64_t* dumpsize = std::get_if<uint64_t>(&size);
++            this->dumpSize = *dumpsize;
++            this->initiateOffload();
++            this->doConnect();
++        },
++            "xyz.openbmc_project.Dump.Manager",
++            "/xyz/openbmc_project/dump/" + dumpType + "/entry/" + entryID,
++            "org.freedesktop.DBus.Properties", "Get",
++            "xyz.openbmc_project.Dump.Entry", "Size");
++    }
++
++    /**
++     * @brief  Reads data from unix domain socket and writes on
++     *         http stream connection socket.
++     *
++     * @return void
++     */
++
++    void doReadStream()
++    {
++        std::size_t bytes = outputBuffer.capacity() - outputBuffer.size();
++
++        this->unixSocket.async_read_some(
++            outputBuffer.prepare(bytes),
++            [this, self(shared_from_this())](
++                const boost::system::error_code& ec, std::size_t bytesRead) {
++            if (ec)
++            {
++                BMCWEB_LOG_ERROR("Couldn't read from local peer: ");
++
++                if (ec != boost::asio::error::eof)
++                {
++                    BMCWEB_LOG_ERROR("Couldn't read from local peer: ");
++                    this->connection->sendStreamErrorStatus(
++                        boost::beast::http::status::internal_server_error);
++                }
++                this->connection->close();
++                return;
++            }
++
++            outputBuffer.commit(bytesRead);
++            auto streamHandler = [this, bytesRead, self(shared_from_this())]() {
++                this->outputBuffer.consume(bytesRead);
++                this->doReadStream();
++            };
++            this->connection->sendMessage(outputBuffer.data(), streamHandler);
++        });
++    }
++
++    std::string entryID;
++    std::string dumpType;
++    boost::beast::flat_static_buffer<socketBufferSize> outputBuffer;
++    std::filesystem::path unixSocketPath;
++    boost::asio::local::stream_protocol::socket unixSocket;
++    uint64_t dumpSize;
++    boost::asio::steady_timer waitTimer;
++    crow::streaming_response::Connection* connection = nullptr;
++    uint16_t connectRetryCount;
++};
++
++static boost::container::flat_map<crow::streaming_response::Connection*,
++                                  std::shared_ptr<Handler>>
++    handlers;
++
++inline void requestRoutes(App& app)
++{
++    namespace fs = std::filesystem;
++    fs::path socketPath = "/var/lib/bmcweb";
++    if (!fs::exists(socketPath))
++    {
++        fs::create_directories(socketPath);
++    }
++
++    BMCWEB_ROUTE(
++        app,
++        "/redfish/v1/Managers/bmc/LogServices/Dump/Entries/<str>/attachment")
++        .privileges({{"ConfigureComponents", "ConfigureManager"}})
++        .streamingResponse()
++        .onopen([](crow::streaming_response::Connection& conn) {
++        std::string url(conn.req.target());
++        std::filesystem::path dumpIdPath(
++            url.substr(0, url.find("/attachment")));
++        std::string dumpId = dumpIdPath.filename();
++        std::string dumpType = "bmc";
++        boost::asio::io_context* ioCon = conn.getIoContext();
++
++        std::string unixSocketPath = unixSocketPathDir + dumpType + "_dump_" +
++                                     dumpId;
++
++        handlers[&conn] = std::make_shared<Handler>(*ioCon, dumpId, dumpType,
++                                                    unixSocketPath);
++        handlers[&conn]->connection = &conn;
++        handlers[&conn]->getDumpSize(dumpId, dumpType);
++    }).onclose([](crow::streaming_response::Connection& conn) {
++        auto handler = handlers.find(&conn);
++        if (handler == handlers.end())
++        {
++            BMCWEB_LOG_DEBUG("No handler to cleanup");
++            return;
++        }
++        handler->second->outputBuffer.clear();
++        handlers.erase(handler);
++    });
++
++    BMCWEB_ROUTE(
++        app,
++        "/redfish/v1/Systems/system/LogServices/Dump/Entries/<str>/attachment")
++        .privileges({{"ConfigureComponents", "ConfigureManager"}})
++        .streamingResponse()
++        .onopen([](crow::streaming_response::Connection& conn) {
++        std::string url(conn.req.target());
++        std::filesystem::path dumpIdPath(
++            url.substr(0, url.find("/attachment")));
++        std::string dumpId = dumpIdPath.filename();
++        std::string dumpType = "system";
++        boost::asio::io_context* ioCon = conn.getIoContext();
++
++        std::string unixSocketPath = unixSocketPathDir + dumpType + "_dump_" +
++                                     dumpId;
++
++        handlers[&conn] = std::make_shared<Handler>(*ioCon, dumpId, dumpType,
++                                                    unixSocketPath);
++        handlers[&conn]->connection = &conn;
++        handlers[&conn]->getDumpSize(dumpId, dumpType);
++    }).onclose([](crow::streaming_response::Connection& conn) {
++        auto handler = handlers.find(&conn);
++        if (handler == handlers.end())
++        {
++            BMCWEB_LOG_DEBUG("No handler to cleanup");
++            return;
++        }
++        handlers.erase(handler);
++        handler->second->outputBuffer.clear();
++    });
++}
++
++} // namespace obmc_dump
++} // namespace crow
+diff --git a/src/webserver_main.cpp b/src/webserver_main.cpp
+index 67e2aaef..23ca66c1 100644
+--- a/src/webserver_main.cpp
++++ b/src/webserver_main.cpp
+@@ -24,6 +24,7 @@
+ #include <systemd/sd-daemon.h>
+ 
+ #include <boost/asio/io_context.hpp>
++#include <dump_offload.hpp>
+ #include <sdbusplus/asio/connection.hpp>
+ #include <sdbusplus/bus.hpp>
+ #include <sdbusplus/server.hpp>
+@@ -145,6 +146,11 @@ static int run()
+ 
+     bmcweb::registerUserRemovedSignal();
+ 
++#ifdef BMCWEB_ENABLE_REDFISH_DUMP_LOG
++    BMCWEB_LOG_INFO("Start Download Debug Log ...");
++    crow::obmc_dump::requestRoutes(app);
++#endif
++
+     app.run();
+     io->run();
+ 
+-- 
+2.25.1
+
