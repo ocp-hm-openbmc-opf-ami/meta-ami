@@ -1,0 +1,89 @@
+From 626f572b8f38a03fcc8e77c7a771422ba7ca87fc Mon Sep 17 00:00:00 2001
+From: krishnar4 <krishnar@ami.com>
+Date: Tue, 26 Sep 2023 16:33:00 +0530
+Subject: [PATCH 7/7] OT-149 SDR Info Free space issue fixed
+
+---
+ src/sensorcommands.cpp | 54 ++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 52 insertions(+), 2 deletions(-)
+
+diff --git a/src/sensorcommands.cpp b/src/sensorcommands.cpp
+index 6c9d678..f54733b 100644
+--- a/src/sensorcommands.cpp
++++ b/src/sensorcommands.cpp
+@@ -1871,7 +1871,17 @@ ipmi::RspType<uint8_t,  // sdr version
+               >
+     ipmiStorageGetSDRRepositoryInfo(ipmi::Context::ptr ctx)
+ {
+-    constexpr const uint16_t unspecifiedFreeSpace = 0xFFFF;
++
++    constexpr const uint16_t maxFreeSpace = 0xFFFE;
++    constexpr const uint8_t type1RecordSize = 64;
++    constexpr const uint8_t type2RecordSize = 48;
++    constexpr const uint8_t fruRecordSize = 32;
++    uint16_t fullSdrCount = 0;
++    uint16_t compactSdrCount = 0;
++    uint16_t type11SdrCount = 0;
++    uint16_t recordID = 0;
++    std::vector<uint8_t> record;
++
+     if (!getSensorSubtree(sensorTree) && sensorTree.empty())
+     {
+         return ipmi::responseResponseError();
+@@ -1891,12 +1901,52 @@ ipmi::RspType<uint8_t,  // sdr version
+     uint8_t operationSupport = static_cast<uint8_t>(
+         SdrRepositoryInfoOps::overflow); // write not supported
+ 
++        while (!getSensorDataRecord(ctx, record, recordID++))
++    {
++        get_sdr::SensorDataRecordHeader* hdr =
++            reinterpret_cast<get_sdr::SensorDataRecordHeader*>(record.data());
++        if (hdr)
++        {
++            if (hdr->record_type == get_sdr::SENSOR_DATA_FULL_RECORD)
++            {
++                get_sdr::SensorDataFullRecord* recordData =
++                    reinterpret_cast<get_sdr::SensorDataFullRecord*>(
++                        record.data());
++                if (ctx->lun == recordData->key.owner_lun)
++                {
++                    fullSdrCount++;
++                }
++            }
++            else if (hdr->record_type == get_sdr::SENSOR_DATA_COMPACT_RECORD)
++            {
++                get_sdr::SensorDataCompactRecord* recordData =
++                    reinterpret_cast<get_sdr::SensorDataCompactRecord*>(
++                        record.data());
++                if (ctx->lun == recordData->key.owner_lun)
++                {
++                    compactSdrCount++;
++                }
++            }
++            else if (hdr->record_type == get_sdr::SENSOR_DATA_FRU_RECORD)
++            {
++                type11SdrCount++;
++            }
++        }
++    }
++
++    uint16_t freeSpace =
++        maxFreeSpace - ((fullSdrCount * type1RecordSize) +
++                        (compactSdrCount * type2RecordSize) +
++                        (type11SdrCount * fruRecordSize) +
++                        (ipmi::storage::type12Count * fruRecordSize) +
++			(fruCount * fruRecordSize));
++
+     operationSupport |=
+         static_cast<uint8_t>(SdrRepositoryInfoOps::allocCommandSupported);
+     operationSupport |= static_cast<uint8_t>(
+         SdrRepositoryInfoOps::reserveSDRRepositoryCommandSupported);
+     return ipmi::responseSuccess(ipmiSdrVersion, recordCount,
+-                                 unspecifiedFreeSpace, sdrLastAdd,
++                                 freeSpace, sdrLastAdd,
+                                  sdrLastRemove, operationSupport);
+ }
+ 
+-- 
+2.41.0
+
