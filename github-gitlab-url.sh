@@ -76,6 +76,8 @@ sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.at-scale-
 
 sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.crashdump-add-in-card.git;protocol=ssh;branch=main/git@git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.crashdump-add-in-card.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/aic-crashdump/aic-crashdump.bb
 
+sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.node-manager.git;protocol=ssh;branch=bhs/git@git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.node-manager.git;protocol=ssh;branch=bhs/g' openbmc-meta-intel/meta-restricted/recipes-intel/nm/node-manager_git.bb
+
 sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.node-manager.git;protocol=ssh;branch=main/git@git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.node-manager.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/nm/node-manager_git.bb
 
 sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.bmc-collector.git;protocol=ssh;branch=main/git@git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.bmc-collector.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/acd/bmc-collector_git.bb
