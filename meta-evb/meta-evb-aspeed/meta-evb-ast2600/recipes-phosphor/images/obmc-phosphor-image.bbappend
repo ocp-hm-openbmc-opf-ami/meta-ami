@@ -58,3 +58,4 @@ clean_pubkey() {
 }
 
 ROOTFS_POSTPROCESS_COMMAND += " clean_pubkey; "
+inherit obmc-phosphor-image ${@bb.utils.contains("BBFILE_COLLECTIONS", "restricted", "obmc-phosphor-image-restricted", "",d)}
