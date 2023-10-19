@@ -1,0 +1,129 @@
+From 84f06a523c37a1f1e83115af6f06d8c5c04b2bf6 Mon Sep 17 00:00:00 2001
+From: pandiarajt <pandiarajt@ami.com>
+Date: Wed, 18 Oct 2023 16:09:43 +0530
+Subject: [PATCH 1159/1159] Fix for setting SOL Conf Parameters
+
+---
+ transporthandler.cpp | 52 ++++++++++++++++++++++++++++++++++++--------
+ 1 file changed, 43 insertions(+), 9 deletions(-)
+
+diff --git a/transporthandler.cpp b/transporthandler.cpp
+index e839891..37b234a 100644
+--- a/transporthandler.cpp
++++ b/transporthandler.cpp
+@@ -2181,6 +2181,7 @@ enum class Privilege : uint8_t
+ constexpr uint8_t progressMask = 0x03;
+ constexpr uint8_t enableMask = 0x01;
+ constexpr uint8_t retryMask = 0x07;
++constexpr uint8_t privileageMask = 0x05;
+ 
+ ipmi::RspType<> setSOLConfParams(ipmi::Context::ptr ctx, uint4_t chNum,
+                                  uint4_t reserved, uint8_t paramSelector,
+@@ -2213,6 +2214,12 @@ ipmi::RspType<> setSOLConfParams(ipmi::Context::ptr ctx, uint4_t chNum,
+             {
+                 return ipmi::responseReqDataLenInvalid();
+             }
++
++	    if ( !(configParamData1 < progressMask) )
++	    {
++                return ipmi::responseInvalidFieldRequest();
++	    }
++
+             uint8_t progress = configParamData1 & progressMask;
+             ipmi::Value currentProgress = 0;
+             if (getSOLParameter("Progress", currentProgress, channelNum) < 0)
+@@ -2225,6 +2232,11 @@ ipmi::RspType<> setSOLConfParams(ipmi::Context::ptr ctx, uint4_t chNum,
+                 return ipmi::responseSetInProgressActive();
+             }
+ 
++	    if (progress == 2)
++	    {
++                return ipmi::responseParmNotSupported();
++	    }
++
+             if (setSOLParameter("Progress", progress, channelNum) < 0)
+             {
+                 return ipmi::responseUnspecifiedError();
+@@ -2233,10 +2245,11 @@ ipmi::RspType<> setSOLConfParams(ipmi::Context::ptr ctx, uint4_t chNum,
+         }
+         case sol::Parameter::enable:
+         {
+-            if (configParamData2)
+-            {
++            if (configParamData2 || !(configParamData1 <= enableMask))
++	    {
+                 return ipmi::responseReqDataLenInvalid();
+             }
++
+             bool enable = configParamData1 & enableMask;
+             if (setSOLParameter("Enable", enable, channelNum) < 0)
+             {
+@@ -2250,22 +2263,38 @@ ipmi::RspType<> setSOLConfParams(ipmi::Context::ptr ctx, uint4_t chNum,
+             {
+                 return ipmi::responseReqDataLenInvalid();
+             }
+-            uint8_t encrypt = (configParamData1 & encryptMask) >> encryptShift;
+-            uint8_t auth = (configParamData1 & authMask) >> authShift;
+-            uint8_t privilege = configParamData1 & privilegeMask;
++            if ((configParamData1 & 0x30) != 0)
++            {
++                return ipmi::responseInvalidFieldRequest();
++            }
++            bool encrypt = (configParamData1 & encryptMask) >> encryptShift;
++            bool auth = (configParamData1 & authMask) >> authShift;
++
++	    
++	    uint8_t privilege = configParamData1 & privilegeMask;
+             // For security considering encryption and authentication must be
+             // true.
+-            if (!encrypt || !auth)
++/*          if (!encrypt || !auth)
+             {
+                 return ipmi::responseSystemInfoParameterSetReadOnly();
+-            }
+-            else if (privilege <
++            }*/
++            if (privilege <
+                          static_cast<uint8_t>(sol::Privilege::userPriv) ||
+                      privilege > static_cast<uint8_t>(sol::Privilege::oemPriv))
+             {
+                 return ipmi::responseInvalidFieldRequest();
+             }
+ 
++	    if (setSOLParameter("ForceEncryption", encrypt, channelNum) < 0)
++            {
++                return ipmi::responseUnspecifiedError();
++            }
++            if (setSOLParameter("ForceAuthentication", auth, channelNum) < 0)
++            {
++                return ipmi::responseUnspecifiedError();
++            }
++
++
+             if (setSOLParameter("Privilege", privilege, channelNum) < 0)
+             {
+                 return ipmi::responseUnspecifiedError();
+@@ -2279,7 +2308,7 @@ ipmi::RspType<> setSOLConfParams(ipmi::Context::ptr ctx, uint4_t chNum,
+             {
+                 return ipmi::responseReqDataLenInvalid();
+             }
+-            if (*configParamData2 == 0)
++            if (configParamData1 == 0 || *configParamData2 == 0)
+             {
+                 return ipmi::responseInvalidFieldRequest();
+             }
+@@ -2300,6 +2329,11 @@ ipmi::RspType<> setSOLConfParams(ipmi::Context::ptr ctx, uint4_t chNum,
+             {
+                 return ipmi::responseReqDataLenInvalid();
+             }
++            if (configParamData1 > retryMask)
++            {
++                return ipmi::responseInvalidFieldRequest();
++            }
++
+             if ((setSOLParameter(
+                      "RetryCount",
+                      static_cast<uint8_t>(configParamData1 & retryMask),
+-- 
+2.25.1
+
