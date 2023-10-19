@@ -1,0 +1,774 @@
+diff --git a/src/config_parser.cpp b/src/config_parser.cpp
+index 7fa0742..57fa59e 100644
+--- a/src/config_parser.cpp
++++ b/src/config_parser.cpp
+@@ -66,6 +66,11 @@ fs::path pathForIntfDev(const fs::path& dir, std::string_view intf)
+     return dir / fmt::format(FMT_COMPILE("{}.netdev"), intf);
+ }
+ 
++fs::path pathForIntfInfo(const fs::path& dir, std::string_view intf)
++{
++    return dir / intf;
++}
++
+ const std::string*
+     SectionMap::getLastValueString(std::string_view section,
+                                    std::string_view key) const noexcept
+diff --git a/src/config_parser.hpp b/src/config_parser.hpp
+index fc24aad..f4be6d5 100644
+--- a/src/config_parser.hpp
++++ b/src/config_parser.hpp
+@@ -39,6 +39,7 @@ enum class ReturnCode
+ 
+ fs::path pathForIntfConf(const fs::path& dir, std::string_view intf);
+ fs::path pathForIntfDev(const fs::path& dir, std::string_view intf);
++fs::path pathForIntfInfo(const fs::path& dir, std::string_view intf);
+ 
+ template <typename T, typename Check>
+ class Checked
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index e6b6ab8..5564f23 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -147,6 +147,18 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+         EthernetInterfaceIntf::ipv6StaticRtrAddr(getIP6StaticRtrAddr(ifaceConfig), true);
+     }
+ 
++    auto [ipv4List, ipv6List] = getIndexList(ifaceConfig);
++    if (!EthernetInterfaceIntf::dhcp4()) {
++        ipv4IndexUsedList = std::move(ipv4List);
++    }
++
++    if (!EthernetInterfaceIntf::dhcp6()) {
++        ipv6IndexUsedList = std::move(ipv6List);
++    }
++
++    ipv4IndexUsedList.resize(IPV4_MAX_NUM+1, std::nullopt);
++    ipv6IndexUsedList.resize(IPV6_MAX_NUM+1, std::nullopt);
++
+     this->loadARPControl();
+     emit_object_added();
+ 
+@@ -262,9 +274,19 @@ void EthernetInterface::addAddr(const AddressInfo& info)
+     auto it = addrs.find(info.ifaddr);
+     if (it == addrs.end())
+     {
++        int idx = 0;
++        if (origin == IP::AddressOrigin::Static) {
++            auto tmpAddr = stdplus::toStr(info.ifaddr.getAddr());
++            if (tmpAddr.find(":") != std::string::npos) {
++                idx = getProperIpIdx<IP::Protocol::IPv6>(ipv6IndexUsedList, info.ifaddr.getAddr());
++            } // if
++            else if (tmpAddr.find(".") != std::string::npos) {
++                idx = getProperIpIdx<IP::Protocol::IPv4>(ipv4IndexUsedList, info.ifaddr.getAddr());
++            }
++        }
+         addrs.emplace(info.ifaddr, std::make_unique<IPAddress>(
+                                        bus, std::string_view(objPath), *this,
+-                                       info.ifaddr, origin));
++                                       info.ifaddr, origin, idx));
+     }
+     else
+     {
+@@ -303,9 +325,70 @@ void EthernetInterface::addStaticNeigh(const NeighborInfo& info)
+     }
+ }
+ 
+-ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
+-                                 uint8_t prefixLength, std::string ipgateway)
+-{
++void EthernetInterface::updateIpIndex(stdplus::SubnetAny addr, std::variant<bool, int> index) {
++    int idx = 0;
++
++    try {
++        if (std::get_if<bool>(&index)) {
++            std::string ipaddress = stdplus::toStr(addr);
++            if (ipaddress.find(":") != std::string::npos) {
++                idx = getProperIpIdx<IP::Protocol::IPv6>(ipv6IndexUsedList, addr.getAddr());
++            } // if
++            else if (ipaddress.find(".") != std::string::npos) {
++                idx = getProperIpIdx<IP::Protocol::IPv4>(ipv4IndexUsedList, addr.getAddr());
++            }
++        } // if
++        else {
++            idx = *std::get_if<int>(&index);
++        } // else
++
++        std::string ipaddress = stdplus::toStr(addr.getAddr());
++        if (ipaddress.find(":") != std::string::npos) {
++            for (const auto& v : ipv6IndexUsedList) {
++                if (v == ipaddress) {
++                    goto EXIT;
++                } // if
++            }
++
++            if (ipv6IndexUsedList.size() <= idx) {
++                ipv6IndexUsedList.resize(idx+1, std::nullopt);
++            }
++            ipv6IndexUsedList.at(idx) = std::move(ipaddress);
++        } // if
++        else if (ipaddress.find(".") != std::string::npos) {
++            for (const auto& v : ipv4IndexUsedList) {
++                if (v == ipaddress) {
++                    goto EXIT;
++                } // if
++            }
++
++            if (ipv4IndexUsedList.size() <= idx) {
++                ipv4IndexUsedList.resize(idx+1, std::nullopt);
++            }
++            ipv4IndexUsedList.at(idx) = std::move(ipaddress);
++        }
++    } catch (const std::exception& e) {
++        log<level::INFO>(fmt::format("Couldn't update index: {}\n", e.what()).c_str());
++    }
++
++    try {
++        auto it = addrs.find(addr);
++        if (it != addrs.end()) {
++            it->second->IP::idx(idx);
++        }
++        else {
++            throw std::logic_error("No matched IP address found");
++        }
++    } catch (const std::exception& e) {
++        log<level::INFO>(fmt::format("Couldn't update index: {}\n", e.what()).c_str());
++    }
++
++EXIT:
++    return;
++}
++
++std::tuple<bool, ObjectPath> EthernetInterface::createStaticIP(IP::Protocol protType, std::string ipaddress,
++                                              uint8_t prefixLength, std::string ipgateway) {
+     std::optional<stdplus::InAnyAddr> addr, gateway;
+     try
+     {
+@@ -383,21 +466,176 @@ ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
+         it = std::get<0>(addrs.emplace(
+             *ifaddr,
+             std::make_unique<IPAddress>(bus, std::string_view(objPath), *this,
+-                                        *ifaddr, IP::AddressOrigin::Static)));
++                                        *ifaddr, IP::AddressOrigin::Static, 0)));
+     }
+     else
+     {
+         if (it->second->origin() == IP::AddressOrigin::Static)
+         {
+-            return it->second->getObjPath();
++            return std::make_tuple(false, it->second->getObjPath());
+         }
+         it->second->IPIfaces::origin(IP::AddressOrigin::Static);
+     }
+ 
+-    writeConfigurationFile();
+-    manager.get().reloadConfigs();
++    return std::make_tuple(true, it->second->getObjPath());
++}
+ 
+-    return it->second->getObjPath();
++ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
++                                 uint8_t prefixLength, std::string ipgateway)
++{
++    std::optional<stdplus::InAnyAddr> addr;
++    try {
++        int count = 0;
++        if (protType == IP::Protocol::IPv6) {
++            std::for_each(ipv6IndexUsedList.begin(), ipv6IndexUsedList.end(),
++                [&](const std::optional<std::string> v) {
++                    if (v.has_value()) {
++                        count += 1;
++                    }
++                });
++            if (count >= IPV6_MAX_NUM) {
++                auto msg = fmt::format("The number of IPv6 address id out of limit {}. ", IPV6_MAX_NUM);
++                throw std::logic_error(msg.c_str());
++            }
++
++            addr.emplace(stdplus::fromStr<stdplus::In6Addr>(ipaddress));
++        } // if
++        else if (protType == IP::Protocol::IPv4) {
++            std::for_each(ipv4IndexUsedList.begin(), ipv4IndexUsedList.end(),
++                [&](const std::optional<std::string> v) {
++                    if (v.has_value()) {
++                        count += 1;
++                    }
++                });
++            if (count >= IPV4_MAX_NUM) {
++                auto msg = fmt::format("The number of IPv4 address id out of limit {}. ", IPV4_MAX_NUM);
++                throw std::logic_error(msg.c_str());
++            } // if
++
++            addr.emplace(stdplus::fromStr<stdplus::In4Addr>(ipaddress));
++        } // else if
++    } catch (const std::exception& e) {
++        elog<InvalidArgument>(Argument::ARGUMENT_NAME("ipaddress"), Argument::ARGUMENT_VALUE(ipaddress.c_str()));
++    }
++
++    auto [reload, path] = createStaticIP(protType, ipaddress, prefixLength, ipgateway);
++    std::optional<stdplus::SubnetAny> ifaddr;
++    try
++    {
++        if (prefixLength == 0)
++        {
++            throw std::invalid_argument("default route");
++        }
++        ifaddr.emplace(*addr, prefixLength);
++    }
++    catch (const std::exception& e)
++    {
++        lg2::error("Invalid prefix length {NET_PFX}: {ERROR}", "NET_PFX",
++                   prefixLength, "ERROR", e);
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("prefixLength"),
++            Argument::ARGUMENT_VALUE(stdplus::toStr(prefixLength).c_str()));
++    }
++
++    if (reload) {
++        updateIpIndex(*ifaddr, false);
++        writeConfigurationFile();
++        manager.get().reloadConfigs();
++    } // if
++
++    return path;
++}
++
++ObjectPath EthernetInterface::ipWithIndex(IP::Protocol protType, std::string ipaddress,
++                                 uint8_t prefixLength, uint8_t idx,std::string ipgateway)
++{
++    int count = 0;
++    std::optional<stdplus::InAnyAddr> addr;
++    try {
++        if (protType == IP::Protocol::IPv6) {
++            std::for_each(ipv6IndexUsedList.begin(), ipv6IndexUsedList.end(),
++                [&](const std::optional<std::string> v) {
++                    if (v.has_value()) {
++                        count += 1;
++                    }
++                });
++            if (idx >= IPV6_MAX_NUM || count >= IPV6_MAX_NUM) {
++                auto errMsg = fmt::format("IPv6 Index {} is out of limit {}. ", idx, IPV6_MAX_NUM);
++                throw std::logic_error(errMsg);
++            } // if
++            else if (ipv6IndexUsedList.size() > idx && ipv6IndexUsedList.at(idx).has_value()) {
++                throw std::logic_error(fmt::format("IPv6 The Index #{} is already used\n", idx).c_str());
++            }
++
++            addr.emplace(stdplus::fromStr<stdplus::In6Addr>(ipaddress));
++        } // if
++        else if (protType == IP::Protocol::IPv4) {
++            std::for_each(ipv4IndexUsedList.begin(), ipv4IndexUsedList.end(),
++                [&](const std::optional<std::string> v) {
++                    if (v.has_value()) {
++                        count += 1;
++                    }
++                });
++            if (idx >= IPV4_MAX_NUM || count >= IPV4_MAX_NUM) {
++                auto errMsg = fmt::format("IPv4 Index {} is out of limit {}. ", idx, IPV4_MAX_NUM);
++                throw std::logic_error(errMsg);
++            } // if
++            else if (ipv4IndexUsedList.size() > idx && ipv4IndexUsedList.at(idx).has_value()) {
++                throw std::logic_error(fmt::format("IPv4 The Index #{} is already used.\n", idx).c_str());
++            }
++
++            addr.emplace(stdplus::fromStr<stdplus::In4Addr>(ipaddress));
++        } // else if
++    } catch (const std::exception& e) {
++        elog<InvalidArgument>(Argument::ARGUMENT_NAME("idx"), Argument::ARGUMENT_VALUE(stdplus::toStr(idx).c_str()));
++        elog<InvalidArgument>(Argument::ARGUMENT_NAME("ipaddress"), Argument::ARGUMENT_VALUE(ipaddress.c_str()));
++    }
++
++    auto [reload, path] = createStaticIP(protType, ipaddress, prefixLength, ipgateway);
++    std::optional<stdplus::SubnetAny> ifaddr;
++    try
++    {
++        if (prefixLength == 0)
++        {
++            throw std::invalid_argument("default route");
++        }
++        ifaddr.emplace(*addr, prefixLength);
++    }
++    catch (const std::exception& e)
++    {
++        lg2::error("Invalid prefix length {NET_PFX}: {ERROR}", "NET_PFX",
++                   prefixLength, "ERROR", e);
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("prefixLength"),
++            Argument::ARGUMENT_VALUE(stdplus::toStr(prefixLength).c_str()));
++    }
++
++    if (reload) {
++        updateIpIndex(*ifaddr, idx);
++        writeConfigurationFile();
++        manager.get().reloadConfigs();
++    } // if
++
++    return path;
++}
++
++void EthernetInterface::delIpIdx(std::string address, IP::Protocol protocolType) {
++    if (protocolType == IP::Protocol::IPv4) {
++        for (int i = 0; i < IPV4_MAX_NUM; i++) {
++            if (ipv4IndexUsedList.at(i).value_or("0.0.0.0") == address) {
++                ipv4IndexUsedList.at(i) = std::nullopt;
++                break;
++            } // if
++        } // for
++    } // if
++    else if (protocolType == IP::Protocol::IPv6) {
++        for (int i = 0; i < IPV6_MAX_NUM; i++) {
++            if (ipv6IndexUsedList.at(i).value_or("::") == address) {
++                ipv6IndexUsedList.at(i) = std::nullopt;
++                break;
++            } // if
++        } // for
++    }
+ }
+ 
+ ObjectPath EthernetInterface::neighbor(std::string ipAddress,
+@@ -482,6 +720,9 @@ bool EthernetInterface::dhcp4(bool value)
+                     }
+                 );
+             }
++
++            ipv4IndexUsedList.clear();
++            ipv4IndexUsedList.assign(IPV4_MAX_NUM+1, std::nullopt);
+         }
+ 
+         EthernetInterfaceIntf::dhcp4(value);
+@@ -499,6 +740,11 @@ bool EthernetInterface::dhcp6(bool value)
+     }
+     if (dhcp6() != EthernetInterfaceIntf::dhcp6(value))
+     {
++        if (value) {
++            ipv6IndexUsedList.clear();
++            ipv6IndexUsedList.assign(IPV6_MAX_NUM+1, std::nullopt);
++        } // if
++
+         writeConfigurationFile();
+         manager.get().reloadConfigs();
+     }
+@@ -1000,22 +1246,46 @@ void EthernetInterface::writeConfigurationFile()
+         }
+         {
+             config::Parser IfaceState;
+-            auto& state = IfaceState.map["Network"].emplace_back();
+-            state["IPv4Enable"].emplace_back(EthernetInterfaceIntf::ipv4Enable() ? "true" : "false");
+-            state["IPv6Enable"].emplace_back(EthernetInterfaceIntf::ipv6Enable() ? "true" : "false");
+-
+-            auto& router = IfaceState.map["IPv6Router"].emplace_back();
+-            router["IPv6EnableStaticRtr"].emplace_back(EthernetInterfaceIntf::ipv6EnableStaticRtr() ? "true" : "false");
+-            if (EthernetInterfaceIntf::ipv6EnableStaticRtr()) {
+-                router["IPv6StaticRtrAddr"].emplace_back(EthernetInterfaceIntf::ipv6StaticRtrAddr());
+-                if (!EthernetInterfaceIntf::ipv6StaticRtrAddr().empty()) {
+-                    if (auto it = staticNeighbors.find(stdplus::fromStr<stdplus::In6Addr>(EthernetInterfaceIntf::ipv6StaticRtrAddr())); it != staticNeighbors.end()) {
+-                        router["IPv6StaticRtrPrefix"].emplace_back(stdplus::toStr((it->second->prefixLength())));
++            {
++                auto& state = IfaceState.map["Network"].emplace_back();
++                state["IPv4Enable"].emplace_back(EthernetInterfaceIntf::ipv4Enable() ? "true" : "false");
++                state["IPv6Enable"].emplace_back(EthernetInterfaceIntf::ipv6Enable() ? "true" : "false");
++
++                auto& router = IfaceState.map["IPv6Router"].emplace_back();
++                router["IPv6EnableStaticRtr"].emplace_back(EthernetInterfaceIntf::ipv6EnableStaticRtr() ? "true" : "false");
++                if (EthernetInterfaceIntf::ipv6EnableStaticRtr()) {
++                    router["IPv6StaticRtrAddr"].emplace_back(EthernetInterfaceIntf::ipv6StaticRtrAddr());
++                    if (!EthernetInterfaceIntf::ipv6StaticRtrAddr().empty()) {
++                        if (auto it = staticNeighbors.find(stdplus::fromStr<stdplus::In6Addr>(EthernetInterfaceIntf::ipv6StaticRtrAddr())); it != staticNeighbors.end()) {
++                            router["IPv6StaticRtrPrefix"].emplace_back(stdplus::toStr((it->second->prefixLength())));
++                        }
+                     }
+                 }
+             }
+-            IfaceState.writeFile(fs::path{fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(), interfaceName()).c_str()});
++            {
++                if (!dhcp4() || !dhcp6()) {
++                    auto& index = IfaceState.map["Address"].emplace_back()["Index"];
++                    if (!dhcp4() && EthernetInterfaceIntf::ipv4Enable()) {
++                        for (auto i = 0; i < ipv4IndexUsedList.size(); i++) {
++                            if (ipv4IndexUsedList.at(i).has_value()) {
++                                index.emplace_back(fmt::format("{}/{}", ipv4IndexUsedList.at(i).value(), i));
++                            }
++                        } // for
++                    } // if
+ 
++                    if (!dhcp6() && EthernetInterfaceIntf::ipv6Enable()) {
++                        for (auto i = 0; i < ipv6IndexUsedList.size(); i++) {
++                            if (ipv6IndexUsedList.at(i).has_value()) {
++                                index.emplace_back(fmt::format("{}/{}", ipv6IndexUsedList.at(i).value(), i));
++                            }
++                        } // for
++                    } // if
++                } // if
++            }
++
++            IfaceState.writeFile(fs::path{fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(), interfaceName()).c_str()});
++        }
++        {
+             network["IPv6AcceptRA"].emplace_back(EthernetInterfaceIntf::ipv6Enable() && ipv6AcceptRA() ? "true" : "false");
+             network["DHCP"].emplace_back(dhcp4() ? (dhcp6() ? "true" : "ipv4")
+                                                 : (dhcp6() ? "ipv6" : "false"));
+@@ -1209,6 +1479,11 @@ void EthernetInterface::deleteAll()
+ {
+     // clear all the ip on the interface
+     addrs.clear();
++    ipv4IndexUsedList.clear();
++    ipv4IndexUsedList.assign(IPV4_MAX_NUM+1, std::nullopt);
++
++    ipv6IndexUsedList.clear();
++    ipv6IndexUsedList.assign(IPV6_MAX_NUM+1, std::nullopt);
+ 
+     writeConfigurationFile();
+     manager.get().reloadConfigs();
+@@ -1333,6 +1608,9 @@ void EthernetInterface::VlanProperties::delete_()
+     std::filesystem::remove(config::pathForIntfConf(confDir, intf), ec);
+     std::filesystem::remove(config::pathForIntfDev(confDir, intf), ec);
+ 
++    const auto& infoDir = eth.get().manager.get().getIfaceConfDir();
++    std::filesystem::remove(config::pathForIntfInfo(infoDir, intf), ec);
++
+     if (eth.get().ifIdx > 0)
+     {
+         eth.get().manager.get().interfacesByIdx.erase(eth.get().ifIdx);
+@@ -1949,5 +2227,39 @@ void EthernetInterface::registerSignal(sdbusplus::bus::bus& bus) {
+     }
+ }
+ 
++template<sdbusplus::common::xyz::openbmc_project::network::IP::Protocol family>
++int EthernetInterface::getProperIpIdx(std::vector<std::optional<std::string>>& list, stdplus::InAnyAddr addr) {
++    auto delimeter = ":";
++    int idx = 0;
++    int minIdx = IPV6_MAX_NUM;
++    int MAX_NUM = IPV6_MAX_NUM;
++    if (IP::Protocol::IPv4 == family) {
++        delimeter = ".";
++        minIdx = IPV4_MAX_NUM;
++        MAX_NUM = IPV4_MAX_NUM;
++    } // if
++    auto tmpAddr = stdplus::toStr(addr);
++    if (tmpAddr.find(delimeter) != std::string::npos) {
++        for (int i = 0; i < MAX_NUM; i++) {
++            if (list.size() > i && !list.at(i).has_value() && minIdx == MAX_NUM) {
++                minIdx = i;
++            } // if
++            if (list.size() > i && list.at(i).has_value() && list.at(i).value() == tmpAddr) {
++                idx = i;
++                break;
++            } // if
++        } // for
++
++        if (idx == 0 && minIdx == 0) {
++            idx = 0;
++        } // if
++        else if (minIdx != MAX_NUM && idx == 0) {
++            idx = minIdx;
++        } // else if
++    }
++
++    return idx;
++}
++
+ } // namespace network
+ } // namespace phosphor
+diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
+index b567b91..c18052a 100644
+--- a/src/ethernet_interface.hpp
++++ b/src/ethernet_interface.hpp
+@@ -143,6 +143,20 @@ class EthernetInterface : public Ifaces
+     ObjectPath ip(IP::Protocol addressType, std::string ipAddress,
+                   uint8_t prefixLength, std::string ipgateway) override;
+ 
++    /** @brief Implementation for IPWithIndex
++     *  Create ipaddress object with index.
++     *
++     *  @param[in] protocolType - protocol type can be IPv4 or IPv6 etc.
++     *  @param[in] address - IP Address.
++     *  @param[in] prefixLength - Prefix Length.
++     *  @param[in] idx - Default index is 0. Index value for IPv4 is 0. Index value for IPv6.
++     *  @param[in] gateway - Gateway Address.
++     *
++     *  @return path[sdbusplus::message::object_path] - The path for the created ipaddress object.
++     */
++    ObjectPath ipWithIndex(IP::Protocol protocolType, std::string address,
++                           uint8_t prefixLength, uint8_t idx, std::string gateway) override;
++
+     /** @brief Function to create static neighbor dbus object.
+      *  @param[in] ipAddress - IP address.
+      *  @param[in] macAddress - Low level MAC address.
+@@ -284,6 +298,9 @@ class EthernetInterface : public Ifaces
+     /** Set value of IPv6StaticRtrAddr */
+     std::string ipv6StaticRtrAddr(std::string value) override;
+ 
++    /** Delete the index according to given IP address*/
++    void delIpIdx(std::string address, IP::Protocol protocolType);
++
+     using ChannelAccessIntf::maxPrivilege;
+     using EthernetInterfaceIntf::interfaceName;
+     using EthernetInterfaceIntf::linkUp;
+@@ -399,6 +416,35 @@ class EthernetInterface : public Ifaces
+      */
+     int getCreatedVLANNum(std::filesystem::__cxx11::path confFile);
+ 
++    /** @brief Return the minimun index or the existing index by given address
++     *  @param[in] list - The list of IP address
++     *  @param[in] addr - The new IP address need giving index
++     *  @return Index of IP address in the list
++     */
++    template<sdbusplus::common::xyz::openbmc_project::network::IP::Protocol family>
++    int getProperIpIdx(std::vector<std::optional<std::string>>& list, stdplus::InAnyAddr addr);
++
++    /** @brief Update index table by the given address
++     *  @param[in] addr - The new IP address need adding into table
++     *  @param[in] index - The index of IP address
++     */
++    void updateIpIndex(stdplus::SubnetAny addr, std::variant<bool, int> index);
++
++    /** @brief Function to create ipAddress dbus object.
++     *  @param[in] protType - Type of ip address.
++     *  @param[in] ipAddress- IP address.
++     *  @param[in] prefixLength - Length of prefix.
++     *  @param[in] ipgateway - Gateway address.
++     *  @return A tuple containing whether the IP address exists and the object path
++     */
++    std::tuple<bool, ObjectPath> createStaticIP(IP::Protocol protType, std::string ipaddress,
++                                uint8_t prefixLength, std::string ipgateway);
++
++    /** List to save index and IPv4 Address */
++    std::vector<std::optional<std::string>> ipv4IndexUsedList;
++
++    /** List to save index and IPv6 Address */
++    std::vector<std::optional<std::string>> ipv6IndexUsedList;
+ };
+ 
+ } // namespace network
+diff --git a/src/ipaddress.cpp b/src/ipaddress.cpp
+index 5379c14..056203b 100644
+--- a/src/ipaddress.cpp
++++ b/src/ipaddress.cpp
+@@ -48,14 +48,14 @@ struct Proto<stdplus::In6Addr>
+ 
+ IPAddress::IPAddress(sdbusplus::bus_t& bus, std::string_view objRoot,
+                      stdplus::PinnedRef<EthernetInterface> parent,
+-                     stdplus::SubnetAny addr, AddressOrigin origin) :
+-    IPAddress(bus, makeObjPath(objRoot, addr), parent, addr, origin)
++                     stdplus::SubnetAny addr, AddressOrigin origin, uint8_t idx) :
++    IPAddress(bus, makeObjPath(objRoot, addr), parent, addr, origin, idx)
+ {}
+ 
+ IPAddress::IPAddress(sdbusplus::bus_t& bus,
+                      sdbusplus::message::object_path objPath,
+                      stdplus::PinnedRef<EthernetInterface> parent,
+-                     stdplus::SubnetAny addr, AddressOrigin origin) :
++                     stdplus::SubnetAny addr, AddressOrigin origin, uint8_t idx) :
+     IPIfaces(bus, objPath.str.c_str(), IPIfaces::action::defer_emit),
+     parent(parent), objPath(std::move(objPath))
+ {
+@@ -65,6 +65,7 @@ IPAddress::IPAddress(sdbusplus::bus_t& bus,
+                         addr.getAddr()),
+              true);
+     IP::origin(origin, true);
++    IP::idx(idx,true);
+     emit_object_added();
+ 
+ #ifdef AMI_IP_ADVANCED_ROUTING_SUPPORT
+@@ -97,6 +98,10 @@ uint8_t IPAddress::prefixLength(uint8_t /*value*/)
+ {
+     elog<NotAllowed>(Reason("Property update is not allowed"));
+ }
++uint8_t IPAddress::idx(uint8_t /*value*/)
++{
++    elog<NotAllowed>(Reason("Property update is not allowed"));
++}
+ std::string IPAddress::gateway(std::string /*gateway*/)
+ {
+     elog<NotAllowed>(Reason("Property update is not allowed"));
+@@ -122,8 +122,6 @@ void IPAddress::delete_()
+                    "{NET_PFX} interface {NET_INTF}",
+                    "NET_IP", address(), "NET_PFX", prefixLength(), "NET_INTF",
+                    parent.get().interfaceName());
+-
+-        elog<NotAllowed>(Reason("Not allowed to delete a non-static address"));
+     }
+ 
+     std::unique_ptr<IPAddress> ptr;
+@@ -129,6 +134,7 @@ void IPAddress::delete_()
+         {
+             ptr = std::move(it->second);
+             addrs.erase(it);
++            parent.get().delIpIdx(this->address(), this->type());
+             break;
+         }
+     }
+diff --git a/src/ipaddress.hpp b/src/ipaddress.hpp
+index 81db9ff..27da01e 100644
+--- a/src/ipaddress.hpp
++++ b/src/ipaddress.hpp
+@@ -41,11 +41,12 @@ class IPAddress : public IPIfaces
+      */
+     IPAddress(sdbusplus::bus_t& bus, std::string_view objRoot,
+               stdplus::PinnedRef<EthernetInterface> parent,
+-              stdplus::SubnetAny addr, IP::AddressOrigin origin);
++              stdplus::SubnetAny addr, IP::AddressOrigin origin, uint8_t idx);
+     ~IPAddress();
+ 
+     std::string address(std::string ipAddress) override;
+     uint8_t prefixLength(uint8_t) override;
++    uint8_t idx(uint8_t) override;
+     std::string gateway(std::string gateway) override;
+     IP::Protocol type(IP::Protocol type) override;
+     IP::AddressOrigin origin(IP::AddressOrigin origin) override;
+@@ -59,6 +60,7 @@ class IPAddress : public IPIfaces
+     using IP::origin;
+     using IP::prefixLength;
+     using IP::type;
++    using IP::idx;
+ 
+     inline const auto& getObjPath() const
+     {
+@@ -74,7 +76,7 @@ class IPAddress : public IPIfaces
+ 
+     IPAddress(sdbusplus::bus_t& bus, sdbusplus::message::object_path objPath,
+               stdplus::PinnedRef<EthernetInterface> parent,
+-              stdplus::SubnetAny addr, IP::AddressOrigin origin);
++              stdplus::SubnetAny addr, IP::AddressOrigin origin, uint8_t idx);
+ };
+ 
+ } // namespace network
+diff --git a/src/network_manager.cpp b/src/network_manager.cpp
+index 1c49715..422bf1a 100644
+--- a/src/network_manager.cpp
++++ b/src/network_manager.cpp
+@@ -670,6 +670,13 @@ void Manager::reset()
+         std::error_code ec;
+         std::filesystem::remove(dirent.path(), ec);
+     }
++
++    for (const auto& dirent : std::filesystem::directory_iterator(ifaceConfDir))
++    {
++        std::error_code ec;
++        std::filesystem::remove(dirent.path(), ec);
++    }
++
+     lg2::info("Network data purged.");
+ 
+     if (!createDefaultARPControlFiles(true))
+diff --git a/src/types.hpp b/src/types.hpp
+index e8f0126..7d6d07a 100644
+--- a/src/types.hpp
++++ b/src/types.hpp
+@@ -70,11 +70,12 @@ struct AddressInfo
+     stdplus::SubnetAny ifaddr;
+     uint8_t scope;
+     uint32_t flags;
++    uint8_t idx;
+ 
+     constexpr bool operator==(const AddressInfo& rhs) const noexcept
+     {
+         return ifidx == rhs.ifidx && ifaddr == rhs.ifaddr &&
+-               scope == rhs.scope && flags == rhs.flags;
++               scope == rhs.scope && flags == rhs.flags && idx == rhs.idx;
+     }
+ };
+ 
+diff --git a/src/util.cpp b/src/util.cpp
+index da61969..9d7e38d 100644
+--- a/src/util.cpp
++++ b/src/util.cpp
+@@ -265,6 +265,27 @@ std::string getGarpInterval(const config::Parser& parser)
+        }
+ }
+ 
++std::tuple<std::vector<std::optional<std::string>>,std::vector<std::optional<std::string>>> getIndexList(const config::Parser& parser) {
++    auto list = parser.map.getValueStrings("Address", "Index");
++    std::vector<std::optional<std::string>> ipv4List(IPV4_MAX_NUM);
++    std::vector<std::optional<std::string>> ipv6List(IPV6_MAX_NUM);
++
++    for (std::string vv : list) {
++        bool ipv6 = vv.find(":") == std::string::npos ? false : true;
++        auto delimeterIdx = vv.find_first_of("/");
++        std::string addr(vv.begin(), vv.begin()+delimeterIdx);
++        int idx = std::stoi(std::string(vv.begin()+delimeterIdx+1,vv.end()));
++        if (ipv6) {
++            ipv6List.at(idx) = addr;
++        } // if
++        else {
++            ipv4List.at(idx) = addr;
++        }
++    }
++
++    return std::make_tuple(ipv4List, ipv6List);
++}
++
+ namespace ip_address {
+ 
+ bool in6AddrIetfProtocolAssignment(in6_addr* addr) {
+diff --git a/src/util.hpp b/src/util.hpp
+index 6e76dfa..a2b5f81 100644
+--- a/src/util.hpp
++++ b/src/util.hpp
+@@ -8,6 +8,11 @@
+ #include <string>
+ #include <string_view>
+ #include <unordered_set>
++#include <tuple>
++#include <vector>
++
++constexpr auto IPV4_MAX_NUM = 1;
++constexpr auto IPV6_MAX_NUM = 16;
+ 
+ namespace phosphor
+ {
+@@ -106,6 +111,11 @@ bool getIP4Enable(const config::Parser& config);
+  */
+ bool getIP6Enable(const config::Parser& config);
+ 
++/** @brief read the Index of IP address from the configuration file
++ *  @param[in] config - The parsed configuration.
++ */
++std::tuple<std::vector<std::optional<std::string>>,std::vector<std::optional<std::string>>> getIndexList(const config::Parser& parser);
++
+ /** @brief read the DHCP value from the configuration file
+  *  @param[in] config - The parsed configuration.
+  */
+diff --git a/yaml/xyz/openbmc_project/Network/IP/Create.interface.yaml b/yaml/xyz/openbmc_project/Network/IP/Create.interface.yaml
+index 61bd676..eba1094 100644
+--- a/yaml/xyz/openbmc_project/Network/IP/Create.interface.yaml
++++ b/yaml/xyz/openbmc_project/Network/IP/Create.interface.yaml
+@@ -28,3 +28,37 @@ methods:
+       errors:
+           - xyz.openbmc_project.Common.Error.InvalidArgument
+           - xyz.openbmc_project.Common.Error.NotAllowed
++    - name: IPWithIndex
++      description: >
++          Create ipaddress object with index.
++      parameters:
++          - name: ProtocolType
++            type: enum[xyz.openbmc_project.Network.IP.Protocol]
++            description: >
++                protocol type can be IPv4 or IPv6 etc.
++          - name: Address
++            type: string
++            description: >
++                IP Address.
++          - name: PrefixLength
++            type: byte
++            description: >
++                Prefix Length.
++          - name: idx
++            type: byte
++            description: >
++                Default index is 0.
++                Index value for IPv4 is 0.
++                Index value for IPv6.
++          - name: Gateway
++            type: string
++            description: >
++                Gateway Address.
++      returns:
++          - name: Path
++            type: object_path
++            description: >
++                The path for the created ipaddress object.
++      errors:
++          - xyz.openbmc_project.Common.Error.InvalidArgument
++          - xyz.openbmc_project.Common.Error.NotAllowed
+

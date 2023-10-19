@@ -1,0 +1,81 @@
+From d42ac2b7f3cba21b382fb2afe935239c2c778f84 Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Thu, 5 Oct 2023 00:48:39 -0700
+Subject: [PATCH] Check if IPv4 and IPv4 Default Gateway are in the Same Series
+ 	modified:   src/ethernet_interface.cpp 	modified:   src/util.cpp 
+ modified:   src/util.hpp
+
+---
+ src/ethernet_interface.cpp |  7 ++-----
+ src/util.cpp               | 10 ++++++++++
+ src/util.hpp               |  7 +++++++
+ 3 files changed, 19 insertions(+), 5 deletions(-)
+
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index ab6d191..b5d12cd 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -294,6 +294,7 @@ ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
+                 addr.emplace(stdplus::fromStr<stdplus::In4Addr>(ipaddress));
+                 ip_address::isValidIPv4Addr((in_addr*)(&addr.value()), ip_address::Type::IP4_ADDRESS);
+                 if(!ipgateway.empty()) {
++                    ip_address::isSameSeries(ipaddress, ipgateway, prefixLength);
+                     gateway.emplace(stdplus::fromStr<stdplus::In4Addr>(ipgateway));
+                     ip_address::isValidIPv4Addr((in_addr*)(&gateway.value()), ip_address::Type::GATEWAY4_ADDRESS);
+                     EthernetInterfaceIntf::defaultGateway(ipgateway);
+@@ -1211,11 +1212,7 @@ std::string EthernetInterface::defaultGateway(std::string gateway)
+     {
+         for (auto& addr : addrs) {
+             if (addr.second->type() == IP::Protocol::IPv4 && addr.second->origin() != IP::AddressOrigin::LinkLocal) {
+-                auto prefixLength = addr.second->prefixLength();
+-                auto netmask = htobe32(~UINT32_C(0) << (32 - prefixLength));
+-                if (((stdplus::fromStr<stdplus::In4Addr>(addr.second->address())).a.s_addr & netmask) != ( (stdplus::fromStr<stdplus::In4Addr>(gateway)).a.s_addr & netmask)) {
+-                    throw std::logic_error("Gateway address and IP address aren't in the same subnet.");
+-                }
++                ip_address::isSameSeries(addr.second->address(), gateway, addr.second->prefixLength());
+                 break;
+             }
+         }
+diff --git a/src/util.cpp b/src/util.cpp
+index 7d6535d..1f57d8c 100644
+--- a/src/util.cpp
++++ b/src/util.cpp
+@@ -332,6 +332,16 @@ void isValidIPv6Addr(in6_addr* addr, Type type) {
+         throw std::invalid_argument(strType+" is Unspecified.");
+     }
+ }
++
++void isSameSeries(std::string ipStr, std::string gwStr, uint8_t prefixLength) {
++    auto ip = (stdplus::fromStr<stdplus::In4Addr>(ipStr)).a.s_addr;
++    auto gw = (stdplus::fromStr<stdplus::In4Addr>(gwStr)).a.s_addr;
++    auto netmask = htobe32(~UINT32_C(0) << (32 - prefixLength));
++
++    if ((ip & netmask) != (gw & netmask)) {
++        throw std::logic_error("Gateway address and IP address aren't in the same subnet.");
++    } // if
++}
+ } // namespace ip_address
+ 
+ 
+diff --git a/src/util.hpp b/src/util.hpp
+index cc30746..aeea653 100644
+--- a/src/util.hpp
++++ b/src/util.hpp
+@@ -55,6 +55,13 @@ void isValidIPv4Addr(in_addr* addr, Type type);
+  */
+ void isValidIPv6Addr(in6_addr* addr, Type Type);
+ 
++/** @brief Check if the IPv4 address and default gateway are in the same series
++ *  @param[in] ipAddr - The IPv4 address
++ *  @param[in] gateway - The IPv4 default gateway address
++ *  @param[in] prefixLength - The prefix length of IPv4
++ */
++void isSameSeries(std::string ipAddr, std::string gateway, uint8_t prefixLength);
++
+ } // namespace ip_address
+ 
+ /* @brief converts a sockaddr for the specified address family into
+-- 
+2.25.1
+
+

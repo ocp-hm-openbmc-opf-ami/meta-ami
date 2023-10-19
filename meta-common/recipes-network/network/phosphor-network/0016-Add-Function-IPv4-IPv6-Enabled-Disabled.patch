@@ -1,29 +1,426 @@
-From 45710dc3baf9951157544c9808dd12913456e4c7 Mon Sep 17 00:00:00 2001
+From 0dd4d0c35bb3a40925081f237d31dc5caba0ede9 Mon Sep 17 00:00:00 2001
 From: Ethan Wei <ethanwei@ami.com>
-Date: Tue, 27 Jun 2023 10:47:16 +0800
-Subject: [PATCH] Add error handling and properties to enable/disable IPv4/IPv6
- on each interface. 	modified:   src/ethernet_interface.cpp 	modified:  
- src/ethernet_interface.hpp 	modified:   src/network_manager.cpp 
- modified:   src/network_manager.hpp 	modified:   src/util.cpp 
- modified:   src/util.hpp 	modified:  
- yaml/xyz/openbmc_project/Network/IP/Create.interface.yaml
+Date: Mon, 16 Oct 2023 00:43:52 -0700
+Subject: [PATCH 10/13] 0016-Add-Function-IPv4-IPv6-Enabled-Disabled.patch
 
 ---
- src/ethernet_interface.cpp                    | 141 ++++++++++++++++--
- src/ethernet_interface.hpp                    |  12 ++
- src/network_manager.cpp                       |  13 ++
- src/network_manager.hpp                       |  10 ++
+ ...-Function-IPv4-IPv6-Enabled-Disabled.patch | 394 ++++++++++++++++++
+ src/ethernet_interface.cpp                    | 139 +++++-
+ src/ethernet_interface.hpp                    |  12 +
+ src/network_manager.cpp                       |  13 +
+ src/network_manager.hpp                       |  10 +
  src/util.cpp                                  |   8 +
- src/util.hpp                                  |  10 ++
+ src/util.hpp                                  |  10 +
  .../Network/IP/Create.interface.yaml          |   1 +
- 7 files changed, 182 insertions(+), 13 deletions(-)
+ 8 files changed, 575 insertions(+), 12 deletions(-)
+ create mode 100644 0016-Add-Function-IPv4-IPv6-Enabled-Disabled.patch
 
+diff --git a/0016-Add-Function-IPv4-IPv6-Enabled-Disabled.patch b/0016-Add-Function-IPv4-IPv6-Enabled-Disabled.patch
+new file mode 100644
+index 0000000..6bd253c
+--- /dev/null
++++ b/0016-Add-Function-IPv4-IPv6-Enabled-Disabled.patch
+@@ -0,0 +1,394 @@
++From 45710dc3baf9951157544c9808dd12913456e4c7 Mon Sep 17 00:00:00 2001
++From: Ethan Wei <ethanwei@ami.com>
++Date: Tue, 27 Jun 2023 10:47:16 +0800
++Subject: [PATCH] Add error handling and properties to enable/disable IPv4/IPv6
++ on each interface. 	modified:   src/ethernet_interface.cpp 	modified:  
++ src/ethernet_interface.hpp 	modified:   src/network_manager.cpp 
++ modified:   src/network_manager.hpp 	modified:   src/util.cpp 
++ modified:   src/util.hpp 	modified:  
++ yaml/xyz/openbmc_project/Network/IP/Create.interface.yaml
++
++---
++ src/ethernet_interface.cpp                    | 141 ++++++++++++++++--
++ src/ethernet_interface.hpp                    |  12 ++
++ src/network_manager.cpp                       |  13 ++
++ src/network_manager.hpp                       |  10 ++
++ src/util.cpp                                  |   8 +
++ src/util.hpp                                  |  10 ++
++ .../Network/IP/Create.interface.yaml          |   1 +
++ 7 files changed, 182 insertions(+), 13 deletions(-)
++
++diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
++index 412ba2a..ca59790 100644
++--- a/src/ethernet_interface.cpp
+++++ b/src/ethernet_interface.cpp
++@@ -125,6 +125,10 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
++         EthernetInterface::defaultGateway6(stdplus::toStr(*info.defgw6), true);
++     }
++ 
+++    const config::Parser& ifaceConfig(fs::path{fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(),interfaceName()).c_str()});
+++    EthernetInterfaceIntf::ipv4Enable(getIP4Enable(ifaceConfig), true);
+++    EthernetInterfaceIntf::ipv6Enable(getIP6Enable(ifaceConfig), true);
+++
++     this->loadARPControl();
++     emit_object_added();
++ 
++@@ -243,6 +247,9 @@ ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
++         switch (protType)
++         {
++             case IP::Protocol::IPv4:
+++                if (!EthernetInterface::ipv4Enable()) {
+++                    throw NotAllowed();
+++                }
++                 addr.emplace(stdplus::fromStr<stdplus::In4Addr>(ipaddress));
++                 ip_address::isValidIPv4Addr((in_addr*)(&addr.value()), ip_address::Type::IP4_ADDRESS);
++                 if(!ipgateway.empty()) {
++@@ -253,5 +260,8 @@ ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
++                 break;
++             case IP::Protocol::IPv6:
+++                if (!EthernetInterface::ipv6Enable()) {
+++                    throw NotAllowed();
+++                }
++                 addr.emplace(stdplus::fromStr<stdplus::In6Addr>(ipaddress));
++                 ip_address::isValidIPv6Addr((in6_addr*)(&addr.value()), ip_address::Type::IP6_ADDRESS);
++                 if(!ipgateway.empty())
++@@ -266,6 +276,10 @@ ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
++             throw std::invalid_argument("not unicast");
++         }
++     }
+++    catch (const NotAllowed& e) {
+++        log<level::ERR>(fmt::format("Not support in current state. {}\n", e.what()).c_str());
+++        elog<NotAllowed>(NotAllowedArgument::REASON(e.what()));
+++    }
++     catch (const std::exception& e)
++     {
++         lg2::error("Invalid IP {NET_IP}: {ERROR}", "NET_IP", ipaddress, "ERROR",
++@@ -379,6 +393,11 @@ bool EthernetInterface::ipv6AcceptRA(bool value)
++ 
++ bool EthernetInterface::dhcp4(bool value)
++ {
+++    if (!EthernetInterface::ipv4Enable()) {
+++        log<level::ERR>(fmt::format("Not support in current state. IPv4 of {} is not enabled.\n", interfaceName()).c_str());
+++        elog<NotAllowed>(NotAllowedArgument::REASON(fmt::format("Not support in current state. IPv4 of {} is not enabled.\n", interfaceName()).c_str()));
+++    }
+++
++     if (dhcp4() != value) {
++         if (value) {
++             if (!EthernetInterfaceIntf::defaultGateway().empty()) {
++@@ -400,6 +419,10 @@ bool EthernetInterface::dhcp4(bool value)
++ 
++ bool EthernetInterface::dhcp6(bool value)
++ {
+++    if (!EthernetInterface::ipv6Enable()) {
+++        log<level::ERR>(fmt::format("Not support in current state. IPv6 of {} is not enabled.\n", interfaceName()).c_str());
+++        elog<NotAllowed>(NotAllowedArgument::REASON(fmt::format("Not support in current state. IPv4 of {} is not enabled.\n", interfaceName()).c_str()));
+++    }
++     if (dhcp6() != EthernetInterfaceIntf::dhcp6(value))
++     {
++         writeConfigurationFile();
++@@ -737,16 +760,34 @@ void EthernetInterface::writeConfigurationFile()
++     {
++         auto& network = config.map["Network"].emplace_back();
++         auto& lla = network["LinkLocalAddressing"];
++-        if (std::string{LINK_LOCAL_AUTOCONFIGURATION} == "yes")
++-            lla.emplace_back("yes");
++-        else if (std::string{LINK_LOCAL_AUTOCONFIGURATION} ==  "ipv6")
++-            lla.emplace_back("ipv6");
++-        else if (std::string{LINK_LOCAL_AUTOCONFIGURATION} ==  "ipv4")
++-            lla.emplace_back("ipv4");
++-        else
++-            lla.emplace_back("no");
++-
++-        network["IPv6AcceptRA"].emplace_back(ipv6AcceptRA() ? "true" : "false");
+++#ifdef LINK_LOCAL_AUTOCONFIGURATION
+++        {
+++            switch (EthernetInterfaceIntf::linkLocalAutoConf()) {
+++                case EthernetInterface::LinkLocalConf::v4:
+++                    lla.emplace_back("ipv4");
+++                    break;
+++                case EthernetInterface::LinkLocalConf::none:
+++                    lla.emplace_back("no");
+++                    break;
+++                case EthernetInterface::LinkLocalConf::v6:
+++                    lla.emplace_back("ipv6");
+++                    break;
+++                case EthernetInterface::LinkLocalConf::both:
+++                default:
+++                    lla.emplace_back("yes");
+++                    break;
+++            }
+++        }
+++#else
+++        lla.emplace_back("no");
+++#endif
+++        config::Parser IfaceState;
+++        auto& state = IfaceState.map["Network"].emplace_back();
+++        state["IPv4Enable"].emplace_back(EthernetInterfaceIntf::ipv4Enable() ? "true" : "false");
+++        state["IPv6Enable"].emplace_back(EthernetInterfaceIntf::ipv6Enable() ? "true" : "false");
+++        IfaceState.writeFile(fs::path{fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(), interfaceName()).c_str()});
+++
+++        network["IPv6AcceptRA"].emplace_back(EthernetInterfaceIntf::ipv6Enable() && ipv6AcceptRA() ? "true" : "false");
++         network["DHCP"].emplace_back(dhcp4() ? (dhcp6() ? "true" : "ipv4")
++                                              : (dhcp6() ? "ipv6" : "false"));
++ 
++@@ -784,7 +825,8 @@ void EthernetInterface::writeConfigurationFile()
++             auto& address = network["Address"];
++             for (const auto& addr : addrs)
++             {
++-                if (( addr.second->type() == IP::Protocol::IPv6 && !dhcp6() ) || ( addr.second->type() == IP::Protocol::IPv4 && !dhcp4() )) {
+++                if (( addr.second->type() == IP::Protocol::IPv6 && !dhcp6() && EthernetInterfaceIntf::ipv6Enable())
+++                    || ( addr.second->type() == IP::Protocol::IPv4 && !dhcp4() && EthernetInterfaceIntf::ipv4Enable())) {
++                     if (originIsManuallyAssigned(addr.second->origin()))
++                     {
++                         address.emplace_back(
++@@ -796,7 +838,7 @@ void EthernetInterface::writeConfigurationFile()
++         }
++         {
++             auto& gateways = network["Gateway"];
++-            if (!dhcp4())
+++            if (!dhcp4() && EthernetInterfaceIntf::ipv4Enable())
++             {
++                 auto gateway = EthernetInterfaceIntf::defaultGateway();
++                 if (!gateway.empty())
++@@ -805,7 +847,7 @@ void EthernetInterface::writeConfigurationFile()
++                 }
++             }
++ 
++-            if (!dhcp6())
+++            if (!dhcp6() && EthernetInterfaceIntf::ipv6Enable())
++             {
++                 auto gateway6 = EthernetInterfaceIntf::defaultGateway6();
++                 if (!gateway6.empty())
++@@ -944,6 +986,11 @@ void EthernetInterface::deleteAll()
++ 
++ std::string EthernetInterface::defaultGateway(std::string gateway)
++ {
+++    if (!EthernetInterface::ipv4Enable()) {
+++        log<level::ERR>(fmt::format("Not support in current state. IPv4 of {} is not enabled.\n", interfaceName()).c_str());
+++        elog<NotAllowed>(NotAllowedArgument::REASON(fmt::format("Not support in current state. IPv4 of {} is not enabled.\n", interfaceName()).c_str()));
+++    }
+++
++     normalizeGateway<stdplus::In4Addr>(gateway);
++     if (gateway != defaultGateway())
++     {
++@@ -982,6 +1029,11 @@ std::string EthernetInterface::defaultGateway(std::string gateway)
++ 
++ std::string EthernetInterface::defaultGateway6(std::string gateway)
++ {
+++    if (!EthernetInterface::ipv6Enable()) {
+++        log<level::ERR>(fmt::format("Not support in current state. IPv6 of {} is not enabled.\n", interfaceName()).c_str());
+++        elog<NotAllowed>(NotAllowedArgument::REASON(fmt::format("Not support in current state. IPv4 of {} is not enabled.\n", interfaceName()).c_str()));
+++    }
+++
++     normalizeGateway<stdplus::In6Addr>(gateway);
++     if (gateway != defaultGateway6())
++     {
++@@ -1268,6 +1320,69 @@ uint64_t EthernetInterface::gratuitousARPInterval(uint64_t interval)
++     return garpInterval;
++ }
++ 
+++/** Set value of LinkLocalAutoConf */
+++EthernetInterface::LinkLocalConf EthernetInterface::linkLocalAutoConf(LinkLocalConf value) {
+++    if (value == EthernetInterface::linkLocalAutoConf()) {
+++        return value;
+++    }
+++
+++    EthernetInterfaceIntf::linkLocalAutoConf(value);
+++    manager.get().reloadConfigs();
+++    return value;
+++}
+++
+++/** Set value of IPv6Enable */
+++bool EthernetInterface::ipv6Enable(bool value) {
+++    if (value == EthernetInterfaceIntf::ipv6Enable()) {
+++        log<level::INFO>("Pv6Enable no change\n");
+++        return value;
+++    }
+++
+++    if (value) {
+++        EthernetInterfaceIntf::linkLocalAutoConf(LinkLocalConf::v6);
+++        EthernetInterfaceIntf::dhcp6(true);
+++        EthernetInterfaceIntf::ipv6AcceptRA(true);
+++    }
+++    else {
+++        if (EthernetInterfaceIntf::dhcp6()) {
+++            EthernetInterfaceIntf::dhcp6(false);
+++        } // if
+++
+++        EthernetInterfaceIntf::linkLocalAutoConf(LinkLocalConf::none);
+++        EthernetInterfaceIntf::ipv6AcceptRA(false);
+++    }
+++
+++    EthernetInterfaceIntf::ipv6Enable(value);
+++    writeConfigurationFile();
+++    manager.get().reloadConfigs();
+++
+++    return value;
+++}
+++
+++/** Set value of IPv4Enable */
+++bool EthernetInterface::ipv4Enable(bool value) {
+++    if (value == EthernetInterfaceIntf::ipv4Enable()) {
+++        log<level::INFO>("IPv4Enable no change\n");
+++        return value;
+++    }
+++
+++    if (value) {
+++        EthernetInterfaceIntf::dhcp4(true);
+++    }
+++    else {
+++        if (EthernetInterfaceIntf::dhcp4()) {
+++            EthernetInterfaceIntf::dhcp4(false);
+++        } // if
+++
+++    }
+++
+++    EthernetInterfaceIntf::ipv4Enable(value);
+++    writeConfigurationFile();
+++    manager.get().reloadConfigs();
+++
+++    return value;
+++}
+++
++ /** @brief write the ARPControl configuration into the conf file.
++  */
++ void EthernetInterface::writeConfiguration()
++diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
++index b24e55b..13bd1c6 100644
++--- a/src/ethernet_interface.hpp
+++++ b/src/ethernet_interface.hpp
++@@ -257,6 +257,15 @@ class EthernetInterface : public Ifaces
++      */
++     uint8_t getIfIdx();
++ 
+++    /** Set value of LinkLocalAutoConf */
+++    LinkLocalConf linkLocalAutoConf(LinkLocalConf value) override;
+++
+++    /** Set value of IPv6Enable */
+++    bool ipv6Enable(bool value) override;
+++
+++    /** Set value of IPv4Enable */
+++    bool ipv4Enable(bool value) override;
+++
++     using ChannelAccessIntf::maxPrivilege;
++     using EthernetInterfaceIntf::interfaceName;
++     using EthernetInterfaceIntf::linkUp;
++@@ -269,6 +278,9 @@ class EthernetInterface : public Ifaces
++ 
++     using EthernetInterfaceIntf::defaultGateway;
++     using EthernetInterfaceIntf::defaultGateway6;
+++    using EthernetInterfaceIntf::linkLocalAutoConf;
+++    using EthernetInterfaceIntf::ipv6Enable;
+++    using EthernetInterfaceIntf::ipv4Enable;
++ 
++     using EthernetInterfaceIntf::domainName;
++     using EthernetInterfaceIntf::nameservers;
++diff --git a/src/network_manager.cpp b/src/network_manager.cpp
++index 4f5f920..852b88f 100644
++--- a/src/network_manager.cpp
+++++ b/src/network_manager.cpp
++@@ -23,6 +23,7 @@
++ 
++ constexpr char ARPCONTROL_CONF_DIR[] = "/etc/arpcontrol";
++ constexpr char DNS_CONF_DIR[]  = "/etc/dns.d";
+++constexpr char INTERFACE_CONF_DIR[] = "/etc/interface";
++ 
++ namespace phosphor
++ {
++@@ -737,6 +738,18 @@ void Manager::setConfDir(const fs::path& dir)
++             elog<InternalFailure>();
++         }
++     }
+++
+++    fs::path ifaceDir(INTERFACE_CONF_DIR);
+++    ifaceConfDir = ifaceDir;
+++    if (!fs::exists(ifaceConfDir))
+++    {
+++        if (!fs::create_directories(ifaceConfDir))
+++        {
+++            log<level::ERR>("Unable to create the Interface conf dir",
+++                            entry("DIR=%s", ifaceConfDir.c_str()));
+++            elog<InternalFailure>();
+++        }
+++    }
++ }
++ 
++ } // namespace network
++diff --git a/src/network_manager.hpp b/src/network_manager.hpp
++index c4fa40e..dd8ce50 100644
++--- a/src/network_manager.hpp
+++++ b/src/network_manager.hpp
++@@ -90,11 +90,21 @@ class Manager : public ManagerIface
++         return arpConfDir;
++     }
++ 
+++    /** @brief gets the interface conf directory.
+++     */
+++    fs::path getIfaceConfDir()
+++    {
+++        return ifaceConfDir;
+++    }
+++
++     bool createDefaultARPControlFiles(bool force);
++ 
++     /** @brief ARP Control Configuration directory. */
++     fs::path arpConfDir;
++ 
+++    /** @brief Interface Configuration directory. */
+++    fs::path ifaceConfDir;
+++
++     /** @brief gets the system conf object.
++      *
++      */
++diff --git a/src/util.cpp b/src/util.cpp
++index 9b3a54c..1e6b159 100644
++--- a/src/util.cpp
+++++ b/src/util.cpp
++@@ -202,6 +202,14 @@ bool getIPv6AcceptRA(const config::Parser& config)
++         .value_or(def);
++ }
++ 
+++bool getIP4Enable(const config::Parser& config) {
+++    return systemdParseLast(config, "Network", "IPv4Enable", config::parseBool).value_or(true);
+++}
+++
+++bool getIP6Enable(const config::Parser& config) {
+++    return systemdParseLast(config, "Network", "IPv6Enable", config::parseBool).value_or(true);
+++}
+++
++ DHCPVal getDHCPValue(const config::Parser& config)
++ {
++     return systemdParseLast(config, "Network", "DHCP", systemdParseDHCP)
++diff --git a/src/util.hpp b/src/util.hpp
++index 632e64e..04598b7 100644
++--- a/src/util.hpp
+++++ b/src/util.hpp
++@@ -110,6 +110,16 @@ std::optional<std::string> interfaceToUbootEthAddr(std::string_view intf);
++  */
++ bool getIPv6AcceptRA(const config::Parser& config);
++ 
+++/** @brief read the IPv4Enable value from the configuration file
+++ *  @param[in] config - The parsed configuration.
+++ */
+++bool getIP4Enable(const config::Parser& config);
+++
+++/** @brief read the IPv6Enable value from the configuration file
+++ *  @param[in] config - The parsed configuration.
+++ */
+++bool getIP6Enable(const config::Parser& config);
+++
++ /** @brief read the DHCP value from the configuration file
++  *  @param[in] config - The parsed configuration.
++  */
++diff --git a/yaml/xyz/openbmc_project/Network/IP/Create.interface.yaml b/yaml/xyz/openbmc_project/Network/IP/Create.interface.yaml
++index 6654b08..61bd676 100644
++--- a/yaml/xyz/openbmc_project/Network/IP/Create.interface.yaml
+++++ b/yaml/xyz/openbmc_project/Network/IP/Create.interface.yaml
++@@ -27,3 +27,4 @@ methods:
++                 The path for the created ipaddress object.
++       errors:
++           - xyz.openbmc_project.Common.Error.InvalidArgument
+++          - xyz.openbmc_project.Common.Error.NotAllowed
++-- 
++2.25.1
++
 diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
-index 412ba2a..ca59790 100644
+index e77b1de..4db9de2 100644
 --- a/src/ethernet_interface.cpp
 +++ b/src/ethernet_interface.cpp
-@@ -125,6 +125,10 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
-         EthernetInterface::defaultGateway6(std::to_string(*info.defgw6), true);
+@@ -132,6 +132,10 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+         EthernetInterface::defaultGateway6(stdplus::toStr(*info.defgw6), true);
      }
  
 +    const config::Parser& ifaceConfig(fs::path{fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(),interfaceName()).c_str()});
@@ -33,28 +430,28 @@ index 412ba2a..ca59790 100644
      this->loadARPControl();
      emit_object_added();
  
-@@ -243,6 +247,9 @@ ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
+@@ -267,6 +271,9 @@ ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
          switch (protType)
          {
              case IP::Protocol::IPv4:
 +                if (!EthernetInterface::ipv4Enable()) {
 +                    throw NotAllowed();
 +                }
-                 addr = ToAddr<in_addr>{}(ipaddress);
-                 ip_address::isValidIPv4Addr((in_addr*)&addr, ip_address::Type::IP4_ADDRESS);
+                 addr.emplace(stdplus::fromStr<stdplus::In4Addr>(ipaddress));
+                 ip_address::isValidIPv4Addr((in_addr*)(&addr.value()), ip_address::Type::IP4_ADDRESS);
                  if(!ipgateway.empty()) {
-@@ -253,6 +260,9 @@ ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
- 
+@@ -276,6 +283,9 @@ ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
+                 }
                  break;
              case IP::Protocol::IPv6:
 +                if (!EthernetInterface::ipv6Enable()) {
 +                    throw NotAllowed();
 +                }
-                 addr = ToAddr<in6_addr>{}(ipaddress);
-                 ip_address::isValidIPv6Addr((in6_addr*)&addr, ip_address::Type::IP6_ADDRESS);
+                 addr.emplace(stdplus::fromStr<stdplus::In6Addr>(ipaddress));
+                 ip_address::isValidIPv6Addr((in6_addr*)(&addr.value()), ip_address::Type::IP6_ADDRESS);
                  if(!ipgateway.empty())
-@@ -266,6 +276,10 @@ ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
-                 throw std::logic_error("Exhausted protocols");
+@@ -293,6 +303,10 @@ ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
+             throw std::invalid_argument("not unicast");
          }
      }
 +    catch (const NotAllowed& e) {
@@ -63,8 +460,8 @@ index 412ba2a..ca59790 100644
 +    }
      catch (const std::exception& e)
      {
-         lg2::error("Invalid IP {IP_ADDRESS}: {ERROR}", "IP_ADDRESS", ipaddress,
-@@ -379,6 +393,11 @@ bool EthernetInterface::ipv6AcceptRA(bool value)
+         lg2::error("Invalid IP {NET_IP}: {ERROR}", "NET_IP", ipaddress, "ERROR",
+@@ -410,6 +424,11 @@ bool EthernetInterface::ipv6AcceptRA(bool value)
  
  bool EthernetInterface::dhcp4(bool value)
  {
@@ -76,7 +473,7 @@ index 412ba2a..ca59790 100644
      if (dhcp4() != value) {
          if (value) {
              if (!EthernetInterfaceIntf::defaultGateway().empty()) {
-@@ -400,6 +419,10 @@ bool EthernetInterface::dhcp4(bool value)
+@@ -431,6 +450,10 @@ bool EthernetInterface::dhcp4(bool value)
  
  bool EthernetInterface::dhcp6(bool value)
  {
@@ -87,7 +484,7 @@ index 412ba2a..ca59790 100644
      if (dhcp6() != EthernetInterfaceIntf::dhcp6(value))
      {
          writeConfigurationFile();
-@@ -737,16 +760,34 @@ void EthernetInterface::writeConfigurationFile()
+@@ -758,16 +781,34 @@ void EthernetInterface::writeConfigurationFile()
      {
          auto& network = config.map["Network"].emplace_back();
          auto& lla = network["LinkLocalAddressing"];
@@ -99,8 +496,6 @@ index 412ba2a..ca59790 100644
 -            lla.emplace_back("ipv4");
 -        else
 -            lla.emplace_back("no");
--
--        network["IPv6AcceptRA"].emplace_back(ipv6AcceptRA() ? "true" : "false");
 +#ifdef LINK_LOCAL_AUTOCONFIGURATION
 +        {
 +            switch (EthernetInterfaceIntf::linkLocalAutoConf()) {
@@ -127,12 +522,13 @@ index 412ba2a..ca59790 100644
 +        state["IPv4Enable"].emplace_back(EthernetInterfaceIntf::ipv4Enable() ? "true" : "false");
 +        state["IPv6Enable"].emplace_back(EthernetInterfaceIntf::ipv6Enable() ? "true" : "false");
 +        IfaceState.writeFile(fs::path{fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(), interfaceName()).c_str()});
-+
+ 
+-        network["IPv6AcceptRA"].emplace_back(ipv6AcceptRA() ? "true" : "false");
 +        network["IPv6AcceptRA"].emplace_back(EthernetInterfaceIntf::ipv6Enable() && ipv6AcceptRA() ? "true" : "false");
          network["DHCP"].emplace_back(dhcp4() ? (dhcp6() ? "true" : "ipv4")
                                               : (dhcp6() ? "ipv6" : "false"));
  
-@@ -784,7 +825,8 @@ void EthernetInterface::writeConfigurationFile()
+@@ -805,7 +846,8 @@ void EthernetInterface::writeConfigurationFile()
              auto& address = network["Address"];
              for (const auto& addr : addrs)
              {
@@ -142,7 +538,7 @@ index 412ba2a..ca59790 100644
                      if (originIsManuallyAssigned(addr.second->origin()))
                      {
                          address.emplace_back(
-@@ -796,7 +838,7 @@ void EthernetInterface::writeConfigurationFile()
+@@ -817,7 +859,7 @@ void EthernetInterface::writeConfigurationFile()
          }
          {
              auto& gateways = network["Gateway"];
@@ -151,7 +547,7 @@ index 412ba2a..ca59790 100644
              {
                  auto gateway = EthernetInterfaceIntf::defaultGateway();
                  if (!gateway.empty())
-@@ -805,7 +847,7 @@ void EthernetInterface::writeConfigurationFile()
+@@ -826,7 +868,7 @@ void EthernetInterface::writeConfigurationFile()
                  }
              }
  
@@ -160,7 +556,7 @@ index 412ba2a..ca59790 100644
              {
                  auto gateway6 = EthernetInterfaceIntf::defaultGateway6();
                  if (!gateway6.empty())
-@@ -944,6 +986,11 @@ void EthernetInterface::deleteAll()
+@@ -999,6 +1041,11 @@ static void normalizeGateway(std::string& gw)
  
  std::string EthernetInterface::defaultGateway(std::string gateway)
  {
@@ -169,10 +565,10 @@ index 412ba2a..ca59790 100644
 +        elog<NotAllowed>(NotAllowedArgument::REASON(fmt::format("Not support in current state. IPv4 of {} is not enabled.\n", interfaceName()).c_str()));
 +    }
 +
-     try
+     normalizeGateway<stdplus::In4Addr>(gateway);
+     if (gateway != defaultGateway())
      {
-         if (!gateway.empty())
-@@ -982,6 +1029,11 @@ std::string EthernetInterface::defaultGateway(std::string gateway)
+@@ -1018,6 +1065,11 @@ std::string EthernetInterface::defaultGateway(std::string gateway)
  
  std::string EthernetInterface::defaultGateway6(std::string gateway)
  {
@@ -181,10 +577,10 @@ index 412ba2a..ca59790 100644
 +        elog<NotAllowed>(NotAllowedArgument::REASON(fmt::format("Not support in current state. IPv4 of {} is not enabled.\n", interfaceName()).c_str()));
 +    }
 +
-     try
+     normalizeGateway<stdplus::In6Addr>(gateway);
+     if (gateway != defaultGateway6())
      {
-         if (!gateway.empty())
-@@ -1268,6 +1320,69 @@ uint64_t EthernetInterface::gratuitousARPInterval(uint64_t interval)
+@@ -1285,6 +1337,69 @@ uint64_t EthernetInterface::gratuitousARPInterval(uint64_t interval)
      return garpInterval;
  }
  
@@ -255,10 +651,10 @@ index 412ba2a..ca59790 100644
   */
  void EthernetInterface::writeConfiguration()
 diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
-index b24e55b..13bd1c6 100644
+index e729aab..4a27e77 100644
 --- a/src/ethernet_interface.hpp
 +++ b/src/ethernet_interface.hpp
-@@ -257,6 +257,15 @@ class EthernetInterface : public Ifaces
+@@ -258,6 +258,15 @@ class EthernetInterface : public Ifaces
       */
      uint8_t getIfIdx();
  
@@ -274,7 +670,7 @@ index b24e55b..13bd1c6 100644
      using ChannelAccessIntf::maxPrivilege;
      using EthernetInterfaceIntf::interfaceName;
      using EthernetInterfaceIntf::linkUp;
-@@ -269,6 +278,9 @@ class EthernetInterface : public Ifaces
+@@ -270,6 +279,9 @@ class EthernetInterface : public Ifaces
  
      using EthernetInterfaceIntf::defaultGateway;
      using EthernetInterfaceIntf::defaultGateway6;
@@ -285,18 +681,18 @@ index b24e55b..13bd1c6 100644
      using EthernetInterfaceIntf::domainName;
      using EthernetInterfaceIntf::nameservers;
 diff --git a/src/network_manager.cpp b/src/network_manager.cpp
-index 4f5f920..852b88f 100644
+index 81cce64..d2a2f84 100644
 --- a/src/network_manager.cpp
 +++ b/src/network_manager.cpp
-@@ -28,6 +28,7 @@ constexpr char NETWORKD_PATH[] = "/org/freedesktop/network1";
- constexpr char NETWORKD_INTERFACE[] = "org.freedesktop.network1.Manager";
+@@ -23,6 +23,7 @@
+ 
  constexpr char ARPCONTROL_CONF_DIR[] = "/etc/arpcontrol";
  constexpr char DNS_CONF_DIR[]  = "/etc/dns.d";
 +constexpr char INTERFACE_CONF_DIR[] = "/etc/interface";
  
  namespace phosphor
  {
-@@ -737,6 +738,18 @@ void Manager::setConfDir(const fs::path& dir)
+@@ -721,6 +722,18 @@ void Manager::setConfDir(const fs::path& dir)
              elog<InternalFailure>();
          }
      }
@@ -316,10 +712,10 @@ index 4f5f920..852b88f 100644
  
  } // namespace network
 diff --git a/src/network_manager.hpp b/src/network_manager.hpp
-index c4fa40e..dd8ce50 100644
+index bd52398..e1234be 100644
 --- a/src/network_manager.hpp
 +++ b/src/network_manager.hpp
-@@ -96,11 +96,21 @@ class Manager : public ManagerIface
+@@ -90,11 +90,21 @@ class Manager : public ManagerIface
          return arpConfDir;
      }
  
@@ -332,8 +728,8 @@ index c4fa40e..dd8ce50 100644
 +
      bool createDefaultARPControlFiles(bool force);
  
-      /** @brief ARP Control Configuration directory. */
-      fs::path arpConfDir;
+     /** @brief ARP Control Configuration directory. */
+     fs::path arpConfDir;
  
 +    /** @brief Interface Configuration directory. */
 +    fs::path ifaceConfDir;
@@ -342,10 +738,10 @@ index c4fa40e..dd8ce50 100644
       *
       */
 diff --git a/src/util.cpp b/src/util.cpp
-index 9b3a54c..1e6b159 100644
+index 687b08a..4950692 100644
 --- a/src/util.cpp
 +++ b/src/util.cpp
-@@ -202,6 +202,14 @@ bool getIPv6AcceptRA(const config::Parser& config)
+@@ -205,6 +205,14 @@ bool getIPv6AcceptRA(const config::Parser& config)
          .value_or(def);
  }
  
@@ -361,10 +757,10 @@ index 9b3a54c..1e6b159 100644
  {
      return systemdParseLast(config, "Network", "DHCP", systemdParseDHCP)
 diff --git a/src/util.hpp b/src/util.hpp
-index 632e64e..04598b7 100644
+index c1b1b51..f6146a5 100644
 --- a/src/util.hpp
 +++ b/src/util.hpp
-@@ -110,6 +110,16 @@ std::optional<std::string> interfaceToUbootEthAddr(std::string_view intf);
+@@ -87,6 +87,16 @@ std::optional<std::string> interfaceToUbootEthAddr(std::string_view intf);
   */
  bool getIPv6AcceptRA(const config::Parser& config);
  

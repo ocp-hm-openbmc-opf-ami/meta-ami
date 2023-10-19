@@ -1,31 +1,1771 @@
-From 1c116b7735f54f8227fcff3c2d8df2cefa99e471 Mon Sep 17 00:00:00 2001
-From: ethan <ethanwei@ami.com>
-Date: Sun, 18 Jun 2023 22:19:11 -0700
-Subject: [PATCH] Implement EIP 741000. DDNS-Nsupdate Feature 	modified:  
- src/dhcp_configuration.cpp 	modified:   src/dhcp_configuration.hpp 
- modified:   src/dns_updater.cpp 	modified:   src/dns_updater.hpp 
- modified:   src/ethernet_interface.cpp 	modified:  
- src/ethernet_interface.hpp 	modified:   src/network_manager.cpp 
- modified:   src/network_manager.hpp 	modified:  
- src/system_configuration.cpp 	modified:   src/system_configuration.hpp
+From d9895b5a6bc6e233ecb145bd4b034501e1ba3b5f Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Sun, 15 Oct 2023 23:52:07 -0700
+Subject: [PATCH] 0015-Implement-DDNS-Nsupdate-With-TSIG.patch
 
 ---
- nsupdate.sh                  |  50 +++
- src/dhcp_configuration.cpp   |  49 +++
- src/dhcp_configuration.hpp   |  11 +
- src/dns_updater.cpp          | 790 ++++++++++++++++++++++++++++++++++-
- src/dns_updater.hpp          | 169 ++++++++
- src/ethernet_interface.cpp   |  52 ++-
- src/ethernet_interface.hpp   |  14 +
- src/network_manager.cpp      |   4 +
- src/network_manager.hpp      |   9 +
- src/system_configuration.cpp |  38 ++
- src/system_configuration.hpp |   8 +
- 11 files changed, 1191 insertions(+), 3 deletions(-)
- create mode 100644 nsupdate.sh
+ 0015-Implement-DDNS-Nsupdate-With-TSIG.patch | 1740 ++++++++++++++++++
+ src/dhcp_configuration.cpp                   |   62 +
+ src/dhcp_configuration.hpp                   |   11 +
+ src/dns_updater.cpp                          |  815 +++++++-
+ src/dns_updater.hpp                          |  181 ++
+ src/ethernet_interface.cpp                   |   52 +-
+ src/ethernet_interface.hpp                   |   14 +
+ src/network_manager.cpp                      |    4 +
+ src/network_manager.hpp                      |    9 +
+ src/system_configuration.cpp                 |   38 +
+ src/system_configuration.hpp                 |    8 +
+ 11 files changed, 2932 insertions(+), 2 deletions(-)
+ create mode 100644 0015-Implement-DDNS-Nsupdate-With-TSIG.patch
 
+diff --git a/0015-Implement-DDNS-Nsupdate-With-TSIG.patch b/0015-Implement-DDNS-Nsupdate-With-TSIG.patch
+new file mode 100644
+index 0000000..c83e134
+--- /dev/null
++++ b/0015-Implement-DDNS-Nsupdate-With-TSIG.patch
+@@ -0,0 +1,1740 @@
++From 1c116b7735f54f8227fcff3c2d8df2cefa99e471 Mon Sep 17 00:00:00 2001
++From: ethan <ethanwei@ami.com>
++Date: Sun, 18 Jun 2023 22:19:11 -0700
++Subject: [PATCH] Implement EIP 741000. DDNS-Nsupdate Feature 	modified:  
++ src/dhcp_configuration.cpp 	modified:   src/dhcp_configuration.hpp 
++ modified:   src/dns_updater.cpp 	modified:   src/dns_updater.hpp 
++ modified:   src/ethernet_interface.cpp 	modified:  
++ src/ethernet_interface.hpp 	modified:   src/network_manager.cpp 
++ modified:   src/network_manager.hpp 	modified:  
++ src/system_configuration.cpp 	modified:   src/system_configuration.hpp
++
++---
++ nsupdate.sh                  |  50 +++
++ src/dhcp_configuration.cpp   |  49 +++
++ src/dhcp_configuration.hpp   |  11 +
++ src/dns_updater.cpp          | 790 ++++++++++++++++++++++++++++++++++-
++ src/dns_updater.hpp          | 169 ++++++++
++ src/ethernet_interface.cpp   |  52 ++-
++ src/ethernet_interface.hpp   |  14 +
++ src/network_manager.cpp      |   4 +
++ src/network_manager.hpp      |   9 +
++ src/system_configuration.cpp |  38 ++
++ src/system_configuration.hpp |   8 +
++ 11 files changed, 1191 insertions(+), 3 deletions(-)
++ create mode 100644 nsupdate.sh
++
++diff --git a/src/dhcp_configuration.cpp b/src/dhcp_configuration.cpp
++index 8843c7c..7067516 100644
++--- a/src/dhcp_configuration.cpp
+++++ b/src/dhcp_configuration.cpp
++@@ -22,6 +22,10 @@ namespace dhcp
++ using namespace phosphor::network;
++ using namespace sdbusplus::xyz::openbmc_project::Common::Error;
++ 
+++constexpr auto NETWORK_Service = "xyz.openbmc_project.Network";
+++constexpr auto DNS_OBJ_PATH= "/xyz/openbmc_project/network/dns";
+++constexpr auto DNS_INTERFACE = "xyz.openbmc_project.Network.DDNS";
+++
++ Configuration::Configuration(sdbusplus::bus_t& bus,
++                              stdplus::const_zstring objPath,
++                              stdplus::PinnedRef<Manager> parent) :
++@@ -53,9 +57,51 @@ Configuration::Configuration(sdbusplus::bus_t& bus,
++     ConfigIntf::ntpEnabled(getDHCPProp(conf, "UseNTP"), true);
++     ConfigIntf::hostNameEnabled(getDHCPProp(conf, "UseHostname"), true);
++     ConfigIntf::sendHostNameEnabled(getDHCPProp(conf, "SendHostname"), true);
+++    ConfigIntf::sendNsupdateEnabled(getDHCPProp(conf, "SendNsupdate"), false);
+++
+++    signals = initSignals();
+++    registerSignal(bus);
+++
++     emit_object_added();
++ }
++ 
+++std::map<std::string, std::unique_ptr<sdbusplus::bus::match_t>> Configuration::initSignals() {
+++    std::map<std::string, std::unique_ptr<sdbusplus::bus::match_t>> mp;
+++    mp["DDNSSignal"] = nullptr;
+++
+++    return mp;
+++}
+++
+++void Configuration::registerSignal(sdbusplus::bus::bus& bus) {
+++    for (auto& signal : Configuration::signals) {
+++        if (signal.second == nullptr && signal.first == "DDNSSignal") {
+++            signal.second = std::make_unique<sdbusplus::bus::match_t>(
+++                bus,
+++                sdbusplus::bus::match::rules::propertiesChanged(DNS_OBJ_PATH, DNS_INTERFACE),
+++                [&](sdbusplus::message::message& msg) {
+++                    std::map<std::string, std::variant<std::string, std::vector<std::string>,  bool, std::tuple<bool, uint8_t, std::string>>> props;
+++                    std::string iface;
+++                    bool value;
+++                    msg.read(iface, props);
+++                    for (const auto& t : props)
+++                    {
+++                        if (t.first == "DNSEnabled")
+++                        {
+++                            value = std::get<bool>(t.second);
+++                            dnsEnabled(value);
+++                            auto [enabled, priority, domainName] = manager.get().getDNSConf().domainConf();
+++                            if (enabled && dnsEnabled() == true) {
+++                                domainEnabled(enabled);
+++                            }
+++                        }
+++                    }
+++                }
+++            );
+++        }
+++    }
+++}
+++
+++
++ bool Configuration::sendHostNameEnabled(bool value)
++ {
++     if (value == sendHostNameEnabled())
++@@ -107,12 +153,28 @@ bool Configuration::dnsEnabled(bool value)
++     }
++ 
++     auto dns = ConfigIntf::dnsEnabled(value);
+++    if (value == false) {
+++        ConfigIntf::domainEnabled(value);
+++    }
++     manager.get().writeToConfigurationFile();
++     manager.get().reloadConfigs();
++ 
++     return dns;
++ }
++ 
+++bool Configuration::sendNsupdateEnabled(bool value) {
+++    if (value == sendNsupdateEnabled())
+++    {
+++        return value;
+++    }
+++
+++    ConfigIntf::sendNsupdateEnabled(value);
+++
+++    manager.get().writeToConfigurationFile();
+++    manager.get().reloadConfigs();
+++    return value;
+++}
+++
++ } // namespace dhcp
++ } // namespace network
++ } // namespace phosphor
++diff --git a/src/dhcp_configuration.hpp b/src/dhcp_configuration.hpp
++index 964b7d5..997af63 100644
++--- a/src/dhcp_configuration.hpp
+++++ b/src/dhcp_configuration.hpp
++@@ -66,6 +66,12 @@ class Configuration : public Iface
++      */
++     bool sendHostNameEnabled(bool value) override;
++ 
+++    bool sendNsupdateEnabled(bool value) override;
+++
+++    // Add new signal here
+++    void registerSignal(sdbusplus::bus::bus& bus);
+++    std::map<std::string, std::unique_ptr<sdbusplus::bus::match_t>> initSignals();
+++
++     /* @brief Network Manager needed the below function to know the
++      *        value of the properties (ntpEnabled,dnsEnabled,hostnameEnabled
++               sendHostNameEnabled).
++@@ -75,6 +81,11 @@ class Configuration : public Iface
++     using ConfigIntf::hostNameEnabled;
++     using ConfigIntf::ntpEnabled;
++     using ConfigIntf::sendHostNameEnabled;
+++    using ConfigIntf::sendNsupdateEnabled;
+++
+++  protected:
+++    /** Signals to notify other service via dbus*/
+++    std::map<std::string, std::unique_ptr<sdbusplus::bus::match_t>> signals ;
++ 
++   private:
++     /** @brief Network Manager object. */
++diff --git a/src/dns_updater.cpp b/src/dns_updater.cpp
++index d2c1a28..dc7cd3e 100644
++--- a/src/dns_updater.cpp
+++++ b/src/dns_updater.cpp
++@@ -2,8 +2,20 @@
++ 
++ #include <phosphor-logging/elog-errors.hpp>
++ #include <phosphor-logging/lg2.hpp>
++-#include <sdbusplus/bus.hpp>
++ #include <xyz/openbmc_project/Common/error.hpp>
+++#include <fmt/compile.h>
+++#include <fmt/format.h>
+++#include "util.hpp"
+++#include "config.h"
+++#include "config_parser.hpp"
+++#include <sys/stat.h>
+++#include "network_manager.hpp"
+++#include <xyz/openbmc_project/Common/error.hpp>
+++#include "ethernet_interface.hpp"
+++#include "types.hpp"
+++#include <thread>
+++#include <mutex>
+++#include <cstdlib>
++ 
++ #include <fstream>
++ 
++@@ -50,6 +62,781 @@ void updateDNSEntries(const fs::path& inFile, const fs::path& outFile)
++ }
++ 
++ } // namespace updater
+++
+++using namespace phosphor::network;
+++using namespace phosphor::logging;
+++using namespace sdbusplus::xyz::openbmc_project::Common::Error;
+++
+++constexpr auto NSUPDATE_TMP_FILE = "/etc/dns.d/nsupdate_tmp";
+++constexpr auto RESOLVED_SERVICE = "org.freedesktop.resolve1";
+++constexpr auto RESOLVED_INTERFACE = "org.freedesktop.resolve1.Link";
+++constexpr auto PROPERTY_INTERFACE = "org.freedesktop.DBus.Properties";
+++constexpr auto RESOLVED_SERVICE_PATH = "/org/freedesktop/resolve1/link/";
+++
+++constexpr auto DHCP_PROP_INTERFACE = "xyz.openbmc_project.Network.DHCPConfiguration";
+++constexpr auto DHCP_SERVICE_PATH = "/xyz/openbmc_project/network/dhcp";
+++
+++constexpr auto DEFAULT_HOSTNAME_PATH = "/etc/hostname_default";
+++constexpr auto GET = "Get";
+++constexpr auto DNS_CONF_DIR  = "/etc/dns.d";
+++constexpr auto DNS_CONF  = "/etc/dns.d/dns.conf";
+++constexpr auto DNS_CONF_BAK  = "/etc/dns.d/dns.conf.bak";
+++constexpr auto TTL  = "86400";
+++constexpr auto DELAYED_SEC  = 3;
+++
+++std::mutex g_mutex;
+++
+++std::map<std::string, std::unique_ptr<sdbusplus::bus::match_t>> signals ;
+++
+++Configuration::Configuration(sdbusplus::bus_t& bus, stdplus::const_zstring path, Manager& parent) :
+++    Iface(bus, path.c_str(), Iface::action::defer_emit),
+++    bus(bus), manager(parent)
+++{
+++    config::Parser conf;
+++    {
+++        ddnsIface::dnsEnabled(manager.get().getDHCPConf().dnsEnabled());
+++    }
+++
+++    fs::path dnsDir(DNS_CONF_DIR);
+++    if (!fs::exists(dnsDir))
+++    {
+++        if (!fs::create_directories(dnsDir))
+++        {
+++            lg2::error("Unable to create the dns conf dir");
+++            elog<InternalFailure>();
+++        }
+++    }
+++
+++    if (fs::exists(DNS_CONF_DIR) && fs::exists(DNS_CONF)) {
+++        updateDNSInfo(false);
+++        updateDNSInfo(true);
+++    }
+++    else {
+++        {
+++            ddnsIface::hostConf(std::make_tuple(true, manager.get().getSystemConf().hostName()));
+++        }
+++        {
+++            if (getDHCPProp(conf, "UseDomains") && dnsEnabled()) {
+++                 ddnsIface::domainConf(std::make_tuple(true,1, ""));
+++            }
+++            else{
+++                ddnsIface::domainConf(std::make_tuple(false,0, ""));
+++            }
+++        }
+++    }
+++
+++    signals = initSignals();
+++    registerSignal(bus);
+++    emit_object_added();
+++
+++    ddnsIface::setInProgress(false);
+++}
+++
+++// Add new signal here
+++std::map<std::string, std::unique_ptr<sdbusplus::bus::match_t>> Configuration::initSignals() {
+++    std::map<std::string, std::unique_ptr<sdbusplus::bus::match_t>> mp;
+++    mp["DHCPSignal"] = nullptr;
+++    mp["SystemconfigSignal"] = nullptr;
+++    return mp;
+++}
+++
+++void Configuration::registerSignal(sdbusplus::bus_t& bus) {
+++    for (auto& signal : signals) {
+++        if (signal.second == nullptr && signal.first == "DHCPSignal") {
+++            signal.second = std::make_unique<sdbusplus::bus::match_t>(
+++                bus,
+++                sdbusplus::bus::match::rules::propertiesChanged(DHCP_SERVICE_PATH,
+++                                                                DHCP_PROP_INTERFACE),
+++                [&](sdbusplus::message::message& msg) {
+++                    std::map<std::string, std::variant<std::string, std::vector<std::string>,  bool>> props;
+++                    std::string iface;
+++                    bool value;
+++                    msg.read(iface, props);
+++                    for (const auto& t : props)
+++                    {
+++                        if (t.first == "DomainEnabled")
+++                        {
+++                            value = std::get<bool>(t.second);
+++                            if (value == true && dnsEnabled())
+++                                domainConf(std::make_tuple(true,1, ""));
+++                            else {
+++                                domainConf(std::make_tuple(false,0, std::get<2>(ddnsIface::domainConf())));
+++                            }
+++                        }
+++                        else if (t.first == "DNSEnabled")
+++                        {
+++                            value = std::get<bool>(t.second);
+++                            dnsEnabled(value);
+++                        }
+++                        else if (t.first == "SendNsupdateEnabled")
+++                        {
+++                            value = std::get<bool>(t.second);
+++                            if (!value) {
+++                                toDeregister();
+++                                system("/usr/bin/nsupdate.sh &");
+++                            }
+++                        }
+++                    }
+++                }
+++            );
+++        }
+++    }
+++}
+++
+++int16_t Configuration::doNsupdate() {
+++    if (ddnsIface::setInProgress() == true) {
+++        lg2::info("Nsupdate is now performed...\n");
+++        return -1;
+++    }
+++    ddnsIface::setInProgress(true);
+++    for (int i=0;i<DELAYED_SEC;i++){
+++        auto info = fmt::format("DNS restart waiting...\n");
+++        std::this_thread::sleep_for(std::chrono::seconds(1));
+++    }
+++
+++
+++    if (fs::exists(DNS_CONF_BAK)) {
+++        toDeregister();
+++    }
+++
+++    if (!fs::exists(DNS_CONF))
+++        writeConfigurationFile();
+++    fs::copy_file(DNS_CONF, DNS_CONF_BAK, fs::copy_options::overwrite_existing);
+++    toRegister();
+++
+++    system("/usr/bin/nsupdate.sh &");
+++    return 0;
+++}
+++
+++
+++int16_t Configuration::toDeregister() {
+++    std::string info;
+++    std::ofstream ofs;
+++    if (!fs::exists(DNS_CONF_BAK)) {
+++        lg2::info("No need to do reregister\n");
+++        return 0;
+++    }
+++
+++    updateDNSInfo(true);
+++
+++    for (int i =1; true; i++) {
+++        std::filesystem::path delFile(fmt::format("{}-del-{}", NSUPDATE_TMP_FILE, i).c_str());
+++        if (!std::filesystem::exists(delFile)) {
+++            break;
+++        }
+++        std::error_code ec;
+++        std::filesystem::remove(delFile, ec);
+++    }
+++
+++
+++
+++    auto [setting, hostname] = preHost;
+++    for(auto it = preIfaceConf.begin(); it != preIfaceConf.end(); it++) {
+++        std::string iName;
+++        bool doNsupdate, tsig;
+++        Method method;
+++        std::tie(iName, doNsupdate, tsig, method) = (*it);
+++        auto iface = manager.get().interfaces.find(iName);
+++        if (iface == manager.get().interfaces.end()) {
+++            lg2::info("Interface not found: {IFACE}\n", "IFACE", iName);
+++        }
+++
+++        std::vector<std::string> dnsServers;
+++        std::vector<std::string> IPs;
+++        std::string domainName;
+++        for (auto& vv : preDomain) {
+++            auto [domainIface, name] = vv;
+++            if (domainIface == iName) {
+++                domainName = name;
+++                break;
+++            }
+++        }
+++
+++        for (auto& vv : preDns) {
+++            auto [dnsName, servers] = vv;
+++            if (dnsName == iName) {
+++                dnsServers = servers;
+++                break;
+++            }
+++        }
+++
+++        for (auto& vv : preIPAddr) {
+++            auto [ipName, tmpIPs] = vv;
+++            if (ipName == iName) {
+++                IPs = tmpIPs;
+++                break;
+++            }
+++        }
+++
+++        auto i = 1;
+++        for (auto& dns: dnsServers) {
+++            for (auto& ip : IPs) {
+++                ofs.open(fmt::format("{}-del-{}", NSUPDATE_TMP_FILE, i).c_str());
+++                if (!ofs.is_open()) {
+++                    lg2::error("Cannot create {NSUPDATE_TMP_FILE}-del-{INDEX}\n", "NSUPDATE_TMP_FILE", NSUPDATE_TMP_FILE, "INDEX",i);
+++                    return -1;
+++                }
+++                auto cmd = fmt::format("server {}\n", dns);
+++                ofs << cmd;
+++                lg2::info(cmd.c_str());
+++                bool ipv6 = ip.find(":") == std::string::npos ? false : true;
+++                std::string revIP = ipv6 == true ? getRevIPv6(ip): getRevIPv4(ip);
+++                cmd = fmt::format("update delete {}.{} {}\n", hostname, domainName, ipv6 ? "AAAA" : "A");
+++                lg2::info(cmd.c_str());
+++                // There must be a blank line between PTR and A/AAAA record
+++                ofs << cmd << std::endl;
+++                cmd = fmt::format("update delete {} {} PTR {}.{}\n", revIP, TTL, hostname, domainName);
+++                lg2::info(cmd.c_str());
+++                // There must be a blank line between PTR and A/AAAA record
+++                ofs << cmd << std::endl << "send" << std::endl;
+++                ofs.close();
+++                i++;
+++            }
+++        }
+++    }
+++
+++
+++    fs::copy_file(DNS_CONF, DNS_CONF_BAK, fs::copy_options::overwrite_existing);
+++    return 0;
+++}
+++
+++int16_t Configuration::toRegister() {
+++    std::ofstream ofs;
+++
+++    std::string info;
+++
+++    if (!manager.get().getDHCPConf().sendNsupdateEnabled()) {
+++        lg2::error("sendNsupdateEnabled is not enabled...\n");
+++        return -1;
+++    }
+++
+++    for (int i = 1; true; i++) {
+++        std::filesystem::path delFile(fmt::format("{}-add-{}", NSUPDATE_TMP_FILE, i).c_str());
+++        if (!std::filesystem::exists(delFile)) {
+++            break;
+++        }
+++        std::error_code ec;
+++        std::filesystem::remove(delFile, ec);
+++    }
+++
+++    auto [setting, hostname] = ddnsIface::hostConf();
+++    std::vector<std::tuple<std::string, bool, bool, ddnsIface::Method>> interfaceConf(ddnsIface::interfacesConf());
+++    for(auto it = interfaceConf.begin(); it != interfaceConf.end(); it++) {
+++        std::string iName;
+++        bool doNsupdate, tsig;
+++        Method method;
+++        std::tie(iName, doNsupdate, tsig, method) = (*it);
+++        auto iface = manager.get().interfaces.find(iName);
+++        if (iface == manager.get().interfaces.end()) {
+++            lg2::info("Interface not found: {INAME} \n", "INAME", iName);
+++            return -1;
+++        } //
+++
+++        if (method != Method::Register || doNsupdate == false) {
+++            continue;
+++        }
+++
+++        std::string domainName = getDomainName(iName);
+++        if (domainName == "") {
+++            lg2::info("Domain Name isn't set.\n");
+++            return -1;
+++        }
+++
+++        std::vector<std::string> dnsServers = getDNSServer(iName);
+++
+++        auto i = 1;
+++        for (auto& dns: dnsServers) {
+++            for (auto& addr : iface->second->addrs) {
+++                std::string ip = stdplus::toStr(addr.first);
+++                bool ipv6 = ip.find(":") == std::string::npos ? false : true;
+++                auto index = ip.find_first_of("/");
+++                ip.assign(ip.begin(), ip.begin()+index);
+++                if (ipv6) {
+++                    in6_addr tmp = stdplus::fromStr<stdplus::In6Addr>(ip);
+++                    if (IN6_IS_ADDR_LINKLOCAL((in6_addr*)&tmp))
+++                        continue;
+++                }
+++                ofs.open(fmt::format("{}-add-{}", NSUPDATE_TMP_FILE, i).c_str());
+++                if (!ofs.is_open()) {
+++                    lg2::error("Cannot create {NSUPDATE_TMP_FILE}-add-{INDEX}\n", "NSUPDATE_TMP_FILE", NSUPDATE_TMP_FILE, "INDEX", i);
+++                    return -1;
+++                }
+++                auto cmd = fmt::format("server {}\n", dns);
+++                ofs << cmd;
+++                lg2::info(cmd.c_str());
+++                cmd = fmt::format("update add {}.{} {} {} {}\n", hostname, domainName, TTL, ipv6 ? "AAAA" : "A", ip);
+++                // There must be a blank line between PTR and A/AAAA record
+++                ofs << cmd << std::endl;
+++                lg2::info(cmd.c_str());
+++                std::string revIP = ipv6 == true ? getRevIPv6(ip): getRevIPv4(ip);
+++                cmd = fmt::format("update add {} {} PTR {}.{}\n", revIP, TTL, hostname, domainName);
+++                // There must be a blank line between PTR and A/AAAA record
+++                ofs << cmd << std::endl << "send" << std::endl;
+++                lg2::info(cmd.c_str());
+++                ofs.close();
+++                i++;
+++            }
+++        }
+++    }
+++
+++    writeConfigurationFile();
+++    return 0;
+++}
+++
+++int16_t Configuration::setHostConf(bool hostSetting, std::string hostName) {
+++    bool different = false;
+++    std::string hostname;
+++    const char invalidChar[] = "{}()<>&*`|=?;[]$#~!\"%/\\:+,'-.";
+++    if (std::get<0>(ddnsIface::hostConf()) != hostSetting) {
+++        if (hostSetting) {
+++            std::fstream inStream(DEFAULT_HOSTNAME_PATH, std::fstream::in);
+++            if (!inStream.is_open())
+++            {
+++                lg2::error("Unable to open the input file.");
+++                return -1;
+++            }
+++            else {
+++                std::getline(inStream, hostname);
+++                inStream.close();
+++            }
+++        } // if
+++        else {
+++            if (hostName.size() > 63) {
+++                lg2::error("Unable to hostname since hostname size isn't in range ( 0 - 64 )");
+++                return -1;
+++            } // if
+++            else if (strstr(hostname.c_str(), "--") != NULL || strpbrk(hostName.c_str(), invalidChar) != NULL ) {
+++                lg2::error("Unable to hostname since hostname contains invalid charactor\n");
+++                return -1;
+++            }
+++
+++            hostname = hostName;
+++        } // else
+++
+++        different = true;
+++    } // if
+++    else if (!hostSetting) {
+++        if (std::get<1>(ddnsIface::hostConf()) != hostName ) {
+++            if (hostName.size() > 63) {
+++                lg2::error("Unable to hostname since hostname size isn't in range ( 0 - 64 )");
+++                return -1;
+++            } // if
+++            else if (strstr(hostname.c_str(), "--") != NULL || strpbrk(hostName.c_str(), invalidChar) != NULL) {
+++                lg2::error("Unable to hostname since hostname contains invalid charactor\n");
+++                return -1;
+++            }
+++            hostname = hostName;
+++            different = true;
+++        } // if
+++    } // else if
+++
+++    if (different) {
+++        hostConf(std::make_tuple(hostSetting, hostname));
+++        manager.get().getSystemConf().hostName(hostname);
+++    }
+++
+++    return 0;
+++
+++}
+++
+++int16_t Configuration::setInterfacesConf(std::vector<std::tuple<std::string, bool, bool, Method>> interfaceConf) {
+++
+++    for(auto it = interfaceConf.begin(); it != interfaceConf.end(); it++) {
+++        auto [interface, doNsupdate, tsig, method] = (*it);
+++
+++        if (manager.get().interfaces.find(interface) == manager.get().interfaces.end()) {
+++            lg2::error("Unable to hostname since hostname contains invalid charactor\n");
+++            return -1;
+++        }
+++
+++    }
+++
+++    interfacesConf(interfaceConf);
+++    return 0;
+++}
+++
+++int16_t Configuration::setDomainConf(bool dhcp, uint8_t priority,std::string domainName) {
+++    auto [dominaDHCP, domainPriority, DomainDN] = ddnsIface::domainConf();
+++    if ( dhcp == dominaDHCP && priority == domainPriority && domainName ==  DomainDN) {
+++        return 0;
+++    }
+++
+++    if (dnsEnabled() == false && dhcp == true) {
+++        lg2::info("Cannot enable Domain DHCP\n");
+++        return -1;
+++    }
+++    manager.get().getDHCPConf().domainEnabled(dhcp);
+++    if (domainName.size() > 0) {
+++        domainConf(std::make_tuple(dhcp, priority, domainName));
+++    }
+++    else
+++        domainConf(std::make_tuple(dhcp, priority, ""));
+++
+++    std::vector<std::string> tmpVec;
+++    if (!dhcp) {
+++        tmpVec.push_back(domainName);
+++    }
+++
+++    for (auto i = manager.get().interfaces.begin(); i != manager.get().interfaces.end(); i++) {
+++        if (i->second->linkUp()) {
+++            i->second->domainName({});
+++        }
+++    }
+++
+++    return 0;
+++}
+++
+++int16_t Configuration::setDNSServer(std::string interface, std::vector<std::string> servers) {
+++    auto iface = manager.get().interfaces.find(interface);
+++    if (iface == manager.get().interfaces.end()) {
+++        lg2::info("Interface not found: {INTERFACE}\n", "INTERFACE", interface);
+++        return -1;
+++    }
+++
+++    for (auto& ipaddress:servers) {
+++        try {
+++            stdplus::fromStr<stdplus::InAnyAddr>(ipaddress);
+++        } catch (std::invalid_argument e) {
+++            lg2::error("Invalid IP `{IPADDRESS}`: invalid_argument\n", "IPADDRESS", ipaddress);
+++            return -1;
+++        }
+++    }
+++    auto result = iface->second->staticNameServers(servers);
+++    if (servers.size() == 0 && result.size() == 0) {
+++        writeConfigurationFile();
+++        return 0;
+++    }
+++    else if (result.size() == 0) {
+++        return -1;
+++    }
+++
+++    writeConfigurationFile();
+++
+++    return 0;
+++}
+++
+++bool Configuration::dnsEnabled(bool value) {
+++    if (value == dnsEnabled()) {
+++        return value;
+++    }
+++
+++    auto name = ddnsIface::dnsEnabled(value);
+++    auto [_, priority, dn] =  domainConf();
+++    if (value) {
+++        std::vector<std::string> empty;
+++        for (auto iface = manager.get().interfaces.begin(); iface != manager.get().interfaces.end(); iface++) {
+++            iface->second->staticNameServers(empty);
+++        }
+++        setDomainConf(true, priority, dn);
+++    }
+++    else if (!value) {
+++        setDomainConf(false, 0, dn);
+++    }
+++
+++    writeConfigurationFile();
+++    return name;
+++}
+++
+++std::tuple<bool, std::string> Configuration::hostConf(std::tuple<bool, std::string> value) {
+++    auto [hostSetting, hostName] = value;
+++    ddnsIface::hostConf(value);
+++    writeConfigurationFile();
+++    return value;
+++}
+++
+++std::vector<std::tuple<std::string, bool, bool, ddnsIface::Method>> Configuration::interfacesConf(std::vector<std::tuple<std::string, bool, bool, Method>> value) {
+++    ddnsIface::interfacesConf(value);
+++    writeConfigurationFile();
+++    return value;
+++}
+++
+++std::tuple<bool, uint8_t, std::string> Configuration::domainConf(std::tuple<bool, uint8_t, std::string> value) {
+++    auto [DHCP, priority, name] = value;
+++    ddnsIface::domainConf(value);
+++    writeConfigurationFile();
+++    return value;
+++}
+++
+++std::string Configuration::getDomainName(std::string interface) {
+++    auto [DHCP, priority, name] = ddnsIface::domainConf();
+++    std::vector<std::string> DomainNames;
+++    if (DHCP && dnsEnabled()) {
+++        auto iface = manager.get().interfaces.find(interface);
+++        if (iface == manager.get().interfaces.end()) {
+++            return "";
+++        }
+++
+++        uint8_t index = iface->second->getIfIdx();
+++        auto OBJ_PATH = fmt::format("{}{}", RESOLVED_SERVICE_PATH, index);
+++        using type = std::vector<std::tuple<std::string, bool>>;
+++        std::variant<type> names;
+++        auto method = bus.new_method_call(RESOLVED_SERVICE, OBJ_PATH.c_str(), PROPERTY_INTERFACE, GET);
+++
+++        method.append(RESOLVED_INTERFACE, "Domains");
+++
+++        try
+++        {
+++            auto reply = bus.call(method);
+++            reply.read(names);
+++        }
+++        catch (const sdbusplus::exception_t& e)
+++        {
+++            lg2::error("Failed to get DNS information from Systemd-Resolved. {E}", "E", e.what());
+++            return "";
+++        }
+++        auto tupleVector = std::get_if<type>(&names);
+++        for (auto i = tupleVector->begin(); i != tupleVector->end(); ++i)
+++        {
+++            auto [domainName, fromRoute] = (*i);
+++            DomainNames.push_back(domainName);
+++        }
+++
+++        if (DomainNames.size() >= 1) {
+++            if (priority == 1) {
+++                return DomainNames.at(0);
+++            }
+++            else {
+++                return DomainNames.at(DomainNames.size()-1);
+++            }
+++        }
+++        else {
+++            return "";
+++        }
+++    }
+++    else {
+++        return name;
+++    }
+++}
+++
+++std::vector<std::string> Configuration::getDNSServer(std::string interface) {
+++    std::vector<std::string> servers;
+++    auto iface = manager.get().interfaces.find(interface);
+++    if (iface == manager.get().interfaces.end()) {
+++        lg2::error("Interface not found: {INTERFACE}\n", "INTERFACE", interface);
+++        return {};
+++    }
+++
+++    uint8_t index = iface->second->getIfIdx();
+++    auto OBJ_PATH = fmt::format("{}{}", RESOLVED_SERVICE_PATH, index);
+++    using type = std::vector<std::tuple<int32_t, std::vector<uint8_t>>>;
+++    std::variant<type> names;
+++    auto method = bus.new_method_call(RESOLVED_SERVICE, OBJ_PATH.c_str(),
+++                                    PROPERTY_INTERFACE, GET);
+++
+++    method.append(RESOLVED_INTERFACE, "DNS");
+++
+++    try
+++    {
+++        auto reply = bus.call(method);
+++        reply.read(names);
+++    }
+++    catch (const sdbusplus::exception_t& e)
+++    {
+++        lg2::error("Failed to get DNS information from Systemd-Resolved");
+++        return {};
+++    }
+++    auto tupleVector = std::get_if<type>(&names);
+++    for (auto i = tupleVector->begin(); i != tupleVector->end(); ++i)
+++    {
+++        auto [addrFamily, ipaddress] = (*i);
+++        servers.push_back(stdplus::toStr(addrFromBuf(addrFamily, stdplus::raw::asView<char>(ipaddress))));
+++    }
+++
+++    return std::move(servers);
+++}
+++
+++
+++
+++std::string Configuration::getRevIPv4(std::string ipv4) {
+++    in_addr addr = stdplus::fromStr<stdplus::In4Addr>(ipv4);
+++    std::string revIP4 = fmt::format("{}.{}.{}.{}.in-addr.arpa",
+++                (addr.s_addr >> 24) & 0xFF, (addr.s_addr >> 16) & 0xFF, (addr.s_addr >> 8) & 0xFF, addr.s_addr & 0xFF );
+++    return revIP4;
+++}
+++
+++std::string Configuration::getRevIPv6(std::string ipv6) {
+++    in6_addr addr = stdplus::fromStr<stdplus::In6Addr>(ipv6);
+++    std::string revIP6 = "";
+++    for (int i = 15; i >= 0; i--) {
+++        revIP6 += fmt::format("{:x}.{:x}.",
+++                    addr.s6_addr[i] & 0b1111, (addr.s6_addr[i] >> 4) & 0b1111);
+++    }
+++
+++    revIP6 += "ip6.arpa";
+++    return revIP6;
+++
+++}
+++
+++void Configuration::addInterfaceConf(std::string interface) {
+++    bool found = false;
+++    std::vector<std::tuple<std::string, bool, bool, ddnsIface::Method>> tmpIface = ddnsIface::interfacesConf();
+++    for (auto& vv : tmpIface) {
+++        auto [ name, doNsupdate, tsig, method ] = vv;
+++        if (interface == name) {
+++            found = true;
+++            break;
+++        }
+++    }
+++
+++    if (found == false) {
+++        tmpIface.push_back(std::tuple(interface,
+++                                false,
+++                                false,
+++                                ddnsIface::Method::Deregister));
+++        ddnsIface::interfacesConf(std::move(tmpIface));
+++    }
+++}
+++
+++void Configuration::writeConfigurationFile() {
+++    if (!fs::exists(DNS_CONF_DIR))
+++        return;
+++
+++    // g_mutex.lock();
+++    config::Parser config;
+++    {
+++        auto [setting, hn] = ddnsIface::hostConf();
+++        auto& hostConf = config.map["HostConf"].emplace_back();
+++        hostConf["Automatic"].emplace_back(setting == true ? "true" : "false");
+++        hostConf["Hostname"].emplace_back(hn);
+++    }
+++    {
+++        auto [DHCP, priority, name] = ddnsIface::domainConf();
+++        auto& domain = config.map["DomainConf"].emplace_back();
+++        domain["DomainDHCP"].emplace_back((DHCP && dnsEnabled()) == true ? "DHCP" : "Static");
+++        if (priority == 1) {
+++            domain["DomainPriority"].emplace_back("v4");
+++        } else if (priority == 2) {
+++            domain["DomainPriority"].emplace_back("v6");
+++        } else {
+++            domain["DomainPriority"].emplace_back("static");
+++        }
+++
+++        if (name.size() != 0) {
+++            domain["StaticDomainName"].emplace_back((DHCP && dnsEnabled()) == true ? "" : name);
+++        }
+++        else {
+++            domain["StaticDomainName"].emplace_back("");
+++        }
+++
+++        auto conf = interfacesConf();
+++        auto& ii = config.map["Interfaces"].emplace_back();
+++        for (auto it = conf.begin(); it != conf.end(); it++) {
+++            auto [interface, doNsupdate, tsig, method] = (*it);
+++            auto& ifConf = config.map[interface].emplace_back();
+++            auto iface = manager.get().interfaces.find(interface);
+++            if (iface == manager.get().interfaces.end()) {
+++                 lg2::info("No interface ({INTERFACE}) found\n", "INTERFACE", interface);
+++                 return;
+++            }
+++            ifConf["Do"].emplace_back(method == ddnsIface::Method::Register ? "Register" : "De-Register");
+++            ifConf["DoNsupdate"].emplace_back(doNsupdate == true ? "true" : "false");
+++            ifConf["UseTSIG"].emplace_back(tsig == true ? "true" : "false");
+++
+++            ifConf["DomainName"].emplace_back(getDomainName(interface));
+++            std::vector<std::string> dnsServers = dnsEnabled() ? getDNSServer(interface) : iface->second->staticNameServers();
+++            for (auto& vv : dnsServers) {
+++                ifConf["DNS"].emplace_back(vv);
+++            }
+++            for (auto& addr : iface->second->addrs) {
+++                std::string ip = stdplus::toStr(addr.first);
+++                bool ipv6 = ip.find(":") == std::string::npos ? false : true;
+++                auto index = ip.find_first_of("/");
+++                ip.assign(ip.begin(), ip.begin()+index);
+++                if (ipv6) {
+++                    in6_addr tmp = stdplus::fromStr<stdplus::In6Addr>(ip);
+++                    if (IN6_IS_ADDR_LINKLOCAL((in6_addr*)&tmp))
+++                        continue;
+++                }
+++
+++                ifConf["IP"].emplace_back(ip);
+++            }
+++
+++            ii["Linked"].emplace_back(interface);
+++        }
+++    }
+++
+++    config.writeFile(DNS_CONF);
+++    // g_mutex.unlock();
+++    lg2::info("Wrote dns file: {DNS_CONF}", "DNS_CONF", DNS_CONF);
+++
+++}
+++
+++void Configuration::updateDNSInfo(bool bakupInfo) {
+++    config::Parser conf;
+++    std::string filePath;
+++    if (bakupInfo) {
+++        filePath = DNS_CONF_BAK;
+++    }
+++    else {
+++        filePath = DNS_CONF;
+++    }
+++
+++    std::tuple<bool, std::string> tmpHost;
+++    std::vector<std::tuple<std::string, bool, bool, ddnsIface::Method>> tmpInterface;
+++    std::tuple<bool, uint8_t, std::string> tmpDomain;
+++
+++
+++    if (fs::exists(filePath)) {
+++        conf.setFile(filePath);
+++        {
+++            tmpHost = std::make_tuple(
+++                *conf.map.getLastValueString("HostConf", "Automatic") == "true" ? true : false,
+++                *conf.map.getLastValueString("HostConf", "Hostname"));
+++        }
+++        {
+++            uint8_t priority = 0;
+++            if ( *conf.map.getLastValueString("DomainConf", "DomainPriority") == "v4" ) {
+++                priority = 1;
+++            } else if ( *conf.map.getLastValueString("DomainConf", "DomainPriority") == "v6" ) {
+++                priority = 2;
+++            }
+++
+++            tmpDomain = std::make_tuple(
+++                *conf.map.getLastValueString("DomainConf", "DomainDHCP") == "Static" ? 0 : 1,
+++                priority,
+++                *conf.map.getLastValueString("DomainConf", "StaticDomainName")
+++            );
+++        }
+++        {
+++            std::vector<std::string> list= conf.map.getValueStrings("Interfaces", "Linked");
+++            for (auto it = list.begin(); it != list.end(); it++) {
+++                tmpInterface.push_back(std::make_tuple(
+++                        *it,
+++                        *conf.map.getLastValueString(*it, "DoNsupdate") == "true" ? true:false,
+++                        *conf.map.getLastValueString(*it, "UseTSIG") == "true" ? true:false,
+++                        *conf.map.getLastValueString(*it, "Do") == "Register" ? ddnsIface::Method::Register : ddnsIface::Method::Deregister
+++                    )
+++                );
+++            }
+++        }
+++
+++        if (bakupInfo) {
+++            preHost = std::move(tmpHost);
+++            preIfaceConf = std::move(tmpInterface);
+++            preDns.clear();
+++            preDomain.clear();
+++            preIPAddr.clear();
+++            for(auto it = preIfaceConf.begin(); it != preIfaceConf.end(); it++) {
+++                std::string iName;
+++                bool doNsupdate, tsig;
+++                Method method;
+++                std::tie(iName, doNsupdate, tsig, method) = (*it);
+++                std::vector<std::string> list= conf.map.getValueStrings(iName, "DNS");
+++                preDns.push_back(std::make_tuple(iName, list));
+++                list= conf.map.getValueStrings(iName, "IP");
+++                preIPAddr.push_back(std::make_tuple(iName, list));
+++                preDomain.push_back(std::make_tuple(iName, *conf.map.getLastValueString(iName, "DomainName")));
+++            }
+++        }
+++        else {
+++            ddnsIface::hostConf(tmpHost);
+++            ddnsIface::domainConf(tmpDomain);
+++            ddnsIface::interfacesConf(tmpInterface);
+++        }
+++    }
+++}
+++
+++
++ } // namespace dns
++ } // namespace network
++ } // namespace phosphor
++diff --git a/src/dns_updater.hpp b/src/dns_updater.hpp
++index 5d23b29..57d7fcc 100644
++--- a/src/dns_updater.hpp
+++++ b/src/dns_updater.hpp
++@@ -1,11 +1,19 @@
++ #pragma once
++ 
++ #include <filesystem>
+++#include <xyz/openbmc_project/Network/DDNS/server.hpp>
+++#include <stdplus/zstring.hpp>
+++#include <sdbusplus/bus.hpp>
+++#include <sdbusplus/server/object.hpp>
+++#include "system_configuration.hpp"
++ 
++ namespace phosphor
++ {
++ namespace network
++ {
+++
+++class Manager; // forward declaration of network manager.
+++
++ namespace dns
++ {
++ namespace updater
++@@ -35,6 +43,167 @@ inline void processDNSEntries(const fs::path& inFile)
++ }
++ 
++ } // namespace updater
+++
+++using ddnsIface = sdbusplus::xyz::openbmc_project::Network::server::DDNS;
+++
+++using Iface = sdbusplus::server::object_t<ddnsIface>;
+++using IfacesRegisterStatus = std::vector<std::tuple<std::string, bool, bool, bool, ddnsIface::Method>>;
+++
+++enum class DNS_PROGESS {
+++    NO_PROGESS = 0,
+++    IN_PROGESS = 1,
+++};
+++
+++class Configuration : Iface {
+++    public:
+++        /* Define all of the basic class operations:
+++            *     Not allowed:
+++            *         - Default constructor to avoid nullptrs.
+++            *         - Copy operations due to internal unique_ptr.
+++            *         - Move operations due to 'this' being registered as the
+++            *           'context' with sdbus.
+++            *     Allowed:
+++            *         - Destructor.
+++            */
+++        Configuration() = delete;
+++        Configuration(const Configuration&) = delete;
+++        Configuration& operator=(const Configuration&) = delete;
+++        Configuration(Configuration&&) = delete;
+++        Configuration& operator=(Configuration&&) = delete;
+++        virtual ~Configuration() = default;
+++
+++        /** @brief Constructor to put object onto bus at a dbus path.
+++            *  @param[in] bus - Bus to attach to.
+++            *  @param[in] path - Path to attach at.
+++            */
+++        Configuration(sdbusplus::bus_t& bus, stdplus::const_zstring path, Manager& parent);
+++
+++        // ========================== Add Method below ==========================
+++
+++        /** @brief Implementation for DoNsupdate
+++         *  Restart DNS Service
+++         *
+++         *  @return result[int16_t] -
+++         */
+++        int16_t doNsupdate() override;
+++
+++        /** @brief Implementation for SetHostConf
+++         *  HostName Configuration
+++         *
+++         *  @param[in] hostSetting - True for automatic and False for manul
+++         *  @param[in] hostName - Manully set hostname
+++         *
+++         *  @return result[int16_t] -
+++         */
+++
+++        /** @brief Implementation for toRegister
+++         *  Run nsupdate to register
+++         *
+++         *  @return result[int16_t] -
+++         */
+++        int16_t toRegister() override;
+++        /** @brief Implementation for toDeregister
+++         *  Run nsupdate to deregister.
+++         *
+++         *  @return result[int16_t] -
+++         */
+++        int16_t toDeregister() override;
+++
+++        /** @brief Implementation for SetHostConf
+++         *  HostName Configuration
+++         *
+++         *  @param[in] hostSetting - True for automatic and False for manul
+++         *  @param[in] hostName - Manully set hostname
+++         *
+++         *  @return result[int16_t] -
+++         */
+++        int16_t setHostConf(bool hostSetting, std::string hostName) override;
+++
+++        /** @brief Implementation for SetInterfacesConf
+++         *  Interfaces Configuration for DNS
+++         *
+++         *  @param[in] interfaceConf - Data 1 - Interface Name Data 2 - Do nsupdate or not Data 4 - Use TSIG Authentication or not Data 5 - To register or deregister
+++         *
+++         *  @return result[int16_t] -
+++         */
+++        int16_t setInterfacesConf(std::vector<std::tuple<std::string, bool, bool, Method>> interfaceConf) override;
+++
+++        /** @brief Implementation for SetDomainConf
+++         *  Domain Configuration
+++         *
+++         *  @param[in] dhcp - True for DHCP method and False for static method
+++         *  @param[in] priority - 1 for IPv4, 2 for IPv6 and 0 for static method
+++         *  @param[in] domainName - Domain Nameto register DNS server if Domain DHCP is disable
+++         *
+++         *  @return result[int16_t] -
+++         */
+++        int16_t setDomainConf(bool dhcp,uint8_t priority,std::string domainName) override;
+++
+++        /** @brief Implementation for SetDNSServer
+++         *  DNS Configuration
+++         *
+++         *  @param[in] interface - Interface for DNS server
+++         *  @param[in] servers - DNS Server IPs
+++         *
+++         *  @return result[int16_t] -
+++         */
+++        int16_t setDNSServer(std::string interface, std::vector<std::string> servers) override;
+++
+++        /** @brief Implementation for GetDNSServer
+++         *  DNS Configuration
+++         *
+++         *  @param[in] interface - Interface for DNS server
+++         *
+++         *  @return result[std::vector<std::string>] -
+++         */
+++        std::vector<std::string> getDNSServer(std::string interface) override;
+++
+++
+++        void registerSignal(sdbusplus::bus_t& bus) ;
+++
+++        std::map<std::string, std::unique_ptr<sdbusplus::bus::match_t>> initSignals();
+++
+++        // ========================== Add Property below ==========================
+++
+++        bool dnsEnabled(bool value) override;
+++
+++        std::tuple<bool, std::string> hostConf(std::tuple<bool, std::string> value) override;
+++
+++        std::vector<std::tuple<std::string, bool, bool, ddnsIface::Method>> interfacesConf(std::vector<std::tuple<std::string, bool, bool, Method>> value) override;
+++
+++        std::tuple<bool, uint8_t, std::string> domainConf(std::tuple<bool, uint8_t, std::string> value) override;
+++
+++        void addInterfaceConf(std::string interface);
+++
+++
+++        using ddnsIface::hostConf;
+++        using ddnsIface::interfacesConf;
+++        using ddnsIface::domainConf;
+++        using ddnsIface::dnsEnabled;
+++        using ddnsIface::setInProgress;
+++
+++    protected:
+++        void writeConfigurationFile();
+++        void updateDNSInfo(bool bakupInfo);
+++        std::string getDomainName(std::string interface);
+++        std::string getRevIPv4(std::string ipv4);
+++        std::string getRevIPv6(std::string ipv6);
+++        std::vector<std::tuple<std::string, bool, bool, ddnsIface::Method>> preIfaceConf;
+++        std::tuple<bool, std::string> preHost;
+++        std::vector<std::tuple<std::string, std::string>> preDomain;
+++        std::vector<std::tuple<std::string, std::vector<std::string>>> preDns;
+++        std::vector<std::tuple<std::string, std::vector<std::string>>> preIPAddr;
+++    private:
+++        /** @brief sdbusplus DBus bus connection. */
+++        sdbusplus::bus_t& bus;
+++
+++        /** @brief Network Manager object. */
+++        stdplus::PinnedRef<Manager> manager;
+++
+++        DNS_PROGESS state;
+++}; // class Configuration
+++
+++
++ } // namespace dns
++ } // namespace network
++ } // namespace phosphor
++diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
++index 7bcab07..381423b 100644
++--- a/src/ethernet_interface.cpp
+++++ b/src/ethernet_interface.cpp
++@@ -140,6 +140,8 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
++     {
++         addStaticNeigh(neigh);
++     }
+++
+++    manager.get().getDNSConf().addInterfaceConf(interfaceName());
++ }
++ 
++ void EthernetInterface::updateInfo(const InterfaceInfo& info, bool skipSignal)
++@@ -391,6 +393,31 @@ bool EthernetInterface::dhcp6(bool value)
++     return value;
++ }
++ 
+++std::vector<std::string> EthernetInterface::domainName(std::vector<std::string> value) {
+++    bool different = false;
+++
+++    if (value.size() != domainName().size()) {
+++        different = true;
+++    }
+++    else {
+++        for (int i = 0; i < (int)domainName().size() ; i++) {
+++            if (value.at(i) != domainName().at(i)) {
+++                different = true;
+++            }
+++        }
+++    }
+++
+++    if (different) {
+++        EthernetInterfaceIntf::domainName(value);
+++        writeConfigurationFile();
+++        manager.get().reloadConfigs();
+++        return value;
+++    }
+++    else {
+++        return domainName();
+++    }
+++}
+++
++ EthernetInterface::DHCPConf EthernetInterface::dhcpEnabled(DHCPConf value)
++ {
++     auto old4 = EthernetInterfaceIntf::dhcp4();
++@@ -504,6 +504,7 @@ ServerList EthernetInterface::staticNameServers(ServerList value)
++                        "ERROR", e);
++             elog<InvalidArgument>(Argument::ARGUMENT_NAME("StaticNameserver"),
++                                   Argument::ARGUMENT_VALUE(ip.c_str()));
+++            return {};
++         }
++     }
++ 
++@@ -498,11 +526,20 @@ void EthernetInterface::loadNTPServers(const config::Parser& config)
++ 
++ void EthernetInterface::loadNameServers(const config::Parser& config)
++ {
++-    EthernetInterfaceIntf::nameservers(getNameServerFromResolvd());
+++    if (manager.get().getDHCPConf().dnsEnabled())
+++        EthernetInterfaceIntf::nameservers(getNameServerFromResolvd());
++     EthernetInterfaceIntf::staticNameServers(
++         config.map.getValueStrings("Network", "DNS"));
++ }
++ 
+++void EthernetInterface::loadStaticDomainNames()
+++{
+++    auto [dhcp, priority, name] = manager.get().getDNSConf().domainConf();
+++    if (!dhcp) {
+++        EthernetInterfaceIntf::domainName(std::vector<std::string>{name});
+++    }
+++}
+++
++ ServerList EthernetInterface::getNTPServerFromTimeSyncd()
++ {
++     ServerList servers; // Variable to capture the NTP Server IPs
++@@ -529,6 +566,10 @@ ServerList EthernetInterface::getNTPServerFromTimeSyncd()
++     return servers;
++ }
++ 
+++uint8_t EthernetInterface::getIfIdx() {
+++    return ifIdx;
+++}
+++
++ ServerList EthernetInterface::getNameServerFromResolvd()
++ {
++     ServerList servers;
++@@ -693,6 +734,13 @@ void EthernetInterface::writeConfigurationFile()
++         network["IPv6AcceptRA"].emplace_back(ipv6AcceptRA() ? "true" : "false");
++         network["DHCP"].emplace_back(dhcp4() ? (dhcp6() ? "true" : "ipv4")
++                                              : (dhcp6() ? "ipv6" : "false"));
+++
+++        std::string s("");
+++        for (int i = 0; i < (int)domainName().size(); i++) {
+++            s += domainName().at(i);
+++        }
+++        network["Domains"].emplace_back(s);
+++
++         {
++             auto& vlans = network["VLAN"];
++             for (const auto& [_, intf] : manager.get().interfaces)
++@@ -778,6 +826,8 @@ void EthernetInterface::writeConfigurationFile()
++                                                                 : "false");
++         dhcp["SendHostname"].emplace_back(conf.sendHostNameEnabled() ? "true"
++                                                                      : "false");
+++        dhcp["SendNsupdate"].emplace_back(conf.sendNsupdateEnabled() ? "true"
+++                                                                     : "false");
++     }
++     auto path = config::pathForIntfConf(manager.get().getConfDir(),
++                                         interfaceName());
++diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
++index a8fa7b0..724ebd2 100644
++--- a/src/ethernet_interface.hpp
+++++ b/src/ethernet_interface.hpp
++@@ -123,6 +123,10 @@ class EthernetInterface : public Ifaces
++      */
++     void loadARPControl();
++ 
+++    /** @brief Function used to load the domainNames.
+++     */
+++    void loadStaticDomainNames();
+++
++     /** @brief Function to create ipAddress dbus object.
++      *  @param[in] addressType - Type of ip address.
++      *  @param[in] ipAddress- IP address.
++@@ -139,6 +143,9 @@ class EthernetInterface : public Ifaces
++      */
++     ObjectPath neighbor(std::string ipAddress, std::string macAddress, uint8_t prefixLength) override;
++ 
+++    /** Set value of DomainName */
+++    std::vector<std::string> domainName(std::vector<std::string> value) override;
+++
++     /** Set value of DHCPEnabled */
++     DHCPConf dhcpEnabled() const override;
++     DHCPConf dhcpEnabled(DHCPConf value) override;
++@@ -241,6 +248,9 @@ class EthernetInterface : public Ifaces
++      */
++     uint64_t gratuitousARPInterval(uint64_t interval) override;
++ 
+++    /** @brief Get current interface index.
+++     */
+++    uint8_t getIfIdx();
++ 
++     using ChannelAccessIntf::maxPrivilege;
++     using EthernetInterfaceIntf::interfaceName;
++@@ -255,6 +265,10 @@ class EthernetInterface : public Ifaces
++     using EthernetInterfaceIntf::defaultGateway;
++     using EthernetInterfaceIntf::defaultGateway6;
++ 
+++    using EthernetInterfaceIntf::domainName;
+++    using EthernetInterfaceIntf::nameservers;
+++    using EthernetInterfaceIntf::staticNameServers;
+++
++   protected:
++     /** @brief get the NTP server list from the timsyncd dbus obj
++      *
++diff --git a/src/network_manager.cpp b/src/network_manager.cpp
++index 0828219..7b75531 100644
++--- a/src/network_manager.cpp
+++++ b/src/network_manager.cpp
++@@ -22,6 +22,7 @@
++ #include <filesystem>
++ 
++ constexpr char ARPCONTROL_CONF_DIR[] = "/etc/arpcontrol";
+++constexpr char DNS_CONF_DIR[]  = "/etc/dns.d";
++ 
++ namespace phosphor
++ {
++@@ -162,6 +163,8 @@ Manager::Manager(stdplus::PinnedRef<sdbusplus::bus_t> bus,
++         bus, (this->objPath / "config").str);
++     dhcpConf = std::make_unique<phosphor::network::dhcp::Configuration>(
++         bus, (this->objPath / "dhcp").str, *this);
+++    ddnsConf = std::make_unique<phosphor::network::dns::Configuration>(
+++        bus, (this->objPath / "dns").str, *this);
++     setConfDir(confDir);
++     initSupportedPrivilges();
++ }
++@@ -300,6 +303,7 @@ void Manager::createInterface(const AllIntfInfo& info, bool enabled)
++         bus, *this, info, objPath.str, config, enabled);
++     intf->loadNameServers(config);
++     intf->loadNTPServers(config);
+++    intf->loadStaticDomainNames();
++     auto ptr = intf.get();
++     interfaces.insert_or_assign(*info.intf.name, std::move(intf));
++     interfacesByIdx.insert_or_assign(info.intf.idx, ptr);
++diff --git a/src/network_manager.hpp b/src/network_manager.hpp
++index 6ba8f2b..c4fa40e 100644
++--- a/src/network_manager.hpp
+++++ b/src/network_manager.hpp
++@@ -3,6 +3,7 @@
++ #include "ethernet_interface.hpp"
++ #include "system_configuration.hpp"
++ #include "types.hpp"
+++#include "dns_updater.hpp"
++ #include "xyz/openbmc_project/Network/VLAN/Create/server.hpp"
++ 
++ #include <function2/function2.hpp>
++@@ -116,6 +117,11 @@ class Manager : public ManagerIface
++         return *dhcpConf;
++     }
++ 
+++    inline auto& getDNSConf()
+++    {
+++        return *ddnsConf;
+++    }
+++
++     /** @brief Arms a timer to tell systemd-network to reload all of the network
++      * configurations
++      */
++@@ -169,6 +175,9 @@ class Manager : public ManagerIface
++     /** @brief pointer to dhcp conf object. */
++     std::unique_ptr<dhcp::Configuration> dhcpConf = nullptr;
++ 
+++    /** @brief pointer to ddns conf object. */
+++    std::unique_ptr<dns::Configuration> ddnsConf = nullptr;
+++
++     /** @brief Network Configuration directory. */
++     std::filesystem::path confDir;
++ 
++diff --git a/src/system_configuration.cpp b/src/system_configuration.cpp
++index 7604eb9..b55b2e6 100644
++--- a/src/system_configuration.cpp
+++++ b/src/system_configuration.cpp
++@@ -4,6 +4,7 @@
++ #include <phosphor-logging/lg2.hpp>
++ #include <stdplus/pinned.hpp>
++ #include <xyz/openbmc_project/Common/error.hpp>
+++#include <filesystem>
++ 
++ namespace phosphor
++ {
++@@ -13,6 +14,10 @@ namespace network
++ static constexpr char HOSTNAMED_SVC[] = "org.freedesktop.hostname1";
++ static constexpr char HOSTNAMED_OBJ[] = "/org/freedesktop/hostname1";
++ static constexpr char HOSTNAMED_INTF[] = "org.freedesktop.hostname1";
+++constexpr auto DNS_OBJ_PATH= "/xyz/openbmc_project/network/dns";
+++constexpr auto DNS_INTERFACE = "xyz.openbmc_project.Network.DDNS";
+++
+++std::unique_ptr<sdbusplus::bus::match_t> hostNameSignal(nullptr);
++ 
++ using namespace sdbusplus::xyz::openbmc_project::Common::Error;
++ 
++@@ -57,12 +62,21 @@ SystemConfiguration::SystemConfiguration(
++         auto reply = req.call();
++         reply.read(name);
++         SystemConfigIntf::hostName(std::get<std::string>(name), true);
+++        if (!std::filesystem::exists(DEFAULT_HOSTNAME_PATH)) {
+++            std::ofstream ofs;
+++            ofs.open(DEFAULT_HOSTNAME_PATH);
+++            if (ofs.is_open()) {
+++                ofs << std::get<std::string>(name);
+++                ofs.close();
+++            }
+++        }
++     }
++     catch (const std::exception& e)
++     {
++         lg2::error("Failed to get hostname: {ERROR}", "ERROR", e);
++     }
++ 
+++    registerSignal(bus);
++     emit_object_added();
++ }
++ 
++@@ -87,5 +101,29 @@ std::string SystemConfiguration::hostName(std::string name)
++     return SystemConfigIntf::hostName();
++ }
++ 
+++void SystemConfiguration::registerSignal(sdbusplus::bus::bus& bus) {
+++    if (hostNameSignal == nullptr) {
+++        hostNameSignal = std::make_unique<sdbusplus::bus::match_t>(
+++            bus,
+++            sdbusplus::bus::match::rules::propertiesChanged(DNS_OBJ_PATH,
+++                                                            DNS_INTERFACE),
+++            [&](sdbusplus::message::message& msg) {
+++                std::map<std::string, std::variant<std::string, std::vector<std::string>,  bool>> props;
+++                std::string iface;
+++                std::string value;
+++                msg.read(iface, props);
+++                for (const auto& t : props)
+++                {
+++                    if (t.first == "HostName")
+++                    {
+++                        value = std::get<std::string>(t.second);
+++                        hostName(value);
+++                    }
+++                }
+++            }
+++        );
+++    }
+++}
+++
++ } // namespace network
++ } // namespace phosphor
++diff --git a/src/system_configuration.hpp b/src/system_configuration.hpp
++index 8f79bac..0d375a5 100644
++--- a/src/system_configuration.hpp
+++++ b/src/system_configuration.hpp
++@@ -8,6 +8,10 @@
++ #include <xyz/openbmc_project/Network/SystemConfiguration/server.hpp>
++ 
++ #include <string>
+++#include <fstream>
+++#include "config.h"
+++
+++constexpr auto DEFAULT_HOSTNAME_PATH = "/etc/hostname_default";
++ 
++ namespace phosphor
++ {
++@@ -45,6 +49,10 @@ class SystemConfiguration : public Iface
++      */
++     std::string hostName(std::string name) override;
++ 
+++    using SystemConfigIntf::hostName;
+++
+++    void registerSignal(sdbusplus::bus::bus& bus);
+++
++   private:
++     /** @brief Persistent sdbusplus DBus bus connection. */
++     stdplus::PinnedRef<sdbusplus::bus_t> bus;
++-- 
++2.25.1
++diff --git a/src/dns_updater.cpp b/src/dns_updater.cpp
++index 411f9bb..18aaab4 100644
++--- a/src/dns_updater.cpp
+++++ b/src/dns_updater.cpp
++@@ -13,8 +13,6 @@
++ #include <xyz/openbmc_project/Common/error.hpp>
++ #include "ethernet_interface.hpp"
++ #include "types.hpp"
++-#include <thread>
++-#include <mutex>
++ #include <cstdlib>
++ 
++ #include <fstream>
++@@ -130,6 +128,12 @@ Configuration::Configuration(sdbusplus::bus_t& bus, stdplus::const_zstring path,
++     emit_object_added();
++ 
++     ddnsIface::setInProgress(false);
+++    dnsLock = std::unique_lock(dnsMutex);
+++    dnsWorker = std::thread(&Configuration::dnsWorkerFunc, this);
+++}
+++
+++Configuration::~Configuration() {
+++    dnsWorker.std::thread::~thread();
++ }
++ 
++ // Add new signal here
++@@ -172,8 +176,9 @@ void Configuration::registerSignal(sdbusplus::bus_t& bus) {
++                         {
++                             value = std::get<bool>(t.second);
++                             if (!value) {
+++                                NsupdateEnabledChanged=true;
++                                 toDeregister();
++-                                system("/usr/bin/nsupdate.sh &");
+++                                NsupdateEnabledChanged=false;
++                             }
++                         }
++                     }
++@@ -188,26 +193,33 @@ int16_t Configuration::doNsupdate() {
++         lg2::info("Nsupdate is now performed...\n");
++         return -1;
++     }
++-    ddnsIface::setInProgress(true);
+++
++     for (int i=0;i<DELAYED_SEC;i++){
++         auto info = fmt::format("DNS restart waiting...\n");
++         std::this_thread::sleep_for(std::chrono::seconds(1));
++     }
++ 
++-
++     if (fs::exists(DNS_CONF_BAK)) {
++         toDeregister();
++     }
++ 
++-    if (!fs::exists(DNS_CONF))
++-        writeConfigurationFile();
++-    fs::copy_file(DNS_CONF, DNS_CONF_BAK, fs::copy_options::overwrite_existing);
++     toRegister();
++-
++-    system("/usr/bin/nsupdate.sh &");
++     return 0;
++ }
++ 
+++void Configuration::dnsWorkerFunc() {
+++    while (true) {
+++        dnsCondVar.wait(dnsLock);
+++        ddnsIface::setInProgress(true);
+++        while (!dnsWorkq.empty()) {
+++            dnsWorkq.front()();
+++            dnsWorkq.pop();
+++        }
+++
+++        ddnsIface::setInProgress(false);
+++        fs::copy_file(DNS_CONF, DNS_CONF_BAK, fs::copy_options::overwrite_existing);
+++    }
+++}
++ 
++ int16_t Configuration::toDeregister() {
++     std::string info;
++@@ -217,19 +229,12 @@ int16_t Configuration::toDeregister() {
++         return 0;
++     }
++ 
++-    updateDNSInfo(true);
++-
++-    for (int i =1; true; i++) {
++-        std::filesystem::path delFile(fmt::format("{}-del-{}", NSUPDATE_TMP_FILE, i).c_str());
++-        if (!std::filesystem::exists(delFile)) {
++-            break;
++-        }
++-        std::error_code ec;
++-        std::filesystem::remove(delFile, ec);
+++    if (!manager.get().getDHCPConf().sendNsupdateEnabled() && !NsupdateEnabledChanged) {
+++        lg2::error("sendNsupdateEnabled is not enabled...\n");
+++        return -1;
++     }
++ 
++-
++-
+++    updateDNSInfo(true);
++     auto [setting, hostname] = preHost;
++     for(auto it = preIfaceConf.begin(); it != preIfaceConf.end(); it++) {
++         std::string iName;
++@@ -238,7 +243,20 @@ int16_t Configuration::toDeregister() {
++         std::tie(iName, doNsupdate, tsig, method) = (*it);
++         auto iface = manager.get().interfaces.find(iName);
++         if (iface == manager.get().interfaces.end()) {
++-            lg2::info("Interface not found: {IFACE}\n", "IFACE", iName);
+++            lg2::info("Interface not found: {INAME}\n", "INAME", iName);
+++        }
+++
+++        for (int i =1; true; i++) {
+++            std::filesystem::path delFile(fmt::format("{}-del-{}-{}", NSUPDATE_TMP_FILE, iName, i).c_str());
+++            if (!std::filesystem::exists(delFile)) {
+++                break;
+++            }
+++            std::error_code ec;
+++            std::filesystem::remove(delFile, ec);
+++        }
+++
+++        if (method == Method::Deregister || doNsupdate == false) {
+++            continue;
++         }
++ 
++         std::vector<std::string> dnsServers;
++@@ -271,9 +289,9 @@ int16_t Configuration::toDeregister() {
++         auto i = 1;
++         for (auto& dns: dnsServers) {
++             for (auto& ip : IPs) {
++-                ofs.open(fmt::format("{}-del-{}", NSUPDATE_TMP_FILE, i).c_str());
+++                ofs.open(fmt::format("{}-del-{}-{}", NSUPDATE_TMP_FILE, iName, i).c_str());
++                 if (!ofs.is_open()) {
++-                    lg2::error("Cannot create {NSUPDATE_TMP_FILE}-del-{INDEX}\n", "NSUPDATE_TMP_FILE", NSUPDATE_TMP_FILE, "INDEX",i);
+++                    lg2::error("Cannot create {NSUPDATE_TMP_FILE}-del-{NAME}-{INDEX}\n", "NSUPDATE_TMP_FILE", NSUPDATE_TMP_FILE, "NAME", iName, "INDEX",i);
++                     return -1;
++                 }
++                 auto cmd = fmt::format("server {}\n", dns);
++@@ -293,10 +311,13 @@ int16_t Configuration::toDeregister() {
++                 i++;
++             }
++         }
++-    }
++ 
+++        dnsWorkq.push([iName]() {
+++            execute("/usr/bin/nsupdate.sh", "nsupdate.sh", "deregister", iName.c_str());
+++        });
+++    }
++ 
++-    fs::copy_file(DNS_CONF, DNS_CONF_BAK, fs::copy_options::overwrite_existing);
+++    dnsCondVar.notify_one();
++     return 0;
++ }
++ 
++@@ -310,15 +331,6 @@ int16_t Configuration::toRegister() {
++         return -1;
++     }
++ 
++-    for (int i = 1; true; i++) {
++-        std::filesystem::path delFile(fmt::format("{}-add-{}", NSUPDATE_TMP_FILE, i).c_str());
++-        if (!std::filesystem::exists(delFile)) {
++-            break;
++-        }
++-        std::error_code ec;
++-        std::filesystem::remove(delFile, ec);
++-    }
++-
++     auto [setting, hostname] = ddnsIface::hostConf();
++     std::vector<std::tuple<std::string, bool, bool, ddnsIface::Method>> interfaceConf(ddnsIface::interfacesConf());
++     for(auto it = interfaceConf.begin(); it != interfaceConf.end(); it++) {
++@@ -332,6 +344,15 @@ int16_t Configuration::toRegister() {
++             return -1;
++         } //
++ 
+++        for (int i = 1; true; i++) {
+++            std::filesystem::path delFile(fmt::format("{}-add-{}-{}", NSUPDATE_TMP_FILE, iName, i).c_str());
+++            if (!std::filesystem::exists(delFile)) {
+++                break;
+++            }
+++            std::error_code ec;
+++            std::filesystem::remove(delFile, ec);
+++        }
+++
++         if (method != Method::Register || doNsupdate == false) {
++             continue;
++         }
++@@ -356,9 +377,9 @@ int16_t Configuration::toRegister() {
++                     if (IN6_IS_ADDR_LINKLOCAL((in6_addr*)&tmp))
++                         continue;
++                 }
++-                ofs.open(fmt::format("{}-add-{}", NSUPDATE_TMP_FILE, i).c_str());
+++                ofs.open(fmt::format("{}-add-{}-{}", NSUPDATE_TMP_FILE, iName, i).c_str());
++                 if (!ofs.is_open()) {
++-                    lg2::error("Cannot create {NSUPDATE_TMP_FILE}-add-{INDEX}\n", "NSUPDATE_TMP_FILE", NSUPDATE_TMP_FILE, "INDEX", i);
+++                    lg2::error("Cannot create {NSUPDATE_TMP_FILE}-add-{NAME}-{INDEX}\n", "NSUPDATE_TMP_FILE", NSUPDATE_TMP_FILE, "NAME", iName, "INDEX", i);
++                     return -1;
++                 }
++                 auto cmd = fmt::format("server {}\n", dns);
++@@ -377,16 +398,21 @@ int16_t Configuration::toRegister() {
++                 i++;
++             }
++         }
+++
+++        dnsWorkq.push([iName]() {
+++            execute("/usr/bin/nsupdate.sh", "nsupdate.sh", "register", iName.c_str());
+++        });
++     }
++ 
++     writeConfigurationFile();
+++    dnsCondVar.notify_one();
++     return 0;
++ }
++ 
++ int16_t Configuration::setHostConf(bool hostSetting, std::string hostName) {
++     bool different = false;
++     std::string hostname;
++-    const char invalidChar[] = "{}()<>&*`|=?;[]$#~!\"%/\\:+,'-.";
+++    const char invalidChar[] = "{}()<>&*`|=?;[]$#~!\"%/\\:+,'.";
++     if (std::get<0>(ddnsIface::hostConf()) != hostSetting) {
++         if (hostSetting) {
++             std::fstream inStream(DEFAULT_HOSTNAME_PATH, std::fstream::in);
++diff --git a/src/dns_updater.hpp b/src/dns_updater.hpp
++index 4f6682b..71bc346 100644
++--- a/src/dns_updater.hpp
+++++ b/src/dns_updater.hpp
++@@ -6,6 +6,11 @@
++ #include <sdbusplus/bus.hpp>
++ #include <sdbusplus/server/object.hpp>
++ #include "system_configuration.hpp"
+++#include <functional>
+++#include <thread>
+++#include <condition_variable>
+++#include <mutex>
+++#include <queue>
++ 
++ namespace phosphor
++ {
++@@ -70,7 +75,7 @@ class Configuration : Iface {
++         Configuration& operator=(const Configuration&) = delete;
++         Configuration(Configuration&&) = delete;
++         Configuration& operator=(Configuration&&) = delete;
++-        virtual ~Configuration() = default;
+++        ~Configuration();
++ 
++         /** @brief Constructor to put object onto bus at a dbus path.
++             *  @param[in] bus - Bus to attach to.
++@@ -175,6 +180,8 @@ class Configuration : Iface {
++ 
++         void addInterfaceConf(std::string interface);
++ 
+++        std::queue<std::function<void()>> dnsWorkq;
+++        std::condition_variable dnsCondVar;
++ 
++         using ddnsIface::hostConf;
++         using ddnsIface::interfacesConf;
++@@ -201,6 +208,11 @@ class Configuration : Iface {
++         stdplus::PinnedRef<Manager> manager;
++ 
++         DNS_PROGESS state;
+++        std::thread dnsWorker;
+++        std::unique_lock<std::mutex> dnsLock;
+++        std::mutex dnsMutex;
+++        void dnsWorkerFunc();
+++        bool NsupdateEnabledChanged;
++ }; // class Configuration
++ 
++ 
++-- 
++2.25.1
++
 diff --git a/src/dhcp_configuration.cpp b/src/dhcp_configuration.cpp
-index 8843c7c..7067516 100644
+index c649568..822a178 100644
 --- a/src/dhcp_configuration.cpp
 +++ b/src/dhcp_configuration.cpp
 @@ -22,6 +22,10 @@ namespace dhcp
@@ -150,10 +1890,10 @@ index 964b7d5..997af63 100644
    private:
      /** @brief Network Manager object. */
 diff --git a/src/dns_updater.cpp b/src/dns_updater.cpp
-index d2c1a28..dc7cd3e 100644
+index d2c1a28..90644bb 100644
 --- a/src/dns_updater.cpp
 +++ b/src/dns_updater.cpp
-@@ -2,8 +2,20 @@
+@@ -2,8 +2,18 @@
  
  #include <phosphor-logging/elog-errors.hpp>
  #include <phosphor-logging/lg2.hpp>
@@ -169,13 +1909,11 @@ index d2c1a28..dc7cd3e 100644
 +#include <xyz/openbmc_project/Common/error.hpp>
 +#include "ethernet_interface.hpp"
 +#include "types.hpp"
-+#include <thread>
-+#include <mutex>
 +#include <cstdlib>
  
  #include <fstream>
  
-@@ -50,6 +62,781 @@ void updateDNSEntries(const fs::path& inFile, const fs::path& outFile)
+@@ -50,6 +60,809 @@ void updateDNSEntries(const fs::path& inFile, const fs::path& outFile)
  }
  
  } // namespace updater
@@ -247,6 +1985,12 @@ index d2c1a28..dc7cd3e 100644
 +    emit_object_added();
 +
 +    ddnsIface::setInProgress(false);
++    dnsLock = std::unique_lock(dnsMutex);
++    dnsWorker = std::thread(&Configuration::dnsWorkerFunc, this);
++}
++
++Configuration::~Configuration() {
++    dnsWorker.std::thread::~thread();
 +}
 +
 +// Add new signal here
@@ -289,8 +2033,9 @@ index d2c1a28..dc7cd3e 100644
 +                        {
 +                            value = std::get<bool>(t.second);
 +                            if (!value) {
++                                NsupdateEnabledChanged=true;
 +                                toDeregister();
-+                                system("/usr/bin/nsupdate.sh &");
++                                NsupdateEnabledChanged=false;
 +                            }
 +                        }
 +                    }
@@ -305,26 +2050,33 @@ index d2c1a28..dc7cd3e 100644
 +        lg2::info("Nsupdate is now performed...\n");
 +        return -1;
 +    }
-+    ddnsIface::setInProgress(true);
++
 +    for (int i=0;i<DELAYED_SEC;i++){
 +        auto info = fmt::format("DNS restart waiting...\n");
 +        std::this_thread::sleep_for(std::chrono::seconds(1));
 +    }
 +
-+
 +    if (fs::exists(DNS_CONF_BAK)) {
 +        toDeregister();
 +    }
 +
-+    if (!fs::exists(DNS_CONF))
-+        writeConfigurationFile();
-+    fs::copy_file(DNS_CONF, DNS_CONF_BAK, fs::copy_options::overwrite_existing);
 +    toRegister();
-+
-+    system("/usr/bin/nsupdate.sh &");
 +    return 0;
 +}
 +
++void Configuration::dnsWorkerFunc() {
++    while (true) {
++        dnsCondVar.wait(dnsLock);
++        ddnsIface::setInProgress(true);
++        while (!dnsWorkq.empty()) {
++            dnsWorkq.front()();
++            dnsWorkq.pop();
++        }
++
++        ddnsIface::setInProgress(false);
++        fs::copy_file(DNS_CONF, DNS_CONF_BAK, fs::copy_options::overwrite_existing);
++    }
++}
 +
 +int16_t Configuration::toDeregister() {
 +    std::string info;
@@ -334,19 +2086,12 @@ index d2c1a28..dc7cd3e 100644
 +        return 0;
 +    }
 +
-+    updateDNSInfo(true);
-+
-+    for (int i =1; true; i++) {
-+        std::filesystem::path delFile(fmt::format("{}-del-{}", NSUPDATE_TMP_FILE, i).c_str());
-+        if (!std::filesystem::exists(delFile)) {
-+            break;
-+        }
-+        std::error_code ec;
-+        std::filesystem::remove(delFile, ec);
++    if (!manager.get().getDHCPConf().sendNsupdateEnabled() && !NsupdateEnabledChanged) {
++        lg2::error("sendNsupdateEnabled is not enabled...\n");
++        return -1;
 +    }
 +
-+
-+
++    updateDNSInfo(true);
 +    auto [setting, hostname] = preHost;
 +    for(auto it = preIfaceConf.begin(); it != preIfaceConf.end(); it++) {
 +        std::string iName;
@@ -355,7 +2100,20 @@ index d2c1a28..dc7cd3e 100644
 +        std::tie(iName, doNsupdate, tsig, method) = (*it);
 +        auto iface = manager.get().interfaces.find(iName);
 +        if (iface == manager.get().interfaces.end()) {
-+            lg2::info("Interface not found: {IFACE}\n", "IFACE", iName);
++            lg2::info("Interface not found: {INAME}\n", "INAME", iName);
++        }
++
++        for (int i =1; true; i++) {
++            std::filesystem::path delFile(fmt::format("{}-del-{}-{}", NSUPDATE_TMP_FILE, iName, i).c_str());
++            if (!std::filesystem::exists(delFile)) {
++                break;
++            }
++            std::error_code ec;
++            std::filesystem::remove(delFile, ec);
++        }
++
++        if (method == Method::Deregister || doNsupdate == false) {
++            continue;
 +        }
 +
 +        std::vector<std::string> dnsServers;
@@ -388,9 +2146,9 @@ index d2c1a28..dc7cd3e 100644
 +        auto i = 1;
 +        for (auto& dns: dnsServers) {
 +            for (auto& ip : IPs) {
-+                ofs.open(fmt::format("{}-del-{}", NSUPDATE_TMP_FILE, i).c_str());
++                ofs.open(fmt::format("{}-del-{}-{}", NSUPDATE_TMP_FILE, iName, i).c_str());
 +                if (!ofs.is_open()) {
-+                    lg2::error("Cannot create {NSUPDATE_TMP_FILE}-del-{INDEX}\n", "NSUPDATE_TMP_FILE", NSUPDATE_TMP_FILE, "INDEX",i);
++                    lg2::error("Cannot create {NSUPDATE_TMP_FILE}-del-{NAME}-{INDEX}\n", "NSUPDATE_TMP_FILE", NSUPDATE_TMP_FILE, "NAME", iName, "INDEX",i);
 +                    return -1;
 +                }
 +                auto cmd = fmt::format("server {}\n", dns);
@@ -410,10 +2168,13 @@ index d2c1a28..dc7cd3e 100644
 +                i++;
 +            }
 +        }
++
++        dnsWorkq.push([iName]() {
++            execute("/usr/bin/nsupdate.sh", "nsupdate.sh", "deregister", iName.c_str());
++        });
 +    }
 +
-+
-+    fs::copy_file(DNS_CONF, DNS_CONF_BAK, fs::copy_options::overwrite_existing);
++    dnsCondVar.notify_one();
 +    return 0;
 +}
 +
@@ -425,15 +2186,6 @@ index d2c1a28..dc7cd3e 100644
 +    if (!manager.get().getDHCPConf().sendNsupdateEnabled()) {
 +        lg2::error("sendNsupdateEnabled is not enabled...\n");
 +        return -1;
-+    }
-+
-+    for (int i = 1; true; i++) {
-+        std::filesystem::path delFile(fmt::format("{}-add-{}", NSUPDATE_TMP_FILE, i).c_str());
-+        if (!std::filesystem::exists(delFile)) {
-+            break;
-+        }
-+        std::error_code ec;
-+        std::filesystem::remove(delFile, ec);
 +    }
 +
 +    auto [setting, hostname] = ddnsIface::hostConf();
@@ -448,6 +2200,15 @@ index d2c1a28..dc7cd3e 100644
 +            lg2::info("Interface not found: {INAME} \n", "INAME", iName);
 +            return -1;
 +        } //
++
++        for (int i = 1; true; i++) {
++            std::filesystem::path delFile(fmt::format("{}-add-{}-{}", NSUPDATE_TMP_FILE, iName, i).c_str());
++            if (!std::filesystem::exists(delFile)) {
++                break;
++            }
++            std::error_code ec;
++            std::filesystem::remove(delFile, ec);
++        }
 +
 +        if (method != Method::Register || doNsupdate == false) {
 +            continue;
@@ -464,18 +2225,18 @@ index d2c1a28..dc7cd3e 100644
 +        auto i = 1;
 +        for (auto& dns: dnsServers) {
 +            for (auto& addr : iface->second->addrs) {
-+                std::string ip = std::to_string(addr.first);
++                std::string ip = stdplus::toStr(addr.first);
 +                bool ipv6 = ip.find(":") == std::string::npos ? false : true;
 +                auto index = ip.find_first_of("/");
 +                ip.assign(ip.begin(), ip.begin()+index);
 +                if (ipv6) {
-+                    in6_addr tmp = ToAddr<in6_addr>{}(ip);
++                    in6_addr tmp = stdplus::fromStr<stdplus::In6Addr>(ip);
 +                    if (IN6_IS_ADDR_LINKLOCAL((in6_addr*)&tmp))
 +                        continue;
 +                }
-+                ofs.open(fmt::format("{}-add-{}", NSUPDATE_TMP_FILE, i).c_str());
++                ofs.open(fmt::format("{}-add-{}-{}", NSUPDATE_TMP_FILE, iName, i).c_str());
 +                if (!ofs.is_open()) {
-+                    lg2::error("Cannot create {NSUPDATE_TMP_FILE}-add-{INDEX}\n", "NSUPDATE_TMP_FILE", NSUPDATE_TMP_FILE, "INDEX", i);
++                    lg2::error("Cannot create {NSUPDATE_TMP_FILE}-add-{NAME}-{INDEX}\n", "NSUPDATE_TMP_FILE", NSUPDATE_TMP_FILE, "NAME", iName, "INDEX", i);
 +                    return -1;
 +                }
 +                auto cmd = fmt::format("server {}\n", dns);
@@ -494,16 +2255,21 @@ index d2c1a28..dc7cd3e 100644
 +                i++;
 +            }
 +        }
++
++        dnsWorkq.push([iName]() {
++            execute("/usr/bin/nsupdate.sh", "nsupdate.sh", "register", iName.c_str());
++        });
 +    }
 +
 +    writeConfigurationFile();
++    dnsCondVar.notify_one();
 +    return 0;
 +}
 +
 +int16_t Configuration::setHostConf(bool hostSetting, std::string hostName) {
 +    bool different = false;
 +    std::string hostname;
-+    const char invalidChar[] = "{}()<>&*`|=?;[]$#~!\"%/\\:+,'-.";
++    const char invalidChar[] = "{}()<>&*`|=?;[]$#~!\"%/\\:+,'.";
 +    if (std::get<0>(ddnsIface::hostConf()) != hostSetting) {
 +        if (hostSetting) {
 +            std::fstream inStream(DEFAULT_HOSTNAME_PATH, std::fstream::in);
@@ -612,7 +2378,7 @@ index d2c1a28..dc7cd3e 100644
 +
 +    for (auto& ipaddress:servers) {
 +        try {
-+            ToAddr<std::variant<in_addr, in6_addr>>{}(ipaddress);
++            stdplus::fromStr<stdplus::InAnyAddr>(ipaddress);
 +        } catch (std::invalid_argument e) {
 +            lg2::error("Invalid IP `{IPADDRESS}`: invalid_argument\n", "IPADDRESS", ipaddress);
 +            return -1;
@@ -756,7 +2522,7 @@ index d2c1a28..dc7cd3e 100644
 +    for (auto i = tupleVector->begin(); i != tupleVector->end(); ++i)
 +    {
 +        auto [addrFamily, ipaddress] = (*i);
-+        servers.push_back(std::to_string(addrFromBuf(addrFamily, stdplus::raw::asView<char>(ipaddress))));
++        servers.push_back(stdplus::toStr(addrFromBuf(addrFamily, stdplus::raw::asView<char>(ipaddress))));
 +    }
 +
 +    return std::move(servers);
@@ -765,14 +2531,14 @@ index d2c1a28..dc7cd3e 100644
 +
 +
 +std::string Configuration::getRevIPv4(std::string ipv4) {
-+    in_addr addr = ToAddr<in_addr>{}(ipv4);
++    in_addr addr = stdplus::fromStr<stdplus::In4Addr>(ipv4);
 +    std::string revIP4 = fmt::format("{}.{}.{}.{}.in-addr.arpa",
 +                (addr.s_addr >> 24) & 0xFF, (addr.s_addr >> 16) & 0xFF, (addr.s_addr >> 8) & 0xFF, addr.s_addr & 0xFF );
 +    return revIP4;
 +}
 +
 +std::string Configuration::getRevIPv6(std::string ipv6) {
-+    in6_addr addr = ToAddr<in6_addr>{}(ipv6);
++    in6_addr addr = stdplus::fromStr<stdplus::In6Addr>(ipv6);
 +    std::string revIP6 = "";
 +    for (int i = 15; i >= 0; i--) {
 +        revIP6 += fmt::format("{:x}.{:x}.",
@@ -855,12 +2621,12 @@ index d2c1a28..dc7cd3e 100644
 +                ifConf["DNS"].emplace_back(vv);
 +            }
 +            for (auto& addr : iface->second->addrs) {
-+                std::string ip = std::to_string(addr.first);
++                std::string ip = stdplus::toStr(addr.first);
 +                bool ipv6 = ip.find(":") == std::string::npos ? false : true;
 +                auto index = ip.find_first_of("/");
 +                ip.assign(ip.begin(), ip.begin()+index);
 +                if (ipv6) {
-+                    in6_addr tmp = ToAddr<in6_addr>{}(ip);
++                    in6_addr tmp = stdplus::fromStr<stdplus::In6Addr>(ip);
 +                    if (IN6_IS_ADDR_LINKLOCAL((in6_addr*)&tmp))
 +                        continue;
 +                }
@@ -958,10 +2724,10 @@ index d2c1a28..dc7cd3e 100644
  } // namespace network
  } // namespace phosphor
 diff --git a/src/dns_updater.hpp b/src/dns_updater.hpp
-index 5d23b29..57d7fcc 100644
+index 5d23b29..71bc346 100644
 --- a/src/dns_updater.hpp
 +++ b/src/dns_updater.hpp
-@@ -1,11 +1,19 @@
+@@ -1,11 +1,24 @@
  #pragma once
  
  #include <filesystem>
@@ -970,6 +2736,11 @@ index 5d23b29..57d7fcc 100644
 +#include <sdbusplus/bus.hpp>
 +#include <sdbusplus/server/object.hpp>
 +#include "system_configuration.hpp"
++#include <functional>
++#include <thread>
++#include <condition_variable>
++#include <mutex>
++#include <queue>
  
  namespace phosphor
  {
@@ -981,7 +2752,7 @@ index 5d23b29..57d7fcc 100644
  namespace dns
  {
  namespace updater
-@@ -35,6 +43,167 @@ inline void processDNSEntries(const fs::path& inFile)
+@@ -35,6 +48,174 @@ inline void processDNSEntries(const fs::path& inFile)
  }
  
  } // namespace updater
@@ -1012,7 +2783,7 @@ index 5d23b29..57d7fcc 100644
 +        Configuration& operator=(const Configuration&) = delete;
 +        Configuration(Configuration&&) = delete;
 +        Configuration& operator=(Configuration&&) = delete;
-+        virtual ~Configuration() = default;
++        ~Configuration();
 +
 +        /** @brief Constructor to put object onto bus at a dbus path.
 +            *  @param[in] bus - Bus to attach to.
@@ -1117,6 +2888,8 @@ index 5d23b29..57d7fcc 100644
 +
 +        void addInterfaceConf(std::string interface);
 +
++        std::queue<std::function<void()>> dnsWorkq;
++        std::condition_variable dnsCondVar;
 +
 +        using ddnsIface::hostConf;
 +        using ddnsIface::interfacesConf;
@@ -1143,6 +2916,11 @@ index 5d23b29..57d7fcc 100644
 +        stdplus::PinnedRef<Manager> manager;
 +
 +        DNS_PROGESS state;
++        std::thread dnsWorker;
++        std::unique_lock<std::mutex> dnsLock;
++        std::mutex dnsMutex;
++        void dnsWorkerFunc();
++        bool NsupdateEnabledChanged;
 +}; // class Configuration
 +
 +
@@ -1150,10 +2928,10 @@ index 5d23b29..57d7fcc 100644
  } // namespace network
  } // namespace phosphor
 diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
-index 7bcab07..381423b 100644
+index e8bf221..4126815 100644
 --- a/src/ethernet_interface.cpp
 +++ b/src/ethernet_interface.cpp
-@@ -140,6 +140,8 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+@@ -147,6 +147,8 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
      {
          addStaticNeigh(neigh);
      }
@@ -1162,7 +2940,7 @@ index 7bcab07..381423b 100644
  }
  
  void EthernetInterface::updateInfo(const InterfaceInfo& info, bool skipSignal)
-@@ -391,6 +393,31 @@ bool EthernetInterface::dhcp6(bool value)
+@@ -422,6 +424,31 @@ bool EthernetInterface::dhcp6(bool value)
      return value;
  }
  
@@ -1194,15 +2972,15 @@ index 7bcab07..381423b 100644
  EthernetInterface::DHCPConf EthernetInterface::dhcpEnabled(DHCPConf value)
  {
      auto old4 = EthernetInterfaceIntf::dhcp4();
-@@ -473,6 +500,7 @@ ServerList EthernetInterface::staticNameServers(ServerList value)
-                        "IP_ADDRESS", ip, "ERROR", e);
+@@ -504,6 +531,7 @@ ServerList EthernetInterface::staticNameServers(ServerList value)
+                        "ERROR", e);
              elog<InvalidArgument>(Argument::ARGUMENT_NAME("StaticNameserver"),
                                    Argument::ARGUMENT_VALUE(ip.c_str()));
 +            return {};
          }
      }
-     try
-@@ -498,11 +526,20 @@ void EthernetInterface::loadNTPServers(const config::Parser& config)
+ 
+@@ -524,11 +552,20 @@ void EthernetInterface::loadNTPServers(const config::Parser& config)
  
  void EthernetInterface::loadNameServers(const config::Parser& config)
  {
@@ -1224,7 +3002,7 @@ index 7bcab07..381423b 100644
  ServerList EthernetInterface::getNTPServerFromTimeSyncd()
  {
      ServerList servers; // Variable to capture the NTP Server IPs
-@@ -529,6 +566,10 @@ ServerList EthernetInterface::getNTPServerFromTimeSyncd()
+@@ -555,6 +592,10 @@ ServerList EthernetInterface::getNTPServerFromTimeSyncd()
      return servers;
  }
  
@@ -1235,7 +3013,7 @@ index 7bcab07..381423b 100644
  ServerList EthernetInterface::getNameServerFromResolvd()
  {
      ServerList servers;
-@@ -693,6 +734,13 @@ void EthernetInterface::writeConfigurationFile()
+@@ -714,6 +755,13 @@ void EthernetInterface::writeConfigurationFile()
          network["IPv6AcceptRA"].emplace_back(ipv6AcceptRA() ? "true" : "false");
          network["DHCP"].emplace_back(dhcp4() ? (dhcp6() ? "true" : "ipv4")
                                               : (dhcp6() ? "ipv6" : "false"));
@@ -1249,7 +3027,7 @@ index 7bcab07..381423b 100644
          {
              auto& vlans = network["VLAN"];
              for (const auto& [_, intf] : manager.get().interfaces)
-@@ -778,6 +826,8 @@ void EthernetInterface::writeConfigurationFile()
+@@ -799,6 +847,8 @@ void EthernetInterface::writeConfigurationFile()
                                                                  : "false");
          dhcp["SendHostname"].emplace_back(conf.sendHostNameEnabled() ? "true"
                                                                       : "false");
@@ -1259,10 +3037,10 @@ index 7bcab07..381423b 100644
      auto path = config::pathForIntfConf(manager.get().getConfDir(),
                                          interfaceName());
 diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
-index a8fa7b0..724ebd2 100644
+index fe21de4..6679657 100644
 --- a/src/ethernet_interface.hpp
 +++ b/src/ethernet_interface.hpp
-@@ -123,6 +123,10 @@ class EthernetInterface : public Ifaces
+@@ -124,6 +124,10 @@ class EthernetInterface : public Ifaces
       */
      void loadARPControl();
  
@@ -1273,7 +3051,7 @@ index a8fa7b0..724ebd2 100644
      /** @brief Function to create ipAddress dbus object.
       *  @param[in] addressType - Type of ip address.
       *  @param[in] ipAddress- IP address.
-@@ -139,6 +143,9 @@ class EthernetInterface : public Ifaces
+@@ -140,6 +144,9 @@ class EthernetInterface : public Ifaces
       */
      ObjectPath neighbor(std::string ipAddress, std::string macAddress, uint8_t prefixLength) override;
  
@@ -1283,7 +3061,7 @@ index a8fa7b0..724ebd2 100644
      /** Set value of DHCPEnabled */
      DHCPConf dhcpEnabled() const override;
      DHCPConf dhcpEnabled(DHCPConf value) override;
-@@ -241,6 +248,9 @@ class EthernetInterface : public Ifaces
+@@ -242,6 +249,9 @@ class EthernetInterface : public Ifaces
       */
      uint64_t gratuitousARPInterval(uint64_t interval) override;
  
@@ -1293,7 +3071,7 @@ index a8fa7b0..724ebd2 100644
  
      using ChannelAccessIntf::maxPrivilege;
      using EthernetInterfaceIntf::interfaceName;
-@@ -255,6 +265,10 @@ class EthernetInterface : public Ifaces
+@@ -256,6 +266,10 @@ class EthernetInterface : public Ifaces
      using EthernetInterfaceIntf::defaultGateway;
      using EthernetInterfaceIntf::defaultGateway6;
  
@@ -1305,18 +3083,18 @@ index a8fa7b0..724ebd2 100644
      /** @brief get the NTP server list from the timsyncd dbus obj
       *
 diff --git a/src/network_manager.cpp b/src/network_manager.cpp
-index 0828219..7b75531 100644
+index a808837..b2a2934 100644
 --- a/src/network_manager.cpp
 +++ b/src/network_manager.cpp
-@@ -27,6 +27,7 @@ constexpr char NETWORKD_BUSNAME[] = "org.freedesktop.network1";
- constexpr char NETWORKD_PATH[] = "/org/freedesktop/network1";
- constexpr char NETWORKD_INTERFACE[] = "org.freedesktop.network1.Manager";
+@@ -22,6 +22,7 @@
+ #include <filesystem>
+ 
  constexpr char ARPCONTROL_CONF_DIR[] = "/etc/arpcontrol";
 +constexpr char DNS_CONF_DIR[]  = "/etc/dns.d";
  
  namespace phosphor
  {
-@@ -162,6 +163,8 @@ Manager::Manager(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+@@ -159,6 +160,8 @@ Manager::Manager(stdplus::PinnedRef<sdbusplus::bus_t> bus,
          bus, (this->objPath / "config").str);
      dhcpConf = std::make_unique<phosphor::network::dhcp::Configuration>(
          bus, (this->objPath / "dhcp").str, *this);
@@ -1325,7 +3103,7 @@ index 0828219..7b75531 100644
      setConfDir(confDir);
      initSupportedPrivilges();
  }
-@@ -300,6 +303,7 @@ void Manager::createInterface(const AllIntfInfo& info, bool enabled)
+@@ -297,6 +300,7 @@ void Manager::createInterface(const AllIntfInfo& info, bool enabled)
          bus, *this, info, objPath.str, config, enabled);
      intf->loadNameServers(config);
      intf->loadNTPServers(config);
@@ -1334,18 +3112,18 @@ index 0828219..7b75531 100644
      interfaces.insert_or_assign(*info.intf.name, std::move(intf));
      interfacesByIdx.insert_or_assign(info.intf.idx, ptr);
 diff --git a/src/network_manager.hpp b/src/network_manager.hpp
-index 6ba8f2b..c4fa40e 100644
+index 4c5e7f9..bd52398 100644
 --- a/src/network_manager.hpp
 +++ b/src/network_manager.hpp
-@@ -12,6 +12,7 @@
- #include <stdplus/pinned.hpp>
- #include <stdplus/zstring_view.hpp>
- #include <xyz/openbmc_project/Common/FactoryReset/server.hpp>
+@@ -3,6 +3,7 @@
+ #include "ethernet_interface.hpp"
+ #include "system_configuration.hpp"
+ #include "types.hpp"
 +#include "dns_updater.hpp"
+ #include "xyz/openbmc_project/Network/VLAN/Create/server.hpp"
  
- #include <filesystem>
- #include <memory>
-@@ -116,6 +117,11 @@ class Manager : public ManagerIface
+ #include <function2/function2.hpp>
+@@ -110,6 +111,11 @@ class Manager : public ManagerIface
          return *dhcpConf;
      }
  
@@ -1357,7 +3135,7 @@ index 6ba8f2b..c4fa40e 100644
      /** @brief Arms a timer to tell systemd-network to reload all of the network
       * configurations
       */
-@@ -169,6 +175,9 @@ class Manager : public ManagerIface
+@@ -163,6 +169,9 @@ class Manager : public ManagerIface
      /** @brief pointer to dhcp conf object. */
      std::unique_ptr<dhcp::Configuration> dhcpConf = nullptr;
  
@@ -1468,273 +3246,6 @@ index 8f79bac..0d375a5 100644
    private:
      /** @brief Persistent sdbusplus DBus bus connection. */
      stdplus::PinnedRef<sdbusplus::bus_t> bus;
--- 
-2.25.1
-diff --git a/src/dns_updater.cpp b/src/dns_updater.cpp
-index 411f9bb..18aaab4 100644
---- a/src/dns_updater.cpp
-+++ b/src/dns_updater.cpp
-@@ -13,8 +13,6 @@
- #include <xyz/openbmc_project/Common/error.hpp>
- #include "ethernet_interface.hpp"
- #include "types.hpp"
--#include <thread>
--#include <mutex>
- #include <cstdlib>
- 
- #include <fstream>
-@@ -130,6 +128,12 @@ Configuration::Configuration(sdbusplus::bus_t& bus, stdplus::const_zstring path,
-     emit_object_added();
- 
-     ddnsIface::setInProgress(false);
-+    dnsLock = std::unique_lock(dnsMutex);
-+    dnsWorker = std::thread(&Configuration::dnsWorkerFunc, this);
-+}
-+
-+Configuration::~Configuration() {
-+    dnsWorker.std::thread::~thread();
- }
- 
- // Add new signal here
-@@ -172,8 +176,9 @@ void Configuration::registerSignal(sdbusplus::bus_t& bus) {
-                         {
-                             value = std::get<bool>(t.second);
-                             if (!value) {
-+                                NsupdateEnabledChanged=true;
-                                 toDeregister();
--                                system("/usr/bin/nsupdate.sh &");
-+                                NsupdateEnabledChanged=false;
-                             }
-                         }
-                     }
-@@ -188,26 +193,33 @@ int16_t Configuration::doNsupdate() {
-         lg2::info("Nsupdate is now performed...\n");
-         return -1;
-     }
--    ddnsIface::setInProgress(true);
-+
-     for (int i=0;i<DELAYED_SEC;i++){
-         auto info = fmt::format("DNS restart waiting...\n");
-         std::this_thread::sleep_for(std::chrono::seconds(1));
-     }
- 
--
-     if (fs::exists(DNS_CONF_BAK)) {
-         toDeregister();
-     }
- 
--    if (!fs::exists(DNS_CONF))
--        writeConfigurationFile();
--    fs::copy_file(DNS_CONF, DNS_CONF_BAK, fs::copy_options::overwrite_existing);
-     toRegister();
--
--    system("/usr/bin/nsupdate.sh &");
-     return 0;
- }
- 
-+void Configuration::dnsWorkerFunc() {
-+    while (true) {
-+        dnsCondVar.wait(dnsLock);
-+        ddnsIface::setInProgress(true);
-+        while (!dnsWorkq.empty()) {
-+            dnsWorkq.front()();
-+            dnsWorkq.pop();
-+        }
-+
-+        ddnsIface::setInProgress(false);
-+        fs::copy_file(DNS_CONF, DNS_CONF_BAK, fs::copy_options::overwrite_existing);
-+    }
-+}
- 
- int16_t Configuration::toDeregister() {
-     std::string info;
-@@ -217,19 +229,12 @@ int16_t Configuration::toDeregister() {
-         return 0;
-     }
- 
--    updateDNSInfo(true);
--
--    for (int i =1; true; i++) {
--        std::filesystem::path delFile(fmt::format("{}-del-{}", NSUPDATE_TMP_FILE, i).c_str());
--        if (!std::filesystem::exists(delFile)) {
--            break;
--        }
--        std::error_code ec;
--        std::filesystem::remove(delFile, ec);
-+    if (!manager.get().getDHCPConf().sendNsupdateEnabled() && !NsupdateEnabledChanged) {
-+        lg2::error("sendNsupdateEnabled is not enabled...\n");
-+        return -1;
-     }
- 
--
--
-+    updateDNSInfo(true);
-     auto [setting, hostname] = preHost;
-     for(auto it = preIfaceConf.begin(); it != preIfaceConf.end(); it++) {
-         std::string iName;
-@@ -238,7 +243,20 @@ int16_t Configuration::toDeregister() {
-         std::tie(iName, doNsupdate, tsig, method) = (*it);
-         auto iface = manager.get().interfaces.find(iName);
-         if (iface == manager.get().interfaces.end()) {
--            lg2::info("Interface not found: {IFACE}\n", "IFACE", iName);
-+            lg2::info("Interface not found: {INAME}\n", "INAME", iName);
-+        }
-+
-+        for (int i =1; true; i++) {
-+            std::filesystem::path delFile(fmt::format("{}-del-{}-{}", NSUPDATE_TMP_FILE, iName, i).c_str());
-+            if (!std::filesystem::exists(delFile)) {
-+                break;
-+            }
-+            std::error_code ec;
-+            std::filesystem::remove(delFile, ec);
-+        }
-+
-+        if (method == Method::Deregister || doNsupdate == false) {
-+            continue;
-         }
- 
-         std::vector<std::string> dnsServers;
-@@ -271,9 +289,9 @@ int16_t Configuration::toDeregister() {
-         auto i = 1;
-         for (auto& dns: dnsServers) {
-             for (auto& ip : IPs) {
--                ofs.open(fmt::format("{}-del-{}", NSUPDATE_TMP_FILE, i).c_str());
-+                ofs.open(fmt::format("{}-del-{}-{}", NSUPDATE_TMP_FILE, iName, i).c_str());
-                 if (!ofs.is_open()) {
--                    lg2::error("Cannot create {NSUPDATE_TMP_FILE}-del-{INDEX}\n", "NSUPDATE_TMP_FILE", NSUPDATE_TMP_FILE, "INDEX",i);
-+                    lg2::error("Cannot create {NSUPDATE_TMP_FILE}-del-{NAME}-{INDEX}\n", "NSUPDATE_TMP_FILE", NSUPDATE_TMP_FILE, "NAME", iName, "INDEX",i);
-                     return -1;
-                 }
-                 auto cmd = fmt::format("server {}\n", dns);
-@@ -293,10 +311,13 @@ int16_t Configuration::toDeregister() {
-                 i++;
-             }
-         }
--    }
- 
-+        dnsWorkq.push([iName]() {
-+            execute("/usr/bin/nsupdate.sh", "nsupdate.sh", "deregister", iName.c_str());
-+        });
-+    }
- 
--    fs::copy_file(DNS_CONF, DNS_CONF_BAK, fs::copy_options::overwrite_existing);
-+    dnsCondVar.notify_one();
-     return 0;
- }
- 
-@@ -310,15 +331,6 @@ int16_t Configuration::toRegister() {
-         return -1;
-     }
- 
--    for (int i = 1; true; i++) {
--        std::filesystem::path delFile(fmt::format("{}-add-{}", NSUPDATE_TMP_FILE, i).c_str());
--        if (!std::filesystem::exists(delFile)) {
--            break;
--        }
--        std::error_code ec;
--        std::filesystem::remove(delFile, ec);
--    }
--
-     auto [setting, hostname] = ddnsIface::hostConf();
-     std::vector<std::tuple<std::string, bool, bool, ddnsIface::Method>> interfaceConf(ddnsIface::interfacesConf());
-     for(auto it = interfaceConf.begin(); it != interfaceConf.end(); it++) {
-@@ -332,6 +344,15 @@ int16_t Configuration::toRegister() {
-             return -1;
-         } //
- 
-+        for (int i = 1; true; i++) {
-+            std::filesystem::path delFile(fmt::format("{}-add-{}-{}", NSUPDATE_TMP_FILE, iName, i).c_str());
-+            if (!std::filesystem::exists(delFile)) {
-+                break;
-+            }
-+            std::error_code ec;
-+            std::filesystem::remove(delFile, ec);
-+        }
-+
-         if (method != Method::Register || doNsupdate == false) {
-             continue;
-         }
-@@ -356,9 +377,9 @@ int16_t Configuration::toRegister() {
-                     if (IN6_IS_ADDR_LINKLOCAL((in6_addr*)&tmp))
-                         continue;
-                 }
--                ofs.open(fmt::format("{}-add-{}", NSUPDATE_TMP_FILE, i).c_str());
-+                ofs.open(fmt::format("{}-add-{}-{}", NSUPDATE_TMP_FILE, iName, i).c_str());
-                 if (!ofs.is_open()) {
--                    lg2::error("Cannot create {NSUPDATE_TMP_FILE}-add-{INDEX}\n", "NSUPDATE_TMP_FILE", NSUPDATE_TMP_FILE, "INDEX", i);
-+                    lg2::error("Cannot create {NSUPDATE_TMP_FILE}-add-{NAME}-{INDEX}\n", "NSUPDATE_TMP_FILE", NSUPDATE_TMP_FILE, "NAME", iName, "INDEX", i);
-                     return -1;
-                 }
-                 auto cmd = fmt::format("server {}\n", dns);
-@@ -377,16 +398,21 @@ int16_t Configuration::toRegister() {
-                 i++;
-             }
-         }
-+
-+        dnsWorkq.push([iName]() {
-+            execute("/usr/bin/nsupdate.sh", "nsupdate.sh", "register", iName.c_str());
-+        });
-     }
- 
-     writeConfigurationFile();
-+    dnsCondVar.notify_one();
-     return 0;
- }
- 
- int16_t Configuration::setHostConf(bool hostSetting, std::string hostName) {
-     bool different = false;
-     std::string hostname;
--    const char invalidChar[] = "{}()<>&*`|=?;[]$#~!\"%/\\:+,'-.";
-+    const char invalidChar[] = "{}()<>&*`|=?;[]$#~!\"%/\\:+,'.";
-     if (std::get<0>(ddnsIface::hostConf()) != hostSetting) {
-         if (hostSetting) {
-             std::fstream inStream(DEFAULT_HOSTNAME_PATH, std::fstream::in);
-diff --git a/src/dns_updater.hpp b/src/dns_updater.hpp
-index 4f6682b..71bc346 100644
---- a/src/dns_updater.hpp
-+++ b/src/dns_updater.hpp
-@@ -6,6 +6,11 @@
- #include <sdbusplus/bus.hpp>
- #include <sdbusplus/server/object.hpp>
- #include "system_configuration.hpp"
-+#include <functional>
-+#include <thread>
-+#include <condition_variable>
-+#include <mutex>
-+#include <queue>
- 
- namespace phosphor
- {
-@@ -70,7 +75,7 @@ class Configuration : Iface {
-         Configuration& operator=(const Configuration&) = delete;
-         Configuration(Configuration&&) = delete;
-         Configuration& operator=(Configuration&&) = delete;
--        virtual ~Configuration() = default;
-+        ~Configuration();
- 
-         /** @brief Constructor to put object onto bus at a dbus path.
-             *  @param[in] bus - Bus to attach to.
-@@ -175,6 +180,8 @@ class Configuration : Iface {
- 
-         void addInterfaceConf(std::string interface);
- 
-+        std::queue<std::function<void()>> dnsWorkq;
-+        std::condition_variable dnsCondVar;
- 
-         using ddnsIface::hostConf;
-         using ddnsIface::interfacesConf;
-@@ -201,6 +208,11 @@ class Configuration : Iface {
-         stdplus::PinnedRef<Manager> manager;
- 
-         DNS_PROGESS state;
-+        std::thread dnsWorker;
-+        std::unique_lock<std::mutex> dnsLock;
-+        std::mutex dnsMutex;
-+        void dnsWorkerFunc();
-+        bool NsupdateEnabledChanged;
- }; // class Configuration
- 
- 
 -- 
 2.25.1
 

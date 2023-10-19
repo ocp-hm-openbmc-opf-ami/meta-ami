@@ -2,39 +2,39 @@ diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
 index cc40b5a..ab8b815 100644
 --- a/src/ethernet_interface.cpp
 +++ b/src/ethernet_interface.cpp
-@@ -229,18 +229,26 @@ void EthernetInterface::addStaticNeigh(const NeighborInfo& info)
+@@ -253,18 +253,26 @@ void EthernetInterface::addStaticNeigh(const NeighborInfo& info)
  }
  
  ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
 -                                 uint8_t prefixLength, std::string)
 +                                 uint8_t prefixLength, std::string ipgateway)
  {
--    InAddrAny addr;
-+    InAddrAny addr, gateway;
+-    std::optional<stdplus::InAnyAddr> addr;
++    std::optional<stdplus::InAnyAddr> addr, gateway;
      try
      {
          switch (protType)
          {
              case IP::Protocol::IPv4:
-                 addr = ToAddr<in_addr>{}(ipaddress);
-+                gateway = ToAddr<in_addr>{}(ipgateway);
-+                ip_address::isValidIPv4Addr((in_addr*)&addr, ip_address::Type::IP4_ADDRESS);
-+                ip_address::isValidIPv4Addr((in_addr*)&gateway, ip_address::Type::GATEWAY4_ADDRESS);
+                 addr.emplace(stdplus::fromStr<stdplus::In4Addr>(ipaddress));
++                gateway.emplace(stdplus::fromStr<stdplus::In4Addr>(ipgateway));
++                ip_address::isValidIPv4Addr((in_addr*)(&addr.value()), ip_address::Type::IP4_ADDRESS);
++                ip_address::isValidIPv4Addr((in_addr*)(&gateway.value()), ip_address::Type::GATEWAY4_ADDRESS);
 +                EthernetInterfaceIntf::defaultGateway(ipgateway);
                  break;
              case IP::Protocol::IPv6:
-                 addr = ToAddr<in6_addr>{}(ipaddress);
-+                gateway = ToAddr<in6_addr>{}(ipgateway);
-+                ip_address::isValidIPv6Addr((in6_addr*)&addr, ip_address::Type::IP6_ADDRESS);
-+                ip_address::isValidIPv6Addr((in6_addr*)&gateway, ip_address::Type::GATEWAY6_ADDRESS);
+                 addr.emplace(stdplus::fromStr<stdplus::In6Addr>(ipaddress));
++                gateway.emplace(stdplus::fromStr<stdplus::In6Addr>(ipgateway));
++                ip_address::isValidIPv6Addr((in6_addr*)(&addr.value()), ip_address::Type::IP6_ADDRESS);
++                ip_address::isValidIPv6Addr((in6_addr*)(&gateway.value()), ip_address::Type::IP6_ADDRESS);
 +                EthernetInterfaceIntf::defaultGateway6(ipgateway);
                  break;
              default:
                  throw std::logic_error("Exhausted protocols");
-@@ -250,8 +258,12 @@ ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
+@@ -278,8 +286,12 @@ ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
      {
-         lg2::error("Invalid IP {IP_ADDRESS}: {ERROR}", "IP_ADDRESS", ipaddress,
-                    "ERROR", e);
+         lg2::error("Invalid IP {NET_IP}: {ERROR}", "NET_IP", ipaddress, "ERROR",
+                    e);
 +        lg2::error("Invalid IP {IP_GATEWAY}: {ERROR}", "IP_GATEWAY", ipgateway,
 +                   "ERROR", e);
          elog<InvalidArgument>(Argument::ARGUMENT_NAME("ipaddress"),
@@ -42,29 +42,26 @@ index cc40b5a..ab8b815 100644
 +        elog<InvalidArgument>(Argument::ARGUMENT_NAME("ipgateway"),
 +                              Argument::ARGUMENT_VALUE(ipgateway.c_str()));
      }
-     IfAddr ifaddr;
+     std::optional<stdplus::SubnetAny> ifaddr;
      try
-@@ -857,6 +869,7 @@ std::string EthernetInterface::defaultGateway(std::string gateway)
-         if (!gateway.empty())
+@@ -890,6 +902,12 @@ static void normalizeGateway(std::string& gw)
          {
-             gateway = std::to_string(ToAddr<in_addr>{}(gateway));
-+            ip_address::isValidIPv4Addr(gateway, ip_address::Type::GATEWAY4_ADDRESS);
+             throw std::invalid_argument("Invalid unicast");
          }
-     }
-     catch (const std::exception& e)
-@@ -886,6 +899,7 @@ std::string EthernetInterface::defaultGateway6(std::string gateway)
-         if (!gateway.empty())
-         {
-             gateway = std::to_string(ToAddr<in6_addr>{}(gateway));
-+            ip_address::isValidIPv6Addr(gateway, ip_address::Type::GATEWAY6_ADDRESS);
-         }
++
++        if (typeid(stdplus::In4Addr) == typeid(Addr))
++            ip_address::isValidIPv4Addr(gw, ip_address::Type::GATEWAY4_ADDRESS);
++        else
++            ip_address::isValidIPv6Addr(gw, ip_address::Type::GATEWAY6_ADDRESS);
++
+         gw = stdplus::toStr(ip);
      }
      catch (const std::exception& e)
 diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
 index 629a98c..0c1078c 100644
 --- a/src/ethernet_interface.hpp
 +++ b/src/ethernet_interface.hpp
-@@ -127,10 +127,11 @@ class EthernetInterface : public Ifaces
+@@ -128,10 +128,11 @@ class EthernetInterface : public Ifaces
       *  @param[in] addressType - Type of ip address.
       *  @param[in] ipAddress- IP address.
       *  @param[in] prefixLength - Length of prefix.
@@ -81,7 +78,7 @@ diff --git a/src/util.cpp b/src/util.cpp
 index 484e1eb..163a8af 100644
 --- a/src/util.cpp
 +++ b/src/util.cpp
-@@ -235,6 +235,78 @@ std::string getGarpInterval(const config::Parser& parser)
+@@ -238,5 +238,78 @@ std::string getGarpInterval(const config::Parser& parser)
         }
  }
  
@@ -96,13 +93,13 @@ index 484e1eb..163a8af 100644
 +}
 +
 +void isValidIPv4Addr(std::string addr, Type type) {
-+     in_addr gateway = ToAddr<in_addr>{}(addr);
++     in_addr gateway = stdplus::fromStr<stdplus::In4Addr>(addr);
 +     isValidIPv4Addr((in_addr*)&gateway, type);
 +}
 +
 +void isValidIPv4Addr(in_addr* addr, Type type) {
 +    uint8_t ip[4];
-+    in_addr_t tmp = ntoh(addr->s_addr);
++    in_addr_t tmp = stdplus::ntoh(addr->s_addr);
 +    for (int i = 0; i < 4; i++) {
 +        ip[i] = ( tmp >> (8 * (3 - i)) ) & 0xFF;
 +    } // for
@@ -120,7 +117,7 @@ index 484e1eb..163a8af 100644
 +}
 +
 +void isValidIPv6Addr(std::string addr, Type type) {
-+    in6_addr address = ToAddr<in6_addr>{}(addr);
++    in6_addr address = stdplus::fromStr<stdplus::In6Addr>(addr);
 +    isValidIPv6Addr((in6_addr*)&address, type);
 +}
 +
@@ -157,18 +154,17 @@ index 484e1eb..163a8af 100644
 +}
 +} // namespace ip_address
 +
- namespace mac_address
- {
- 
++
+ } // namespace network
+ } // namespace phosphor
 diff --git a/src/util.hpp b/src/util.hpp
 index f59db55..9477653 100644
 --- a/src/util.hpp
 +++ b/src/util.hpp
-@@ -22,6 +22,41 @@ constexpr auto arpPrefix = "00-bmc-arpcontrol-";
- constexpr auto arpSurffix = ".conf";
+@@ -23,6 +23,40 @@ constexpr auto arpSurffix = ".conf";
  //using IntfName = std::string;
  //using InterfaceList = std::unordered_set<IntfName>;
-+
+ 
 +namespace ip_address {
 +enum class Type {
 +    GATEWAY4_ADDRESS,
@@ -203,8 +199,8 @@ index f59db55..9477653 100644
 +
 +} // namespace ip_address
 +
- namespace mac_address
- {
- 
+ /* @brief converts a sockaddr for the specified address family into
+  *        a type_safe InAddrAny.
+  * @param[in] family - The address family of the buf
 -- 
 2.25.1

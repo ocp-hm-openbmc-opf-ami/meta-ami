@@ -1,0 +1,154 @@
+From bcf3e02f0a0393f8f3c84f1a01ffceca033e2b21 Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Mon, 2 Oct 2023 20:39:19 -0700
+Subject: [PATCH] Add Index for IP Address. 1. Change the Function Setting IP
+ Address from "IP" to "IPWithIndex". 2. Default Give Index 0 to IPv4 Address
+ 3. Change IPv6 Source from Static to DHCP if All the static IPv6 Address are
+ deleted 	modified:   transporthandler.cpp 	modified:  
+ transporthandler.hpp
+
+---
+ transporthandler.cpp | 22 +++++++++--------
+ transporthandler.hpp | 59 +++++++++++++++++++++++++++++++++++++++++---
+ 2 files changed, 67 insertions(+), 14 deletions(-)
+
+diff --git a/transporthandler.cpp b/transporthandler.cpp
+index 530b1dd..d292c93 100644
+--- a/transporthandler.cpp
++++ b/transporthandler.cpp
+@@ -351,15 +351,15 @@ void deleteObjectIfExists(sdbusplus::bus_t& bus, const std::string& service,
+ template <int family>
+ void createIfAddr(sdbusplus::bus_t& bus, const ChannelParams& params,
+                   const typename AddrFamily<family>::addr& address,
+-                  uint8_t prefix)
++                  uint8_t prefix, uint8_t index = 0)
+ {
+     auto newreq = bus.new_method_call(params.service.c_str(),
+                                       params.logicalPath.c_str(),
+-                                      INTF_IP_CREATE, "IP");
++                                      INTF_IP_CREATE, "IPWithIndex");
+     std::string protocol =
+         sdbusplus::xyz::openbmc_project::Network::server::convertForMessage(
+             AddrFamily<family>::protocol);
+-    newreq.append(protocol, addrToString<family>(address), prefix, "");
++    newreq.append(protocol, addrToString<family>(address), prefix, index, "");
+     bus.call_noreply(newreq);
+ }
+ 
+@@ -502,7 +502,7 @@ void reconfigureIfAddr6(sdbusplus::bus_t& bus, const ChannelParams& params,
+                         uint8_t idx, const in6_addr& address, uint8_t prefix)
+ {
+     deconfigureIfAddr6(bus, params, idx);
+-    createIfAddr<AF_INET6>(bus, params, address, prefix);
++    createIfAddr<AF_INET6>(bus, params, address, prefix, idx);
+ }
+ 
+ /** @brief Converts the AddressOrigin into an IPv6Source
+@@ -1482,12 +1482,14 @@ RspType<> setLan(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
+             else
+             {
+                 channelCall<deconfigureIfAddr6>(channel, set);
+-                channelCall<setDHCPv6Property>(
+-                    channel, EthernetInterface::DHCPConf::v6, true);
+-
+-                //We disable IPv6 Router Address Configuration static control field as only applicable when IPv6 is static
+-                IPv6RouterControlFlag::StaticControl=0;
+-                channelCall<setIPv6StaticRtr>(channel, IPv6RouterControlFlag::StaticControl);
++                auto nums = channelCall<getIfAddrNum<AF_INET6>>(channel, originsV6Static);
++                if (nums == 0) {
++                    channelCall<setDHCPv6Property>(channel, EthernetInterface::DHCPConf::v6, true);
++
++                    //We disable IPv6 Router Address Configuration static control field as only applicable when IPv6 is static
++                    IPv6RouterControlFlag::StaticControl=0;
++                    channelCall<setIPv6StaticRtr>(channel, IPv6RouterControlFlag::StaticControl);
++                } // if
+             }
+             return responseSuccess();
+         }
+diff --git a/transporthandler.hpp b/transporthandler.hpp
+index d067f31..05e0313 100644
+--- a/transporthandler.hpp
++++ b/transporthandler.hpp
+@@ -45,6 +45,7 @@ namespace ipmi
+ namespace transport
+ {
+ 
++using namespace phosphor::logging;
+ // D-Bus Network Daemon definitions
+ constexpr auto PATH_ROOT = "/xyz/openbmc_project/network";
+ constexpr auto INTF_ETHERNET = "xyz.openbmc_project.Network.EthernetInterface";
+@@ -485,6 +486,48 @@ std::string addrToString(const typename AddrFamily<family>::addr& address)
+  *  @return MAC in bytes
+  */
+ ether_addr stringToMAC(const char* mac);
++
++/** @brief Count the ip object lookup cache for an address matching
++ *         the input parameters.
++ *
++ *  @param[in] bus     - The bus object used for lookups
++ *  @param[in] params  - The parameters for the channel
++ *  @param[in] idx     - The index of the desired address on the interface
++ *  @param[in] origins - The allowed origins for the address objects
++ *  @return The number of IP address
++ */
++template <int family>
++int getIfAddrNum(
++    sdbusplus::bus_t& bus,
++    const ChannelParams& params,
++    const std::unordered_set<sdbusplus::xyz::openbmc_project::Network::server::IP::AddressOrigin>& origins)
++{
++    int count = 0;
++    ObjectLookupCache ips(bus, params, INTF_IP);
++    for (const auto& [path, properties] : ips)
++    {
++        const auto& addrStr = std::get<std::string>(properties.at("Address"));
++        auto addr = maybeStringToAddr<family>(addrStr.c_str());
++        if (!addr)
++        {
++            continue;
++        }
++
++        sdbusplus::xyz::openbmc_project::Network::server::IP::AddressOrigin
++            origin = sdbusplus::xyz::openbmc_project::Network::server::IP::
++                convertAddressOriginFromString(
++                    std::get<std::string>(properties.at("Origin")));
++        if (origins.find(origin) == origins.end())
++        {
++            continue;
++        }
++
++        count += 1;
++    }
++
++    return count;
++}
++
+ /** @brief Searches the ip object lookup cache for an address matching
+  *         the input parameters. NOTE: The index lacks stability across address
+  *         changes since the network daemon has no notion of stable indicies.
+@@ -523,10 +566,18 @@ std::optional<IfAddr<family>> findIfAddr(
+             continue;
+         }
+ 
+-        if (idx > 0)
+-        {
+-            idx--;
+-            continue;
++        if ( origins == originsV6Static) {
++            const auto& index = std::get<uint8_t>(properties.at("Idx"));
++            if (idx != index) {
++                continue;
++            } // if
++        }
++        else {
++            if (idx > 0)
++            {
++                idx--;
++                continue;
++            }
+         }
+ 
+         IfAddr<family> ifaddr;
+-- 
+2.25.1
+
