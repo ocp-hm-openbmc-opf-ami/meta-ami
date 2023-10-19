@@ -43,6 +43,7 @@ SRC_URI += " \
            file://0052-Fix_For_Set_systemboot_option-0.patch \
            file://0053-Add-Index-for-IP-Address.patch \
            file://0053-Fix-the-Info-of-IPv6-Static-Route-Missing-after-Changing_To_Dynamic_Route.patch \
+           file://0039-Added-Diag-and-safe-boot-mode-support.patch \
            "
 
 
