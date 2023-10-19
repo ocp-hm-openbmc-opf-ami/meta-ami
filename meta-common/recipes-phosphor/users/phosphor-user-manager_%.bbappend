@@ -6,6 +6,8 @@ EXTRA_OECONF += "${@bb.utils.contains_any("IMAGE_FEATURES", [ 'debug-tweaks', 'a
 
 SRC_URI += " \
              file://0003-Add-Host-Interface-User-Support.patch \
+	     file://0012-passwordpolicy.patch \
+	     file://0015-passwordchangerequired.patch \
              file://0017-SSH-Active-User-Delete-Fix.patch \
              file://0018-Added-group-user-for-host-interface.patch \
            "
