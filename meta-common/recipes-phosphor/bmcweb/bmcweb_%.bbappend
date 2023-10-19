@@ -64,7 +64,6 @@ SRC_URI:append = "   \
 	    file://0067-adding-support-for-HttpPushUriTargets.patch \
 	    file://0111-Adding-the-OEM-property-support-for-discrete-sensor.patch \
 	    file://0077-ADDING-propertyNotWritable-Error-Message-for-ReadOnl.patch \
-	    file://0114-powersubsystem-powersupply-properties.patch \
 	    file://0017-Integrated-NVME-Interface.patch \
 	    file://0031-Integrated-RAID-HBA-Interface.patch \
 	    file://0010-Time-zone-configuration-support.patch \
