@@ -4,7 +4,7 @@ SRC_URI += " \
         file://0001-Apply-power-restore-policy-only-AC-power-loss.patch \
         file://0002-Timer-Support-for-Chassis-Systems-Reset-EGS.patch \
         "
-#DEPENDS += "bmc-boot-check"
+DEPENDS += "bmc-boot-check"
 
 #SRC_URI_EGS:append = "file://0002-Timer-Support-for-Chassis-Systems-Reset-EGS.patch"
 
