@@ -46,6 +46,7 @@ SRC_URI += " \
            file://0053-Fix-the-Info-of-IPv6-Static-Route-Missing-after-Changing_To_Dynamic_Route.patch \
            file://0039-Added-Diag-and-safe-boot-mode-support.patch \
            file://phosphor-ipmi-host-evb-ami.service \
+           file://0053-Fix-For-Asset_Tag.patch \
            "
 
 
