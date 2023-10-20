@@ -1,0 +1,1723 @@
+From 51df0cd2aedf0292070536ed28487b3b5c9720c3 Mon Sep 17 00:00:00 2001
+From: leon_lin <leonlin@ami.com>
+Date: Tue, 18 Jul 2023 16:48:10 +0800
+Subject: [PATCH 01/11] Support MCTP secured message type
+
+Signed-off-by: leon_lin <leonlin@ami.com>
+---
+ include/spdmtransport_mctp.hpp |  3 ++-
+ src/spdmtransport_mctp.cpp     | 33 ++++++++++++++++++++++++++++-----
+ 2 files changed, 30 insertions(+), 6 deletions(-)
+
+diff --git a/include/spdmtransport_mctp.hpp b/include/spdmtransport_mctp.hpp
+index 70d86b1..56f2cd3 100644
+--- a/include/spdmtransport_mctp.hpp
++++ b/include/spdmtransport_mctp.hpp
+@@ -123,6 +123,7 @@ class SPDMTransportMCTP : public SPDMTransport
+     std::shared_ptr<boost::asio::io_context> ioc;
+     std::shared_ptr<sdbusplus::asio::connection> conn;
+     mctpw::BindingType transType; /*MCTP over PCIe, MCTP over SMBus*/
+-    std::shared_ptr<mctpw::MCTPWrapper> mctpWrapper;
++    std::shared_ptr<mctpw::MCTPWrapper> mctpWrapper; /* SPDM channel over MCTP */
++    std::shared_ptr<mctpw::MCTPWrapper> securedOverMctpWrapper; /* Secured channel over MCTP */
+ };
+ } // namespace spdm_transport
+diff --git a/src/spdmtransport_mctp.cpp b/src/spdmtransport_mctp.cpp
+index 0bb0174..3d85904 100644
+--- a/src/spdmtransport_mctp.cpp
++++ b/src/spdmtransport_mctp.cpp
+@@ -29,13 +29,27 @@ void SPDMTransportMCTP::transMsgRecvCallback(void*, mctpw::eid_t srcEid,
+                                              const std::vector<uint8_t>& data,
+                                              int /*status*/)
+ {
+-    if (!data.empty() &&
+-        data.at(0) == static_cast<uint8_t>(mctpw::MessageType::spdm))
++    if (data.empty())
++    {
++        return;
++    }
++
++    TransportEndPoint tmpEP;
++    tmpEP.devIdentifier = srcEid;
++
++    if (data.at(0) == static_cast<uint8_t>(mctpw::MessageType::spdm))
+     {
+-        TransportEndPoint tmpEP;
+-        tmpEP.devIdentifier = srcEid;
+         msgReceiveCB(tmpEP, data);
+     }
++    else if (data.at(0) == static_cast<uint8_t>(mctpw::MessageType::securedMsg))
++    {
++        if (asyncSendData(tmpEP, data, 2000) !=
++            spdm_app_lib::error_codes::returnSuccess)
++        {
++            phosphor::logging::log<phosphor::logging::level::ERR>(
++                "Failed to send secured messages back.");
++        }
++    }
+ }
+ 
+ void SPDMTransportMCTP::transOnDeviceUpdate(
+@@ -121,7 +135,9 @@ int SPDMTransportMCTP::sendRecvData(TransportEndPoint& transEP,
+         return spdm_app_lib::error_codes::generalReturnError;
+     }
+ 
+-    if (reply.second.at(0) != static_cast<uint8_t>(mctpw::MessageType::spdm))
++    if (reply.second.at(0) != static_cast<uint8_t>(mctpw::MessageType::spdm) &&
++        reply.second.at(0) !=
++            static_cast<uint8_t>(mctpw::MessageType::securedMsg))
+     {
+         return spdm_app_lib::error_codes::generalReturnError;
+     }
+@@ -173,5 +189,12 @@ SPDMTransportMCTP::SPDMTransportMCTP(
+         std::bind(&SPDMTransportMCTP::transOnDeviceUpdate, this, _1, _2, _3),
+         std::bind(&SPDMTransportMCTP::transMsgRecvCallback, this, _1, _2, _3,
+                   _4, _5, _6));
++    mctpw::MCTPConfiguration securedConfig(mctpw::MessageType::securedMsg,
++                                           transType);
++    securedOverMctpWrapper = std::make_shared<mctpw::MCTPWrapper>(
++        conn, securedConfig,
++        std::bind(&SPDMTransportMCTP::transOnDeviceUpdate, this, _1, _2, _3),
++        std::bind(&SPDMTransportMCTP::transMsgRecvCallback, this, _1, _2, _3,
++                  _4, _5, _6));
+ }
+ } // namespace spdm_transport
+-- 
+2.34.1
+
+
+From 40ea921fa5c65771cd8c4d99856d32bee59d2c22 Mon Sep 17 00:00:00 2001
+From: leon_lin <leonlin@ami.com>
+Date: Fri, 21 Jul 2023 18:21:07 +0800
+Subject: [PATCH 02/11] Add more logs to trace type-6 packet
+
+Signed-off-by: leon_lin <leonlin@ami.com>
+---
+ src/spdmtransport_mctp.cpp | 23 ++++++++++++++++++++++-
+ 1 file changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/src/spdmtransport_mctp.cpp b/src/spdmtransport_mctp.cpp
+index 3d85904..77180f5 100644
+--- a/src/spdmtransport_mctp.cpp
++++ b/src/spdmtransport_mctp.cpp
+@@ -20,6 +20,7 @@
+ #include <cstdint>
+ #include <functional>
+ #include <iostream>
++#include <sstream>
+ 
+ namespace spdm_transport
+ {
+@@ -27,7 +28,7 @@ void SPDMTransportMCTP::transMsgRecvCallback(void*, mctpw::eid_t srcEid,
+                                              bool /*tagOwner*/,
+                                              uint8_t /* msgTag*/,
+                                              const std::vector<uint8_t>& data,
+-                                             int /*status*/)
++                                             int status)
+ {
+     if (data.empty())
+     {
+@@ -43,6 +44,15 @@ void SPDMTransportMCTP::transMsgRecvCallback(void*, mctpw::eid_t srcEid,
+     }
+     else if (data.at(0) == static_cast<uint8_t>(mctpw::MessageType::securedMsg))
+     {
++        std::stringstream ss;
++        ss << "onMCTPReceive EID " << static_cast<int>(srcEid) << std::endl
++           << "onMCTPReceive Status " << status << std::endl
++           << "onMCTPReceive Response ";
++        for (uint8_t n : data)
++        {
++            ss << n << ' ';
++        }
++        phosphor::logging::log<phosphor::logging::level::DEBUG>(ss.str().c_str());
+         if (asyncSendData(tmpEP, data, 2000) !=
+             spdm_app_lib::error_codes::returnSuccess)
+         {
+@@ -168,6 +178,17 @@ void SPDMTransportMCTP::initDiscovery(
+             transAddNewDevice(item.first);
+         }
+     });
++
++    boost::asio::spawn(*(ioc), [this](boost::asio::yield_context yield) {
++        securedOverMctpWrapper->detectMctpEndpoints(yield);
++        mctpw::VersionFields specVersion = {0xF1, 0xF0, 0xF1, 0x00};
++        auto rcvStatus = securedOverMctpWrapper->registerResponder(specVersion);
++        if (rcvStatus != boost::system::errc::success)
++        {
++            phosphor::logging::log<phosphor::logging::level::ERR>(
++                "Failed to register secured MCTP responder.");
++        }
++    });
+ }
+ 
+ std::string SPDMTransportMCTP::getSPDMtransport()
+-- 
+2.34.1
+
+
+From 0dc2ab4ac2fd1fb117870f4f14680ce1cbc7cdca Mon Sep 17 00:00:00 2001
+From: leon_lin <leonlin@ami.com>
+Date: Wed, 26 Jul 2023 14:35:01 +0800
+Subject: [PATCH 03/11] Format debug log on MCTP event
+
+Signed-off-by: leon_lin <leonlin@ami.com>
+---
+ src/spdmtransport_mctp.cpp | 20 +++++++++++---------
+ 1 file changed, 11 insertions(+), 9 deletions(-)
+
+diff --git a/src/spdmtransport_mctp.cpp b/src/spdmtransport_mctp.cpp
+index 77180f5..1c6f8d6 100644
+--- a/src/spdmtransport_mctp.cpp
++++ b/src/spdmtransport_mctp.cpp
+@@ -20,6 +20,7 @@
+ #include <cstdint>
+ #include <functional>
+ #include <iostream>
++#include <iomanip>
+ #include <sstream>
+ 
+ namespace spdm_transport
+@@ -38,21 +39,22 @@ void SPDMTransportMCTP::transMsgRecvCallback(void*, mctpw::eid_t srcEid,
+     TransportEndPoint tmpEP;
+     tmpEP.devIdentifier = srcEid;
+ 
++    std::ostringstream oss;
++    oss << "Payloads: ";
++    for (const auto& byte : data)
++    {
++         oss << "0x" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(byte) << ' ';
++    }
++    phosphor::logging::log<phosphor::logging::level::INFO>(("EID: " + std::to_string(srcEid)).c_str());
++    phosphor::logging::log<phosphor::logging::level::INFO>(("Status: " + std::to_string(status)).c_str());
++    phosphor::logging::log<phosphor::logging::level::INFO>(oss.str().c_str());
++
+     if (data.at(0) == static_cast<uint8_t>(mctpw::MessageType::spdm))
+     {
+         msgReceiveCB(tmpEP, data);
+     }
+     else if (data.at(0) == static_cast<uint8_t>(mctpw::MessageType::securedMsg))
+     {
+-        std::stringstream ss;
+-        ss << "onMCTPReceive EID " << static_cast<int>(srcEid) << std::endl
+-           << "onMCTPReceive Status " << status << std::endl
+-           << "onMCTPReceive Response ";
+-        for (uint8_t n : data)
+-        {
+-            ss << n << ' ';
+-        }
+-        phosphor::logging::log<phosphor::logging::level::DEBUG>(ss.str().c_str());
+         if (asyncSendData(tmpEP, data, 2000) !=
+             spdm_app_lib::error_codes::returnSuccess)
+         {
+-- 
+2.34.1
+
+
+From 358f6cbf8127b5016fa527f729b00727941cb1bb Mon Sep 17 00:00:00 2001
+From: leon_lin <leonlin@ami.com>
+Date: Tue, 8 Aug 2023 19:10:08 +0800
+Subject: [PATCH 04/11] Add SPDM 1.1 functions of requester side
+
+Signed-off-by: leon_lin <leonlin@ami.com>
+---
+ include/spdmapplib.hpp                |  55 ++++++++++++
+ include/spdmapplib_requester_impl.hpp |  63 ++++++++++++++
+ src/spdmapplib.cpp                    |  29 +++++++
+ src/spdmapplib_requester_impl.cpp     | 117 ++++++++++++++++++++++++++
+ 4 files changed, 264 insertions(+)
+
+diff --git a/include/spdmapplib.hpp b/include/spdmapplib.hpp
+index 2796a79..545ddc8 100644
+--- a/include/spdmapplib.hpp
++++ b/include/spdmapplib.hpp
+@@ -144,6 +144,61 @@ class SPDMRequester
+      **/
+     bool getCertificate(std::vector<uint8_t>& certificate);
+ 
++    /**
++     * @brief  To start secure session.
++     * @param  usePsk            Use pre shared key.
++     * @param  sessionId         Id created for this session
++     * @param  heartbeatPeriod   Heartbeat period for this session
++     * @return  true             Indicates Success.
++     * @return  false            Indicates Failure
++     *
++     **/
++    bool startSecureSession(bool usePsk, uint32_t& sessionId,
++                            uint8_t& heartbeatPeriod);
++
++    /**
++     * @brief  To terminate secure session.
++     * @param  sessionId         Session id to terminate
++     * @return  true             Indicates Success.
++     * @return  false            Indicates Failure
++     *
++     **/
++    bool endSecureSession(uint32_t sessionId);
++
++    /**
++     *
++     * @brief  To send HEARTBEAT to an SPDM Session.
++     * @param  sessionId         The session ID of the session.
++     * @return  true             Indicates Success.
++     * @return  false            Indicates Failure.
++     *
++     **/
++    bool sendHeartbeat(uint32_t sessionId);
++
++    /**
++     *
++     * @brief  To update keys for an SPDM Session and then verify new key.
++     * @param  sessionId         The session ID of the session.
++     * @param  singleDirection   Update only the single-direction key
++     * @return  true             Indicates Success.
++     * @return  false            Indicates Failure.
++     **/
++    bool updateKey(uint32_t sessionId, bool singleDirection);
++
++    /**
++     *
++     * @brief  To send a secured application message in SPDM session.
++     * @param  sessionId      Indicates a running SPDM session ID.
++     * @param  request        The request data to send.
++     * @param  response       The received response data.
++     * @return  true          Indicates Success.
++     * @return  false         Indicates Failure.
++     *
++     **/
++    bool sendSecuredMessage(uint32_t sessionId,
++                            const std::vector<uint8_t>& request,
++                            std::vector<uint8_t>& response);
++
+   private:
+     std::shared_ptr<SPDMRequesterImpl> pReqImpl;
+ };
+diff --git a/include/spdmapplib_requester_impl.hpp b/include/spdmapplib_requester_impl.hpp
+index 533496c..0ce453a 100644
+--- a/include/spdmapplib_requester_impl.hpp
++++ b/include/spdmapplib_requester_impl.hpp
+@@ -64,6 +64,61 @@ class SPDMRequesterImpl
+      **/
+     bool getCertificate(std::vector<uint8_t>& certificate);
+ 
++    /**
++     * @brief  To start secure session.
++     * @param  usePsk            Use pre shared key.
++     * @param  sessionId         Id created for this session
++     * @param  heartbeatPeriod   Heartbeat period for this session
++     * @return  true             Indicates Success.
++     * @return  false            Indicates Failure.
++     *
++     **/
++    bool startSecureSession(bool usePsk, uint32_t& sessionId,
++                            uint8_t& heartbeatPeriod);
++
++    /**
++     * @brief  To terminate secure session.
++     * @param  sessionId         Session id to terminate
++     * @return  true             Indicates Success.
++     * @return  false            Indicates Failure.
++     *
++     **/
++    bool endSecureSession(uint32_t sessionId);
++
++    /**
++     *
++     * @brief  To send HEARTBEAT to an SPDM Session.
++     * @param  sessionId         The session ID of the session.
++     * @return  true             Indicates Success.
++     * @return  false            Indicates Failure.
++     *
++     **/
++    bool sendHeartbeat(uint32_t sessionId);
++
++    /**
++     *
++     * @brief  To update keys for an SPDM Session and then verify new key.
++     * @param  sessionId         The session ID of the session.
++     * @param  singleDirection   Update only the single-direction key
++     * @return  true             Indicates Success.
++     * @return  false            Indicates Failure.
++     **/
++    bool updateKey(uint32_t sessionId, bool singleDirection);
++
++    /**
++     *
++     * @brief  To send a secured application message in SPDM session.
++     * @param  sessionId      Indicates a running SPDM session ID.
++     * @param  request        The request data to send.
++     * @param  response       The received response data.
++     * @return  true          Indicates Success.
++     * @return  false         Indicates Failure.
++     *
++     **/
++    bool sendSecuredMessage(uint32_t sessionId,
++                            const std::vector<uint8_t>& request,
++                            std::vector<uint8_t>& response);
++
+     /**
+      * @brief Register to libspdm for sending SPDM payload.
+      *
+@@ -140,6 +195,14 @@ class SPDMRequesterImpl
+      */
+     bool setupSpdmRequester();
+ 
++    /**
++     * @brief set certificate chain for mutual authentication
++     *
++     * @return true           If, setCertificateChain succeeds
++     * @return false          If, setCertificateChain fails
++     **/
++    bool setCertificateChain();
++
+     /**
+      * @brief Set received data to assigned endpoint.
+      *
+diff --git a/src/spdmapplib.cpp b/src/spdmapplib.cpp
+index b2167d8..4c94060 100644
+--- a/src/spdmapplib.cpp
++++ b/src/spdmapplib.cpp
+@@ -178,6 +178,35 @@ bool SPDMRequester::getMeasurements(std::vector<uint8_t>& measurements)
+     return pReqImpl->getMeasurements(measurements);
+ }
+ 
++
++bool SPDMRequester::startSecureSession(bool usePsk, uint32_t& sessionId,
++                                       uint8_t& heartbeatPeriod)
++{
++    return pReqImpl->startSecureSession(usePsk, sessionId, heartbeatPeriod);
++}
++
++bool SPDMRequester::endSecureSession(uint32_t sessionId)
++{
++    return pReqImpl->endSecureSession(sessionId);
++}
++
++bool SPDMRequester::sendHeartbeat(uint32_t sessionId)
++{
++    return pReqImpl->sendHeartbeat(sessionId);
++}
++
++bool SPDMRequester::updateKey(uint32_t sessionId, bool singleDirection)
++{
++    return pReqImpl->updateKey(sessionId, singleDirection);
++}
++
++bool SPDMRequester::sendSecuredMessage(uint32_t sessionId,
++                                       const std::vector<uint8_t>& request,
++                                       std::vector<uint8_t>& response)
++{
++    return pReqImpl->sendSecuredMessage(sessionId, request, response);
++}
++
+ SPDMRequester::~SPDMRequester() noexcept = default;
+ 
+ SPDMResponder::SPDMResponder(
+diff --git a/src/spdmapplib_requester_impl.cpp b/src/spdmapplib_requester_impl.cpp
+index fd2c554..89b93f6 100644
+--- a/src/spdmapplib_requester_impl.cpp
++++ b/src/spdmapplib_requester_impl.cpp
+@@ -225,6 +225,13 @@ bool SPDMRequesterImpl::doMeasurement(const uint32_t* session_id)
+     std::array<uint8_t, measurementTranscriptSize> measurementTranscript{0};
+     spdmResponder.dataMeas.clear();
+ 
++    if (!setCertificateChain())
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "SPDMRequesterImpl::doMeasurement cannot set up certificate chain for mutual authentication.");
++        return false;
++    }
++
+     if ((exeConnection & exeConnectionChal))
+     {
+         if (!validateSpdmRc(
+@@ -367,6 +374,116 @@ bool SPDMRequesterImpl::setupSpdmRequester()
+     return true;
+ }
+ 
++bool SPDMRequesterImpl::startSecureSession(bool usePsk, uint32_t& sessionId,
++                                           uint8_t& heartbeatPeriod)
++{
++    uint8_t useMeasurementSummaryHashType =
++        SPDM_CHALLENGE_REQUEST_ALL_MEASUREMENTS_HASH;
++    uint8_t measurementHash[LIBSPDM_MAX_HASH_SIZE];
++    uint8_t sessionPolicy =
++        SPDM_KEY_EXCHANGE_REQUEST_SESSION_POLICY_TERMINATION_POLICY_RUNTIME_UPDATE;
++    uint8_t useSlotId = 0;
++
++    if (!setCertificateChain())
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "SPDMRequesterImpl::startSecureSession cannot set up certificate chain for mutual authentication.");
++        return false;
++    }
++
++    return validateSpdmRc(libspdm_start_session(
++        spdmResponder.spdmContext, usePsk, useMeasurementSummaryHashType,
++        useSlotId, sessionPolicy, &sessionId, &heartbeatPeriod,
++        measurementHash));
++}
++
++bool SPDMRequesterImpl::endSecureSession(uint32_t sessionId)
++{
++    uint8_t endSessionAttributes =
++        0x00000001; // preservce responder negotiated state
++    return validateSpdmRc(libspdm_stop_session(
++        spdmResponder.spdmContext, sessionId, endSessionAttributes));
++}
++
++bool SPDMRequesterImpl::sendHeartbeat(uint32_t sessionId)
++{
++    return validateSpdmRc(
++        libspdm_heartbeat(spdmResponder.spdmContext, sessionId));
++}
++
++bool SPDMRequesterImpl::updateKey(uint32_t sessionId, bool singleDirection)
++{
++    return validateSpdmRc(libspdm_key_update(spdmResponder.spdmContext,
++                                             sessionId, singleDirection));
++}
++
++bool SPDMRequesterImpl::sendSecuredMessage(uint32_t sessionId,
++                                           const std::vector<uint8_t>& request,
++                                           std::vector<uint8_t>& response)
++{
++    const bool IS_APP_MESSAGE = true;
++    size_t requestSize = request.size();
++    size_t responseSize = LIBSPDM_MAX_MESSAGE_BUFFER_SIZE;
++    uint8_t responseArray[LIBSPDM_MAX_MESSAGE_BUFFER_SIZE];
++    const uint8_t *requestArray = request.data();
++    if (!validateSpdmRc(libspdm_send_receive_data(
++            spdmResponder.spdmContext, &sessionId, IS_APP_MESSAGE, requestArray,
++            requestSize, responseArray, &responseSize)))
++    {
++        return false;
++    }
++    std::vector<uint8_t> buffer(responseArray, responseArray + responseSize);
++    response = buffer;
++    return true;
++}
++
++bool SPDMRequesterImpl::setCertificateChain()
++{
++    uint32_t baseHashAlgo;
++    uint32_t baseAsymAlgo;
++    uint32_t measurementHashAlgo;
++    uint16_t reqAsymAlgo;
++    size_t certChainSize = 0;
++    void* certChain;
++    libspdm_data_parameter_t parameter;
++
++    if (!(spdmRequesterCfg.capability &
++          SPDM_GET_CAPABILITIES_REQUEST_FLAGS_MUT_AUTH_CAP))
++    {
++        phosphor::logging::log<phosphor::logging::level::INFO>(
++            "SPDMRequesterImpl::setCerticateChain Ignore to set certificate due to unsupported mutual authentication.");
++        return true;
++    }
++
++    if (!spdmGetAlgo(spdmResponder, measurementHashAlgo, baseAsymAlgo,
++                     baseHashAlgo, reqAsymAlgo))
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "SPDMRequesterImpl::setCerticateChain failed to get negotiated algorithms for mutual authentication.");
++        return false;
++    }
++
++    if (!libspdm_read_requester_public_certificate_chain(
++            baseHashAlgo, reqAsymAlgo, &certChain, &certChainSize, nullptr,
++            nullptr))
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "SPDMRequesterImpl::setCerticateChain failed to read public certificate chain for mutual authentication.");
++        return false;
++    }
++
++    initGetSetParameter(parameter, operationSet);
++    if (!validateSpdmRc(libspdm_set_data(spdmResponder.spdmContext,
++                                         LIBSPDM_DATA_LOCAL_PUBLIC_CERT_CHAIN,
++                                         &parameter, certChain, certChainSize)))
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "SPDMRequesterImpl::setCerticateChain failed to set certificate chain for mutual authentication.");
++        return false;
++    }
++    return true;
++}
++
+ SPDMRequesterImpl::SPDMRequesterImpl(
+     std::shared_ptr<boost::asio::io_context> io,
+     std::shared_ptr<sdbusplus::asio::connection> con,
+-- 
+2.34.1
+
+
+From c65956abc21ceca5afb477c1ec414531d3f600af Mon Sep 17 00:00:00 2001
+From: leon_lin <leonlin@ami.com>
+Date: Thu, 10 Aug 2023 18:09:49 +0800
+Subject: [PATCH 05/11] Add slot id in SPDM 1.0 functions
+
+Signed-off-by: leon_lin <leonlin@ami.com>
+---
+ include/spdmapplib.hpp                |  8 ++++++--
+ include/spdmapplib_requester_impl.hpp | 14 ++++++++++----
+ src/spdmapplib.cpp                    | 11 ++++++-----
+ src/spdmapplib_requester_impl.cpp     | 19 ++++++++++---------
+ 4 files changed, 32 insertions(+), 20 deletions(-)
+
+diff --git a/include/spdmapplib.hpp b/include/spdmapplib.hpp
+index 545ddc8..dc22a0f 100644
+--- a/include/spdmapplib.hpp
++++ b/include/spdmapplib.hpp
+@@ -129,20 +129,24 @@ class SPDMRequester
+      * @brief Get all measurement function
+      *
+      * @param   measurements     The measurements returned for specific endPoint
++     * @param   useSlotId        The number of slot for the certificate chain.
+      * @return  true             Indicates Success.
+      * @return  false            Indicates Failure
+      **/
+-    bool getMeasurements(std::vector<uint8_t>& measurements);
++    bool getMeasurements(std::vector<uint8_t>& measurements,
++                         uint8_t useSlotId = 0);
+ 
+     /**
+      * @brief Get certificate function
+      *
+      * @param   certificate      The certificate returned for specific endPoint.
++     * @param   useSlotId        The number of slot for the certificate chain.
+      * @return  true             Indicates Success.
+      * @return  false            Indicates Failure
+      *
+      **/
+-    bool getCertificate(std::vector<uint8_t>& certificate);
++    bool getCertificate(std::vector<uint8_t>& certificate,
++                        uint8_t useSlotId = 0);
+ 
+     /**
+      * @brief  To start secure session.
+diff --git a/include/spdmapplib_requester_impl.hpp b/include/spdmapplib_requester_impl.hpp
+index 0ce453a..3ad3f67 100644
+--- a/include/spdmapplib_requester_impl.hpp
++++ b/include/spdmapplib_requester_impl.hpp
+@@ -50,19 +50,23 @@ class SPDMRequesterImpl
+      * @brief Get all measurement function
+      *
+      * @param measurement     vector holding the measurements
++     * @param useSlotId       The number of slot for the certificate chain.
+      * @return true           If, vector contains measurements.
+      * @return false          If, vector is empty
+      **/
+-    bool getMeasurements(std::vector<uint8_t>& measurement);
++    bool getMeasurements(std::vector<uint8_t>& measurement,
++                         uint8_t useSlotId = 0);
+ 
+     /**
+      * @brief Get certification function
+      *
+      * @param certificate     vector holding the certificate
++     * @param useSlotId       The number of slot for the certificate chain.
+      * @return true           If, vector contains certificate.
+      * @return false          If, vector is empty
+      **/
+-    bool getCertificate(std::vector<uint8_t>& certificate);
++    bool getCertificate(std::vector<uint8_t>& certificate,
++                        uint8_t useSlotId = 0);
+ 
+     /**
+      * @brief  To start secure session.
+@@ -173,19 +177,21 @@ class SPDMRequesterImpl
+     /**
+      * @brief The authentication function
+      *
++     * @param useSlotId       The number of slot for the certificate chain.
+      * @return true           If, doAuth passes.
+      * @return false          If, doAuth fails
+      **/
+-    bool doAuthentication(void);
++    bool doAuthentication(uint8_t useSlotId = 0);
+ 
+     /**
+      * @brief The measurement function
+      *
+      * @param  sessionid      The session id pointer
++     * @param useSlotId       The number of slot for the certificate chain.
+      * @return true           If, doMeas succeeds
+      * @return false          If, doMeas fails
+      **/
+-    bool doMeasurement(const uint32_t* sessionid);
++    bool doMeasurement(const uint32_t* sessionid, uint8_t useSlotId = 0);
+ 
+     /**
+      * @brief sets up the SPDM Requester
+diff --git a/src/spdmapplib.cpp b/src/spdmapplib.cpp
+index 4c94060..44caa64 100644
+--- a/src/spdmapplib.cpp
++++ b/src/spdmapplib.cpp
+@@ -168,17 +168,18 @@ SPDMRequester::SPDMRequester(
+                                                  transResponder, pSpdmConfig))
+ {}
+ 
+-bool SPDMRequester::getCertificate(std::vector<uint8_t>& certificate)
++bool SPDMRequester::getCertificate(std::vector<uint8_t>& certificate,
++                                   uint8_t useSlotId)
+ {
+-    return pReqImpl->getCertificate(certificate);
++    return pReqImpl->getCertificate(certificate, useSlotId);
+ }
+ 
+-bool SPDMRequester::getMeasurements(std::vector<uint8_t>& measurements)
++bool SPDMRequester::getMeasurements(std::vector<uint8_t>& measurements,
++                                    uint8_t useSlotId)
+ {
+-    return pReqImpl->getMeasurements(measurements);
++    return pReqImpl->getMeasurements(measurements, useSlotId);
+ }
+ 
+-
+ bool SPDMRequester::startSecureSession(bool usePsk, uint32_t& sessionId,
+                                        uint8_t& heartbeatPeriod)
+ {
+diff --git a/src/spdmapplib_requester_impl.cpp b/src/spdmapplib_requester_impl.cpp
+index 89b93f6..477a466 100644
+--- a/src/spdmapplib_requester_impl.cpp
++++ b/src/spdmapplib_requester_impl.cpp
+@@ -156,10 +156,9 @@ bool SPDMRequesterImpl::isConnStateNegotiated()
+     return true;
+ }
+ 
+-bool SPDMRequesterImpl::doAuthentication(void)
++bool SPDMRequesterImpl::doAuthentication(uint8_t useSlotId)
+ {
+     uint8_t slotMask = 0;
+-    uint8_t useSlotId = 0;
+     std::array<uint8_t, LIBSPDM_MAX_CERT_CHAIN_SIZE> certChain{0};
+     std::array<uint8_t, LIBSPDM_MAX_HASH_SIZE * SPDM_MAX_SLOT_COUNT>
+         totalDigestBuffer{0};
+@@ -214,9 +213,9 @@ bool SPDMRequesterImpl::doAuthentication(void)
+     return true;
+ }
+ 
+-bool SPDMRequesterImpl::doMeasurement(const uint32_t* session_id)
++bool SPDMRequesterImpl::doMeasurement(const uint32_t* session_id,
++                                      uint8_t useSlotId)
+ {
+-    uint8_t useSlotId = 0;
+     uint8_t numberOfBlocks = 0;
+     uint32_t measurementRecordLength = 0;
+     constexpr size_t measurementTranscriptSize = 0x4096;
+@@ -278,7 +277,8 @@ bool SPDMRequesterImpl::doMeasurement(const uint32_t* session_id)
+     return true;
+ }
+ 
+-bool SPDMRequesterImpl::getMeasurements(std::vector<uint8_t>& measurements)
++bool SPDMRequesterImpl::getMeasurements(std::vector<uint8_t>& measurements,
++                                        uint8_t useSlotId)
+ {
+     if (!setupSpdmRequester())
+     {
+@@ -286,7 +286,7 @@ bool SPDMRequesterImpl::getMeasurements(std::vector<uint8_t>& measurements)
+             "SPDMRequesterImpl::getMeasurements setupSpdmRequester failed!");
+         return false;
+     }
+-    if (!doAuthentication())
++    if (!doAuthentication(useSlotId))
+     {
+         phosphor::logging::log<phosphor::logging::level::INFO>(
+             "SPDMRequesterImpl::getMeasurements doAuthentication failed!");
+@@ -300,7 +300,7 @@ bool SPDMRequesterImpl::getMeasurements(std::vector<uint8_t>& measurements)
+         return false;
+     }
+ 
+-    if (!doMeasurement(NULL))
++    if (!doMeasurement(NULL, useSlotId))
+     {
+         phosphor::logging::log<phosphor::logging::level::INFO>(
+             "SPDMRequesterImpl::getMeasurements doMeasurement failed!");
+@@ -319,7 +319,8 @@ bool SPDMRequesterImpl::getMeasurements(std::vector<uint8_t>& measurements)
+     return true;
+ }
+ 
+-bool SPDMRequesterImpl::getCertificate(std::vector<uint8_t>& certificate)
++bool SPDMRequesterImpl::getCertificate(std::vector<uint8_t>& certificate,
++                                       uint8_t useSlotId)
+ {
+     if (!setupSpdmRequester())
+     {
+@@ -328,7 +329,7 @@ bool SPDMRequesterImpl::getCertificate(std::vector<uint8_t>& certificate)
+         return false;
+     }
+ 
+-    if (!doAuthentication())
++    if (!doAuthentication(useSlotId))
+     {
+         phosphor::logging::log<phosphor::logging::level::ERR>(
+             "SPDMRequesterImpl::getCertificate doAuthentication failed!");
+-- 
+2.34.1
+
+
+From 738fadf278e236168bf1a1e1e081a9588ca8a48c Mon Sep 17 00:00:00 2001
+From: leon_lin <leonlin@ami.com>
+Date: Thu, 10 Aug 2023 18:10:57 +0800
+Subject: [PATCH 06/11] Add sample key and CA for requester mutual
+ authentication
+
+Signed-off-by: leon_lin <leonlin@ami.com>
+---
+ sample_spdm_requester/meson.build             |  22 ++++++++++
+ .../rsa3072/bundle_requester.certchain.der    | Bin 0 -> 3632 bytes
+ .../sample_keys/rsa3072/end_requester.key     |  40 ++++++++++++++++++
+ 3 files changed, 62 insertions(+)
+ create mode 100755 sample_spdm_requester/sample_keys/rsa3072/bundle_requester.certchain.der
+ create mode 100755 sample_spdm_requester/sample_keys/rsa3072/end_requester.key
+
+diff --git a/sample_spdm_requester/meson.build b/sample_spdm_requester/meson.build
+index 0e56875..bba0d6b 100755
+--- a/sample_spdm_requester/meson.build
++++ b/sample_spdm_requester/meson.build
+@@ -9,3 +9,25 @@ executable('spdm_requester',
+     install: true,
+     install_dir:get_option('bindir'))
+ 
++packagedir = join_paths(
++    get_option('prefix'),
++    get_option('datadir'),
++    'spdmd',
++)
++
++certificates = [
++    'bundle_requester.certchain.der',
++    'end_requester.key'
++]
++filepaths = []
++foreach c : certificates
++    file = join_paths('sample_keys/rsa3072', c)
++    install_data(
++        file,
++        install_dir: join_paths(
++            packagedir,
++            'sample_keys/rsa3072',
++        )
++    )
++    filepaths += [file]
++endforeach
+\ No newline at end of file
+-- 
+2.34.1
+
+
+From 189ffbf52195def1025d75ee5960e293199ee049 Mon Sep 17 00:00:00 2001
+From: leon_lin <leonlin@ami.com>
+Date: Thu, 10 Aug 2023 23:56:24 +0800
+Subject: [PATCH 07/11] Add optional slot id support on session establishment
+
+Signed-off-by: leon_lin <leonlin@ami.com>
+---
+ include/spdmapplib.hpp                | 3 ++-
+ include/spdmapplib_requester_impl.hpp | 3 ++-
+ src/spdmapplib.cpp                    | 6 ++++--
+ src/spdmapplib_requester_impl.cpp     | 4 ++--
+ 4 files changed, 10 insertions(+), 6 deletions(-)
+
+diff --git a/include/spdmapplib.hpp b/include/spdmapplib.hpp
+index dc22a0f..6523c50 100644
+--- a/include/spdmapplib.hpp
++++ b/include/spdmapplib.hpp
+@@ -153,12 +153,13 @@ class SPDMRequester
+      * @param  usePsk            Use pre shared key.
+      * @param  sessionId         Id created for this session
+      * @param  heartbeatPeriod   Heartbeat period for this session
++     * @param  useSlotId         The number of slot for the certificate chain.
+      * @return  true             Indicates Success.
+      * @return  false            Indicates Failure
+      *
+      **/
+     bool startSecureSession(bool usePsk, uint32_t& sessionId,
+-                            uint8_t& heartbeatPeriod);
++                            uint8_t& heartbeatPeriod, uint8_t useSlotId = 0);
+ 
+     /**
+      * @brief  To terminate secure session.
+diff --git a/include/spdmapplib_requester_impl.hpp b/include/spdmapplib_requester_impl.hpp
+index 3ad3f67..d62be8f 100644
+--- a/include/spdmapplib_requester_impl.hpp
++++ b/include/spdmapplib_requester_impl.hpp
+@@ -73,12 +73,13 @@ class SPDMRequesterImpl
+      * @param  usePsk            Use pre shared key.
+      * @param  sessionId         Id created for this session
+      * @param  heartbeatPeriod   Heartbeat period for this session
++     * @param  useSlotId         The number of slot for the certificate chain.
+      * @return  true             Indicates Success.
+      * @return  false            Indicates Failure.
+      *
+      **/
+     bool startSecureSession(bool usePsk, uint32_t& sessionId,
+-                            uint8_t& heartbeatPeriod);
++                            uint8_t& heartbeatPeriod, uint8_t useSlotId = 0);
+ 
+     /**
+      * @brief  To terminate secure session.
+diff --git a/src/spdmapplib.cpp b/src/spdmapplib.cpp
+index 44caa64..3dfe9d3 100644
+--- a/src/spdmapplib.cpp
++++ b/src/spdmapplib.cpp
+@@ -181,9 +181,11 @@ bool SPDMRequester::getMeasurements(std::vector<uint8_t>& measurements,
+ }
+ 
+ bool SPDMRequester::startSecureSession(bool usePsk, uint32_t& sessionId,
+-                                       uint8_t& heartbeatPeriod)
++                                       uint8_t& heartbeatPeriod,
++                                       uint8_t useSlotId)
+ {
+-    return pReqImpl->startSecureSession(usePsk, sessionId, heartbeatPeriod);
++    return pReqImpl->startSecureSession(usePsk, sessionId, heartbeatPeriod,
++                                        useSlotId);
+ }
+ 
+ bool SPDMRequester::endSecureSession(uint32_t sessionId)
+diff --git a/src/spdmapplib_requester_impl.cpp b/src/spdmapplib_requester_impl.cpp
+index 477a466..1072377 100644
+--- a/src/spdmapplib_requester_impl.cpp
++++ b/src/spdmapplib_requester_impl.cpp
+@@ -376,14 +376,14 @@ bool SPDMRequesterImpl::setupSpdmRequester()
+ }
+ 
+ bool SPDMRequesterImpl::startSecureSession(bool usePsk, uint32_t& sessionId,
+-                                           uint8_t& heartbeatPeriod)
++                                           uint8_t& heartbeatPeriod,
++                                           uint8_t useSlotId)
+ {
+     uint8_t useMeasurementSummaryHashType =
+         SPDM_CHALLENGE_REQUEST_ALL_MEASUREMENTS_HASH;
+     uint8_t measurementHash[LIBSPDM_MAX_HASH_SIZE];
+     uint8_t sessionPolicy =
+         SPDM_KEY_EXCHANGE_REQUEST_SESSION_POLICY_TERMINATION_POLICY_RUNTIME_UPDATE;
+-    uint8_t useSlotId = 0;
+ 
+     if (!setCertificateChain())
+     {
+-- 
+2.34.1
+
+
+From 98c20c9617feb6e4fc958abd90aa0c841fddf4e5 Mon Sep 17 00:00:00 2001
+From: leon_lin <leonlin@ami.com>
+Date: Fri, 11 Aug 2023 18:38:57 +0800
+Subject: [PATCH 08/11] Modify sample requester for SPDM 1.1 functions
+
+Signed-off-by: leon_lin <leonlin@ami.com>
+---
+ sample_spdm_requester/spdm_requester.cpp | 175 ++++++++++++++++++++++-
+ 1 file changed, 169 insertions(+), 6 deletions(-)
+
+diff --git a/sample_spdm_requester/spdm_requester.cpp b/sample_spdm_requester/spdm_requester.cpp
+index 5240e66..f604015 100644
+--- a/sample_spdm_requester/spdm_requester.cpp
++++ b/sample_spdm_requester/spdm_requester.cpp
+@@ -108,26 +108,189 @@ static void startSPDMRequester()
+             auto spdmRequester = std::make_shared<spdm_app_lib::SPDMRequester>(
+                 ioc, conn, trans, eidPoint, spdmRequesterCfg);
+             std::vector<uint8_t> data = {};
+-            if (spdmRequester->getCertificate(data))
++            const uint8_t SLOT_0 = 0;
++            const uint8_t SLOT_1 = 1;
++
++            /** Test case 1 get certificate from slot 0 */
++            if (spdmRequester->getCertificate(data, SLOT_0))
++            {
++                std::cout << "Dump certificate raw data from slot 0."
++                          << std::endl;
++                dumpVector(data);
++            }
++            else
++            {
++                std::cerr << "Failed to get certificate from slot 0 for EID: "
++                          << std::to_string(eidPoint.devIdentifier)
++                          << std::endl;
++            }
++            data.clear();
++
++            /** Test case 2 get certificate from slot 1 */
++            if (spdmRequester->getCertificate(data, SLOT_1))
++            {
++                std::cout << "Dump certificate raw data from slot 1."
++                          << std::endl;
++                dumpVector(data);
++            }
++            else
++            {
++                std::cerr << "Failed to get certificate from slot 1 for EID: "
++                          << std::to_string(eidPoint.devIdentifier)
++                          << std::endl;
++            }
++            data.clear();
++
++            /** Test case 3 get measurement with certificate in slot 0 */
++            if (spdmRequester->getMeasurements(data, SLOT_0))
+             {
++                std::cout
++                    << "Dump measurement raw data with certificate in slot 0."
++                    << std::endl;
+                 dumpVector(data);
+             }
+             else
+             {
+-                std::cerr << "Failed getting Certificate for EID: "
+-                          << std::to_string(eidPoint.devIdentifier) << "\n";
++                std::cerr
++                    << "Failed to get measurement raw data with certificate in slot 0 for EID: "
++                    << std::to_string(eidPoint.devIdentifier) << std::endl;
+             }
+             data.clear();
+-            if (spdmRequester->getMeasurements(data))
++
++            /** Test case 3 get measurement with certificate in slot 1 */
++            if (spdmRequester->getMeasurements(data, SLOT_1))
+             {
++                std::cout
++                    << "Dump measurement raw data with certificate in slot 1."
++                    << std::endl;
+                 dumpVector(data);
+             }
+             else
+             {
+-                std::cerr << "Failed getting Measurements for EID: "
+-                          << std::to_string(eidPoint.devIdentifier) << "\n";
++                std::cerr
++                    << "Failed to get measurement raw data with certificate in slot 1 for EID: "
++                    << std::to_string(eidPoint.devIdentifier) << std::endl;
+             }
+             data.clear();
++
++            /** Test case 4 start secure session by using certificate in slot 0
++             * and no pre-shared key */
++            uint32_t sessionId = 0;
++            uint8_t heartbeatPeriod = 0;
++            const bool NOT_USE_PSK = false;
++            if (spdmRequester->startSecureSession(NOT_USE_PSK, sessionId,
++                                                  heartbeatPeriod, SLOT_0))
++            {
++                std::cout
++                    << "Started secure session with slot-0 certificate successfully."
++                    << std::endl
++                    << "Session ID: " << sessionId << std::endl
++                    << "Heartbeat period: " << heartbeatPeriod << " seconds."
++                    << std::endl;
++            }
++            else
++            {
++                std::cerr
++                    << "Failed to start secure session with slot-0 certificate."
++                    << std::endl;
++            }
++
++            /** Test case 5 send heartbeat */
++            if (spdmRequester->sendHeartbeat(sessionId))
++            {
++                std::cout << "Heartbeat sent successfully." << std::endl;
++            }
++            else
++            {
++                std::cerr << "Failed to send heartbeat" << std::endl
++                          << "Session ID: " << sessionId << std::endl;
++            }
++
++            /** Test case 6 update key in single direction */
++            if (spdmRequester->updateKey(sessionId, false))
++            {
++                std::cout << "Update key in single direction successfully."
++                          << std::endl;
++            }
++            else
++            {
++                std::cerr << "Failed to update key in single direction"
++                          << std::endl
++                          << "Session ID: " << sessionId << std::endl;
++            }
++
++            /** Test case 7 update key */
++            if (spdmRequester->updateKey(sessionId, true))
++            {
++                std::cout << "Update key successfully." << std::endl;
++            }
++            else
++            {
++                std::cerr << "Failed to update key" << std::endl
++                          << "Session ID: " << sessionId << std::endl;
++            }
++
++            /** Test case 8 send application message over secure channel */
++            std::vector<uint8_t> request = {0x05, 0x11, 0xe8, 0x00, 0x00};
++            std::vector<uint8_t> response;
++
++            if (spdmRequester->sendSecuredMessage(sessionId, request, response))
++            {
++                std::cout << "Secured application message sent successfully."
++                          << std::endl;
++            }
++            else
++            {
++                std::cerr << "Failed to send secured messages." << std::endl
++                          << "Session ID: " << sessionId << std::endl;
++            }
++
++            /** Test case 9 terminate the secure session */
++            if (spdmRequester->endSecureSession(sessionId))
++            {
++                std::cout << "Terminate the secure session successfully."
++                          << std::endl;
++            }
++            else
++            {
++                std::cerr << "Failed to terminate the secure session."
++                          << std::endl
++                          << "Session ID: " << sessionId << std::endl;
++            }
++
++            /** Test case 10 start secure session by using certificate in slot 1
++             * and pre-shared key */
++            const bool USE_PSK = true;
++            sessionId = 0;
++            if (spdmRequester->startSecureSession(USE_PSK, sessionId,
++                                                  heartbeatPeriod, SLOT_1))
++            {
++                std::cout
++                    << "Started secure session with slot-1 certificate successfully."
++                    << std::endl
++                    << "Session ID: " << sessionId << std::endl
++                    << "Heartbeat period: " << heartbeatPeriod << " seconds."
++                    << std::endl;
++            }
++            else
++            {
++                std::cerr
++                    << "Failed to start secure session with slot-0 certificate."
++                    << std::endl;
++            }
++
++            /** Test case 11 terminate the secure session */
++            if (spdmRequester->endSecureSession(sessionId))
++            {
++                std::cout << "Terminate the secure session successfully."
++                          << std::endl;
++            }
++            else
++            {
++                std::cerr << "Failed to terminate the secure session."
++                          << std::endl
++                          << "Session ID: " << sessionId << std::endl;
++            }
+         }
+         else if (event == spdm_transport::Event::removed)
+         {
+-- 
+2.34.1
+
+
+From b4bb4e2e059a85274310f8dd24fb32fca5300619 Mon Sep 17 00:00:00 2001
+From: leon_lin <leonlin@ami.com>
+Date: Tue, 15 Aug 2023 16:56:17 +0800
+Subject: [PATCH 09/11] Modify sample requester for SPDM 1.1 validation
+
+Signed-off-by: leon_lin <leonlin@ami.com>
+---
+ sample_spdm_requester/spdm_requester.cpp | 59 ++++++++++++++++++++++++
+ src/spdmapplib_requester_impl.cpp        | 19 +++++++-
+ 2 files changed, 77 insertions(+), 1 deletion(-)
+
+diff --git a/sample_spdm_requester/spdm_requester.cpp b/sample_spdm_requester/spdm_requester.cpp
+index f604015..d1ddb26 100644
+--- a/sample_spdm_requester/spdm_requester.cpp
++++ b/sample_spdm_requester/spdm_requester.cpp
+@@ -90,6 +90,51 @@ static void dumpVector(std::vector<unsigned char> vec)
+     std::cerr << std::dec << std::endl;
+ }
+ 
++static void printBinary(uint32_t value)
++{
++    for (int i = 31; i >= 0; i--)
++    {
++        std::cout << ((value >> i) & 1);
++    }
++}
++
++static void printCurrentConfiguration()
++{
++    std::cout << "Version: ";
++    printBinary(spdmRequesterCfg.version);
++    std::cout << std::endl;
++
++    std::cout << "Capability: ";
++    printBinary(spdmRequesterCfg.capability);
++    std::cout << std::endl;
++
++    std::cout << "ASYM Algorithm: ";
++    printBinary(spdmRequesterCfg.asym);
++    std::cout << std::endl;
++
++    std::cout << "Hash Algorithm: ";
++    printBinary(spdmRequesterCfg.hash);
++    std::cout << std::endl;
++
++    std::cout << "Certificate: " << spdmRequesterCfg.certPath << std::endl;
++
++    std::cout << "DHE Algorithm: ";
++    printBinary(spdmRequesterCfg.dhe);
++    std::cout << std::endl;
++
++    std::cout << "AEAD Algorithm: ";
++    printBinary(spdmRequesterCfg.aead);
++    std::cout << std::endl;
++
++    std::cout << "reqasym Algorithm: ";
++    printBinary(spdmRequesterCfg.reqasym);
++    std::cout << std::endl;
++
++    std::cout << "measHash Algorithm: ";
++    printBinary(spdmRequesterCfg.measHash);
++    std::cout << std::endl;
++}
++
+ /**
+  * @brief Main function of SPDM requester unit test.
+  *
+@@ -99,6 +144,8 @@ static void startSPDMRequester()
+     phosphor::logging::log<phosphor::logging::level::INFO>(
+         "Staring SPDM requester!!");
+ 
++    printCurrentConfiguration();
++
+     trans->initDiscovery([&](spdm_transport::TransportEndPoint eidPoint,
+                              spdm_transport::Event event) {
+         if (event == spdm_transport::Event::added)
+@@ -123,6 +170,7 @@ static void startSPDMRequester()
+                 std::cerr << "Failed to get certificate from slot 0 for EID: "
+                           << std::to_string(eidPoint.devIdentifier)
+                           << std::endl;
++                return;
+             }
+             data.clear();
+ 
+@@ -138,6 +186,7 @@ static void startSPDMRequester()
+                 std::cerr << "Failed to get certificate from slot 1 for EID: "
+                           << std::to_string(eidPoint.devIdentifier)
+                           << std::endl;
++                return;
+             }
+             data.clear();
+ 
+@@ -154,6 +203,7 @@ static void startSPDMRequester()
+                 std::cerr
+                     << "Failed to get measurement raw data with certificate in slot 0 for EID: "
+                     << std::to_string(eidPoint.devIdentifier) << std::endl;
++                return;
+             }
+             data.clear();
+ 
+@@ -170,6 +220,7 @@ static void startSPDMRequester()
+                 std::cerr
+                     << "Failed to get measurement raw data with certificate in slot 1 for EID: "
+                     << std::to_string(eidPoint.devIdentifier) << std::endl;
++                return;
+             }
+             data.clear();
+ 
+@@ -193,6 +244,7 @@ static void startSPDMRequester()
+                 std::cerr
+                     << "Failed to start secure session with slot-0 certificate."
+                     << std::endl;
++                return;
+             }
+ 
+             /** Test case 5 send heartbeat */
+@@ -204,6 +256,7 @@ static void startSPDMRequester()
+             {
+                 std::cerr << "Failed to send heartbeat" << std::endl
+                           << "Session ID: " << sessionId << std::endl;
++                return;
+             }
+ 
+             /** Test case 6 update key in single direction */
+@@ -217,6 +270,7 @@ static void startSPDMRequester()
+                 std::cerr << "Failed to update key in single direction"
+                           << std::endl
+                           << "Session ID: " << sessionId << std::endl;
++                return;
+             }
+ 
+             /** Test case 7 update key */
+@@ -228,6 +282,7 @@ static void startSPDMRequester()
+             {
+                 std::cerr << "Failed to update key" << std::endl
+                           << "Session ID: " << sessionId << std::endl;
++                return;
+             }
+ 
+             /** Test case 8 send application message over secure channel */
+@@ -243,6 +298,7 @@ static void startSPDMRequester()
+             {
+                 std::cerr << "Failed to send secured messages." << std::endl
+                           << "Session ID: " << sessionId << std::endl;
++                return;
+             }
+ 
+             /** Test case 9 terminate the secure session */
+@@ -256,6 +312,7 @@ static void startSPDMRequester()
+                 std::cerr << "Failed to terminate the secure session."
+                           << std::endl
+                           << "Session ID: " << sessionId << std::endl;
++                return;
+             }
+ 
+             /** Test case 10 start secure session by using certificate in slot 1
+@@ -277,6 +334,7 @@ static void startSPDMRequester()
+                 std::cerr
+                     << "Failed to start secure session with slot-0 certificate."
+                     << std::endl;
++                return;
+             }
+ 
+             /** Test case 11 terminate the secure session */
+@@ -290,6 +348,7 @@ static void startSPDMRequester()
+                 std::cerr << "Failed to terminate the secure session."
+                           << std::endl
+                           << "Session ID: " << sessionId << std::endl;
++                return;
+             }
+         }
+         else if (event == spdm_transport::Event::removed)
+diff --git a/src/spdmapplib_requester_impl.cpp b/src/spdmapplib_requester_impl.cpp
+index 1072377..4b5b324 100644
+--- a/src/spdmapplib_requester_impl.cpp
++++ b/src/spdmapplib_requester_impl.cpp
+@@ -385,6 +385,20 @@ bool SPDMRequesterImpl::startSecureSession(bool usePsk, uint32_t& sessionId,
+     uint8_t sessionPolicy =
+         SPDM_KEY_EXCHANGE_REQUEST_SESSION_POLICY_TERMINATION_POLICY_RUNTIME_UPDATE;
+ 
++    if (!setupSpdmRequester())
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "SPDMRequesterImpl::startSecureSession setupSpdmRequester failed!");
++        return false;
++    }
++
++    if (!doAuthentication(useSlotId))
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "SPDMRequesterImpl::startSecureSession doAuthentication failed!");
++        return false;
++    }
++
+     if (!setCertificateChain())
+     {
+         phosphor::logging::log<phosphor::logging::level::ERR>(
+@@ -402,8 +416,11 @@ bool SPDMRequesterImpl::endSecureSession(uint32_t sessionId)
+ {
+     uint8_t endSessionAttributes =
+         0x00000001; // preservce responder negotiated state
+-    return validateSpdmRc(libspdm_stop_session(
++
++    bool result = validateSpdmRc(libspdm_stop_session(
+         spdmResponder.spdmContext, sessionId, endSessionAttributes));
++    freeSpdmContext(spdmResponder);
++    return result;
+ }
+ 
+ bool SPDMRequesterImpl::sendHeartbeat(uint32_t sessionId)
+-- 
+2.34.1
+
+
+From 07aed5fb2c4351680d6a05b7d532121f14f157ff Mon Sep 17 00:00:00 2001
+From: leon_lin <leonlin@ami.com>
+Date: Fri, 18 Aug 2023 00:37:32 +0800
+Subject: [PATCH 10/11] Refactor send secured message
+
+Signed-off-by: leon_lin <leonlin@ami.com>
+---
+ include/spdmapplib.hpp                   |  4 +-
+ include/spdmapplib_requester_impl.hpp    |  4 +-
+ sample_spdm_requester/spdm_requester.cpp | 54 +++++++++++++++++++++---
+ src/spdmapplib.cpp                       |  6 ++-
+ src/spdmapplib_requester_impl.cpp        |  8 ++--
+ src/spdmtransport_mctp.cpp               | 26 ++----------
+ 6 files changed, 64 insertions(+), 38 deletions(-)
+
+diff --git a/include/spdmapplib.hpp b/include/spdmapplib.hpp
+index 6523c50..d0af3a4 100644
+--- a/include/spdmapplib.hpp
++++ b/include/spdmapplib.hpp
+@@ -196,13 +196,15 @@ class SPDMRequester
+      * @param  sessionId      Indicates a running SPDM session ID.
+      * @param  request        The request data to send.
+      * @param  response       The received response data.
++     * @param  isAppMessage   Indicates if it is an APP message or SPDM message.
+      * @return  true          Indicates Success.
+      * @return  false         Indicates Failure.
+      *
+      **/
+     bool sendSecuredMessage(uint32_t sessionId,
+                             const std::vector<uint8_t>& request,
+-                            std::vector<uint8_t>& response);
++                            std::vector<uint8_t>& response,
++                            bool isAppMessage = true);
+ 
+   private:
+     std::shared_ptr<SPDMRequesterImpl> pReqImpl;
+diff --git a/include/spdmapplib_requester_impl.hpp b/include/spdmapplib_requester_impl.hpp
+index d62be8f..7facff1 100644
+--- a/include/spdmapplib_requester_impl.hpp
++++ b/include/spdmapplib_requester_impl.hpp
+@@ -116,13 +116,15 @@ class SPDMRequesterImpl
+      * @param  sessionId      Indicates a running SPDM session ID.
+      * @param  request        The request data to send.
+      * @param  response       The received response data.
++     * @param  isAppMessage   Indicates if it is an APP message or SPDM message.
+      * @return  true          Indicates Success.
+      * @return  false         Indicates Failure.
+      *
+      **/
+     bool sendSecuredMessage(uint32_t sessionId,
+                             const std::vector<uint8_t>& request,
+-                            std::vector<uint8_t>& response);
++                            std::vector<uint8_t>& response,
++                            bool isAppMessage = true);
+ 
+     /**
+      * @brief Register to libspdm for sending SPDM payload.
+diff --git a/sample_spdm_requester/spdm_requester.cpp b/sample_spdm_requester/spdm_requester.cpp
+index d1ddb26..69f15a5 100644
+--- a/sample_spdm_requester/spdm_requester.cpp
++++ b/sample_spdm_requester/spdm_requester.cpp
+@@ -24,6 +24,9 @@
+ 
+ #include <iostream>
+ #include <unordered_set>
++#include <iomanip>
++#include <sstream>
++
+ #ifndef UNUSED
+ #define UNUSED(x) (void)(x)
+ #endif
+@@ -236,8 +239,8 @@ static void startSPDMRequester()
+                     << "Started secure session with slot-0 certificate successfully."
+                     << std::endl
+                     << "Session ID: " << sessionId << std::endl
+-                    << "Heartbeat period: " << heartbeatPeriod << " seconds."
+-                    << std::endl;
++                    << "Heartbeat period: " << static_cast<int>(heartbeatPeriod)
++                    << " seconds." << std::endl;
+             }
+             else
+             {
+@@ -286,13 +289,50 @@ static void startSPDMRequester()
+             }
+ 
+             /** Test case 8 send application message over secure channel */
+-            std::vector<uint8_t> request = {0x05, 0x11, 0xe8, 0x00, 0x00};
++            const uint8_t MCTP_MESSAGE_TYPE_PLDM = 0x01;
++            const uint8_t INSTANCE_ID = 0;
++            const uint8_t PLDM_HEADER_REQUEST_MASK = 0x80;
++            const uint8_t PLDM_MESSAGE_TYPE_CONTROL_DISCOVERY = 0x00;
++            const uint8_t PLDM_CONTROL_DISCOVERY_COMMAND_GET_TID = 0x02;
++            std::vector<uint8_t> request = {
++                MCTP_MESSAGE_TYPE_PLDM, INSTANCE_ID | PLDM_HEADER_REQUEST_MASK,
++                PLDM_MESSAGE_TYPE_CONTROL_DISCOVERY,
++                PLDM_CONTROL_DISCOVERY_COMMAND_GET_TID};
+             std::vector<uint8_t> response;
+-
+-            if (spdmRequester->sendSecuredMessage(sessionId, request, response))
++            /**
++             * The sample uses PLDM content as plain data which is encapsulated
++             * with MCTP and encypted within secured channel. If you want to
++             * send MCTP application message. Please ensure
++             *  1. Pass true as isAppMessage argument into sendSecuredMessage
++             * method.
++             *  2. Ensure SPDM responder side recognized this special format and
++             * then sent back something.
++             *  Note: SPDM or secured-message payload which starts with
++             * 0x05 or 0x06 cannot be considered as an APP message. Pass false
++             * as isAppMessage argument instead.
++             */
++            const bool IS_APP_MESSAGE = true;
++            if (spdmRequester->sendSecuredMessage(sessionId, request, response,
++                                                  IS_APP_MESSAGE))
+             {
+                 std::cout << "Secured application message sent successfully."
+                           << std::endl;
++                std::ostringstream oss;
++                oss << "Request: ";
++                for (const auto& byte : request)
++                {
++                    oss << "0x" << std::hex << std::setw(2) << std::setfill('0')
++                        << static_cast<int>(byte) << ' ';
++                }
++                oss << std::endl;
++                oss << "Response: ";
++                for (const auto& byte : response)
++                {
++                    oss << "0x" << std::hex << std::setw(2) << std::setfill('0')
++                        << static_cast<int>(byte) << ' ';
++                }
++                oss << std::endl;
++                std::cout << oss.str() << std::endl;
+             }
+             else
+             {
+@@ -326,8 +366,8 @@ static void startSPDMRequester()
+                     << "Started secure session with slot-1 certificate successfully."
+                     << std::endl
+                     << "Session ID: " << sessionId << std::endl
+-                    << "Heartbeat period: " << heartbeatPeriod << " seconds."
+-                    << std::endl;
++                    << "Heartbeat period: " << static_cast<int>(heartbeatPeriod)
++                    << " seconds." << std::endl;
+             }
+             else
+             {
+diff --git a/src/spdmapplib.cpp b/src/spdmapplib.cpp
+index 3dfe9d3..e97660e 100644
+--- a/src/spdmapplib.cpp
++++ b/src/spdmapplib.cpp
+@@ -205,9 +205,11 @@ bool SPDMRequester::updateKey(uint32_t sessionId, bool singleDirection)
+ 
+ bool SPDMRequester::sendSecuredMessage(uint32_t sessionId,
+                                        const std::vector<uint8_t>& request,
+-                                       std::vector<uint8_t>& response)
++                                       std::vector<uint8_t>& response,
++                                       bool isAppMessage)
+ {
+-    return pReqImpl->sendSecuredMessage(sessionId, request, response);
++    return pReqImpl->sendSecuredMessage(sessionId, request, response,
++                                        isAppMessage);
+ }
+ 
+ SPDMRequester::~SPDMRequester() noexcept = default;
+diff --git a/src/spdmapplib_requester_impl.cpp b/src/spdmapplib_requester_impl.cpp
+index 4b5b324..f970499 100644
+--- a/src/spdmapplib_requester_impl.cpp
++++ b/src/spdmapplib_requester_impl.cpp
+@@ -437,15 +437,15 @@ bool SPDMRequesterImpl::updateKey(uint32_t sessionId, bool singleDirection)
+ 
+ bool SPDMRequesterImpl::sendSecuredMessage(uint32_t sessionId,
+                                            const std::vector<uint8_t>& request,
+-                                           std::vector<uint8_t>& response)
++                                           std::vector<uint8_t>& response,
++                                           bool isAppMessage)
+ {
+-    const bool IS_APP_MESSAGE = true;
+     size_t requestSize = request.size();
+     size_t responseSize = LIBSPDM_MAX_MESSAGE_BUFFER_SIZE;
+     uint8_t responseArray[LIBSPDM_MAX_MESSAGE_BUFFER_SIZE];
+-    const uint8_t *requestArray = request.data();
++    const uint8_t* requestArray = request.data();
+     if (!validateSpdmRc(libspdm_send_receive_data(
+-            spdmResponder.spdmContext, &sessionId, IS_APP_MESSAGE, requestArray,
++            spdmResponder.spdmContext, &sessionId, isAppMessage, requestArray,
+             requestSize, responseArray, &responseSize)))
+     {
+         return false;
+diff --git a/src/spdmtransport_mctp.cpp b/src/spdmtransport_mctp.cpp
+index 1c6f8d6..248e638 100644
+--- a/src/spdmtransport_mctp.cpp
++++ b/src/spdmtransport_mctp.cpp
+@@ -20,8 +20,6 @@
+ #include <cstdint>
+ #include <functional>
+ #include <iostream>
+-#include <iomanip>
+-#include <sstream>
+ 
+ namespace spdm_transport
+ {
+@@ -29,7 +27,7 @@ void SPDMTransportMCTP::transMsgRecvCallback(void*, mctpw::eid_t srcEid,
+                                              bool /*tagOwner*/,
+                                              uint8_t /* msgTag*/,
+                                              const std::vector<uint8_t>& data,
+-                                             int status)
++                                             int /*status*/)
+ {
+     if (data.empty())
+     {
+@@ -39,29 +37,11 @@ void SPDMTransportMCTP::transMsgRecvCallback(void*, mctpw::eid_t srcEid,
+     TransportEndPoint tmpEP;
+     tmpEP.devIdentifier = srcEid;
+ 
+-    std::ostringstream oss;
+-    oss << "Payloads: ";
+-    for (const auto& byte : data)
+-    {
+-         oss << "0x" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(byte) << ' ';
+-    }
+-    phosphor::logging::log<phosphor::logging::level::INFO>(("EID: " + std::to_string(srcEid)).c_str());
+-    phosphor::logging::log<phosphor::logging::level::INFO>(("Status: " + std::to_string(status)).c_str());
+-    phosphor::logging::log<phosphor::logging::level::INFO>(oss.str().c_str());
+-
+-    if (data.at(0) == static_cast<uint8_t>(mctpw::MessageType::spdm))
++    if (data.at(0) == static_cast<uint8_t>(mctpw::MessageType::spdm) ||
++        data.at(0) == static_cast<uint8_t>(mctpw::MessageType::securedMsg))
+     {
+         msgReceiveCB(tmpEP, data);
+     }
+-    else if (data.at(0) == static_cast<uint8_t>(mctpw::MessageType::securedMsg))
+-    {
+-        if (asyncSendData(tmpEP, data, 2000) !=
+-            spdm_app_lib::error_codes::returnSuccess)
+-        {
+-            phosphor::logging::log<phosphor::logging::level::ERR>(
+-                "Failed to send secured messages back.");
+-        }
+-    }
+ }
+ 
+ void SPDMTransportMCTP::transOnDeviceUpdate(
+-- 
+2.34.1
+
+
+From 8e3beaa690ef1b540bc934518c27aca5f4b253bc Mon Sep 17 00:00:00 2001
+From: leon_lin <leonlin@ami.com>
+Date: Wed, 23 Aug 2023 18:36:50 +0800
+Subject: [PATCH 11/11] Update README for SPDM 1.1
+
+Signed-off-by: leon_lin <leonlin@ami.com>
+---
+ README.md | 85 +++++++++++++++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 79 insertions(+), 6 deletions(-)
+
+diff --git a/README.md b/README.md
+index 98c616a..5e92405 100644
+--- a/README.md
++++ b/README.md
+@@ -8,7 +8,7 @@ by library user.
+ 
+ “SPDM Application Library”  is designed for applications that requires SPDM 
+ responder and requester functions.
+-The `spdmapplib` wrap libspdm(DMTP DSP0274 1.0.0) in easy-to-use way for users.  
++The `spdmapplib` wrap libspdm(DMTP DSP0274 1.1.0) in easy-to-use way for users.
+ 
+ In the package, it also include transport layer example based on 
+ `MCTP over SMBus` for SPDM devices.
+@@ -77,7 +77,10 @@ requester applications.
+ 
+ ## Background and References
+ 
+-- DMTF DSP0274 1.0.0, Security Protocol and Data Model (SPDM) Specification.
++- DMTF DSP0274 1.1.0, Security Protocol and Data Model (SPDM) Specification.
++- DMTF DSP0275 1.0.0, Security Protocol and Data Model (SPDM) over MCTP Binding Specification
++- DMTF DSP0276 1.0.0, Secured Messages using SPDM over MCTP Binding Specification
++- DMTF DSP0277 1.0.0, Secured Messages using SPDM Specification
+ 
+ ## SPDM Requester Interface
+ 
+@@ -104,20 +107,82 @@ Defined required APIs for SPDMRequester listed below, detail information is in t
+      * @brief Get all measurement function
+      *
+      * @param   measurements     The measurements returned for specific endPoint
++     * @param   useSlotId        The number of slot for the certificate chain.
+      * @return  true             Indicates Success.
+      * @return  false            Indicates Failure
+      **/
+-    bool getMeasurements(std::vector<uint8_t>& measurements);
++    bool getMeasurements(std::vector<uint8_t>& measurements,
++                         uint8_t useSlotId = 0);
+ 
+     /**
+      * @brief Get certificate function
+      *
+      * @param   certificate      The certificate returned for specific endPoint.
++     * @param   useSlotId        The number of slot for the certificate chain.
+      * @return  true             Indicates Success.
+      * @return  false            Indicates Failure
+      *
+      **/
+-    bool getCertificate(std::vector<uint8_t>& certificate);
++    bool getCertificate(std::vector<uint8_t>& certificate,
++                        uint8_t useSlotId = 0);
++
++    /**
++     * @brief  To start secure session.
++     * @param  usePsk            Use pre shared key.
++     * @param  sessionId         Id created for this session
++     * @param  heartbeatPeriod   Heartbeat period for this session
++     * @param  useSlotId         The number of slot for the certificate chain.
++     * @return  true             Indicates Success.
++     * @return  false            Indicates Failure
++     *
++     **/
++    bool startSecureSession(bool usePsk, uint32_t& sessionId,
++                            uint8_t& heartbeatPeriod, uint8_t useSlotId = 0);
++
++    /**
++     * @brief  To terminate secure session.
++     * @param  sessionId         Session id to terminate
++     * @return  true             Indicates Success.
++     * @return  false            Indicates Failure
++     *
++     **/
++    bool endSecureSession(uint32_t sessionId);
++
++    /**
++     *
++     * @brief  To send HEARTBEAT to an SPDM Session.
++     * @param  sessionId         The session ID of the session.
++     * @return  true             Indicates Success.
++     * @return  false            Indicates Failure.
++     *
++     **/
++    bool sendHeartbeat(uint32_t sessionId);
++
++    /**
++     *
++     * @brief  To update keys for an SPDM Session and then verify new key.
++     * @param  sessionId         The session ID of the session.
++     * @param  singleDirection   Update only the single-direction key
++     * @return  true             Indicates Success.
++     * @return  false            Indicates Failure.
++     **/
++    bool updateKey(uint32_t sessionId, bool singleDirection);
++
++    /**
++     *
++     * @brief  To send a secured application message in SPDM session.
++     * @param  sessionId      Indicates a running SPDM session ID.
++     * @param  request        The request data to send.
++     * @param  response       The received response data.
++     * @param  isAppMessage   Indicates if it is an APP message or SPDM message.
++     * @return  true          Indicates Success.
++     * @return  false         Indicates Failure.
++     *
++     **/
++    bool sendSecuredMessage(uint32_t sessionId,
++                            const std::vector<uint8_t>& request,
++                            std::vector<uint8_t>& response,
++                            bool isAppMessage = true);
+ ```
+ 
+ ## SPDM Responder Interface
+@@ -260,11 +325,19 @@ Example configurations.
+     },
+     {
+         "Role": "requester",
+-        "Version": "1.0",
++        "Version": "1.1",
+         "CertPath": "/usr/bin",
+         "Capability": [
+             "CERT",
+-            "CHAL"
++            "CHAL",
++            "KEY_EX",
++            "HBEAT",
++            "ENCRYPT",
++            "MAC",
++            "PSK",
++            "KEY_UPD",
++            "MUT_AUTH",
++            "ENCAP"
+         ],
+         "Hash": [
+             "SHA_384"
+-- 
+2.34.1
+
