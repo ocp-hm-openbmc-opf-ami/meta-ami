@@ -1,5 +1,5 @@
 ## Issue URL (AMI Internal Use Only)
-(Copy full MegaRAC Git Workitem URL and paste here)
+(Copy full JIRA URL and paste here)
 
 ## Summary of work done
 (Please base on those items as below to provide information)
