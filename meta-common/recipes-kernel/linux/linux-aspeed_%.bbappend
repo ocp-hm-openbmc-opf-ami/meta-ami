@@ -15,7 +15,9 @@ SRC_URI += "file://nfs.cfg \
             file://0018-Nm-sensor-Threshold-Support.patch \
            "
 
-NON_PFR_SRC_URI_AMI = "file://0012-Add-new-layout-as-per-AMI-requirements.patch"
+NON_PFR_SRC_URI_AMI = "file://0012-Add-new-layout-as-per-AMI-requirements.patch \
+                       file://0019-Fix-for-JFFS2-issue-due-to-SPI-tx-bus-width.patch \
+                      "
 
 SRC_URI += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '',NON_PFR_SRC_URI_AMI, d)}"
 
