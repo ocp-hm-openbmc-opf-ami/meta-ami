@@ -1,11 +1,12 @@
-From 0436b994077657623cda27cd83707d74354e65c5 Mon Sep 17 00:00:00 2001
+From fbdd3bfaf0251d586c1c5f389d4a7406faa612ed Mon Sep 17 00:00:00 2001
 From: Pranoy Goru <gorumanip@ami.com>
-Date: Thu, 26 Oct 2023 17:42:07 +0530
-Subject: [PATCH 102/102] Integrated RAID interface in redfish
+Date: Tue, 31 Oct 2023 00:31:41 +0530
+Subject: [PATCH 101/101] Integrated RAID interface in redfish
 
 Description
 Added RAID and HBA interface in redfish
 
+# busctl tree xyz.openbmc_project.hba.manager
 `-/xyz
   `-/xyz/openbmc_project
     `-/xyz/openbmc_project/HBA
@@ -14,6 +15,7 @@ Added RAID and HBA interface in redfish
           |-/xyz/openbmc_project/HBA/0/pd/0
           `-/xyz/openbmc_project/HBA/0/pd/1
 
+# busctl tree xyz.openbmc_project.raid.manager
 `-/xyz
   `-/xyz/openbmc_project
     `-/xyz/openbmc_project/Raid
@@ -364,20 +366,101 @@ Response
     "TaskStatus": "OK"
 }
 
+9) Delete Logical drive
+
+Post https://{{BMCIP}}/redfish/v1/Systems/system/Storage/Raid_0/Actions/StorageLDrive.Delete
+
+Body
+
+{
+    "LDriveId": "0"
+}
+
+Respose 202
+
+{
+    "@odata.id": "/redfish/v1/TaskService/Tasks/7",
+    "@odata.type": "#Task.v1_4_3.Task",
+    "Id": "5",
+    "TaskState": "New",
+    "TaskStatus": "OK"
+}
+
+Get https://{{BMCIP}}/redfish/v1/TaskService/Tasks/7
+
+{
+    "@odata.id": "/redfish/v1/TaskService/Tasks/7",
+    "@odata.type": "#Task.v1_4_3.Task",
+    "EndTime": "2023-10-30T19:04:02+00:00",
+    "HidePayload": false,
+    "Id": "7",
+    "Messages": [
+        {
+            "@odata.type": "#Message.v1_1_1.Message",
+            "Message": "The task with Id '7' has started.",
+            "MessageArgs": [
+                "7"
+            ],
+            "MessageId": "TaskEvent.1.0.3.TaskStarted",
+            "MessageSeverity": "OK",
+            "Resolution": "None."
+        },
+        {
+            "@odata.type": "#Message.v1_1_1.Message",
+            "Message": "The task with Id '7' has completed.",
+            "MessageArgs": [
+                "7"
+            ],
+            "MessageId": "TaskEvent.1.0.3.TaskCompletedOK",
+            "MessageSeverity": "OK",
+            "Resolution": "None."
+        }
+    ],
+    "Name": "Task 7",
+    "Payload": {
+        "HttpHeaders": [
+            "User-Agent: PostmanRuntime/7.34.0",
+            "Accept: */*",
+            "Host: 172.31.32.52",
+            "Accept-Encoding: gzip, deflate, br",
+            "Connection: keep-alive",
+            "Content-Length: 25"
+        ],
+        "HttpOperation": "POST",
+        "JsonBody": "{\n  \"LDriveId\": \"0\"\n}",
+        "TargetUri": "/redfish/v1/Systems/system/Storage/Raid_0/Actions/StorageLDrive.Delete"
+    },
+    "PercentComplete": 100,
+    "StartTime": "2023-10-30T19:03:56+00:00",
+    "TaskMonitor": "/redfish/v1/TaskService/Tasks/7/Monitor",
+    "TaskState": "SUCCESS",
+    "TaskStatus": "OK"
+}
+
 Signed-off-by: Pranoy Goru <gorumanip@ami.com>
 ---
- redfish-core/include/redfish.hpp          |    6 +
+ redfish-core/include/redfish.hpp          |    7 +
  redfish-core/include/utils/collection.hpp |    3 +
+ redfish-core/lib/raid.hpp                 |   37 +
  redfish-core/lib/storage.hpp              |    8 +
- redfish-core/lib/storage_raid.hpp         | 1109 +++++++++++++++++++++
- 4 files changed, 1126 insertions(+)
+ redfish-core/lib/storage_raid.hpp         | 1105 +++++++++++++++++++++
+ 5 files changed, 1160 insertions(+)
+ create mode 100644 redfish-core/lib/raid.hpp
  create mode 100644 redfish-core/lib/storage_raid.hpp
 
 diff --git a/redfish-core/include/redfish.hpp b/redfish-core/include/redfish.hpp
-index bb1990f9..2bfd4952 100644
+index bb1990f9..6c8517a9 100644
 --- a/redfish-core/include/redfish.hpp
 +++ b/redfish-core/include/redfish.hpp
-@@ -144,6 +144,12 @@ class RedfishService
+@@ -60,6 +60,7 @@
+ #include "sensors.hpp"
+ #include "service_root.hpp"
+ #include "storage.hpp"
++#include "storage_raid.hpp"
+ #include "systems.hpp"
+ #include "task.hpp"
+ #include "telemetry_service.hpp"
+@@ -144,6 +145,12 @@ class RedfishService
          requestRoutesNvmePorts(app);
          requestRoutesNvmePortsInstance(app);
  
@@ -391,17 +474,17 @@ index bb1990f9..2bfd4952 100644
          requestRoutesCableCollection(app);
  #ifdef BMCWEB_INSECURE_ENABLE_REDFISH_FW_TFTP_UPDATE
 diff --git a/redfish-core/include/utils/collection.hpp b/redfish-core/include/utils/collection.hpp
-index 29476bc4..0de81207 100644
+index 29476bc4..1ecd1dd4 100644
 --- a/redfish-core/include/utils/collection.hpp
 +++ b/redfish-core/include/utils/collection.hpp
-@@ -6,6 +6,7 @@
+@@ -5,6 +5,7 @@
+ #include "error_messages.hpp"
  #include "http/utility.hpp"
  #include "human_sort.hpp"
++#include "raid.hpp"
  #include "storage_nvme.hpp"
-+#include "storage_raid.hpp"
  
  #include <boost/url/url.hpp>
- #include <nlohmann/json.hpp>
 @@ -90,6 +91,8 @@ inline void
                  asyncResp->res.jsonValue["Members@odata.count"];
              nlohmann::json& storageControllerArray = members;
@@ -411,18 +494,61 @@ index 29476bc4..0de81207 100644
          }
      });
  }
+diff --git a/redfish-core/lib/raid.hpp b/redfish-core/lib/raid.hpp
+new file mode 100644
+index 00000000..32f84af1
+--- /dev/null
++++ b/redfish-core/lib/raid.hpp
+@@ -0,0 +1,37 @@
++#pragma once
++
++#include "health.hpp"
++#include "openbmc_dbus_rest.hpp"
++#include "redfish_util.hpp"
++#include "utils/json_utils.hpp"
++
++#include <app.hpp>
++#include <registries/privilege_registry.hpp>
++
++namespace redfish
++{
++
++void getLogicalDrives(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
++                             const std::string& raidName,
++                             nlohmann::json& storageArray,
++                             nlohmann::json& count);
++
++void getPhysicalDrives(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
++                              const std::string& name,
++                              nlohmann::json& storageArray,
++                              nlohmann::json& count, int flag,
++                              const std::string& pdPath,
++                              const std::array<const char*, 1> interfaces);
++
++void getRaidDevices(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
++                           nlohmann::json& count,
++                           nlohmann::json& storageControllerArray);
++
++void getHBADevices(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
++                          nlohmann::json& count,
++                          nlohmann::json& storageControllerArray);
++
++void getStorageInstance(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
++                               const std::string& name);
++
++}
 diff --git a/redfish-core/lib/storage.hpp b/redfish-core/lib/storage.hpp
-index 39415845..884745e4 100644
+index 39415845..4a67611c 100644
 --- a/redfish-core/lib/storage.hpp
 +++ b/redfish-core/lib/storage.hpp
-@@ -30,6 +30,7 @@
+@@ -25,6 +25,7 @@
+ #include "human_sort.hpp"
+ #include "openbmc_dbus_rest.hpp"
+ #include "query.hpp"
++#include "raid.hpp"
+ #include "redfish_util.hpp"
+ #include "registries/privilege_registry.hpp"
  #include "utils/collection.hpp"
- #include "utils/dbus_utils.hpp"
- #include "storage_nvme.hpp"
-+#include "storage_raid.hpp"
- 
- #include <boost/system/error_code.hpp>
- #include <boost/url/format.hpp>
 @@ -207,6 +208,13 @@ inline void
      {
          return;
@@ -439,10 +565,10 @@ index 39415845..884745e4 100644
          // Option currently returns no systems.  TBD
 diff --git a/redfish-core/lib/storage_raid.hpp b/redfish-core/lib/storage_raid.hpp
 new file mode 100644
-index 00000000..7e754421
+index 00000000..f582e058
 --- /dev/null
 +++ b/redfish-core/lib/storage_raid.hpp
-@@ -0,0 +1,1109 @@
+@@ -0,0 +1,1105 @@
 +/*
 +// Copyright (c) 2021 AMI Corporation
 +//
@@ -458,24 +584,16 @@ index 00000000..7e754421
 +// See the License for the specific language governing permissions and
 +// limitations under the License.
 +*/
-+#pragma once
++#include "raid.hpp"
 +
-+#include "health.hpp"
-+#include "openbmc_dbus_rest.hpp"
-+#include "redfish_util.hpp"
-+#include "utils/json_utils.hpp"
-+
-+#include <app.hpp>
-+#include <registries/privilege_registry.hpp>
-+//#include <task.hpp>
++#include <task.hpp>
 +
 +namespace redfish
 +{
 +
-+inline void getLogicalDrives(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
-+                             const std::string& raidName,
-+                             nlohmann::json& storageArray,
-+                             nlohmann::json& count)
++void getLogicalDrives(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
++                      const std::string& raidName, nlohmann::json& storageArray,
++                      nlohmann::json& count)
 +
 +{
 +    const std::string& ldPath = "/xyz/openbmc_project/Raid/" + raidName + "/ld";
@@ -511,147 +629,148 @@ index 00000000..7e754421
 +        std::array<const char*, 1>{"xyz.openbmc_project.raid.LogicalDrive"});
 +}
 +
-+//void raidStatusTask(
-+//    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-+//    task::Payload&& payload, const std::string& propertyName)
-+//{
-+//    
-+//    std::shared_ptr<task::TaskData> task = task::TaskData::createTask(
-+//        [propertyName](const boost::system::error_code ec, sdbusplus::message_t& msg,
-+//           const std::shared_ptr<task::TaskData>& taskData) {
-+//        if (ec)
-+//        {
-+//            taskData->messages.emplace_back(messages::internalError());
-+//            taskData->state = "Cancelled";
-+//            return task::completed;
-+//        }
-+//
-+//        std::string iface;
-+//        dbus::utility::DBusPropertiesMap values;
-+//
-+//        std::string index = std::to_string(taskData->index);
-+//        msg.read(iface, values);
-+//
-+//        if (iface == "xyz.openbmc_project.raid.Base")
-+//        {
-+//            const uint32_t* status = nullptr;
-+//
-+//            for (const auto& property : values)
-+//            {
-+//                if (property.first == propertyName)
-+//                {
-+//                    status = std::get_if<uint32_t>(&property.second);
-+//                    if (status == nullptr)
-+//                    {
-+//                        taskData->messages.emplace_back(messages::internalError());
-+//                        return task::completed;
-+//                    }
-+//                }
-+//            }
-+//
-+//            if (status == nullptr)
-+//            {
-+//                return !task::completed;
-+//            }
-+//
-+//            if (*status == 4294967295)
-+//            {
-+//                BMCWEB_LOG_DEBUG("COMMAND_IN_PROGRESS case");
-+//                taskData->state = "COMMAND_IN_PROGRESS";
-+//                taskData->messages.emplace_back(messages::taskStarted(index));
-+//                taskData->extendTimer(std::chrono::minutes(3));
-+//                return !task::completed;
-+//            }
-+//            if (*status == 0)
-+//            {
-+//                BMCWEB_LOG_DEBUG("Command SUCCESS case");
-+//                taskData->state = "SUCCESS";
-+//                taskData->messages.emplace_back(messages::taskCompletedOK(index));
-+//                taskData->percentComplete = 100;
-+//                return task::completed;
-+//            }
-+//            if (*status == 129)
-+//            {
-+//                BMCWEB_LOG_DEBUG("RAID_DEVICE_NOT_PRESENT Failed case");
-+//                taskData->state = "RAID_DEVICE_NOT_PRESENT";
-+//                taskData->messages.emplace_back(messages::taskAborted(index));
-+//                taskData->percentComplete = 100;
-+//                return task::completed;          
-+//            }
-+//            if (*status == 130)
-+//            {
-+//                BMCWEB_LOG_DEBUG("RAID_CTRL_ID_INVALID Failed case");
-+//                taskData->state = "RAID_CTRL_ID_INVALID";
-+//                taskData->messages.emplace_back(messages::taskAborted(index));
-+//                taskData->percentComplete = 100;
-+//                return task::completed;          
-+//            }
-+//            if (*status == 131)
-+//            {
-+//                BMCWEB_LOG_DEBUG("RAID_CTRL_DEVID_INVALID Failed case");
-+//                taskData->state = "RAID_CTRL_DEVID_INVALID";
-+//                taskData->messages.emplace_back(messages::taskAborted(index));
-+//                taskData->percentComplete = 100;
-+//                return task::completed;          
-+//            }
-+//            if (*status == 132)
-+//            {
-+//                BMCWEB_LOG_DEBUG("RAID_NO_VIRTUAL_DEVICE_PRESENT Failed case");
-+//                taskData->state = "RAID_NO_VIRTUAL_DEVICE_PRESENT";
-+//                taskData->messages.emplace_back(messages::taskAborted(index));
-+//                taskData->percentComplete = 100;
-+//                return task::completed;          
-+//            }
-+//            if (*status == 133)
-+//            {
-+//                BMCWEB_LOG_DEBUG("RAID_OPERATION_NOT_PERMITTED case");
-+//                taskData->state = "RAID_OPERATION_NOT_PERMITTED";
-+//                taskData->messages.emplace_back(messages::taskAborted(index));
-+//                taskData->percentComplete = 100;
-+//                return task::completed;
-+//            }
-+//            if (*status == 134)
-+//            {
-+//                BMCWEB_LOG_DEBUG("RAID_UNSUPPORTED_LOGICAL_DEV Failed case");
-+//                taskData->state = "RAID_UNSUPPORTED_LOGICAL_DEV";
-+//                taskData->messages.emplace_back(messages::taskAborted(index));
-+//                taskData->percentComplete = 100;
-+//                return task::completed;          
-+//            }
-+//            if (*status == 135)
-+//            {
-+//                BMCWEB_LOG_DEBUG("RAID_OPERATION_NOT_PERMITTED case");
-+//                taskData->state = "RAID_OPERATION_NOT_PERMITTED";
-+//                taskData->messages.emplace_back(messages::taskAborted(index));
-+//                taskData->percentComplete = 100;
-+//                return task::completed;
-+//            }
-+//            if (*status == 140)
-+//            {
-+//                BMCWEB_LOG_DEBUG("RAID_COMMAND_FAILED case");
-+//                taskData->state = "RAID_COMMAND_FAILED";
-+//                taskData->messages.emplace_back(messages::taskAborted(index));
-+//                taskData->percentComplete = 100;
-+//                return task::completed;
-+//            }
-+//            if (*status == 255)
-+//            {
-+//                BMCWEB_LOG_DEBUG("UNSPECIFIED_ERR case");
-+//                taskData->state = "UNSPECIFIED_ERR";
-+//                taskData->messages.emplace_back(messages::taskAborted(index));
-+//                taskData->percentComplete = 100;
-+//                return task::completed;
-+//            }
-+//        }
-+//
-+//        return !task::completed;
-+//    },
-+//        "type='signal',interface='org.freedesktop.DBus.Properties',"
-+//        "member='PropertiesChanged',path='/xyz/openbmc_project/Raid'");
-+//    task->startTimer(std::chrono::minutes(3));
-+//    task->populateResp(asyncResp->res);
-+//    task->payload.emplace(std::move(payload));
-+//}
++void raidStatusTask(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                    task::Payload&& payload, const std::string& propertyName)
++{
++    std::shared_ptr<task::TaskData> task = task::TaskData::createTask(
++        [propertyName](const boost::system::error_code ec,
++                       sdbusplus::message_t& msg,
++                       const std::shared_ptr<task::TaskData>& taskData) {
++        if (ec)
++        {
++            taskData->messages.emplace_back(messages::internalError());
++            taskData->state = "Cancelled";
++            return task::completed;
++        }
++
++        std::string iface;
++        dbus::utility::DBusPropertiesMap values;
++
++        std::string index = std::to_string(taskData->index);
++        msg.read(iface, values);
++
++        if (iface == "xyz.openbmc_project.raid.Base")
++        {
++            const uint32_t* status = nullptr;
++
++            for (const auto& property : values)
++            {
++                if (property.first == propertyName)
++                {
++                    status = std::get_if<uint32_t>(&property.second);
++                    if (status == nullptr)
++                    {
++                        taskData->messages.emplace_back(
++                            messages::internalError());
++                        return task::completed;
++                    }
++                }
++            }
++
++            if (status == nullptr)
++            {
++                return !task::completed;
++            }
++
++            if (*status == 4294967295)
++            {
++                BMCWEB_LOG_DEBUG("COMMAND_IN_PROGRESS case");
++                taskData->state = "COMMAND_IN_PROGRESS";
++                taskData->messages.emplace_back(messages::taskStarted(index));
++                taskData->extendTimer(std::chrono::minutes(3));
++                return !task::completed;
++            }
++            if (*status == 0)
++            {
++                BMCWEB_LOG_DEBUG("Command SUCCESS case");
++                taskData->state = "SUCCESS";
++                taskData->messages.emplace_back(
++                    messages::taskCompletedOK(index));
++                taskData->percentComplete = 100;
++                return task::completed;
++            }
++            if (*status == 129)
++            {
++                BMCWEB_LOG_DEBUG("RAID_DEVICE_NOT_PRESENT Failed case");
++                taskData->state = "RAID_DEVICE_NOT_PRESENT";
++                taskData->messages.emplace_back(messages::taskAborted(index));
++                taskData->percentComplete = 100;
++                return task::completed;
++            }
++            if (*status == 130)
++            {
++                BMCWEB_LOG_DEBUG("RAID_CTRL_ID_INVALID Failed case");
++                taskData->state = "RAID_CTRL_ID_INVALID";
++                taskData->messages.emplace_back(messages::taskAborted(index));
++                taskData->percentComplete = 100;
++                return task::completed;
++            }
++            if (*status == 131)
++            {
++                BMCWEB_LOG_DEBUG("RAID_CTRL_DEVID_INVALID Failed case");
++                taskData->state = "RAID_CTRL_DEVID_INVALID";
++                taskData->messages.emplace_back(messages::taskAborted(index));
++                taskData->percentComplete = 100;
++                return task::completed;
++            }
++            if (*status == 132)
++            {
++                BMCWEB_LOG_DEBUG("RAID_NO_VIRTUAL_DEVICE_PRESENT Failed case");
++                taskData->state = "RAID_NO_VIRTUAL_DEVICE_PRESENT";
++                taskData->messages.emplace_back(messages::taskAborted(index));
++                taskData->percentComplete = 100;
++                return task::completed;
++            }
++            if (*status == 133)
++            {
++                BMCWEB_LOG_DEBUG("RAID_OPERATION_NOT_PERMITTED case");
++                taskData->state = "RAID_OPERATION_NOT_PERMITTED";
++                taskData->messages.emplace_back(messages::taskAborted(index));
++                taskData->percentComplete = 100;
++                return task::completed;
++            }
++            if (*status == 134)
++            {
++                BMCWEB_LOG_DEBUG("RAID_UNSUPPORTED_LOGICAL_DEV Failed case");
++                taskData->state = "RAID_UNSUPPORTED_LOGICAL_DEV";
++                taskData->messages.emplace_back(messages::taskAborted(index));
++                taskData->percentComplete = 100;
++                return task::completed;
++            }
++            if (*status == 135)
++            {
++                BMCWEB_LOG_DEBUG("RAID_OPERATION_NOT_PERMITTED case");
++                taskData->state = "RAID_OPERATION_NOT_PERMITTED";
++                taskData->messages.emplace_back(messages::taskAborted(index));
++                taskData->percentComplete = 100;
++                return task::completed;
++            }
++            if (*status == 140)
++            {
++                BMCWEB_LOG_DEBUG("RAID_COMMAND_FAILED case");
++                taskData->state = "RAID_COMMAND_FAILED";
++                taskData->messages.emplace_back(messages::taskAborted(index));
++                taskData->percentComplete = 100;
++                return task::completed;
++            }
++            if (*status == 255)
++            {
++                BMCWEB_LOG_DEBUG("UNSPECIFIED_ERR case");
++                taskData->state = "UNSPECIFIED_ERR";
++                taskData->messages.emplace_back(messages::taskAborted(index));
++                taskData->percentComplete = 100;
++                return task::completed;
++            }
++        }
++
++        return !task::completed;
++    },
++        "type='signal',interface='org.freedesktop.DBus.Properties',"
++        "member='PropertiesChanged',path='/xyz/openbmc_project/Raid'");
++    task->startTimer(std::chrono::minutes(3));
++    task->populateResp(asyncResp->res);
++    task->payload.emplace(std::move(payload));
++}
 +
 +inline void requestRoutesDeleteLogicalDriveAction(App& app)
 +{
@@ -695,7 +814,8 @@ index 00000000..7e754421
 +                        {
 +                            BMCWEB_LOG_DEBUG("failed to get property Value  ",
 +                                             ec);
-+                            messages::resourceNotFound(asyncResp->res, "", "LDriveId");
++                            messages::resourceNotFound(asyncResp->res, "",
++                                                       "LDriveId");
 +                            return;
 +                        }
 +
@@ -724,25 +844,27 @@ index 00000000..7e754421
 +                            {
 +                                BMCWEB_LOG_DEBUG(
 +                                    "failed to get property Value  ", ec);
-+                                messages::resourceNotFound(asyncResp->res, "", "LDriveId");
++                                messages::resourceNotFound(asyncResp->res, "",
++                                                           "LDriveId");
 +                                return;
 +                            }
 +                            const uint16_t* targetId =
 +                                std::get_if<uint16_t>(&value);
 +
 +                            crow::connections::systemBus->async_method_call(
-+                                [asyncResp, req](
-+                                    const boost::system::error_code ec) {
++                                [asyncResp,
++                                 req](const boost::system::error_code ec) {
 +                                if (ec)
 +                                {
 +                                    BMCWEB_LOG_ERROR(
 +                                        "Bad D-Bus request error: ", ec);
-+                                    messages::resourceNotFound(asyncResp->res, "", "LDriveId");
++                                    messages::resourceNotFound(asyncResp->res,
++                                                               "", "LDriveId");
 +                                    return;
 +                                }
-+//                                task::Payload payload(req);
-+//                                raidStatusTask(asyncResp, std::move(payload), 
-+//                                    "setRAIDDeleteLDStatus");
++                                task::Payload payload(req);
++                                raidStatusTask(asyncResp, std::move(payload),
++                                               "setRAIDDeleteLDStatus");
 +                            },
 +                                "xyz.openbmc_project.raid.manager",
 +                                "/xyz/openbmc_project/Raid",
@@ -807,11 +929,10 @@ index 00000000..7e754421
 +                std::size_t type = name.find("_");
 +                if (type != std::string::npos)
 +                {
-+                    
 +                    const std::string& path = "/xyz/openbmc_project/" +
 +                                              name.substr(0, type) + "/" +
 +                                              name.substr(type + 1);
-+                    
++
 +                    crow::connections::systemBus->async_method_call(
 +                        [asyncResp, req](const boost::system::error_code ec,
 +                                         const std::variant<uint32_t> value) {
@@ -821,7 +942,7 @@ index 00000000..7e754421
 +                                             ec);
 +                            return;
 +                        }
-+                        
++
 +                        std::uint8_t cmdParm;
 +                        std::uint8_t prl;
 +                        std::uint8_t stripeSize;
@@ -842,7 +963,7 @@ index 00000000..7e754421
 +                        std::vector<uint8_t> VDName;
 +                        std::vector<uint8_t> SpanID;
 +                        std::vector<uint16_t> deviceID;
-+                        
++
 +                        if (!json_util::readJsonAction(
 +                                req, asyncResp->res, "CmdParm", cmdParm, "Prl",
 +                                prl, "StripeSize", stripeSize, "InitState",
@@ -860,15 +981,8 @@ index 00000000..7e754421
 +                            BMCWEB_LOG_DEBUG("Paramaters are not provided");
 +                            return;
 +                        }
-+                        
-+                        const uint32_t* ctrlId = std::get_if<uint32_t>(&value);
 +
-+                        //                                        for (char ch :
-+                        //                                        VdNameBuf)
-+                        //                                        {
-+                        //                                            VDName.push_back(
-+                        //                                                static_cast<uint8_t>(ch));
-+                        //                                        }
++                        const uint32_t* ctrlId = std::get_if<uint32_t>(&value);
 +
 +                        crow::connections::systemBus->async_method_call(
 +                            [asyncResp,
@@ -881,9 +995,9 @@ index 00000000..7e754421
 +                                messages::internalError(asyncResp->res);
 +                                return;
 +                            }
-+//                            task::Payload payload(req);
-+//                            raidStatusTask(asyncResp, std::move(payload), 
-+//                                "manageRAIDConfigStatus");
++                            task::Payload payload(req);
++                            raidStatusTask(asyncResp, std::move(payload),
++                                           "manageRAIDConfigStatus");
 +                        },
 +                            "xyz.openbmc_project.raid.manager",
 +                            "/xyz/openbmc_project/Raid",
@@ -918,12 +1032,11 @@ index 00000000..7e754421
 +    });
 +}
 +
-+inline void getPhysicalDrives(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
-+                              const std::string& name,
-+                              nlohmann::json& storageArray,
-+                              nlohmann::json& count, int flag,
-+                              const std::string& pdPath,
-+                              const std::array<const char*, 1> interfaces)
++void getPhysicalDrives(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
++                       const std::string& name, nlohmann::json& storageArray,
++                       nlohmann::json& count, int flag,
++                       const std::string& pdPath,
++                       const std::array<const char*, 1> interfaces)
 +{
 +    crow::connections::systemBus->async_method_call(
 +        [asyncResp, name, &storageArray, &count,
@@ -963,9 +1076,9 @@ index 00000000..7e754421
 +        interfaces);
 +}
 +
-+inline void getRaidDevices(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
-+                           nlohmann::json& count,
-+                           nlohmann::json& storageControllerArray)
++void getRaidDevices(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
++                    nlohmann::json& count,
++                    nlohmann::json& storageControllerArray)
 +{
 +    crow::connections::systemBus->async_method_call(
 +        [asyncResp, &count,
@@ -998,7 +1111,7 @@ index 00000000..7e754421
 +        std::array<const char*, 1>{"xyz.openbmc_project.raid.Controller"});
 +}
 +
-+inline void requestRoutesRaidLogical(App& app)
++void requestRoutesRaidLogical(App& app)
 +{
 +    BMCWEB_ROUTE(app, "/redfish/v1/Systems/system/Storage/Raid_"
 +                      "<str>"
@@ -1048,7 +1161,7 @@ index 00000000..7e754421
 +        asyncResp->res.jsonValue["@odata.id"] =
 +            "/redfish/v1/Systems/system/Storage/Raid_" + raidName +
 +            "/Volumes/" + driveName;
-+        asyncResp->res.jsonValue["Id"] = driveName;
++        // asyncResp->res.jsonValue["Id"] = driveName;
 +        const std::string& ldPath = "/xyz/openbmc_project/Raid/" + raidName +
 +                                    "/ld/" + driveName;
 +        crow::connections::systemBus->async_method_call(
@@ -1135,6 +1248,15 @@ index 00000000..7e754421
 +                        std::get_if<std::string>(&property.second);
 +                    asyncResp->res.jsonValue[propertyName] = *value;
 +                }
++                else if (propertyName == "TargetId")
++                {
++                    const std::vector<uint16_t>* value =
++                        std::get_if<std::vector<uint16_t>>(&property.second);
++                    if (value != nullptr)
++                    {
++                        asyncResp->res.jsonValue["Id"] = *value;
++                    }
++                }
 +            }
 +        },
 +            "xyz.openbmc_project.raid.manager", ldPath,
@@ -1155,9 +1277,9 @@ index 00000000..7e754421
 +    });
 +}
 +
-+inline void getHBADevices(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
-+                          nlohmann::json& count,
-+                          nlohmann::json& storageControllerArray)
++void getHBADevices(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
++                   nlohmann::json& count,
++                   nlohmann::json& storageControllerArray)
 +{
 +    crow::connections::systemBus->async_method_call(
 +        [asyncResp, &count,
@@ -1190,8 +1312,8 @@ index 00000000..7e754421
 +        std::array<const char*, 1>{"xyz.openbmc_project.hba.Controller"});
 +}
 +
-+inline void getStorageInstance(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
-+                               const std::string& name)
++void getStorageInstance(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
++                        const std::string& name)
 +{
 +    asyncResp->res.jsonValue["@odata.type"] = "#Storage.v1_10_1.Storage";
 +    asyncResp->res.jsonValue["@odata.id"] =
