@@ -27,6 +27,7 @@ SRC_URI += "\
        file://0033-Added-sensor_min-sensor_max-values-to-sdr-record.patch \
        file://0034-Fix-for-GetSMTP-ConfigParam5.patch \
        file://0034-SDR-Info-Free-space-support.patch \
+       file://0035-fix-for-get-sdr-count.patch \
     "
 
 SRC_URI_CORE:append = "file://0032-Add-Support-for-OS-Critical-Discrete-Sensor.patch"
