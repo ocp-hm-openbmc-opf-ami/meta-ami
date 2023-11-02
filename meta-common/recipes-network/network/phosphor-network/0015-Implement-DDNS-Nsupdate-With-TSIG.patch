@@ -3248,4 +3248,131 @@ index 8f79bac..0d375a5 100644
      stdplus::PinnedRef<sdbusplus::bus_t> bus;
 -- 
 2.25.1
-
+diff --git a/src/dns_updater.cpp b/src/dns_updater.cpp
+index 46c25d7..c315273 100644
+--- a/src/dns_updater.cpp
++++ b/src/dns_updater.cpp
+@@ -74,6 +74,13 @@ constexpr auto RESOLVED_SERVICE_PATH = "/org/freedesktop/resolve1/link/";
+ constexpr auto DHCP_PROP_INTERFACE = "xyz.openbmc_project.Network.DHCPConfiguration";
+ constexpr auto DHCP_SERVICE_PATH = "/xyz/openbmc_project/network/dhcp";
+ 
++constexpr auto SYSTEMCONF_PROP_INTERFACE = "xyz.openbmc_project.Network.SystemConfiguration";
++constexpr auto SYSTEMCONF_SERVICE_PATH = "/xyz/openbmc_project/network/config";
++
++constexpr char HOSTNAMED_SVC[] = "org.freedesktop.hostname1";
++constexpr char HOSTNAMED_OBJ[] = "/org/freedesktop/hostname1";
++constexpr char HOSTNAMED_INTF[] = "org.freedesktop.hostname1";
++
+ constexpr auto DEFAULT_HOSTNAME_PATH = "/etc/hostname_default";
+ constexpr auto GET = "Get";
+ constexpr auto DNS_CONF_DIR  = "/etc/dns.d";
+@@ -180,6 +187,27 @@ void Configuration::registerSignal(sdbusplus::bus_t& bus) {
+                     }
+                 }
+             );
++        } // if
++        else if (signal.second == nullptr && signal.first == "SystemconfigSignal") {
++            signal.second = std::make_unique<sdbusplus::bus::match_t>(
++                bus,
++                sdbusplus::bus::match::rules::propertiesChanged(SYSTEMCONF_SERVICE_PATH,
++                                                                SYSTEMCONF_PROP_INTERFACE),
++                [&](sdbusplus::message::message& msg) {
++                    std::map<std::string, std::variant<std::string, std::vector<std::string>,  bool>> props;
++                    std::string iface;
++                    std::string value;
++                    msg.read(iface, props);
++                    for (const auto& t : props)
++                    {
++                        if (t.first == "HostName")
++                        {
++                            value = std::get<std::string>(t.second);
++                            hostConf(std::make_tuple(false, value));
++                        }
++                    }
++                }
++            );
+         }
+     }
+ }
+@@ -453,8 +481,12 @@ int16_t Configuration::setHostConf(bool hostSetting, std::string hostName) {
+     } // else if
+ 
+     if (different) {
++        manager.get().getSystemConf().hostName(hostname, true);
+         hostConf(std::make_tuple(hostSetting, hostname));
+-        manager.get().getSystemConf().hostName(hostname);
++        auto method = bus.new_method_call(
++            HOSTNAMED_SVC, HOSTNAMED_OBJ, HOSTNAMED_INTF, "SetStaticHostname");
++        method.append(hostname, /*interactive=*/false);
++        bus.call_noreply(method);
+     }
+ 
+     return 0;
+diff --git a/src/system_configuration.cpp b/src/system_configuration.cpp
+index b55b2e6..61c7f0e 100644
+--- a/src/system_configuration.cpp
++++ b/src/system_configuration.cpp
+@@ -14,10 +14,6 @@ namespace network
+ static constexpr char HOSTNAMED_SVC[] = "org.freedesktop.hostname1";
+ static constexpr char HOSTNAMED_OBJ[] = "/org/freedesktop/hostname1";
+ static constexpr char HOSTNAMED_INTF[] = "org.freedesktop.hostname1";
+-constexpr auto DNS_OBJ_PATH= "/xyz/openbmc_project/network/dns";
+-constexpr auto DNS_INTERFACE = "xyz.openbmc_project.Network.DDNS";
+-
+-std::unique_ptr<sdbusplus::bus::match_t> hostNameSignal(nullptr);
+ 
+ using namespace sdbusplus::xyz::openbmc_project::Common::Error;
+ 
+@@ -76,7 +72,6 @@ SystemConfiguration::SystemConfiguration(
+         lg2::error("Failed to get hostname: {ERROR}", "ERROR", e);
+     }
+ 
+-    registerSignal(bus);
+     emit_object_added();
+ }
+ 
+@@ -101,29 +96,6 @@ std::string SystemConfiguration::hostName(std::string name)
+     return SystemConfigIntf::hostName();
+ }
+ 
+-void SystemConfiguration::registerSignal(sdbusplus::bus::bus& bus) {
+-    if (hostNameSignal == nullptr) {
+-        hostNameSignal = std::make_unique<sdbusplus::bus::match_t>(
+-            bus,
+-            sdbusplus::bus::match::rules::propertiesChanged(DNS_OBJ_PATH,
+-                                                            DNS_INTERFACE),
+-            [&](sdbusplus::message::message& msg) {
+-                std::map<std::string, std::variant<std::string, std::vector<std::string>,  bool>> props;
+-                std::string iface;
+-                std::string value;
+-                msg.read(iface, props);
+-                for (const auto& t : props)
+-                {
+-                    if (t.first == "HostName")
+-                    {
+-                        value = std::get<std::string>(t.second);
+-                        hostName(value);
+-                    }
+-                }
+-            }
+-        );
+-    }
+-}
+ 
+ } // namespace network
+ } // namespace phosphor
+diff --git a/src/system_configuration.hpp b/src/system_configuration.hpp
+index 0d375a5..f5204e2 100644
+--- a/src/system_configuration.hpp
++++ b/src/system_configuration.hpp
+@@ -51,8 +51,6 @@ class SystemConfiguration : public Iface
+ 
+     using SystemConfigIntf::hostName;
+ 
+-    void registerSignal(sdbusplus::bus::bus& bus);
+-
+   private:
+     /** @brief Persistent sdbusplus DBus bus connection. */
+     stdplus::PinnedRef<sdbusplus::bus_t> bus;
+-- 
+2.25.1
