@@ -15,6 +15,7 @@ SRC_URI:append = " \
             file://0018-Add-OS-Critical-Stop-DS-Support.patch \
             file://0019-Fix-for-Nm-Sensor-Threshold.patch \
             file://0020-Add-D-Bus-logging-support-for-Discrete-Sensor.patch \
+            file://0020-CMOS-Battery-Discrete-Sensor.patch \
             "
 
 PACKAGECONFIG[processorstatus] = "-Dprocstatus=enabled, -Dprocstatus=disabled"
@@ -23,6 +24,7 @@ PACKAGECONFIG[powerunitstatus] = "-Dpowerunit=enabled, -Dpowerunit=disabled"
 PACKAGECONFIG[acpisystemstatus] = "-Dacpisystem=enabled, -Dacpisystem=disabled"
 PACKAGECONFIG[psustatus] = "-Dpsustatus=enabled, -Dpsustatus=disabled"
 PACKAGECONFIG[osstatus] = "-Dosstatus=enabled, -Dosstatus=disabled"
+PACKAGECONFIG[batterystatus] = "-Dbatterystatus=enabled, -Dbatterystatus=disabled"
 
 PACKAGECONFIG:append = " processorstatus \
             systemsensor \
@@ -30,6 +32,7 @@ PACKAGECONFIG:append = " processorstatus \
             acpisystemstatus \
             psustatus \
             osstatus \
+            batterystatus \
 "
 
 SYSTEMD_SERVICE:${PN}:append = " ${@bb.utils.contains('PACKAGECONFIG', 'processorstatus', \
@@ -56,3 +59,6 @@ SYSTEMD_SERVICE:${PN}:append = " ${@bb.utils.contains('PACKAGECONFIG', 'osstatus
                                                'xyz.openbmc_project.osstatus.service', \
                                                '', d)}"
 
+SYSTEMD_SERVICE:${PN} += "${@bb.utils.contains('PACKAGECONFIG', 'batterystatus', \
+                                               'xyz.openbmc_project.batterystatus.service', \
+                                               '', d)}"

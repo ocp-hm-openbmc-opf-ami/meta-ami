@@ -1,0 +1,560 @@
+From f5fd1c67cf8ed255f79144189edf72eaac48be7b Mon Sep 17 00:00:00 2001
+From: krishna <krishnar@ami.com>
+Date: Fri, 3 Nov 2023 00:13:46 +0530
+Subject: [PATCH 7/7] CMOS Battery Discrete Sensor
+
+---
+ meson_options.txt                             |   1 +
+ service_files/meson.build                     |   2 +
+ .../xyz.openbmc_project.batterystatus.service |  15 ++
+ src/BatteryStatus.cpp                         |  85 +++++++++
+ src/BatteryStatus.hpp                         |  46 +++++
+ src/BatteryStatusMain.cpp                     | 163 ++++++++++++++++++
+ src/Discrete.hpp                              | 135 +++++++++++++++
+ src/meson.build                               |  14 ++
+ 8 files changed, 461 insertions(+)
+ create mode 100644 service_files/xyz.openbmc_project.batterystatus.service
+ create mode 100644 src/BatteryStatus.cpp
+ create mode 100644 src/BatteryStatus.hpp
+ create mode 100644 src/BatteryStatusMain.cpp
+
+diff --git a/meson_options.txt b/meson_options.txt
+index c3028db..641cd71 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -18,4 +18,5 @@ option('system', type: 'feature', value: 'disabled', description: 'Enable system
+ option('acpisystem', type: 'feature', value: 'disabled', description: 'Enable acpi system status sensor.',)
+ option('psustatus', type: 'feature', value: 'disabled', description: 'Enable PSU Status sensor.',)
+ option('osstatus', type: 'feature', value: 'disabled', description: 'Enable OS Critical sensor.',)
++option('batterystatus', type: 'feature', value: 'disabled', description: 'Enable Battery sensor.',)
+ 
+diff --git a/service_files/meson.build b/service_files/meson.build
+index cfb66bf..c5f87df 100644
+--- a/service_files/meson.build
++++ b/service_files/meson.build
+@@ -16,6 +16,8 @@ unit_files = [
+     ['acpisystem', 'xyz.openbmc_project.acpisystemstatus.service'],
+     ['psustatus', 'xyz.openbmc_project.psustatus.service'],
+     ['osstatus', 'xyz.openbmc_project.osstatus.service'],
++    ['batterystatus', 'xyz.openbmc_project.batterystatus.service'],
++
+ ]
+ 
+ foreach tuple : unit_files
+diff --git a/service_files/xyz.openbmc_project.batterystatus.service b/service_files/xyz.openbmc_project.batterystatus.service
+new file mode 100644
+index 0000000..4955725
+--- /dev/null
++++ b/service_files/xyz.openbmc_project.batterystatus.service
+@@ -0,0 +1,15 @@
++[Unit]
++Description=Battery Sensor
++StopWhenUnneeded=false
++Requires=xyz.openbmc_project.EntityManager.service
++After=xyz.openbmc_project.EntityManager.service
++Requires=xyz.openbmc_project.adcsensor.service
++After=xyz.openbmc_project.adcsensor.service
++
++[Service]
++Restart=always
++RestartSec=5
++ExecStart=/usr/bin/batterystatus
++
++[Install]
++WantedBy=multi-user.target
+diff --git a/src/BatteryStatus.cpp b/src/BatteryStatus.cpp
+new file mode 100644
+index 0000000..6ad6ba5
+--- /dev/null
++++ b/src/BatteryStatus.cpp
+@@ -0,0 +1,85 @@
++#include <unistd.h>
++
++#include <BatteryStatus.hpp>
++
++#include <exception>
++#include <fstream>
++#include <functional>
++#include <iostream>
++#include <map>
++#include <optional>
++#include <string>
++#include <utility>
++#include <vector>
++
++BatteryStatus::BatteryStatus(sdbusplus::asio::object_server& objectServer,
++                             std::shared_ptr<sdbusplus::asio::connection>& conn,
++                             boost::asio::io_context& io,
++                             const std::string& sensorName,
++                             const std::string& deviceName,
++                             const std::string& sensorConfiguration) :
++    Discrete(escapeName(sensorName), sensorConfiguration, conn),
++    objServer(objectServer), waitTimer(io), deviceName(deviceName), conn(conn)
++{
++
++    sensorInterface = objectServer.add_interface(
++        "/xyz/openbmc_project/sensors/battery/" + name,
++        "xyz.openbmc_project.Sensor.State");
++
++    association = objectServer.add_interface(
++        "/xyz/openbmc_project/sensors/battery/" + name, association::interface);
++    setInitialProperties();
++}
++
++BatteryStatus::~BatteryStatus()
++{
++    objServer.remove_interface(sensorInterface);
++    objServer.remove_interface(association);
++}
++
++void BatteryStatus::setupRead(void)
++{
++
++    monitorState();
++}
++
++void BatteryStatus::monitorState()
++{
++
++    int8_t reading = monitorThreshold(deviceName, sensorObjectPath);
++    uint16_t state = 0;
++    if (reading != -1)
++    {
++        if (reading & (1 << static_cast<int8_t>(IPMIThresholds::warningLow)))
++        {
++            state = state | (1 << static_cast<uint16_t>(battery::batteryLow));
++        }
++        if (reading & (1 << static_cast<int8_t>(IPMIThresholds::criticalLow)))
++        {
++            state =
++                state | (1 << static_cast<uint16_t>(battery::batteryFailed));
++        }
++        state = state | (1 << static_cast<uint16_t>(battery::batteryPresence));
++    }
++
++    updateState(sensorInterface, state);
++    restartRead();
++}
++
++void BatteryStatus::restartRead()
++{
++    std::weak_ptr<BatteryStatus> weakRef = weak_from_this();
++    waitTimer.expires_after(std::chrono::milliseconds(sensorPollMs));
++    waitTimer.async_wait([weakRef](const boost::system::error_code& ec) {
++        if (ec == boost::asio::error::operation_aborted)
++        {
++            return; // we're being canceled
++        }
++        std::shared_ptr<BatteryStatus> self = weakRef.lock();
++        if (!self)
++        {
++            return;
++        }
++        self->setupRead();
++    });
++}
+diff --git a/src/BatteryStatus.hpp b/src/BatteryStatus.hpp
+new file mode 100644
+index 0000000..ad6caa9
+--- /dev/null
++++ b/src/BatteryStatus.hpp
+@@ -0,0 +1,46 @@
++#include <Discrete.hpp>
++#include <Utils.hpp>
++#include <boost/asio/deadline_timer.hpp>
++#include <boost/asio/io_context.hpp>
++#include <boost/container/flat_map.hpp>
++#include <boost/container/flat_set.hpp>
++#include <sdbusplus/asio/object_server.hpp>
++
++#include <filesystem>
++#include <memory>
++#include <optional>
++#include <stdexcept>
++#include <string>
++#include <vector>
++
++static constexpr unsigned int sensorPollMs = 2000;
++constexpr auto sensorObjectPath = "/xyz/openbmc_project/sensors/voltage/";
++enum class battery
++{
++    batteryLow,
++    batteryFailed,
++    batteryPresence,
++};
++
++class BatteryStatus :
++    public Discrete,
++    public std::enable_shared_from_this<BatteryStatus>
++{
++  public:
++    BatteryStatus(sdbusplus::asio::object_server& objectServer,
++                  std::shared_ptr<sdbusplus::asio::connection>& conn,
++                  boost::asio::io_context& io, const std::string& sensorName,
++                  const std::string& deviceName,
++                  const std::string& sensorConfiguration);
++    ~BatteryStatus() override;
++    void setupRead(void);
++
++  private:
++    uint8_t reading = 0;
++    sdbusplus::asio::object_server& objServer;
++    boost::asio::steady_timer waitTimer;
++    std::string deviceName;
++    std::shared_ptr<sdbusplus::asio::connection>& conn;
++    void restartRead();
++    void monitorState();
++};
+diff --git a/src/BatteryStatusMain.cpp b/src/BatteryStatusMain.cpp
+new file mode 100644
+index 0000000..a27ed2c
+--- /dev/null
++++ b/src/BatteryStatusMain.cpp
+@@ -0,0 +1,163 @@
++#include <BatteryStatus.hpp>
++#include <VariantVisitors.hpp>
++#include <boost/algorithm/string/case_conv.hpp>
++#include <boost/algorithm/string/predicate.hpp>
++#include <boost/algorithm/string/replace.hpp>
++#include <boost/container/flat_set.hpp>
++#include <sdbusplus/bus/match.hpp>
++
++#include <functional>
++#include <memory>
++#include <optional>
++#include <regex>
++#include <string>
++#include <variant>
++#include <vector>
++
++static constexpr const char* sensorType = "Battery";
++
++void createSensors(
++    boost::asio::io_context& io, sdbusplus::asio::object_server& objectServer,
++    boost::container::flat_map<std::string, std::shared_ptr<BatteryStatus>>&
++        sensors,
++    std::shared_ptr<sdbusplus::asio::connection>& dbusConnection,
++    const std::shared_ptr<boost::container::flat_set<std::string>>&
++        sensorsChanged)
++{
++    auto getter = std::make_shared<GetSensorConfiguration>(
++        dbusConnection,
++        [&io, &objectServer, &sensors, &dbusConnection,
++         sensorsChanged](const ManagedObjectType& sensorConfigurations) {
++        bool firstScan = sensorsChanged == nullptr;
++        const std::string* interfacePath = nullptr;
++        const std::pair<std::string, SensorBaseConfigMap>* baseConfiguration =
++            nullptr;
++
++        for (const auto& [path, cfgData] : sensorConfigurations)
++        {
++            // clear it out each loop
++            baseConfiguration = nullptr;
++            auto sensorBase = cfgData.find(configInterfaceName(sensorType));
++            if (sensorBase == cfgData.end())
++            {
++                continue;
++            }
++            baseConfiguration = &(*sensorBase);
++            interfacePath = &path.str;
++
++            if (baseConfiguration == nullptr)
++            {
++                std::cerr << "error finding base configuration"
++                          << "\n";
++                continue;
++            }
++            auto findSensorName = baseConfiguration->second.find("Name");
++            if (findSensorName == baseConfiguration->second.end())
++            {
++                std::cerr << "could not determine configuration name"
++                          << "\n";
++                continue;
++            }
++            std::string sensorName =
++                std::get<std::string>(findSensorName->second);
++
++            auto findDeviceName = baseConfiguration->second.find("DeviceName");
++            if (findDeviceName == baseConfiguration->second.end())
++            {
++                std::cerr << "could not determine DeviceName from configuration"
++                          << "\n";
++                continue;
++            }
++            std::string deviceName =
++                std::get<std::string>(findDeviceName->second);
++
++            // on rescans, only update sensors we were signaled by
++            auto findSensor = sensors.find(sensorName);
++            if (!firstScan && findSensor != sensors.end())
++            {
++                bool found = false;
++                for (auto it = sensorsChanged->begin();
++                     it != sensorsChanged->end(); it++)
++                {
++                    if (findSensor->second &&
++                        boost::ends_with(*it, findSensor->second->name))
++                    {
++                        sensorsChanged->erase(it);
++                        findSensor->second = nullptr;
++                        found = true;
++                        break;
++                    }
++                }
++                if (!found)
++                {
++                    continue;
++                }
++            }
++            auto& sensorConstruct = sensors[sensorName];
++            sensorConstruct = nullptr;
++
++            sensorConstruct = std::make_shared<BatteryStatus>(
++                objectServer, dbusConnection, io, sensorName, deviceName,
++                *interfacePath);
++
++            sensorConstruct->setupRead();
++        }
++        });
++
++    getter->getConfiguration(std::vector<std::string>{sensorType});
++}
++
++int main()
++{
++    boost::asio::io_context io;
++    auto systemBus = std::make_shared<sdbusplus::asio::connection>(io);
++    sdbusplus::asio::object_server objectServer(systemBus, true);
++    objectServer.add_manager("/xyz/openbmc_project/sensors");
++    systemBus->request_name("xyz.openbmc_project.BatteryStatus");
++
++    boost::container::flat_map<std::string, std::shared_ptr<BatteryStatus>>
++        sensors;
++    std::vector<std::unique_ptr<sdbusplus::bus::match::match>> matches;
++    auto sensorsChanged =
++        std::make_shared<boost::container::flat_set<std::string>>();
++
++    boost::asio::post(io, [&]() {
++        createSensors(io, objectServer, sensors, systemBus, nullptr);
++    });
++
++    boost::asio::deadline_timer filterTimer(io);
++    std::function<void(sdbusplus::message::message&)> eventHandler =
++        [&](sdbusplus::message::message& message) {
++        if (message.is_method_error())
++        {
++            std::cerr << "callback method error\n";
++            return;
++        }
++        sensorsChanged->insert(message.get_path());
++        // this implicitly cancels the timer
++        filterTimer.expires_from_now(boost::posix_time::seconds(1));
++        filterTimer.async_wait([&](const boost::system::error_code& ec) {
++            if (ec == boost::asio::error::operation_aborted)
++            {
++                /* we were canceled*/
++                return;
++            }
++            if (ec)
++            {
++                std::cerr << "timer error\n";
++                return;
++            }
++            createSensors(io, objectServer, sensors, systemBus, sensorsChanged);
++        });
++    };
++
++    auto match = std::make_unique<sdbusplus::bus::match::match>(
++        static_cast<sdbusplus::bus::bus&>(*systemBus),
++        "type='signal',member='PropertiesChanged',path_namespace='" +
++            std::string(inventoryPath) + "',arg0namespace='" +
++            configInterfaceName(sensorType) + "'",
++        eventHandler);
++    matches.emplace_back(std::move(match));
++
++    io.run();
++}
+diff --git a/src/Discrete.hpp b/src/Discrete.hpp
+index 709aaf2..942c196 100644
+--- a/src/Discrete.hpp
++++ b/src/Discrete.hpp
+@@ -2,6 +2,7 @@
+ 
+ #include <SensorPaths.hpp>
+ #include <Utils.hpp>
++#include <phosphor-logging/log.hpp>
+ #include <sdbusplus/asio/object_server.hpp>
+ #include <sdbusplus/bus/match.hpp>
+ 
+@@ -11,8 +12,31 @@
+ #include <string>
+ #include <vector>
+ 
++using namespace phosphor::logging;
++using namespace sdbusplus;
++
+ constexpr const char* sensorStateInterface = "xyz.openbmc_project.Sensor.State";
++constexpr auto PROP_INTF = "org.freedesktop.DBus.Properties";
++constexpr auto METHOD_GET = "Get";
++constexpr auto METHOD_GET_ALL = "GetAll";
++constexpr auto METHOD_SET = "Set";
++
++constexpr const char* warningInterface =
++    "xyz.openbmc_project.Sensor.Threshold.Warning";
++constexpr const char* criticalInterface =
++    "xyz.openbmc_project.Sensor.Threshold.Critical";
++
+ using value = std::variant<uint8_t, uint16_t, std::string>;
++using property = std::string;
++using sensorValue = std::variant<int64_t, double, std::string, bool>;
++using propertyMap = std::map<property, sensorValue>;
++enum class IPMIThresholds
++{
++    warningLow,
++    warningHigh,
++    criticalLow,
++    criticalHigh,
++};
+ 
+ enum class HostState
+ {
+@@ -117,3 +141,114 @@ uint8_t getHostStatus(std::shared_ptr<sdbusplus::asio::connection> conn)
+ }
+ 
+ };
++
++inline std::string getService(const std::string& intf, const std::string& path)
++{
++    auto bus = bus::new_default_system();
++    auto mapper =
++        bus.new_method_call("xyz.openbmc_project.ObjectMapper",
++                            "/xyz/openbmc_project/object_mapper",
++                            "xyz.openbmc_project.ObjectMapper", "GetObject");
++
++    mapper.append(path);
++    mapper.append(std::vector<std::string>({intf}));
++
++    std::map<std::string, std::vector<std::string>> response;
++
++    try
++    {
++        auto responseMsg = bus.call(mapper);
++
++        responseMsg.read(response);
++    }
++    catch (const sdbusplus::exception::exception& ex)
++    {
++        log<level::ERR>("ObjectMapper call failure",
++                        entry("WHAT=%s", ex.what()));
++        throw;
++    }
++
++    if (response.begin() == response.end())
++    {
++        throw std::runtime_error("Unable to find Object: " + path);
++    }
++
++    return response.begin()->first;
++}
++
++inline int8_t monitorThreshold(const std::string sensorName,
++                               const std::string sensorObjectPath)
++{
++    std::string objectPath = sensorObjectPath;
++    int8_t status = 0;
++    boost::asio::io_context io;
++    auto conn = std::make_shared<sdbusplus::asio::connection>(io);
++    objectPath = objectPath + sensorName;
++    std::string service;
++    // warning interface
++    try
++    {
++        service = getService(warningInterface, objectPath.c_str());
++        propertyMap warningMap;
++        auto method = conn->new_method_call(service.c_str(), objectPath.c_str(),
++                                            PROP_INTF, METHOD_GET_ALL);
++        method.append(warningInterface);
++        auto reply = conn->call(method);
++        if (reply.is_method_error())
++        {
++            phosphor::logging::log<phosphor::logging::level::ERR>(
++                "Failed to get all properties");
++        }
++        reply.read(warningMap);
++        auto findWarningHigh = warningMap.find("WarningAlarmLow");
++        if (findWarningHigh != warningMap.end())
++        {
++            if (std::get<bool>(warningMap.at("WarningAlarmLow")))
++            {
++                status = status |
++                         (1 << static_cast<int8_t>(IPMIThresholds::warningLow));
++            }
++        }
++    }
++    catch (sdbusplus::exception_t& e)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Failed to fetch",
++            phosphor::logging::entry("EXCEPTION=%s", e.what()));
++    }
++
++    // critical interface
++    try
++    {
++        service = getService(criticalInterface, objectPath.c_str());
++        propertyMap criticalMap;
++        auto method = conn->new_method_call(service.c_str(), objectPath.c_str(),
++                                            PROP_INTF, METHOD_GET_ALL);
++        method.append(criticalInterface);
++        auto reply = conn->call(method);
++        if (reply.is_method_error())
++        {
++            phosphor::logging::log<phosphor::logging::level::ERR>(
++                "Failed to get all properties");
++        }
++        reply.read(criticalMap);
++        auto findCriticalHigh = criticalMap.find("CriticalAlarmLow");
++
++        if (findCriticalHigh != criticalMap.end())
++        {
++            if (std::get<bool>(criticalMap.at("CriticalAlarmLow")))
++            {
++                status =
++                    status |
++                    (1 << static_cast<int8_t>(IPMIThresholds::criticalLow));
++            }
++        }
++    }
++    catch (sdbusplus::exception_t& e)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Failed to fetch",
++            phosphor::logging::entry("EXCEPTION=%s", e.what()));
++    }
++    return status;
++}
+diff --git a/src/meson.build b/src/meson.build
+index d9ae534..d81787b 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -331,3 +331,17 @@ if get_option('osstatus').enabled()
+         install: true,
+         )
+ endif
++
++if get_option('batterystatus').enabled()
++    executable(
++        'batterystatus',
++        'BatteryStatus.cpp',
++        'BatteryStatusMain.cpp',
++        dependencies: [
++            default_deps,
++            utils_dep,
++        ],
++        cpp_args: uring_args,
++        install: true,
++    )
++endif
+-- 
+2.34.1
+
