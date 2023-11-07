@@ -6,4 +6,5 @@ SRC_URI += " \
     file://0003-Support-to-Enable-SPS-NM-at-BMC-NM-Init-Mode-3.patch \
     file://0004-Fix-for-NM-Log-level.patch \
     file://0005-Fix-for-Policy-Creation-with-Busctl.patch \
+    file://0006-Restricting-policy-than-capabilitiesrange.patch \
     "
