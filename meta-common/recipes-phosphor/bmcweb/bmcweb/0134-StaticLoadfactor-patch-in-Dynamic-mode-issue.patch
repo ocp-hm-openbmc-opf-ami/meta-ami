@@ -1,0 +1,149 @@
+From 8cf10c4ec8e5911469930f1381913447b5561aac Mon Sep 17 00:00:00 2001
+From: nibinc <nibinc@ami.com>
+Date: Wed, 1 Nov 2023 06:45:01 -0400
+Subject: [PATCH 134/134] StaticLoadfactor patch in Dynamic mode issue
+
+---
+ redfish-core/lib/cups_service.hpp | 118 ++++++++++++++++++++++++++----
+ 1 file changed, 104 insertions(+), 14 deletions(-)
+
+diff --git a/redfish-core/lib/cups_service.hpp b/redfish-core/lib/cups_service.hpp
+index 63d6766f..41ee966e 100644
+--- a/redfish-core/lib/cups_service.hpp
++++ b/redfish-core/lib/cups_service.hpp
+@@ -410,15 +410,8 @@ inline void requestRoutesCupsService(App& app)
+             }
+         }
+ 
+-        if (loadFactorConfiguration)
+-        {
+-            CupsService::setDbusProperty(
+-                patchResp, CupsService::dbus::service, CupsService::dbus::path,
+-                CupsService::dbus::subIface("Configuration"),
+-                "LoadFactorConfiguration", *loadFactorConfiguration);
+-        }
+-
+-        if (staticLoadFactorsCollection)
++        if ((staticLoadFactorsCollection && loadFactorConfiguration) ||
++            staticLoadFactorsCollection)
+         {
+             double coreLoadFactor;
+             double iioLoadFactor;
+@@ -433,12 +426,109 @@ inline void requestRoutesCupsService(App& app)
+ 
+             auto loadFactors = std::make_tuple(coreLoadFactor, iioLoadFactor,
+                                                memoryLoadFactor);
+-
++            if ((staticLoadFactorsCollection && loadFactorConfiguration) ||
++                staticLoadFactorsCollection)
++            {
++                if (staticLoadFactorsCollection && loadFactorConfiguration)
++                {
++                    if (loadFactorConfiguration == "Dynamic")
++                    {
++                        messages::propertyValueFormatError(
++                            asyncResp->res, "staticLoadFactorsCollection",
++                            "loadFactorConfiguration");
++                             return;
++                    }
++                    crow::connections::systemBus->async_method_call(
++                        [asyncResp, patchResp,
++                         loadFactors](const boost::system::error_code ec) {
++                        if (ec)
++                        {
++                            messages::internalError(asyncResp->res);
++                        }
++                        sdbusplus::asio::getProperty<std::string>(
++                            *crow::connections::systemBus,
++                            "xyz.openbmc_project.CupsService",
++                            "/xyz/openbmc_project/CupsService",
++                            "xyz.openbmc_project.CupsService.Configuration",
++                            "LoadFactorConfiguration",
++                            [asyncResp,patchResp,
++                             loadFactors](const boost::system::error_code ec,
++                                          std::string config) {
++                            if (ec)
++                            {
++                                messages::internalError(asyncResp->res);
++                                return;
++                            }
++                            if (config == "Static")
++                            {
++                                CupsService::setDbusProperty(
++                                    patchResp, CupsService::dbus::service,
++                                    CupsService::dbus::subPath(
++                                        "StaticLoadFactors"),
++                                    CupsService::dbus::subIface(
++                                        "StaticLoadFactors"),
++                                    "StaticLoadFactors", loadFactors);
++                            }
++                            else if (config == "Dynamic")
++                            {
++                                messages::propertyValueFormatError(
++                                    asyncResp->res,
++                                    "staticLoadFactorsCollection",
++                                    "loadFactorConfiguration");
++                                return;
++                            }
++                        });
++                    },
++                        "xyz.openbmc_project.CupsService",
++                        "/xyz/openbmc_project/CupsService",
++                        "org.freedesktop.DBus.Properties", "Set",
++                        "xyz.openbmc_project.CupsService.Configuration",
++                        "LoadFactorConfiguration",
++                        dbus::utility::DbusVariantType(
++                            *loadFactorConfiguration));
++                }
++                else if (staticLoadFactorsCollection)
++                {
++                    sdbusplus::asio::getProperty<std::string>(
++                        *crow::connections::systemBus,
++                        "xyz.openbmc_project.CupsService",
++                        "/xyz/openbmc_project/CupsService",
++                        "xyz.openbmc_project.CupsService.Configuration",
++                        "LoadFactorConfiguration",
++                        [asyncResp,patchResp,
++                         loadFactors](const boost::system::error_code ec,
++                                      std::string config) {
++                        if (ec)
++                        {
++                            messages::internalError(asyncResp->res);
++                            return;
++                        }
++                        if (config == "Static")
++                        {
++                            CupsService::setDbusProperty(
++                                patchResp, CupsService::dbus::service,
++                                CupsService::dbus::subPath("StaticLoadFactors"),
++                                CupsService::dbus::subIface(
++                                    "StaticLoadFactors"),
++                                "StaticLoadFactors", loadFactors);
++                        }
++                        else if (config == "Dynamic")
++                        {
++                            messages::propertyValueFormatError(
++                                asyncResp->res, "staticLoadFactorsCollection",
++                                "loadFactorConfiguration");
++                            return;
++                        }
++                    });
++                }
++            }
++        }
++        else if (loadFactorConfiguration)
++        {
+             CupsService::setDbusProperty(
+-                patchResp, CupsService::dbus::service,
+-                CupsService::dbus::subPath("StaticLoadFactors"),
+-                CupsService::dbus::subIface("StaticLoadFactors"),
+-                "StaticLoadFactors", loadFactors);
++                patchResp, CupsService::dbus::service, CupsService::dbus::path,
++                CupsService::dbus::subIface("Configuration"),
++                "LoadFactorConfiguration", *loadFactorConfiguration);
+         }
+     });
+ }
+-- 
+2.34.1
+

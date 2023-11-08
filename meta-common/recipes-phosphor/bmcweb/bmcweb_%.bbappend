@@ -82,6 +82,7 @@ SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was
 SRC_URI_BHS:append = "file://0108-Adding-condition-to-Patch-Min-Value-not-greater-than.patch \
                       file://0110-Fix-For-Pmt-Sensor-Not-listed-in-Redfish.patch \
                       file://0118-removing-the-created-policy-get-calls-after-post.patch \
+                      file://0134-StaticLoadfactor-patch-in-Dynamic-mode-issue.patch \
 "
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'restricted', SRC_URI_NM, '', d)}"
 
