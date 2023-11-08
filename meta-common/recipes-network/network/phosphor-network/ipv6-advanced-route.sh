@@ -2,16 +2,17 @@
 #Add rules for IPv6
 IFACE="$1"
 STATE="$2"
-
+RT_TABLE="/etc/iproute2/rt_tables"
 case "$IFACE" in
     bond*|bond*.*|lo)
         exit 0
         ;;
-    *.*)
-        MODE=`cat /etc/systemd/network/00-bmc-$(echo $IFACE | cut -d"." -f1 ).network 2> /dev/null | grep "DHCP=" | cut -d"=" -f2`
-        ;;
     *)
-        MODE=`cat /etc/systemd/network/00-bmc-$IFACE.network 2> /dev/null | grep "DHCP=" | cut -d"=" -f2`
+        if ! [ -f "/etc/systemd/network/00-bmc-$IFACE.network" ]; then
+            MODE="ipv6"
+        else
+            MODE=`cat /etc/systemd/network/00-bmc-$IFACE.network 2> /dev/null | grep "DHCP=" | cut -d"=" -f2`
+        fi
         ;;
 esac
 
@@ -26,11 +27,24 @@ if [ "$STATE" == "UP" ]; then
         exit 0
     fi
 
+    staticRtrEnable=`grep "IPv6EnableStaticRtr" "/etc/interface/$IFACE" 2> /dev/null | cut -d"=" -f2`
+    if [ "$staticRtrEnable" = "true" ]; then
+        staticRtr1=`grep "IPv6StaticRtrAddr" "/etc/interface/$IFACE"  | cut -d"=" -f2`
+        staticRtr1Prefix=`grep "IPv6StaticRtrPrefix" "/etc/interface/$IFACE" | cut -d"=" -f2`
+        ip -6 route add "$staticRtr1""/""$staticRtr1Prefix" dev $IFACE > /dev/null 2>&1
+    fi
+
     ip -6 route | grep "$IFACE" >> $ROUTE_RULE.$IFACE"_tmp"
 
     if [ ! -f "$ROUTE_RULE.$IFACE" ]; then
         touch $ROUTE_RULE.$IFACE
         FIRST_ADD=1
+    fi
+
+    grep -q "$IFACE" "$RT_TABLE"
+    if [ $? -ne 0 ]; then
+        NUM=`grep -v "#" "$RT_TABLE" | wc -l`
+        echo "$(($NUM + 255)) $IFACE" >> "$RT_TABLE"
     fi
 
     ip -6 route flush table $IFACE 2>/dev/null
@@ -80,7 +94,6 @@ if [ "$STATE" == "UP" ]; then
     rm $ROUTE_RULE.$IFACE"_tmp"
 
 else
-
     ip -6 rule flush table $IFACE 2>/dev/null
     ip -6 route flush table $IFACE 2>/dev/null
 fi

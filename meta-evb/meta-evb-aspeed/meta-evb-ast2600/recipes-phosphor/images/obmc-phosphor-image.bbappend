@@ -46,6 +46,8 @@ OBMC_IMAGE_EXTRA_INSTALL:append = " \
                                   phosphor-post-code-manager \
                                   entity-manager \
                                   phosphor-ipmi-ipmb \
+                                  default-fru \
+                                  dbus-sensors  \
                                  "
 
 clean_pubkey() {
@@ -56,3 +58,4 @@ clean_pubkey() {
 }
 
 ROOTFS_POSTPROCESS_COMMAND += " clean_pubkey; "
+inherit obmc-phosphor-image ${@bb.utils.contains("BBFILE_COLLECTIONS", "restricted", "obmc-phosphor-image-restricted", "",d)}

@@ -1,39 +1,105 @@
-From be109fa4c3cc23cd519b835b1528852d555ee34f Mon Sep 17 00:00:00 2001
+From 1f8cc9d40715588b9e8aca05a1fb2c06aa7caea8 Mon Sep 17 00:00:00 2001
 From: vamsikrishnak <vamsikrishnak@ami.com>
-Date: Wed, 23 Aug 2023 14:51:13 +0530
+Date: Mon, 16 Oct 2023 11:01:19 +0530
 Subject: [PATCH] Fixed Apache Benchmark tool timeout issue
+
+Description:
+Performnace test via Ab_tool getting timeout error for KeepAlive=true in both basic and session auth
+
+Root Cause:
+
+Ab tool is using the HTTP 1.0 version to make the http requests.
+BmcWeb is using the HTTP 1.1 version. When ab tool makeing the http
+request with keep alive enabled, bmcweb is not closing the connection
+request but ab tool is waiting for the connection to close.
+
+Due to that timeout is happaned.
+
+Fix:
+
+Handled to close the keep alive request from HTTP 1.0 version after
+the request is completed.
+
+Test Case
+
+Case (1)
+>>> Ab_Tool# cat CONFIG
+Username=root
+Password=0penBmc
+IP=10.0.106.193
+Nof_iterations=25
+UpdateURIs=false
+time_out=30
+UseSessionAuth=true
+KeepAlive=false
+>>>> Ab_Tool# ./Ab_Run.sh
+381/381 Completed
+Finished
+
+Case (2)
+>>> Ab_Tool# cat CONFIG
+Username=root
+Password=0penBmc
+IP=10.0.106.193
+Nof_iterations=25
+UpdateURIs=false
+time_out=30
+UseSessionAuth=false
+KeepAlive=false
+>>>> Ab_Tool# ./Ab_Run.sh
+381/381 Completed
+Finished
 
 Signed-off-by: vamsikrishnak <vamsikrishnak@ami.com>
 ---
- http/http_connection.hpp | 15 ++++++++++++++-
- 1 file changed, 14 insertions(+), 1 deletion(-)
+ http/http_connection.hpp | 20 ++++++++++++++++++--
+ 1 file changed, 18 insertions(+), 2 deletions(-)
 
 diff --git a/http/http_connection.hpp b/http/http_connection.hpp
-index d1834f1..954ceee 100644
+index 2d92f0b..057c803 100644
 --- a/http/http_connection.hpp
 +++ b/http/http_connection.hpp
-@@ -610,7 +610,20 @@ class Connection :
-                 BMCWEB_LOG_DEBUG << this << " from write(1)";
+@@ -479,7 +479,7 @@ class Connection :
+             }
+ 
+             doRead();
+-            });
++        });
+     }
+ 
+     void doRead()
+@@ -518,7 +518,7 @@ class Connection :
+ 
+             cancelDeadlineTimer();
+             handle();
+-            });
++        });
+     }
+ 
+     void doWrite(crow::Response& thisRes)
+@@ -547,6 +547,22 @@ class Connection :
+                 BMCWEB_LOG_DEBUG("{} from write(1)", logPtr(this));
                  return;
              }
--
-+            if (res.keepAlive()){
++            if (res.keepAlive())
++            {
 +                std::error_code reqEc;
 +                crow::Request& Req = req.emplace(parser->release(), reqEc);
 +                if (reqEc)
 +                {
-+                    BMCWEB_LOG_DEBUG << "Request failed to construct" << reqEc;
++                    BMCWEB_LOG_DEBUG("Request failed to construct", reqEc.message());
 +                    return;
 +                }
 +                // close the request connection from HTTP 1.0
-+                if(Req.version() == 10){
++                if (Req.version() == 10)
++                {
 +                    close();
 +                    return;
 +                }
 +            }
+ 
              serializer.reset();
-             BMCWEB_LOG_DEBUG << this << " Clearing response";
-             res.clear();
+             BMCWEB_LOG_DEBUG("{} Clearing response", logPtr(this));
 -- 
 2.9.5
 

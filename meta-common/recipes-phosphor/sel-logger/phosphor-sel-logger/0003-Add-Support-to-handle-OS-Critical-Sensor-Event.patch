@@ -1,0 +1,94 @@
+From 9cbfc03cb3f4e7dc7372e99fabafef72b3d0ea91 Mon Sep 17 00:00:00 2001
+From: vipinc <vipinc@ami.com>
+Date: Mon, 16 Oct 2023 09:27:24 +0530
+Subject: [PATCH 3/3] Add Support to handle OS-Critical Sensor Event
+
+OS Critical Stop sensor per IPMI Spec. can be used to identify critical
+event occurs in the Host Operating System. As the event will be informed
+to BMC over IPMI Add SEL entry command. This patch add support to update
+OS Critical Discrete sensor its state based on the Add SEL Entry command
+and successfully log the event to RedFish and IPMI SEL.
+
+Tested in INTEL Archrecity:
+1) Verified the Sensor state is updated when Add SEL entry command is triggered
+for OS Critical Stop sensor
+
+// Before triggering add SEL command:
+root@AMIOT-c208ad8319c9:~# ipmitool sdr elist | grep "OS Stop Status"
+OS Stop Status   | 10h | ok  | 35.1 |
+// After triggering add SEL command:
+root@AMIOT-c208ad8319c9:~# ipmitool raw 0x0a 0x44 0x00 0x00 0x02 0x00 0x00 0x00 0x00 0x41 0x00 0x04 0x20 0x00 0x6f 0x01 0xff 0xff
+ 05 00
+root@AMIOT-c208ad8319c9:~#
+root@AMIOT-c208ad8319c9:~# ipmitool sdr elist | grep "OS Stop Status"
+OS Stop Status   | 10h | ok  | 35.1 | Run-time critical stop
+root@AMIOT-c208ad8319c9:~#
+root@AMIOT-c208ad8319c9:~# ipmitool sel list
+   5 | 09/11/23 | 06:19:12 UTC | OS Critical Stop #0x10 | Run-time critical stop | Asserted
+root@AMIOT-c208ad8319c9:~#
+
+Signed-off-by: vipinc <vipinc@ami.com>
+---
+ include/sel_logger.hpp |  3 +++
+ src/sel_logger.cpp     | 23 +++++++++++++++++++----
+ 2 files changed, 22 insertions(+), 4 deletions(-)
+
+diff --git a/include/sel_logger.hpp b/include/sel_logger.hpp
+index 85e8078..31fbc6a 100644
+--- a/include/sel_logger.hpp
++++ b/include/sel_logger.hpp
+@@ -31,6 +31,9 @@ constexpr static const char* pefObjPath = "/xyz/openbmc_project/pef/alerting";
+ constexpr static const char* pefIface = "xyz.openbmc_project.pef.pefTask";
+ constexpr static const char* pefTaskMethod = "doPefTask";
+ 
++static constexpr char const* osService = "xyz.openbmc_project.OSSStatusSensor";
++static constexpr char const* DiscreteIntf = "xyz.openbmc_project.Sensor.State";
++
+ #ifndef SEL_LOGGER_SEND_TO_LOGGING_SERVICE
+ // SEL policy in dbus
+ static constexpr char const* selLogObj = "xyz.openbmc_project.Settings";
+diff --git a/src/sel_logger.cpp b/src/sel_logger.cpp
+index a79e475..04eff44 100644
+--- a/src/sel_logger.cpp
++++ b/src/sel_logger.cpp
+@@ -300,6 +300,24 @@ static void selAddSystemRecord(
+                          {"SENSOR_DATA", selDataStr}}));
+     conn->call(AddToLog);
+ #else
++    // check for OS Critical Sensor Event
++    uint8_t sentype = getSensorTypeFromPath(path);
++    uint8_t senNum = getSensorNumberFromPath(path);
++    uint8_t evtype = getSensorEventTypeFromPath(path);
++    if (sentype == osCriticalStop && evtype == sensorSpecificEvent)
++    {
++        auto bus = sdbusplus::bus::new_default();
++        ipmi::Value event = static_cast<uint16_t>(1 << selData[0]);
++        auto method = bus.new_method_call(
++            osService, path.c_str(), "org.freedesktop.DBus.Properties", "Set");
++        method.append(DiscreteIntf, "State", event);
++        auto reply = bus.call(method);
++        if (reply.is_method_error())
++        {
++            std::cerr << "Failed to update OS Critical Stop sensor";
++        }
++    }
++
+     unsigned int recordId = getNewRecordId();
+     if (recordId != 0)
+     {
+@@ -310,11 +328,8 @@ static void selAddSystemRecord(
+             "IPMI_SEL_GENERATOR_ID=%x", genId, "IPMI_SEL_SENSOR_PATH=%s",
+             path.c_str(), "IPMI_SEL_EVENT_DIR=%x", assert, "IPMI_SEL_DATA=%s",
+             selDataStr.c_str(), std::forward<T>(metadata)..., NULL);
+-        // Do PEF Action
+-        uint8_t sentype = getSensorTypeFromPath(path);
+-        uint8_t senNum = getSensorNumberFromPath(path);
+-        uint8_t evtype = getSensorEventTypeFromPath(path);
+ 
++        // Do PEF Action
+         evtype |= assert ? 0x00 : 0x80;
+ 
+         std::chrono::microseconds timeout = DBUS_TIMEOUT;
+-- 
+2.25.1
+

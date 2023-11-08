@@ -5,11 +5,11 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 EXTRA_OECONF += "${@bb.utils.contains_any("IMAGE_FEATURES", [ 'debug-tweaks', 'allow-root-login' ], '', '--disable-root_user_mgmt', d)}"
 
 SRC_URI += " \
-	     file://0003-Add-Host-Interface-User-Support.patch \
+             file://0003-Add-Host-Interface-User-Support.patch \
 	     file://0012-passwordpolicy.patch \
 	     file://0015-passwordchangerequired.patch \
              file://0017-SSH-Active-User-Delete-Fix.patch \
-	     file://0018-Added-group-user-for-host-interface.patch \
+             file://0018-Added-group-user-for-host-interface.patch \
            "
 
 FILES:${PN} += "${datadir}/dbus-1/system.d/phosphor-nslcd-cert-config.conf"

@@ -76,21 +76,21 @@ index 911c4cd..325e914 100644
  
      this->loadARPControl();
      emit_object_added();
-@@ -233,15 +237,24 @@ void EthernetInterface::addStaticNeigh(const NeighborInfo& info)
+@@ -257,15 +257,24 @@ void EthernetInterface::addStaticNeigh(const NeighborInfo& info)
          return;
      }
  
 +    uint8_t prefixLength = info.prefixLength;
 +    const config::Parser& ifaceConfig(fs::path{fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(),interfaceName()).c_str()});
 +    if (EthernetInterfaceIntf::ipv6EnableStaticRtr()) {
-+        if (!EthernetInterfaceIntf::ipv6StaticRtrAddr().empty() && EthernetInterfaceIntf::ipv6StaticRtrAddr() == std::to_string(*info.addr)) {
++        if (!EthernetInterfaceIntf::ipv6StaticRtrAddr().empty() && EthernetInterfaceIntf::ipv6StaticRtrAddr() == stdplus::toStr(*info.addr)) {
 +            prefixLength = getIP6StaticRtrPrefix(ifaceConfig);
 +        }
 +    }
 +
      if (auto it = staticNeighbors.find(*info.addr); it != staticNeighbors.end())
      {
-         it->second->NeighborObj::macAddress(std::to_string(*info.mac));
+         it->second->NeighborObj::macAddress(stdplus::toStr(*info.mac));
 +        it->second->NeighborObj::prefixLength(prefixLength);
      }
      else
@@ -115,7 +115,7 @@ index 911c4cd..325e914 100644
                      NeighborInfo{
                          .ifidx=ifIdx,
 +                        .state=NUD_PERMANENT,
-                         .addr=ToAddr<in_addr>{}(EthernetInterfaceIntf::defaultGateway())
+                         .addr=stdplus::fromStr<stdplus::In4Addr>(EthernetInterfaceIntf::defaultGateway())
                      }
                  );
 @@ -835,6 +850,17 @@ void EthernetInterface::writeConfigurationFile()
@@ -128,39 +128,45 @@ index 911c4cd..325e914 100644
 +            if (EthernetInterfaceIntf::ipv6EnableStaticRtr()) {
 +                router["IPv6StaticRtrAddr"].emplace_back(EthernetInterfaceIntf::ipv6StaticRtrAddr());
 +                if (!EthernetInterfaceIntf::ipv6StaticRtrAddr().empty()) {
-+                    if (auto it = staticNeighbors.find(ToAddr<in6_addr>{}(EthernetInterfaceIntf::ipv6StaticRtrAddr())); it != staticNeighbors.end()) {
-+                        router["IPv6StaticRtrPrefix"].emplace_back(std::to_string(it->second->prefixLength()));
++                    if (auto it = staticNeighbors.find(stdplus::fromStr<stdplus::In6Addr>(EthernetInterfaceIntf::ipv6StaticRtrAddr())); it != staticNeighbors.end()) {
++                        router["IPv6StaticRtrPrefix"].emplace_back(stdplus::toStr((it->second->prefixLength())));
 +                    }
 +                }
 +            }
              IfaceState.writeFile(fs::path{fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(), interfaceName()).c_str()});
  
              network["IPv6AcceptRA"].emplace_back(EthernetInterfaceIntf::ipv6Enable() && ipv6AcceptRA() ? "true" : "false");
-@@ -1078,13 +1104,23 @@ std::string EthernetInterface::defaultGateway(std::string gateway)
-         manager.get().removeNeighbor(
-             NeighborInfo{
-                 .ifidx=ifIdx,
-+                .state=NUD_PERMANENT,
-                 .addr=ToAddr<in_addr>{}(EthernetInterfaceIntf::defaultGateway())
+@@ -1111,18 +1111,27 @@ std::string EthernetInterface::defaultGateway(std::string gateway)
              }
-         );
+         }
+ 
+-        gateway = EthernetInterfaceIntf::defaultGateway(std::move(gateway));
+-
+         if (!EthernetInterfaceIntf::defaultGateway().empty()) {
+             manager.get().removeNeighbor(
+                 NeighborInfo{
+                     .ifidx=ifIdx,
++                    .state=NUD_PERMANENT,
+                     .addr=stdplus::fromStr<stdplus::In4Addr>(EthernetInterfaceIntf::defaultGateway())
+                 }
+             );
+         }
+ 
+-        setDwMacAddrByIP(gateway);
++        gateway = EthernetInterfaceIntf::defaultGateway(std::move(gateway));
++        auto [mac, prefixLength] = getDwMacAddrByIP(gateway);
++        manager.get().addNeighbor(
++            NeighborInfo{
++                .ifidx=ifIdx,
++                .state=NUD_PERMANENT,
++                .addr=stdplus::fromStr<stdplus::In4Addr>(EthernetInterfaceIntf::defaultGateway()),
++                .mac=stdplus::fromStr<stdplus::EtherAddr>(mac.value_or("00:00:00:00:00:00")),
++                .prefixLength=prefixLength
++            }
++        );
+         manager.get().reloadConfigs();
      }
- 
-     EthernetInterfaceIntf::defaultGateway(gateway);
--    setDwMacAddrByIP(gateway);
-+    auto [mac, prefixLength] = getDwMacAddrByIP(gateway);
-+    manager.get().addNeighbor(
-+        NeighborInfo{
-+            .ifidx=ifIdx,
-+            .state=NUD_PERMANENT,
-+            .addr=ToAddr<in_addr>{}(EthernetInterfaceIntf::defaultGateway()),
-+            .mac=ToAddr<ether_addr>{}(mac.value_or("00:00:00:00:00:00")),
-+            .prefixLength=prefixLength
-+        }
-+    );
- 
-     writeConfigurationFile();
-     manager.get().reloadConfigs();
+     return gateway;
 @@ -1448,6 +1484,35 @@ bool EthernetInterface::ipv4Enable(bool value) {
      return value;
  }
@@ -332,21 +338,21 @@ index 8b629ab..6cebed9 100644
 @@ -494,7 +494,17 @@ void Manager::addDefGw(unsigned ifidx, InAddrAny addr)
                  {
                      it->second->EthernetInterfaceIntf::defaultGateway(
-                         std::to_string(addr));
--                    it->second->setDwMacAddrByIP(std::to_string(addr));
-+                    auto [mac, prefixLength] = it->second->getDwMacAddrByIP(std::to_string(addr));
+                         stdplus::toStr(addr));
+-                    it->second->setDwMacAddrByIP(stdplus::toStr(addr));
++                    auto [mac, prefixLength] = it->second->getDwMacAddrByIP(stdplus::toStr(addr));
 +                    addNeighbor(
 +                        NeighborInfo{
 +                            .ifidx=ifidx,
 +                            .state=NUD_PERMANENT,
-+                            .addr=ToAddr<in_addr>{}(it->second->EthernetInterfaceIntf::defaultGateway()),
-+                            .mac=ToAddr<ether_addr>{}(mac.value_or("00:00:00:00:00:00")),
++                            .addr=stdplus::fromStr<stdplus::In4Addr>(it->second->EthernetInterfaceIntf::defaultGateway()),
++                            .mac=stdplus::fromStr<stdplus::EtherAddr>(mac.value_or("00:00:00:00:00:00")),
 +                            .prefixLength=prefixLength
 +
 +                        }
 +                    );
                  }
-                 else if constexpr (std::is_same_v<in6_addr, decltype(addr)>)
+                 else
                  {
 diff --git a/src/util.cpp b/src/util.cpp
 index 1e6b159..7d6535d 100644

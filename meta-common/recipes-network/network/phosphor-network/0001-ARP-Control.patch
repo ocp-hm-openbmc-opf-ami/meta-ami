@@ -167,7 +167,7 @@ index 9547f45..bcc11ce 100644
  static constexpr const char* defaultChannelPriv = "priv-admin";
 @@ -114,6 +120,8 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
      {
-         EthernetInterface::defaultGateway6(std::to_string(*info.defgw6), true);
+         EthernetInterface::defaultGateway6(stdplus::toStr(*info.defgw6), true);
      }
 +
 +    this->loadARPControl();
@@ -175,7 +175,7 @@ index 9547f45..bcc11ce 100644
  
      if (info.intf.vlan_id)
 @@ -747,6 +755,17 @@ void EthernetInterface::writeConfigurationFile()
-     lg2::info("Wrote networkd file: {FILE_PATH}", "FILE_PATH", path);
+     lg2::info("Wrote networkd file: {CFG_FILE}", "CFG_FILE", path);
  }
  
 +void writeARPControlDefault(const std::string& filename)
@@ -1230,15 +1230,16 @@ index dadb22b..a2f5ab7 100644
  
  #include <linux/if_addr.h>
  #include <linux/neighbour.h>
-@@ -25,6 +26,7 @@ constexpr char SYSTEMD_INTERFACE[] = "org.freedesktop.systemd1.Manager";
- constexpr char NETWORKD_BUSNAME[] = "org.freedesktop.network1";
- constexpr char NETWORKD_PATH[] = "/org/freedesktop/network1";
- constexpr char NETWORKD_INTERFACE[] = "org.freedesktop.network1.Manager";
-+constexpr char ARPCONTROL_CONF_DIR[] = "/etc/arpcontrol";
+@@ -20,6 +21,8 @@
  
+ #include <filesystem>
+ 
++constexpr char ARPCONTROL_CONF_DIR[] = "/etc/arpcontrol";
++
  namespace phosphor
  {
-@@ -160,6 +162,7 @@ Manager::Manager(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+ namespace network
+@@ -156,6 +159,7 @@ Manager::Manager(stdplus::PinnedRef<sdbusplus::bus_t> bus,
          bus, (this->objPath / "config").str);
      dhcpConf = std::make_unique<phosphor::network::dhcp::Configuration>(
          bus, (this->objPath / "dhcp").str, *this);
@@ -1246,7 +1247,7 @@ index dadb22b..a2f5ab7 100644
      initSupportedPrivilges();
  }
  
-@@ -579,6 +582,64 @@ ObjectPath Manager::vlan(std::string interfaceName, uint32_t id)
+@@ -567,6 +571,64 @@ ObjectPath Manager::vlan(std::string interfaceName, uint32_t id)
      return it->second->createVLAN(id);
  }
  
@@ -1311,7 +1312,7 @@ index dadb22b..a2f5ab7 100644
  void Manager::reset()
  {
      for (const auto& dirent : std::filesystem::directory_iterator(confDir))
-@@ -587,6 +648,16 @@ void Manager::reset()
+@@ -575,6 +637,16 @@ void Manager::reset()
          std::filesystem::remove(dirent.path(), ec);
      }
      lg2::info("Network data purged.");
@@ -1328,7 +1329,7 @@ index dadb22b..a2f5ab7 100644
  }
  
  // Need to merge the below function with the code which writes the
-@@ -622,5 +693,32 @@ void Manager::handleAdminState(std::string_view state, unsigned ifidx)
+@@ -610,5 +682,32 @@ void Manager::handleAdminState(std::string_view state, unsigned ifidx)
      }
  }
  
@@ -1365,24 +1366,22 @@ diff --git a/src/network_manager.hpp b/src/network_manager.hpp
 index 45bea07..6ba8f2b 100644
 --- a/src/network_manager.hpp
 +++ b/src/network_manager.hpp
-@@ -24,6 +24,7 @@ namespace phosphor
+@@ -25,10 +25,14 @@ namespace phosphor
  namespace network
  {
  
 +namespace fs = std::filesystem;
++
  using ManagerIface = sdbusplus::server::object_t<
      sdbusplus::xyz::openbmc_project::Network::VLAN::server::Create,
      sdbusplus::xyz::openbmc_project::Common::server::FactoryReset>;
-@@ -37,6 +38,8 @@ class DelayedExecutor
-     virtual void setCallback(fu2::unique_function<void()>&& cb) = 0;
- };
  
 +void writeARPControlDefault(const std::string& filename);
 +
  /** @class Manager
   *  @brief OpenBMC network manager implementation.
   */
-@@ -85,6 +88,18 @@ class Manager : public ManagerIface
+@@ -78,6 +82,18 @@ class Manager : public ManagerIface
          return confDir;
      }
  
@@ -1395,13 +1394,13 @@ index 45bea07..6ba8f2b 100644
 +
 +    bool createDefaultARPControlFiles(bool force);
 +
-+     /** @brief ARP Control Configuration directory. */
-+     fs::path arpConfDir;
++    /** @brief ARP Control Configuration directory. */
++    fs::path arpConfDir;
 +
      /** @brief gets the system conf object.
       *
       */
-@@ -157,6 +172,11 @@ class Manager : public ManagerIface
+@@ -150,6 +166,11 @@ class Manager : public ManagerIface
      /** @brief Network Configuration directory. */
      std::filesystem::path confDir;
  
@@ -1417,8 +1416,8 @@ diff --git a/src/network_manager_main.cpp b/src/network_manager_main.cpp
 index ca971f3..6b7f173 100644
 --- a/src/network_manager_main.cpp
 +++ b/src/network_manager_main.cpp
-@@ -71,6 +71,8 @@ int main()
-     Manager manager(bus, reload, DEFAULT_OBJPATH, "/etc/systemd/network");
+@@ -72,6 +72,8 @@ int main()
+                                      "/etc/systemd/network");
      netlink::Server svr(event, manager);
  
 +    manager.createDefaultARPControlFiles(false);
@@ -1430,7 +1429,7 @@ diff --git a/src/util.cpp b/src/util.cpp
 index 87fe235..08b7c51 100644
 --- a/src/util.cpp
 +++ b/src/util.cpp
-@@ -214,6 +214,27 @@ bool getDHCPProp(const config::Parser& config, std::string_view key)
+@@ -217,5 +217,26 @@ bool getDHCPProp(const config::Parser& config, std::string_view key)
          .value_or(true);
  }
  
@@ -1455,14 +1454,13 @@ index 87fe235..08b7c51 100644
 +       }
 +}
 +
- namespace mac_address
- {
- 
+ } // namespace network
+ } // namespace phosphor
 diff --git a/src/util.hpp b/src/util.hpp
 index f35e512..bcfd09e 100644
 --- a/src/util.hpp
 +++ b/src/util.hpp
-@@ -18,6 +18,10 @@ namespace config
+@@ -18,6 +18,11 @@ namespace config
  class Parser;
  }
  
@@ -1470,9 +1468,10 @@ index f35e512..bcfd09e 100644
 +constexpr auto arpSurffix = ".conf";
 +//using IntfName = std::string;
 +//using InterfaceList = std::unordered_set<IntfName>;
- namespace mac_address
- {
- 
++
+ /* @brief converts a sockaddr for the specified address family into
+  *        a type_safe InAddrAny.
+  * @param[in] family - The address family of the buf
 @@ -86,6 +90,16 @@ DHCPVal getDHCPValue(const config::Parser& config);
   */
  bool getDHCPProp(const config::Parser& config, std::string_view key);

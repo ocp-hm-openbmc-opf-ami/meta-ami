@@ -1,47 +1,59 @@
-From fb58f4812f102caebbb138a2cc95ecaef8e5e1ed Mon Sep 17 00:00:00 2001
+From 592dad8d95b9dbe54e166ce772b2b136da5233df Mon Sep 17 00:00:00 2001
 From: prasannas <prasannas@ami.com>
-Date: Thu, 14 Sep 2023 09:34:37 +0530
-Subject: [PATCH 2432/2432] Redfish Support for BSOD Feature
+Date: Fri, 13 Oct 2023 21:02:52 +0530
+Subject: [PATCH 116/116] Redfish Support for BSOD Feature
 
+Description:
+1)Open a BMC terminal and provide following command to trigger BSOD:
+ipmitool raw 0x0a 0x44 0x00 0x00 0x02 0x00 0x00 0x00 0x00 0x41 0x0 0x04 0x20 0x0 0x6f 0x01 0xff 0xf
+
+2)The captured image is currently set to be stored in BMC tmp folder: /tmp/screenShotBSOD.jpeg
+
+3)The captured image is Displayed as base64 Format in Below Uri:
+https://<BMC_IP>/redfish/v1/Managers/bmc/Oem/OpenBmc/Jpeg
+Note:Response should be in Base64 format
+
+4)the capture image is available for view and download at following path: WEBUI --> Settings--> BSOD.
+
+Signed-off-by: prasannas <prasannas@ami.com>
 ---
- redfish-core/include/redfish.hpp |  4 +++-
- redfish-core/lib/bsodjpeg.hpp    | 47 ++++++++++++++++++++++++++++++++++++++++
- redfish-core/lib/managers.hpp    |  1 +
- 3 files changed, 51 insertions(+), 1 deletion(-)
+ redfish-core/include/redfish.hpp |  2 ++
+ redfish-core/lib/bsodjpeg.hpp    | 50 ++++++++++++++++++++++++++++++++++++++++
+ redfish-core/lib/managers.hpp    |  4 +++-
+ 3 files changed, 55 insertions(+), 1 deletion(-)
  create mode 100644 redfish-core/lib/bsodjpeg.hpp
 
 diff --git a/redfish-core/include/redfish.hpp b/redfish-core/include/redfish.hpp
-index 2f07c2a..094134e 100644
+index c66f753..9690777 100644
 --- a/redfish-core/include/redfish.hpp
 +++ b/redfish-core/include/redfish.hpp
-@@ -57,6 +57,7 @@
- #include "trigger.hpp"
- #include "update_service.hpp"
- #include "virtual_media.hpp"
+@@ -18,6 +18,7 @@
+ #include "account_service.hpp"
+ #include "aggregation_service.hpp"
+ #include "bios.hpp"
 +#include "bsodjpeg.hpp"
- 
- namespace redfish
- {
-@@ -105,7 +106,8 @@ class RedfishService
+ #include "cable.hpp"
+ #include "certificate_service.hpp"
+ #include "chassis.hpp"
+@@ -120,6 +121,7 @@ class RedfishService
+         requestRoutesManagerResetActionInfo(app);
          requestRoutesManagerResetToDefaultsAction(app);
          requestRoutesManagerDiagnosticData(app);
-         requestRoutesChassisCollection(app);
--        requestRoutesChassis(app);
 +        requestRoutesBsodjpeg(app);
-+	requestRoutesChassis(app);
+         requestRoutesChassisCollection(app);
+         requestRoutesChassis(app);
          requestRoutesChassisResetAction(app);
-         requestRoutesChassisResetActionInfo(app);
-         requestRoutesChassisDrive(app);
 diff --git a/redfish-core/lib/bsodjpeg.hpp b/redfish-core/lib/bsodjpeg.hpp
 new file mode 100644
-index 0000000..3e5b622
+index 0000000..6ec1c53
 --- /dev/null
 +++ b/redfish-core/lib/bsodjpeg.hpp
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,50 @@
++#include "log_services.hpp"
++
 +#include <fstream>
 +#include <iterator>
 +#include <vector>
-+#include "log_services.hpp"
 +
 +namespace redfish
 +{
@@ -52,48 +64,60 @@ index 0000000..3e5b622
 +
 +    if (!imageFile)
 +    {
-+        BMCWEB_LOG_DEBUG<< "Failed to open image file.";
-+	asyncResp->res.jsonValue["Image"]="Image File is  not Created";
-+	return;
++        BMCWEB_LOG_DEBUG("Failed to open image file.");
++        asyncResp->res.jsonValue["Image"] = "Image File is  not Created";
++        return;
 +    }
 +
 +    imageFile.seekg(0, std::ios::end);
 +    std::streampos fileSize = imageFile.tellg();
 +    imageFile.seekg(0, std::ios::beg);
-+   
-+    std::vector<unsigned char> imageData(static_cast<size_t>(fileSize));
-+    imageFile.read(reinterpret_cast<char*>(imageData.data()),static_cast<int>(fileSize));
-+    imageFile.close();
-+   
-+    std::string_view strdata(reinterpret_cast<char*>(imageData.data()),imageData.size());
-+    std::string output = crow::utility::base64encode(strdata);
-+    asyncResp->res.jsonValue["Image"]=output;  
-+}
 +
++    std::vector<unsigned char> imageData(static_cast<size_t>(fileSize));
++    imageFile.read(reinterpret_cast<char*>(imageData.data()),
++                   static_cast<int>(fileSize));
++    imageFile.close();
++
++    std::string_view strdata(reinterpret_cast<char*>(imageData.data()),
++                             imageData.size());
++    std::string output = crow::utility::base64encode(strdata);
++    asyncResp->res.jsonValue["Image"] = output;
++}
 +
 +inline void requestRoutesBsodjpeg(App& app)
 +{
 +    BMCWEB_ROUTE(app, "/redfish/v1/Managers/bmc/Oem/OpenBmc/Jpeg")
 +        .privileges({{"Login"}, {"ConfigureComponents"}})
-+        .methods(boost::beast::http::verb::get)([&app](const crow::Request& req,
-+                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp){
-+                if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++        .methods(boost::beast::http::verb::get)(
++            [&app](const crow::Request& req,
++                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp) {
++        if (!redfish::setUpRedfishRoute(app, req, asyncResp))
 +        {
 +            return;
 +        }
-+		getBsodjpeg(asyncResp);
-+            });
++        getBsodjpeg(asyncResp);
++    });
 +}
-+}
++} // namespace redfish
 diff --git a/redfish-core/lib/managers.hpp b/redfish-core/lib/managers.hpp
-index 340da8b..ba662a3 100644
+index 5cfc27a..30fa0b0 100644
 --- a/redfish-core/lib/managers.hpp
 +++ b/redfish-core/lib/managers.hpp
-@@ -2249,6 +2249,7 @@ inline void requestRoutesManager(App& app)
+@@ -124,7 +124,8 @@ inline void
+     std::ofstream restoreFile(restoreOpFname, std::ios::trunc);
+     if (!restoreFile)
+     {
+-        //BMCWEB_LOG_ERROR << "error in opring output stream " << restoreOpFname;
++        // BMCWEB_LOG_ERROR << "error in opring output stream " <<
++        // restoreOpFname;
+         messages::internalError(asyncResp->res);
+         return;
+     }
+@@ -1983,6 +1984,7 @@ inline void requestRoutesManager(App& app)
          oem["@odata.id"] = "/redfish/v1/Managers/bmc#/Oem";
          oemOpenbmc["@odata.type"] = "#OemManager.OpenBmc";
          oemOpenbmc["@odata.id"] = "/redfish/v1/Managers/bmc#/Oem/OpenBmc";
-+        oemOpenbmc["@odata.id"]="/redfish/v1/Managers/bmc/Oem/OpenBmc/Jpeg";
++        oemOpenbmc["@odata.id"] = "/redfish/v1/Managers/bmc/Oem/OpenBmc/Jpeg";
  
          nlohmann::json::object_t certificates;
          certificates["@odata.id"] =

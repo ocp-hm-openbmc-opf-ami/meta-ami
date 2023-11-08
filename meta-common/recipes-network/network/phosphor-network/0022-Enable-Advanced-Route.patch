@@ -78,8 +78,8 @@ index 05aafbd..7d5b080 100644
 +++ b/src/ipaddress.hpp
 @@ -42,6 +42,7 @@ class IPAddress : public IPIfaces
      IPAddress(sdbusplus::bus_t& bus, std::string_view objRoot,
-               stdplus::PinnedRef<EthernetInterface> parent, IfAddr addr,
-               IP::AddressOrigin origin);
+               stdplus::PinnedRef<EthernetInterface> parent,
+               stdplus::SubnetAny addr, IP::AddressOrigin origin);
 +    ~IPAddress();
  
      std::string address(std::string ipAddress) override;
@@ -171,7 +171,7 @@ index 4cf3431..48666dc 100644
 +#endif
    protected:
      /** @brief Handle to the object used to trigger reloads of networkd. */
-     DelayedExecutor& reload;
+     stdplus::PinnedRef<DelayedExecutor> reload;
 @@ -215,6 +222,14 @@ class Manager : public ManagerIface
  
      /** Get the user management service name dynamically **/
@@ -189,4 +189,49 @@ index 4cf3431..48666dc 100644
  } // namespace network
 -- 
 2.25.1
-
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index a53d50c..467973b 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -675,6 +675,19 @@ ObjectPath EthernetInterface::neighbor(std::string ipAddress,
+             *addr, std::make_unique<Neighbor>(bus, std::string_view(objPath),
+                                               *this, *addr, *lladdr, prefixLength,
+                                               Neighbor::State::Permanent)));
++#ifdef AMI_IP_ADVANCED_ROUTING_SUPPORT
++        manager.get().addReloadPostHook(
++            [&](){
++                stdplus::In4Addr* inaddr = std::get_if<stdplus::In4Addr>(&(addr.value()));
++                if (inaddr != nullptr) {
++                    execute("/usr/bin/ipv4-advanced-route.sh", "ipv4-advanced-route.sh", interfaceName().c_str(), "UP");
++                }
++                else {
++                    execute("/usr/bin/ipv6-advanced-route.sh", "ipv6-advanced-route.sh", interfaceName().c_str(), "UP");
++                }
++            }
++        );
++#endif
+     }
+     else
+     {
+diff --git a/src/neighbor.cpp b/src/neighbor.cpp
+index 65f37d9..80f63d3 100644
+--- a/src/neighbor.cpp
++++ b/src/neighbor.cpp
+@@ -60,6 +60,15 @@ void Neighbor::delete_()
+ 
+     parent.get().writeConfigurationFile();
+     parent.get().manager.get().reloadConfigs();
++
++#ifdef AMI_IP_ADVANCED_ROUTING_SUPPORT
++    if (auto ipv4 = this->ipAddress().find("."); ipv4 != std::string::npos) {
++        execute("/usr/bin/ipv4-advanced-route.sh", "ipv4-advanced-route.sh", parent.get().interfaceName().c_str(), "DOWN");
++    }
++    else {
++        execute("/usr/bin/ipv6-advanced-route.sh", "ipv6-advanced-route.sh", parent.get().interfaceName().c_str(), "DOWN");
++    }
++#endif
+ }
+ 
+ using sdbusplus::xyz::openbmc_project::Common::Error::NotAllowed;
+-- 
+2.25.1

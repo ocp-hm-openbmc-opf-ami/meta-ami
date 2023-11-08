@@ -1,0 +1,87 @@
+From 5695756a5a1735aa58db0412dbafb01914052870 Mon Sep 17 00:00:00 2001
+From: arunthomas <arunthomasb@ami.com>
+Date: Tue, 17 Oct 2023 21:37:21 +0530
+Subject: [PATCH 112/112] ByPass authentication for requests redirected 
+ internally
+
+When If-Match header with etag value is passed for PATCH requests, new request with
+GET method is internally framed and sent to calculate the current etag value and match with
+provided etag. For this request by pass authentication since the same request is initially
+authenticated and privileges are assigned. Also to the new request framed internally, same req.session
+is assigned. So its duplicate effort in authenticating and assigning the privilages.
+Also this causes the BMCWEB to crash when assigning the privilages.
+
+Tested: Run Redfish Protocol validator and got passed.
+
+Signed-off-by: arunthomas <arunthomasb@ami.com>
+---
+ http/app.hpp                   | 5 +++--
+ http/routing.hpp               | 5 +++--
+ redfish-core/include/query.hpp | 4 ++--
+ 3 files changed, 8 insertions(+), 6 deletions(-)
+
+diff --git a/http/app.hpp b/http/app.hpp
+index d9c88b95..51e6dc8d 100644
+--- a/http/app.hpp
++++ b/http/app.hpp
+@@ -66,9 +66,10 @@ class App
+     }
+ 
+     void handle(Request& req,
+-                const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++                const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                bool requestRedirect = false)
+     {
+-        router.handle(req, asyncResp);
++        router.handle(req, asyncResp, requestRedirect);
+     }
+ 
+     DynamicRule& routeDynamic(std::string&& rule)
+diff --git a/http/routing.hpp b/http/routing.hpp
+index 4684027e..400d5c2e 100644
+--- a/http/routing.hpp
++++ b/http/routing.hpp
+@@ -608,7 +608,8 @@ class Router
+     }
+ 
+     void handle(Request& req,
+-                const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++                const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                bool requestRedirect = false)
+     {
+         std::optional<HttpVerb> verb = httpVerbFromBoost(req.method());
+         if (!verb || static_cast<size_t>(*verb) >= perMethods.size())
+@@ -665,7 +666,7 @@ class Router
+         BMCWEB_LOG_DEBUG("Matched rule '{}' {} / {}", rule.rule,
+                          static_cast<uint32_t>(*verb), rule.getMethods());
+ 
+-        if (req.session == nullptr)
++        if (req.session == nullptr || requestRedirect)
+         {
+             rule.handle(req, asyncResp, params);
+             return;
+diff --git a/redfish-core/include/query.hpp b/redfish-core/include/query.hpp
+index 78de6cae..4b637668 100644
+--- a/redfish-core/include/query.hpp
++++ b/redfish-core/include/query.hpp
+@@ -48,7 +48,7 @@ inline void
+     // Restart the request without if-match
+     req.req.erase(boost::beast::http::field::if_match);
+     BMCWEB_LOG_DEBUG("Restarting request");
+-    app.handle(req, asyncResp);
++    app.handle(req, asyncResp, true);
+ }
+ 
+ inline bool handleIfMatch(crow::App& app, const crow::Request& req,
+@@ -104,7 +104,7 @@ inline bool handleIfMatch(crow::App& app, const crow::Request& req,
+     getReqAsyncResp->res.setCompleteRequestHandler(std::bind_front(
+         afterIfMatchRequest, std::ref(app), asyncResp, req, ifMatch));
+ 
+-    app.handle(newReq, getReqAsyncResp);
++    app.handle(newReq, getReqAsyncResp, true);
+     return false;
+ }
+ 
+-- 
+2.39.2
+

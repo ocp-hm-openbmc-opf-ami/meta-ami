@@ -1,12 +1,13 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
+NETWORK_BONDING_SRC_URI += "file://0023-Support-Network-Bonding.patch"
 
 SRC_URI:append = " \
-	     file://0001-ARP-Control.patch \
+             file://0001-ARP-Control.patch \
              file://0006-keep-IPv6AcceptRA-TRUE-when-enable-ipv6-static.patch \
              file://0007-IP-Gateway-Validation-When-Set-To-Static.patch \
              file://0009-removed-error-message-ingnoring-function-when-settin.patch \
-	     file://0010-Allow-empty-gateway6-when-ipv6-source-is-static.patch \
+             file://0010-Allow-empty-gateway6-when-ipv6-source-is-static.patch \
              file://0010-Fix-Cannot-Communicate-With-Vlan-IP-By-IPMI-Command.patch \
              file://0011-Fix-Dynamic-And-Static-Addrs-Shown-When-IPSrc-Is-DHCP.patch \
              file://0013-Add-Prefix-Length-at-Neighbor.patch \
@@ -20,20 +21,16 @@ SRC_URI:append = " \
              file://0019-Fix-Defaultgateway6-Is-Zero-When-Setting-More-Than-One_IPv6.patch \
              file://0020-Fix-Remove-Empty-Gateway-and-Static-Gateway-Missing-and-Add-Gateway-Check-Condition.patch \
              file://0021-Add-Function-to-Save-IPv6-Static-Router-Control.patch \
-             file://0022-Enable-Advanced-Route.patch \ 
+             file://0022-Enable-Advanced-Route.patch \
              file://ipv4-advanced-route.sh \
              file://ipv6-advanced-route.sh \
              file://0022-Re-Design-the-RA-part-in-DHCPEnabled.patch \
+             file://0024-Check-if-IPv4-and-Default-Gateway-are-in-the-Same-Series.patch \
+             file://0024-Add-Index-of-IPAddress-and-its-Related-Function.patch \
+             ${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)} \
              file://0026-Catch-More-Exceptions-to-Avoid-Invalid-MACAddress-while-Decoding.patch \
           "
 
-NETWORK_BONDING_SRC_URI += "file://0023-Support-Network-Bonding.patch"
-
-SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
-
-SRC_URI:append = " \
-                   file://0024-Add-Index-of-IPAddress-and-its-Related-Function.patch \
-                 "
 
 do_install:append() {
     install -d ${D}${bindir}
@@ -43,7 +40,6 @@ do_install:append() {
     install -m 0755 ${WORKDIR}/ipv4-advanced-route.sh ${D}${bindir}
 
 }
-
 
 EXTRA_OEMESON:append = " -Dpersist-mac=true"
 

@@ -1,62 +1,69 @@
-From d2deaed0ebcd6e935824972f3122653ee1204cb5 Mon Sep 17 00:00:00 2001
+From 41cace9752b76f02a3161fb2ee9dd1a11b61e2b8 Mon Sep 17 00:00:00 2001
 From: nibinc <nibinc@ami.com>
-Date: Mon, 17 Jul 2023 14:41:13 +0530
+Date: Mon, 16 Oct 2023 12:43:36 -0400
 Subject: [PATCH 10/10] Time zone configuration support
 
 ---
- http/utility.hpp              | 145 ++++++++++++++++++++++++++++++++++
- redfish-core/lib/managers.hpp |  24 +++++-
- 2 files changed, 168 insertions(+), 1 deletion(-)
+ http/utility.hpp              | 144 +++++++++++++++++++++++++++++++++-
+ redfish-core/lib/managers.hpp |  36 +++++++--
+ 2 files changed, 173 insertions(+), 7 deletions(-)
 
 diff --git a/http/utility.hpp b/http/utility.hpp
-index aa640431..d0910406 100644
+index b35811a9..17a9faa5 100644
 --- a/http/utility.hpp
 +++ b/http/utility.hpp
 @@ -25,6 +25,11 @@
  #include <type_traits>
  #include <utility>
  #include <variant>
-+#include <fstream>
 +#include "nlohmann/json.hpp"
 +#include <cstring>
++#include <fstream>
 +#include <regex>
 +#include <boost/date_time/posix_time/posix_time.hpp>
  
  namespace crow
  {
-@@ -369,6 +374,136 @@ inline bool base64Decode(std::string_view input, std::string& output)
+@@ -101,7 +106,6 @@ constexpr inline uint64_t getParameterTag(std::string_view url)
+     }
+     return tagValue;
+ }
+-
+ constexpr size_t numArgsFromTag(int tag)
+ {
+     size_t ret = 0;
+@@ -277,6 +281,134 @@ inline bool base64Decode(std::string_view input, std::string& output)
      return true;
  }
  
 +inline float tzFormatConvert(std::string timeZone)
 +{
-+try {
-+    auto i = timeZone.find(':');
-+    timeZone = timeZone.replace(i, 1, ".");
-+    std::string minute = timeZone.substr(i + 1);
-+    float fValue = std::stof(minute.c_str());
-+    fValue /= 60;
-+    minute = std::to_string(fValue);
-+    auto j = minute.find('.');
-+    minute = minute.substr(j + 1);
-+    timeZone = timeZone.replace(i + 1, 2, minute);
-+    
-+    float res = std::stof(timeZone.c_str());
-+   return res ;
-+}
-+catch (std::exception &ex) {
-+        BMCWEB_LOG_ERROR << "Invalid parameter type" << ex.what();
-+return 0;
-+}
-+}
++    try {
++        auto i = timeZone.find(':');
++        timeZone = timeZone.replace(i, 1, ".");
++        std::string minute = timeZone.substr(i + 1);
++        float fValue = std::stof(minute.c_str());
++        fValue /= 60;
++        minute = std::to_string(fValue);
++        auto j = minute.find('.');
++        minute = minute.substr(j + 1);
++        timeZone = timeZone.replace(i + 1, 2, minute);
 +
++        float res = std::stof(timeZone.c_str());
++        return res ;
++    }
++    catch (std::exception &ex) {
++        BMCWEB_LOG_ERROR("Invalid parameter type {}", ex.what());
++        return 0;
++    }
++}
 +
 +static std::string localTimeZone = "/etc/timezone";
 +
 +namespace details
 +{
-+//constexpr uint64_t maxMilliSeconds = 253402300799999;
-+//constexpr uint64_t maxSeconds = 253402300799;
++    //constexpr uint64_t maxMilliSeconds = 253402300799999;
++    //constexpr uint64_t maxSeconds = 253402300799;
 +inline std::string getDateTime(boost::posix_time::milliseconds timeSinceEpoch)
 +{
 +    boost::posix_time::ptime epoch(boost::gregorian::date(1970, 1, 1));
@@ -64,7 +71,7 @@ index aa640431..d0910406 100644
 +    // append zero offset to the end according to the Redfish spec for Date-Time
 +    return boost::posix_time::to_iso_extended_string(time) + "+00:00";
 +}
-+} // namespace details
++}// namespace details
 +
 +inline std::string getTimeZone(std::string filePath)
 +{
@@ -83,10 +90,10 @@ index aa640431..d0910406 100644
 +{
 +    std::fstream out(filePath, std::ios::out);
 +    if (!out.is_open())
-+        return;
++            return;
 +    out << timeZone;
 +    out.close();
-+    return;
++    return;  
 +}
 +
 +inline std::string getDateTime(const std::time_t& time)
@@ -157,11 +164,10 @@ index aa640431..d0910406 100644
 +    return std::make_pair(dateTime, timeOffset);
 +}
 +
-+
  inline bool constantTimeStringCompare(std::string_view a, std::string_view b)
  {
      // Important note, this function is ONLY constant time if the two input
-@@ -388,6 +523,16 @@ struct ConstantTimeCompare
+@@ -296,6 +428,16 @@ struct ConstantTimeCompare
      }
  };
  
@@ -179,11 +185,11 @@ index aa640431..d0910406 100644
  {
  inline boost::urls::url
 diff --git a/redfish-core/lib/managers.hpp b/redfish-core/lib/managers.hpp
-index 94b3f0e3..042da480 100644
+index 3c5972a2..f4862738 100644
 --- a/redfish-core/lib/managers.hpp
 +++ b/redfish-core/lib/managers.hpp
-@@ -1887,6 +1887,22 @@ inline void
-         "GetManagedObjects");
+@@ -1879,6 +1879,22 @@ inline void
+     });
  }
  
 +inline void setTimeZone(std::shared_ptr<bmcweb::AsyncResp> aResp,
@@ -202,22 +208,50 @@ index 94b3f0e3..042da480 100644
 +    }
 +}
 +
- inline void setDateTime(std::shared_ptr<bmcweb::AsyncResp> aResp,
+ inline void setDateTime(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
                          std::string datetime)
  {
-@@ -2209,9 +2225,10 @@ inline void requestRoutesManager(App& app)
+@@ -1903,7 +1919,10 @@ inline void setDateTime(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
+             BMCWEB_LOG_DEBUG("Failed to set elapsed time. "
+                              "DBUS response error {}",
+                              ec);
+-            messages::internalError(asyncResp->res);
++            messages::propertyValueResourceConflict(
++                asyncResp->res, "DateTime", datetime,
++                boost::urls::url_view(
++                    "/redfish/v1/Managers/bmc/NetworkProtocol"));
+             return;
+         }
+         asyncResp->res.jsonValue["DateTime"] = datetime;
+@@ -2011,7 +2030,7 @@ inline void requestRoutesManager(App& app)
+             "ResetAll", "ResetToDefaultButKeepReservedSettings"};
+ 
+         std::pair<std::string, std::string> redfishDateTimeOffset =
+-            redfish::time_utils::getDateTimeOffsetNow();
++            crow::utility::getDateTimeOffsetNow();
+ 
+         asyncResp->res.jsonValue["DateTime"] = redfishDateTimeOffset.first;
+         asyncResp->res.jsonValue["DateTimeLocalOffset"] =
+@@ -2231,13 +2250,14 @@ inline void requestRoutesManager(App& app)
          std::optional<nlohmann::json> oem;
          std::optional<nlohmann::json> links;
          std::optional<std::string> datetime;
 +        std::optional<std::string> timeZone;
+         std::optional<bool> locationIndicatorActive;
+         std::optional<std::string> vId;
  
-         if (!json_util::readJsonPatch(req, asyncResp->res, "Oem", oem,
--                                      "DateTime", datetime, "Links", links))
-+                                      "DateTime", datetime, "Links", links, "DateTimeLocalOffset", timeZone))
+-        if (!json_util::readJsonPatch(req, asyncResp->res, "Oem", oem,
+-                                      "DateTime", datetime, "Links", links,
+-                                      "LocationIndicatorActive",
+-                                      locationIndicatorActive, "Id", vId))
++        if (!json_util::readJsonPatch(
++                req, asyncResp->res, "Oem", oem, "DateTime", datetime, "Links",
++                links, "LocationIndicatorActive", locationIndicatorActive, "Id",
++                vId, "DateTimeLocalOffset", timeZone))
          {
              return;
          }
-@@ -2272,6 +2289,11 @@ inline void requestRoutesManager(App& app)
+@@ -2305,6 +2325,10 @@ inline void requestRoutesManager(App& app)
          {
              setDateTime(asyncResp, std::move(*datetime));
          }
@@ -225,10 +259,9 @@ index 94b3f0e3..042da480 100644
 +        {
 +            setTimeZone(asyncResp, std::move(*timeZone));
 +        }
-+
-         });
- }
- 
+         if (locationIndicatorActive)
+         {
+             setLocationIndicatorActive(asyncResp, *locationIndicatorActive);
 -- 
-2.25.1
+2.34.1
 

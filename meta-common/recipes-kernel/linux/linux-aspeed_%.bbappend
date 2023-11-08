@@ -10,14 +10,13 @@ SRC_URI += "file://nfs.cfg \
             file://jtag-fragment.cfg \
             file://0014-add-jtag-aspeed-internal-cpld-driver.patch \
 	    file://0003-Fix-incorrect-MAC-address-in-RNDIS-driver.patch \
-            file://0015-Adding-Threshols-support-for-NM-support.patch \
             file://0016-legacy-driver-support-for-pwm-driver.patch \
             file://0002-i3c-mctp-workaround-for-wrong-DCR-value.patch \
             file://0017-Add-write-public-key-in-image-support.patch \
+            file://0018-Nm-sensor-Threshold-Support.patch \
            "
 
-NON_PFR_SRC_URI_AMI = "file://0012-Add-new-layout-as-per-AMI-requirements.patch \
-                      "
+NON_PFR_SRC_URI_AMI = "file://0012-Add-new-layout-as-per-AMI-requirements.patch"
 
 SRC_URI += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '',NON_PFR_SRC_URI_AMI, d)}"
 
@@ -30,3 +29,7 @@ NETWORK_BONDING_SRC_URI += "file://bond.cfg \
                            "
 SRC_URI += "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
 
+SRC_URI_NM += "file://disable_nm_sensor.cfg \
+               file://disable_smart.cfg \
+               "
+SRC_URI:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'nm-features', '', SRC_URI_NM, d)}"

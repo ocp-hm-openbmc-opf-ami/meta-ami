@@ -1,5 +1,5 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRCREV = "703413d762b1c324cb71b3522e02587c8f60e174"
+SRCREV = "41ebd7abf42ef8fdfe4867f865c56063517edb6f"
 
 SRC_URI += "file://0001-Add-secured-message-type-in-mctpd.patch"
