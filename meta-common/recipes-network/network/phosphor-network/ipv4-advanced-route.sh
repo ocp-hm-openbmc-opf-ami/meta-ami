@@ -5,15 +5,17 @@
 
 IFACE="$1"
 STATE="$2"
+RT_TABLE="/etc/iproute2/rt_tables"
 case "$IFACE" in
     bond*|bond*.*|lo)
         exit 0
         ;;
-    *.*)
-        MODE=`cat /etc/systemd/network/00-bmc-$(echo $IFACE | cut -d"." -f1 ).network 2> /dev/null | grep "DHCP=" | cut -d"=" -f2`
-        ;;
     *)
-        MODE=`cat /etc/systemd/network/00-bmc-$IFACE.network 2> /dev/null | grep "DHCP=" | cut -d"=" -f2`
+        if ! [ -f "/etc/systemd/network/00-bmc-$IFACE.network" ]; then
+            MODE="ipv4"
+        else
+            MODE=`cat /etc/systemd/network/00-bmc-$IFACE.network 2> /dev/null | grep "DHCP=" | cut -d"=" -f2`
+        fi
         ;;
 esac
 
@@ -98,14 +100,18 @@ if [ "$STATE" == "UP" ]; then
         route add default gw $GATEWAY dev $IFACE metric $METRIC 2> /dev/null
     fi
 
+    grep -q "$IFACE" "$RT_TABLE"
+    if [ $? -ne 0 ]; then
+        NUM=`grep -v "#" "$RT_TABLE" | wc -l`
+        echo "$(($NUM + 255)) $IFACE" >> "$RT_TABLE"
+    fi
+
     ip route add default via $GATEWAY dev $IFACE table $IFACE metric $((METRIC++)) 2> /dev/null
     ip route add "$NETADDR/$CIDR" dev $IFACE table $IFACE 2> /dev/null
     ip rule del table $IFACE 2>/dev/null
     ip rule add from $IP table $IFACE 2> /dev/null
 
 else
-
     ip rule del table $IFACE 2>/dev/null
     ip route flush table $IFACE 2>/dev/null
-
 fi
