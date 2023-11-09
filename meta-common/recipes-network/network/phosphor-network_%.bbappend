@@ -1,6 +1,9 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-NETWORK_BONDING_SRC_URI += "file://0023-Support-Network-Bonding.patch"
+NETWORK_BONDING_SRC_URI += "file://0023-Support-Network-Bonding.patch \
+                            file://0027-Bond_Function_With_Static_IP_Address_Is_Not_Working_Properly.patch \
+                           "
+
 
 SRC_URI:append = " \
              file://0001-ARP-Control.patch \
@@ -26,9 +29,9 @@ SRC_URI:append = " \
              file://ipv6-advanced-route.sh \
              file://0022-Re-Design-the-RA-part-in-DHCPEnabled.patch \
              file://0024-Check-if-IPv4-and-Default-Gateway-are-in-the-Same-Series.patch \
-             file://0024-Add-Index-of-IPAddress-and-its-Related-Function.patch \
              ${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)} \
              file://0026-Catch-More-Exceptions-to-Avoid-Invalid-MACAddress-while-Decoding.patch \
+             file://0024-Add-Index-of-IPAddress-and-its-Related-Function.patch \
           "
 
 

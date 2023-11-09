@@ -1,0 +1,335 @@
+diff --git a/src/bond.cpp b/src/bond.cpp
+index 5f7b47a..badf08d 100644
+--- a/src/bond.cpp
++++ b/src/bond.cpp
+@@ -11,6 +11,8 @@
+ #include <string>
+ #include <xyz/openbmc_project/Common/error.hpp>
+ #include <cstdlib>
++#include <fstream>
++#include <algorithm>
+ 
+ namespace phosphor
+ {
+@@ -57,16 +59,29 @@ void Bond::delete_()
+     // Remove all configs for the current interface
+     const auto& confDir = eth.manager.get().getConfDir();
+     std::error_code ec;
+-    std::filesystem::remove(config::pathForIntfConf(confDir, intf), ec);
+-    std::filesystem::remove(config::pathForIntfDev(confDir, intf), ec);
+ 
+     auto ifidx = eth.getIfIdx();
++    std::string ipv6StaticRtrAddr{};
++    bool ipv4Enable, ipv6Enable, ipv6EnableStaticRtr;
++    std::vector<std::optional<std::string>> ipv4IndexUsedList, ipv6IndexUsedList;
+ 
+     if (ifidx > 0)
+     {
+         eth.manager.get().interfacesByIdx.erase(ifidx);
+     }
++
++    /**Save Information of Bond0 and later restore*/
+     auto it = eth.manager.get().interfaces.find(intf);
++    std::map<std::string, std::variant<bool, std::string, std::vector<std::optional<std::string>>>> map;
++    if (it != eth.manager.get().interfaces.end()) {
++        map.emplace("ipv6StaticRtrAddr", it->second->ipv6StaticRtrAddr());
++        map.emplace("ipv6EnableStaticRtr", it->second->ipv6EnableStaticRtr());
++        map.emplace("ipv4IndexUsedList", std::move(it->second->ipv4IndexUsedList));
++        map.emplace("ipv6IndexUsedList", std::move(it->second->ipv6IndexUsedList));
++        map.emplace("ipv4Enable", it->second->ipv4Enable());
++        map.emplace("ipv6Enable", it->second->ipv6Enable());
++    }
++
+     auto obj = std::move(it->second);
+     eth.manager.get().interfaces.erase(it);
+ 
+@@ -81,6 +96,11 @@ void Bond::delete_()
+     }
+ 
+     eth.manager.get().writeToConfigurationFile();
++    restoreConfiguration(map);
++    std::filesystem::remove(config::pathForIntfConf(confDir, intf), ec);
++    std::filesystem::remove(config::pathForIntfDev(confDir, intf), ec);
++    std::filesystem::remove(config::pathForIntfInfo(eth.manager.get().getIfaceConfDir(), intf), ec);
++
+     eth.manager.get().reloadConfigs();
+ 
+     execute("/bin/systemctl", "systemctl", "restart", "systemd-networkd.service");
+@@ -120,6 +140,92 @@ Bond::Mode Bond::mode(Mode /*Bonding Mode*/)
+     elog<NotAllowed>(REASON("Property update is not allowed"));
+ }
+ 
++void Bond::restoreConfiguration(std::map<std::string, std::variant<bool, std::string, std::vector<std::optional<std::string>>>> map) {
++    if (auto it = eth.manager.get().interfaces.find(activeSlave()); it != eth.manager.get().interfaces.end()) {
++        {
++            it->second->EthernetInterfaceIntf::ipv4Enable(std::get<bool>(map["ipv4Enable"]), true);
++            it->second->EthernetInterfaceIntf::ipv6Enable(std::get<bool>(map["ipv6Enable"]), true);
++            it->second->ipv4IndexUsedList = std::move(std::get<std::vector<std::optional<std::string>>>(map["ipv4IndexUsedList"]));
++            it->second->ipv6IndexUsedList = std::move(std::get<std::vector<std::optional<std::string>>>(map["ipv6IndexUsedList"]));
++            it->second->EthernetInterfaceIntf::ipv6EnableStaticRtr(std::get<bool>(map["ipv6EnableStaticRtr"]), true);
++            it->second->EthernetInterfaceIntf::ipv6StaticRtrAddr(std::get<std::string>(map["ipv6StaticRtrAddr"]), true);
++        }
++        {
++            config::Parser config(config::pathForIntfConf(eth.manager.get().getConfDir(), "bond0"));
++            it->second->loadDomainNames();
++            it->second->loadNameServers(config);
++            it->second->loadNTPServers(config);
++            auto dhcpVal = getDHCPValue(config);
++            it->second->EthernetInterfaceIntf::dhcp4(dhcpVal.v4, true);
++            it->second->EthernetInterfaceIntf::dhcp6(dhcpVal.v6, true);
++            it->second->EthernetInterfaceIntf::ipv6AcceptRA(getIPv6AcceptRA(config), true);
++        }
++    }
++
++    writeBondConfiguration(false);
++    for (const auto& dirent : std::filesystem::directory_iterator(eth.manager.get().getBondingConfBakDir()))
++    {
++        std::error_code ec;
++        if (dirent.path().filename().generic_string().find(activeSlave()) == std::string::npos) {
++            std::filesystem::copy_file(dirent, fmt::format("{}/{}", eth.manager.get().getConfDir().generic_string(), dirent.path().filename().generic_string()), fs::copy_options::overwrite_existing, ec);
++        }
++        std::filesystem::remove(dirent.path(), ec);
++    }
++
++}
++
++void Bond::writeBondConfiguration(bool isActive) {
++    std::ofstream ofs;
++    std::ifstream ifs;
++    std::string intfName, line, IfaceConfDir;
++    std::filebuf infile, outfile;
++    if (isActive) {
++        ifs.open(config::pathForIntfConf(eth.manager.get().getBondingConfBakDir(), BondIntf::activeSlave()));
++        if (!ifs.is_open()) {
++            log<level::INFO>("writeBondConfiguration slave configuration file not opened.\n");
++        }
++
++        ofs.open(config::pathForIntfConf(eth.manager.get().getConfDir(), "bond0"));
++        if (!ofs.is_open()) {
++            log<level::INFO>("writeBondConfiguration bond configuration file not opened.\n");
++        }
++
++        intfName = "Name=bond0";
++        infile.open(config::pathForIntfInfo(eth.manager.get().getIfaceConfDir(), BondIntf::activeSlave()), std::ios::in | std::ios::binary);
++        outfile.open(config::pathForIntfInfo(eth.manager.get().getIfaceConfDir(), "bond0"), std::ios::out | std::ios::binary);
++    } // if
++    else {
++        ifs.open(config::pathForIntfConf(eth.manager.get().getConfDir(), "bond0"));
++        if (!ifs.is_open()) {
++            log<level::INFO>("writeBondConfiguration slave configuration file not opened.\n");
++        }
++
++        ofs.open(config::pathForIntfConf(eth.manager.get().getConfDir(), BondIntf::activeSlave()));
++        if (!ofs.is_open()) {
++            log<level::INFO>("writeBondConfiguration bond configuration file not opened.\n");
++        }
++
++        intfName = fmt::format("Name={}", BondIntf::activeSlave());
++        infile.open(config::pathForIntfInfo(eth.manager.get().getIfaceConfDir(), "bond0"), std::ios::in | std::ios::binary);
++        outfile.open(config::pathForIntfInfo(eth.manager.get().getIfaceConfDir(), BondIntf::activeSlave()), std::ios::out | std::ios::binary);
++    } // else
++
++    while (ifs.peek() != EOF) {
++        std::getline(ifs, line);
++        if (line.starts_with("Name=")) {
++            ofs << intfName << std::endl;
++        }
++        else {
++            ofs << line << std::endl;
++        }
++        line.clear();
++    }
++
++    ofs.flush();
++    ofs.close();
++    ifs.close();
++    std::copy(std::istreambuf_iterator<char>(&infile), {}, std::ostreambuf_iterator<char>(&outfile));
++}
+ } //namespace network
+ } //namespace phosphor
+ 
+diff --git a/src/bond.hpp b/src/bond.hpp
+index 0328e14..a93317f 100644
+--- a/src/bond.hpp
++++ b/src/bond.hpp
+@@ -62,6 +62,9 @@ class Bond : public BondObj
+     using BondIntf::activeSlave;
+     std::string activeSlave(std::string) override;
+ 
++    void writeBondConfiguration(bool isActive);
++    void restoreConfiguration(std::map<std::string, std::variant<bool, std::string, std::vector<std::optional<std::string>>>> map);
++
+     inline const auto& getObjPath() const
+     {
+         return objPath;
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index 9b79941..af4b67d 100644
+@@ -1080,7 +1081,11 @@ ObjectPath EthernetInterface::createVLAN(uint16_t id)
+ ObjectPath EthernetInterface::createBond(std::string activeSlave, uint8_t miiMonitor)
+ {
+     auto intfName = bondIfcName;
+-    std::string macStr{};
++    std::string macStr{}, ipv6StaticRtrAddr{};
++    std::optional<stdplus::In4Addr> gw = std::nullopt;
++    std::optional<stdplus::In6Addr> gw6 = std::nullopt;
++    bool ipv4Enable, ipv6Enable, ipv6EnableStaticRtr;
++    std::vector<std::optional<std::string>> ipv4IndexUsedList, ipv6IndexUsedList;
+     if (manager.get().interfaces.find(intfName) != manager.get().interfaces.end())
+     {
+         log<level::ERR>("Bond already exists");
+@@ -1092,8 +1097,20 @@ ObjectPath EthernetInterface::createBond(std::string activeSlave, uint8_t miiMon
+     {
+         if(intf->interfaceName().compare(activeSlave.c_str()) == 0)
+         {
+-            /*Get MAC Address of Active Slave*/
++            /*Get Information of Active Slave*/
+             macStr = intf->macAddress();
++            ipv4IndexUsedList = intf->ipv4IndexUsedList;
++            ipv6IndexUsedList = intf->ipv6IndexUsedList;
++            ipv4Enable = intf->ipv4Enable();
++            ipv6Enable = intf->ipv6Enable();
++            ipv6EnableStaticRtr = intf->ipv6EnableStaticRtr();
++            ipv6StaticRtrAddr = intf->ipv6StaticRtrAddr();
++            if (!intf->defaultGateway().empty()) {
++                gw = stdplus::fromStr<stdplus::In4Addr>(intf->defaultGateway());
++            }
++            if (!intf->defaultGateway6().empty()) {
++                gw6 = stdplus::fromStr<stdplus::In6Addr>(intf->defaultGateway6());
++            }
+         }
+     }
+ 
+@@ -1118,11 +1135,20 @@ ObjectPath EthernetInterface::createBond(std::string activeSlave, uint8_t miiMon
+         .bondInfo = std::move(bondinfo),
+         }};
+ 
++    if (gw.has_value()) {
++        info.defgw4 = gw;
++    }
++
++    if (gw6.has_value()) {
++        info.defgw6 = gw6;
++    }
++
+     // Pass the parents nicEnabled property, so that the child
+     // Bond interface can inherit.
+     auto bondIntf = std::make_unique<EthernetInterface>(
+-        bus, manager, info, objRoot, config::Parser(), nicEnabled());
+-
++        bus, manager, info, objRoot,
++        config::Parser(config::pathForIntfConf(manager.get().getConfDir(),
++                        info.intf.bondInfo->activeSlave)), nicEnabled());
+     ObjectPath ret = bondIntf->objPath;
+ 
+     manager.get().interfaces.emplace(intfName, std::move(bondIntf));
+@@ -1141,6 +1167,17 @@ ObjectPath EthernetInterface::createBond(std::string activeSlave, uint8_t miiMon
+ 
+     manager.get().writeToConfigurationFile();
+ 
++    /** Restore Information of Active Slave*/
++    if (auto it = manager.get().interfaces.find(bondIfcName); it != manager.get().interfaces.end()) {
++        it->second->EthernetInterfaceIntf::ipv4Enable(ipv4Enable, true);
++        it->second->EthernetInterfaceIntf::ipv6Enable(ipv6Enable, true);
++        it->second->ipv4IndexUsedList = std::move(ipv4IndexUsedList);
++        it->second->ipv6IndexUsedList = std::move(ipv6IndexUsedList);
++        it->second->EthernetInterfaceIntf::ipv6EnableStaticRtr(ipv6EnableStaticRtr, true);
++        it->second->EthernetInterfaceIntf::ipv6StaticRtrAddr(ipv6StaticRtrAddr, true);
++        it->second->bonding->writeBondConfiguration(true);
++    }
++
+     execute("/bin/systemctl", "systemctl", "restart", "systemd-networkd.service");
+ 
+     return ret;
+@@ -1173,6 +1210,19 @@ void EthernetInterface::writeConfigurationFile()
+ 
+     if((it != manager.get().interfaces.end()) && (interfaceName().compare(bondIfcName) != 0) && (interfaceName().compare("usb0") != 0))
+     {
++        std::error_code ec{};
++        if (fs::exists(config::pathForIntfConf(manager.get().getConfDir(), interfaceName()), ec)) {
++            if(!fs::copy_file(config::pathForIntfConf(
++                                manager.get().getConfDir(),interfaceName()),
++                                config::pathForIntfConf(manager.get().getBondingConfBakDir(), interfaceName()),
++                                fs::copy_options::overwrite_existing, ec)) {
++                log<level::INFO>(fmt::format("interfaceName = {}, error message = {}\n", __LINE__, interfaceName(), ec.message()).c_str());
++            }
++        }
++        else {
++            log<level::INFO>(fmt::format("interfaceName = {}, error message = {}\n", __LINE__, interfaceName(), ec.message()).c_str());
++        }
++
+         config.map["Match"].emplace_back()["Name"].emplace_back(interfaceName());
+         {
+             auto& link = config.map["Link"].emplace_back();
+diff --git a/src/network_manager.cpp b/src/network_manager.cpp
+index e5ce614..43dd889 100644
+--- a/src/network_manager.cpp
++++ b/src/network_manager.cpp
+@@ -24,6 +24,7 @@
+ constexpr char ARPCONTROL_CONF_DIR[] = "/etc/arpcontrol";
+ constexpr char DNS_CONF_DIR[]  = "/etc/dns.d";
+ constexpr char INTERFACE_CONF_DIR[] = "/etc/interface";
++constexpr char BONDING_CONF_BAK_DIR[] = "/etc/interface/bonding";
+ 
+ namespace phosphor
+ {
+@@ -305,7 +306,11 @@ void Manager::createInterface(const AllIntfInfo& info, bool enabled)
+                    info.intf.idx);
+         return;
+     }
++
+     config::Parser config(config::pathForIntfConf(confDir, *info.intf.name));
++    if (fs::exists("/sys/class/net/bond0/bonding/active_slave")) {
++        config = config::pathForIntfConf(bondingConfBakDir, *info.intf.name);
++    }
+     auto intf = std::make_unique<EthernetInterface>(
+         bus, *this, info, objPath.str, config, enabled);
+     intf->loadNameServers(config);
+@@ -760,6 +765,18 @@ void Manager::setConfDir(const fs::path& dir)
+             elog<InternalFailure>();
+         }
+     }
++
++    fs::path bondingDir(BONDING_CONF_BAK_DIR);
++    bondingConfBakDir = bondingDir;
++    if (!fs::exists(bondingConfBakDir))
++    {
++        if (!fs::create_directories(bondingConfBakDir))
++        {
++            log<level::ERR>("Unable to create the bonding conf bak dir",
++                            entry("DIR=%s", bondingConfBakDir.c_str()));
++            elog<InternalFailure>();
++        }
++    }
+ }
+ 
+ Manager::~Manager() {
+diff --git a/src/network_manager.hpp b/src/network_manager.hpp
+index 60e3ab2..79f8ce0 100644
+--- a/src/network_manager.hpp
++++ b/src/network_manager.hpp
+@@ -106,6 +106,13 @@ class Manager : public ManagerIface
+         return ifaceConfDir;
+     }
+ 
++    /** @brief gets the Bonding interface conf backup directory.
++     */
++    inline fs::path getBondingConfBakDir()
++    {
++        return bondingConfBakDir;
++    }
++
+     bool createDefaultARPControlFiles(bool force);
+ 
+     /** @brief ARP Control Configuration directory. */
+@@ -224,6 +231,9 @@ class Manager : public ManagerIface
+     /** Get the user management service name dynamically **/
+     std::string getUserServiceName();
+ 
++    /** @brief Bonding Interface Configuration backup directory. */
++    fs::path bondingConfBakDir;
++
+ #ifdef AMI_IP_ADVANCED_ROUTING_SUPPORT
+   private:
+     std::thread advanced_route_worker;
+-- 
+2.25.1
