@@ -1,0 +1,110 @@
+From 9ff80b95b0f7f463202cc262fb7943f43decb783 Mon Sep 17 00:00:00 2001
+From: Dhineshkumar M <mdhineshkumar@ami.com>
+Date: Tue, 7 Nov 2023 09:25:21 +0530
+Subject: [PATCH] Added-eject-support
+
+Issue:
+# After eject the media from host, slots are not disconnected.
+# There is no support for monitoring the eject status from host.
+
+Fix:
+# Added support for monitoring the eject status from host.
+# After eject the media from host slots are disconnected properly.
+
+Signed-off-by: Dhineshkumar M <mdhineshkumar@ami.com>
+---
+ src/system.hpp | 64 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 64 insertions(+)
+
+diff --git a/src/system.hpp b/src/system.hpp
+index 1852955..e6d1cf8 100644
+--- a/src/system.hpp
++++ b/src/system.hpp
+@@ -2,6 +2,7 @@
+ 
+ #include "logger.hpp"
+ 
++#include <sys/prctl.h>
+ #include <algorithm>
+ #include <boost/asio.hpp>
+ #include <boost/asio/spawn.hpp>
+@@ -476,6 +477,29 @@ class Process : public std::enable_shared_from_this<Process>
+     const NBDDevice& dev;
+ };
+ 
++/* Returns slot number if ejected, -1 otherwise */
++static int eject_status(const std::string& filePath)
++{
++    int slotNumber = -1;
++    std::ifstream file(filePath);
++
++    /* check if file is empty */
++    if (file.peek() == std::ifstream::traits_type::eof())
++    {
++        // Extract the slot number from the file path
++        for (char c : filePath)
++        {
++            if (isdigit(c))
++            {
++                slotNumber = c - '0';
++                break;
++            }
++        }
++    }
++    file.close();
++    return slotNumber;
++}
++
+ struct UsbGadget
+ {
+   private:
+@@ -541,6 +565,46 @@ struct UsbGadget
+                 echoToFile(funcMassStorageDir / "lun.0/cdrom", "0");
+                 echoToFile(funcMassStorageDir / "lun.0/file", path);
+ 
++                /* Spawn a child process to monitor eject status from host */
++                if (fork() == 0)
++                {
++                    prctl(PR_SET_PDEATHSIG, SIGHUP);
++                    std::string filePath = funcMassStorageDir / "lun.0/file";
++                    std::string objpath = "/xyz/openbmc_project/";
++                    std::string interface = "xyz.openbmc_project.VirtualMedia.";
++                    int slot = -1;
++
++                    while (fs::exists(gadgetDir))
++                    {
++                        slot = eject_status(filePath);
++                        if (slot != -1)
++                        {
++                            auto bus = sdbusplus::bus::new_system();
++
++                            if ((slot == 0) || (slot == 1))
++                            {
++                                objpath = objpath + "VirtualMedia/Proxy/Slot_" +
++                                          std::to_string(slot);
++                                interface = interface + "Proxy";
++                            }
++                            else
++                            {
++                                objpath = objpath +
++                                          "VirtualMedia/Legacy/Slot_" +
++                                          std::to_string(slot);
++                                interface = interface + "Legacy";
++                            }
++
++                            auto methodCall = bus.new_method_call(
++                                "xyz.openbmc_project.VirtualMedia",
++                                objpath.c_str(), interface.c_str(), "Unmount");
++                            bus.call(methodCall);
++                            exit(0);
++                        }
++                        sleep(1);
++                    }
++                }
++
+                 for (const auto& port : fs::directory_iterator(
+                          "/sys/bus/platform/devices/1e6a0000.usb-vhub"))
+                 {
+-- 
+2.34.1
+
