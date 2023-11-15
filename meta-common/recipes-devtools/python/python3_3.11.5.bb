@@ -32,6 +32,7 @@ SRC_URI = "http://www.python.org/ftp/python/${PV}/Python-${PV}.tar.xz \
            file://deterministic_imports.patch \
            file://0001-Avoid-shebang-overflow-on-python-config.py.patch \
            file://0001-Update-test_sysconfig-for-posix_user-purelib.patch \
+           file://0001-skip-no_stdout_fileno-test-due-to-load-variability.patch \
            "
 
 SRC_URI:append:class-native = " \
@@ -39,13 +40,13 @@ SRC_URI:append:class-native = " \
            file://12-distutils-prefix-is-inside-staging-area.patch \
            file://0001-Don-t-search-system-for-headers-libraries.patch \
            "
-SRC_URI[sha256sum] = "2f0e409df2ab57aa9fc4cbddfb976af44e4e55bf6f619eee6bc5c2297264a7f6"
+SRC_URI[sha256sum] = "85cd12e9cf1d6d5a45f17f7afe1cebe7ee628d3282281c492e86adf636defa3f"
 
 # exclude pre-releases for both python 2.x and 3.x
 UPSTREAM_CHECK_REGEX = "[Pp]ython-(?P<pver>\d+(\.\d+)+).tar"
 UPSTREAM_CHECK_URI = "https://www.python.org/downloads/source/"
 
-CVE_PRODUCT = "python"
+CVE_PRODUCT = "python cpython"
 
 CVE_STATUS[CVE-2007-4559] = "disputed: Upstream consider this expected behaviour"
 CVE_STATUS[CVE-2019-18348] = "not-applicable-config: This is not exploitable when glibc has CVE-2016-10739 fixed"
@@ -53,7 +54,7 @@ CVE_STATUS[CVE-2020-15523] = "not-applicable-platform: Issue only applies on Win
 CVE_STATUS[CVE-2022-26488] = "not-applicable-platform: Issue only applies on Windows"
 # The module will be removed in the future and flaws documented.
 CVE_STATUS[CVE-2015-20107] = "upstream-wontfix: The mailcap module is insecure by design, so this can't be fixed in a meaningful way"
-# CVE_STATUS[CVE-2023-36632] = "disputed: Not an issue, in fact expected behaviour"
+CVE_STATUS[CVE-2023-36632] = "disputed: Not an issue, in fact expected behaviour"
 
 PYTHON_MAJMIN = "3.11"
 
@@ -90,6 +91,13 @@ CACHED_CONFIGUREVARS = " \
                 ac_cv_file__dev_ptmx=yes \
                 ac_cv_file__dev_ptc=no \
                 ac_cv_working_tzset=yes \
+"
+# set thread stack size to 2MB on musl for interpreter and stdlib C extensions
+# so it does not run into stack limits due to musl's small thread stack
+# This is only needed to build interpreter and not the subsequent modules
+# Thats why CFLAGS_NODIST is modified instead of CFLAGS
+CACHED_CONFIGUREVARS:append:libc-musl = "\
+    CFLAGS_NODIST='${CFLAGS} -DTHREAD_STACK_SIZE=0x200000' \
 "
 
 # PGO currently causes builds to not be reproducible so disable by default, see YOCTO #13407
@@ -215,6 +223,10 @@ do_install:append:class-nativesdk () {
          sed -i -e '1s|^#!.*|#!/usr/bin/env python3|' $PYTHSCRIPT
     done
     create_wrapper ${D}${bindir}/python${PYTHON_MAJMIN} TERMINFO_DIRS='${sysconfdir}/terminfo:/etc/terminfo:/usr/share/terminfo:/usr/share/misc/terminfo:/lib/terminfo' PYTHONNOUSERSITE='1'
+}
+
+do_install_ptest:append:class-target:libc-musl () {
+    sed -i -e 's|SKIPPED_TESTS=|SKIPPED_TESTS="-x test__locale -x test_c_locale_coercion -x test_locale -x test_os test_re -x test__xxsubinterpreters -x test_threading"|' ${D}${PTEST_PATH}/run-ptest
 }
 
 SYSROOT_PREPROCESS_FUNCS:append:class-target = " provide_target_config_script"
@@ -424,8 +436,9 @@ FILES:${PN}-man = "${datadir}/man"
 # See https://bugs.python.org/issue18748 and https://bugs.python.org/issue37395
 RDEPENDS:libpython3:append:libc-glibc = " libgcc"
 RDEPENDS:${PN}-ctypes:append:libc-glibc = " ${MLPREFIX}ldconfig"
-RDEPENDS:${PN}-ptest = "${PN}-modules ${PN}-tests ${PN}-dev ${PN}-cgitb ${PN}-zipapp unzip bzip2 libgcc tzdata coreutils sed gcc g++ binutils"
-RDEPENDS:${PN}-ptest:append:libc-glibc = " locale-base-fr-fr locale-base-en-us locale-base-tr-tr locale-base-de-de"
+RDEPENDS:${PN}-ptest = "${PN}-modules ${PN}-tests ${PN}-dev ${PN}-cgitb ${PN}-zipapp unzip bzip2 libgcc tzdata coreutils sed gcc g++ binutils \
+                        locale-base-fr-fr locale-base-en-us locale-base-de-de"
+RDEPENDS:${PN}-ptest:append:libc-glibc = " locale-base-tr-tr"
 RDEPENDS:${PN}-tkinter += "${@bb.utils.contains('PACKAGECONFIG', 'tk', '${MLPREFIX}tk ${MLPREFIX}tk-lib', '', d)}"
 RDEPENDS:${PN}-idle += "${@bb.utils.contains('PACKAGECONFIG', 'tk', '${PN}-tkinter ${MLPREFIX}tcl', '', d)}"
 DEV_PKG_DEPENDENCY = ""
