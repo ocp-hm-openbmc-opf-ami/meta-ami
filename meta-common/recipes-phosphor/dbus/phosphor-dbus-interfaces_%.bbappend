@@ -18,6 +18,7 @@ SRC_URI += "file://0001-ARP-Control-property.patch\
             file://0013-Add-DBus-properties-to-Save-IPv6-Static-Router-Control.patch \
             file://0015-Add-Index-property-for-IPAddress-Object.patch \
             file://0016-Fix-build-error-due-to-Software.Image-yaml.patch \
+            file://0017-Add-Interface-Count-in-SystemConfiguation.patch \
         "
 
 EXTRA_OEMESON += "-Ddata_com_ami=true"
