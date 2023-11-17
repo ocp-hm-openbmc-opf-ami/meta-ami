@@ -1,0 +1,177 @@
+From 0bcfa68bfecac72e135261435f94ffcb145e84f1 Mon Sep 17 00:00:00 2001
+From: vmani <manikandanv@ami.com>
+Date: Wed, 1 Nov 2023 21:10:18 +0530
+Subject: [PATCH 1167/1167] Added changes to fix Set SOLConf parameters
+
+---
+ transporthandler.cpp | 102 +++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 98 insertions(+), 4 deletions(-)
+
+diff --git a/transporthandler.cpp b/transporthandler.cpp
+index 569bb4c..93a3901 100644
+--- a/transporthandler.cpp
++++ b/transporthandler.cpp
+@@ -1971,10 +1971,27 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
+     return response(ccParamNotSupported);
+ }
+ 
++
++
+ constexpr const char* solInterface = "xyz.openbmc_project.Ipmi.SOL";
+ constexpr const char* solPath = "/xyz/openbmc_project/ipmi/sol/";
+ constexpr const uint16_t solDefaultPort = 623;
+ 
++constexpr uint8_t progressMask = 0x03;
++constexpr uint8_t retryMask = 0x07;
++
++
++constexpr Cc ccSetInProgressActive = 0x81;
++
++static inline auto responseParmNotSupported()
++{
++    return response(ipmiCCParamNotSupported);
++}
++static inline auto responseSetInProgressActive()
++{
++    return response(ccSetInProgressActive);
++}
++
+ RspType<> setSolConfParams(Context::ptr ctx, uint4_t channelBits,
+                            uint4_t /*reserved*/, uint8_t parameter,
+                            message::Payload& req)
+@@ -2004,14 +2021,35 @@ RspType<> setSolConfParams(Context::ptr ctx, uint4_t channelBits,
+     {
+         case SolConfParam::Progress:
+         {
+-            uint8_t progress;
++            uint8_t progress = 0;
++	    uint8_t currentProgress = 0;
+             if (req.unpack(progress) != 0 || !req.fullyUnpacked())
+             {
+                 return responseReqDataLenInvalid();
+             }
+ 
+-            if (ipmi::setDbusProperty(ctx, solService, solPathWitheEthName,
+-                                      solInterface, "Progress", progress))
++	    if ( !(progress < progressMask) )
++	    {
++                return responseInvalidFieldRequest();
++	    }
++
++
++	    if (ipmi::getDbusProperty(ctx, solService, solPathWitheEthName, solInterface, "Progress", currentProgress))
++            {
++                return responseUnspecifiedError();
++            }
++
++	    if ((currentProgress == 1) && (progress == 1))
++            {
++                return responseSetInProgressActive();
++            }
++
++	    if (progress == 2)
++	    {
++                return responseParmNotSupported();
++	    }
++
++            if (ipmi::setDbusProperty(ctx, solService, solPathWitheEthName, solInterface, "Progress", progress))
+             {
+                 return responseUnspecifiedError();
+             }
+@@ -2027,6 +2065,11 @@ RspType<> setSolConfParams(Context::ptr ctx, uint4_t channelBits,
+                 return responseReqDataLenInvalid();
+             }
+ 
++	    if (reserved2 !=0)
++	    {
++		return responseInvalidFieldRequest();
++	    }
++
+             if (ipmi::setDbusProperty(ctx, solService, solPathWitheEthName,
+                                       solInterface, "Enable", enable))
+             {
+@@ -2048,7 +2091,14 @@ RspType<> setSolConfParams(Context::ptr ctx, uint4_t channelBits,
+                 return responseReqDataLenInvalid();
+             }
+ 
++	    if( reserved2 != 0)
++	    {
++		return responseInvalidFieldRequest();
++	    }
++            
++
+             uint8_t privilege = static_cast<uint8_t>(privilegeBits);
++
+             if (privilege < static_cast<uint8_t>(Privilege::User) ||
+                 privilege > static_cast<uint8_t>(Privilege::Oem))
+             {
+@@ -2085,7 +2135,7 @@ RspType<> setSolConfParams(Context::ptr ctx, uint4_t channelBits,
+                 return responseReqDataLenInvalid();
+             }
+ 
+-            if (threshold == 0)
++            if (threshold == 0 || interval == 0) 
+             {
+                 return responseInvalidFieldRequest();
+             }
+@@ -2116,6 +2166,13 @@ RspType<> setSolConfParams(Context::ptr ctx, uint4_t channelBits,
+                 return responseReqDataLenInvalid();
+             }
+ 
++	    if( reserved2 != 0 || (countBits > retryMask))
++	    {
++		return responseInvalidFieldRequest();
++	    }
++
++
++
+             uint8_t count = static_cast<uint8_t>(countBits);
+             if (ipmi::setDbusProperty(ctx, solService, solPathWitheEthName,
+                                       solInterface, "RetryCount", count))
+@@ -2136,6 +2193,43 @@ RspType<> setSolConfParams(Context::ptr ctx, uint4_t channelBits,
+             return response(ipmiCCWriteReadParameter);
+         }
+         case SolConfParam::NonVbitrate:
++	{
++	    uint8_t encodedBitRate = 0;
++	    uint64_t baudRate = 0;
++	    if (req.unpack(encodedBitRate) != 0 || !req.fullyUnpacked())
++            {
++                return responseReqDataLenInvalid();
++            }
++	    switch (encodedBitRate)
++            {
++                case 0x06:
++                    baudRate = 9600;
++                    break;
++                case 0x07:
++                    baudRate = 19200;
++                    break;
++                case 0x08:
++                    baudRate = 38400;
++                    break;
++                case 0x09:
++                    baudRate = 57600;
++                    break;
++                case 0x0a:
++                    baudRate = 115200;
++                    break;
++                default:
++		    return responseInvalidFieldRequest();
++            }
++	    if (ipmi::setDbusProperty(
++                    ctx, "xyz.openbmc_project.Console.default",
++                    "/xyz/openbmc_project/console/default",
++                    "xyz.openbmc_project.Console.UART", "Baud", baudRate))
++            {
++                return ipmi::responseUnspecifiedError();
++            }
++	    break;
++
++	}
+         case SolConfParam::Vbitrate:
+         case SolConfParam::Channel:
+         default:
+-- 
+2.41.0
+

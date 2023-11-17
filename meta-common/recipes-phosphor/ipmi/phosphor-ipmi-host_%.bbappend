@@ -46,6 +46,7 @@ SRC_URI += " \
            file://0039-Added-Diag-and-safe-boot-mode-support.patch \
            file://phosphor-ipmi-host-evb-ami.service \
            file://0053-Fix-For-Asset_Tag.patch \
+           file://0054-Added-changes-to-fix-Set-SOLConf-parameters.patch \
            "
 
 
