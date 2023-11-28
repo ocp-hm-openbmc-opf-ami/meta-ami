@@ -55,6 +55,7 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 ```
 - git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/egs openbmc-meta-intel/meta-egs
 - git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-restricted openbmc-meta-intel/meta-restricted
+- git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-intel openbmc-meta-intel/meta-intel 
 - meta-ami/github-gitlab-url.sh
 - Add meta-resticted layer into openbmc-meta-intel/meta-egs/conf/templates/default/bblayers.conf.sample
 - Enable the needed Si and EP features in openbmc-meta-intel/meta-restricted/conf/layer.conf (Uncomment IMAGE_INSTALL and/or EXTRA_IMAGE_FEATURES)
@@ -65,6 +66,7 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 ```
 - git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/bhs openbmc-meta-intel/meta-bhs
 - git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-restricted openbmc-meta-intel/meta-restricted
+- git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-intel openbmc-meta-intel/meta-intel 
 - meta-ami/github-gitlab-url.sh
 - Add meta-resticted layer into openbmc-meta-intel/meta-bhs/conf/templates/default/bblayers.conf.sample
 - Enable the needed Si and EP features in openbmc-meta-intel/meta-restricted/conf/layer.conf (Uncomment IMAGE_INSTALL and/or EXTRA_IMAGE_FEATURES)
