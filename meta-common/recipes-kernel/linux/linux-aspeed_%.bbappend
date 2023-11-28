@@ -44,3 +44,13 @@ SRC_URI_NM += "file://disable_nm_sensor.cfg \
                file://disable_smart.cfg \
                "
 SRC_URI:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'nm-features', '', SRC_URI_NM, d)}"
+
+SRC_BIOS = "file://0020-bios-patch-to-enable-pnor-mtd.patch "
+
+SRC_URI:append:intel-ast2600  = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'bios-update', SRC_BIOS,'', d)}"
+
+SRC_CPLD = " file://0019-Enabling-JTAG0-for-CPLD-update-using-jatg.patch "
+SRC_URI:append:intel-ast2600  = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'cpld-update', SRC_CPLD,'', d)}"
+
+
+

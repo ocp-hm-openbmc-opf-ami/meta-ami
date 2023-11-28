@@ -1,6 +1,5 @@
 inherit obmc-phosphor-signining
 
-IMAGE_FEATURES[validitems] += "dual-image"
 
 python() {
     types = d.getVar('IMAGE_FSTYPES', True).split()

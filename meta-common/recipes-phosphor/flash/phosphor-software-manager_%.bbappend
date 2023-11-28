@@ -7,12 +7,13 @@ SRC_URI_NON_PFR:append = "file://0001-Add-Purpose-for-other-components-and-add-i
 
 SRC_URI:append = " ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
 
-PACKAGECONFIG:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '','flash_bios', d)}"
-PACKAGECONFIG:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '',' verify_signature ', d)}"
+PACKAGECONFIG:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'bios-update', ' flash_bios ','', d)}"
+PACKAGECONFIG:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'image-sign', ' verify_signature ','', d)}"
 PACKAGECONFIG:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'dual-image', ' static-dual-image ','', d)}"
+
 EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '','-Dfwupd-script=enabled', d)}"
 EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '','-Doptional-images=image-bios,image-cpld,image-pldm', d)}"
-EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '','-Dactive-bmc-max-allowed=2', d)}"
+EXTRA_OEMESON += "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image','-Dactive-bmc-max-allowed=2', '', d)}"
 
 SRC_URI_NON_PFR_DUAL:append = "file://intel-flash-bmc \
                                 file://obmc-flash-bmc-static-mount-alt.service.in \
