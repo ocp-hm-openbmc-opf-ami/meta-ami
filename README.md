@@ -32,6 +32,7 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 ### 3) OT Core EGS Build Instruction
 ```
 - git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/egs openbmc-meta-intel/meta-egs
+- git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-intel openbmc-meta-intel/meta-intel
 - meta-ami/github-gitlab-url.sh
 - TEMPLATECONF=openbmc-meta-intel/meta-egs/conf/templates/default . openbmc-env
 - bitbake intel-platforms
@@ -39,6 +40,7 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 ### 4) OT Core BHS Build Instruction
  ```
 - git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/bhs openbmc-meta-intel/meta-bhs
+- git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-intel openbmc-meta-intel/meta-intel
 - meta-ami/github-gitlab-url.sh
 - TEMPLATECONF=openbmc-meta-intel/meta-bhs/conf/templates/default . openbmc-env
 - bitbake intel-platforms
