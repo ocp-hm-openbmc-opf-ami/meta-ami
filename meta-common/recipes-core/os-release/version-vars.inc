@@ -97,7 +97,10 @@ python() {
         d.setVar('VERSION', version)
         d.setVar('IPMI_MAJOR', versionList[1])
         d.setVar('IPMI_MINOR', versionList[2])
-        d.setVar('IPMI_AUX13', hex(min(int(versionList[3]), 0xff)))
+        if versionList[3] == "Dev": 
+            d.setVar('IPMI_AUX13', hex(min(int(versionList[4]), 0xff)))
+        else:
+            d.setVar('IPMI_AUX13', hex(min(int(versionList[3]), 0xff)))
         d.setVar('IPMI_AUX14', '0x{}'.format(meta_hash[0:2]))
         d.setVar('IPMI_AUX15', '0x{}'.format(meta_hash[2:4]))
         d.setVar('IPMI_AUX16', '0x{}'.format(meta_hash[4:6]))
