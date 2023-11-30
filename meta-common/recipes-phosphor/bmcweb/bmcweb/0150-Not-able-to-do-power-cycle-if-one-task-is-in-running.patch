@@ -1,0 +1,1133 @@
+From 206e7738fc6ac93e5548a5fdcd128fd1c1bdfa63 Mon Sep 17 00:00:00 2001
+From: ramadevip <ramadevip@ami.com>
+Date: Thu, 30 Nov 2023 17:50:33 +0530
+Subject: [PATCH] Not able to do power cycle if one task is in running state
+ for AtMaintenanceWindowStart
+
+Signed-off-by: ramadevip <ramadevip@ami.com>
+---
+ redfish-core/lib/chassis.hpp | 252 +++++++--------
+ redfish-core/lib/systems.hpp | 603 ++++++++++++++++++-----------------
+ 2 files changed, 443 insertions(+), 412 deletions(-)
+
+diff --git a/redfish-core/lib/chassis.hpp b/redfish-core/lib/chassis.hpp
+index 90023b3e..639040bc 100644
+--- a/redfish-core/lib/chassis.hpp
++++ b/redfish-core/lib/chassis.hpp
+@@ -864,54 +864,19 @@ inline void
+     setPowerTransitionTimer(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+                             const uint16_t chassisHostTransitionTimeOut)
+ {
+-    BMCWEB_LOG_ERROR("setPowerTransitionTimer");
+-    const char* busName = "xyz.openbmc_project.ObjectMapper";
+-    const char* path = "/xyz/openbmc_project/object_mapper";
+-    const char* interface = "xyz.openbmc_project.ObjectMapper";
+-    const char* method = "GetSubTreePaths";
+-
+-    const std::array<const char*, 1> interfaces = {
+-        "xyz.openbmc_project.State.Chassis"};
+-
+-    // Use mapper to get subtree paths.
++    BMCWEB_LOG_ERROR("setHostTransitionTimer");
+     crow::connections::systemBus->async_method_call(
+-        [asyncResp, chassisHostTransitionTimeOut](
+-            const boost::system::error_code ec,
+-            const dbus::utility::MapperGetSubTreePathsResponse& chassisList) {
++        [asyncResp](const boost::system::error_code ec) {
+         if (ec)
+         {
+-            BMCWEB_LOG_ERROR("[Set] Bad D-Bus request error:", ec);
+             messages::internalError(asyncResp->res);
+-            return;
+         }
+-
+-        const char* processName = "xyz.openbmc_project.State.Chassis";
+-        const char* interfaceName = "xyz.openbmc_project.State.Chassis";
+-        const char* destProperty = "ChassisHostTransitionTimeOut";
+-        std::string objectPath = "/xyz/openbmc_project/state/chassis_system0";
+-
+-        /* Look for system reset chassis path */
+-        if ((std::find(chassisList.begin(), chassisList.end(), objectPath)) ==
+-            chassisList.end())
+-        {
+-            /* We prefer to reset the full chassis_system, but if it doesn't
+-             * exist on some platforms, fall back to a host-only power reset
+-             */
+-            objectPath = "/xyz/openbmc_project/state/chassis0";
+-        }
+-
+-        crow::connections::systemBus->async_method_call(
+-            [asyncResp](const boost::system::error_code ec2) {
+-            if (ec2)
+-            {
+-                messages::internalError(asyncResp->res);
+-            }
+-        },
+-            processName, objectPath, "org.freedesktop.DBus.Properties", "Set",
+-            interfaceName, destProperty,
+-            dbus::utility::DbusVariantType(chassisHostTransitionTimeOut));
+     },
+-        busName, path, interface, method, "/", 0, interfaces);
++        "xyz.openbmc_project.State.Host0", "/xyz/openbmc_project/state/os",
++        "org.freedesktop.DBus.Properties", "Set",
++        "xyz.openbmc_project.State.OperatingSystem.Status",
++        "ChassisHostTransitionTimeOut",
++        dbus::utility::DbusVariantType(chassisHostTransitionTimeOut));
+ }
+ 
+ inline void
+@@ -1003,6 +968,22 @@ const PropertyValue getHostState(const std::string& processName,
+     return value;
+ }
+ 
++const PropertyValue getchassisHostTransitionTimeOut(
++    const std::string& servicePath, const std::string& objectName,
++    const std::string& interface, const std::string& property_Name)
++{
++    PropertyValue value{};
++
++    auto b = sdbusplus::bus::new_default_system();
++    auto method = b.new_method_call(servicePath.c_str(), objectName.c_str(),
++                                    dbusPropertyInterface, "Get");
++
++    method.append(interface, property_Name);
++    auto reply = b.call(method);
++    reply.read(value);
++    return value;
++}
++
+ /*
+  * Function to create the reboot status task
+  *
+@@ -1090,93 +1071,112 @@ void createImmediateResetTask(
+  * @param[in] asyncResp - Shared pointer for completing asynchronous call
+  * @param[in] payload - Double pointer to get the task Data
+  */
+-/*void createMaintenanceWindowTask(const std::shared_ptr<bmcweb::AsyncResp>&
+-asyncResp, task::Payload&& payload)
++void createMaintenanceWindowTask(
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++    task::Payload&& payload)
+ {
+-        BMCWEB_LOG_DEBUG << " after do Task creartion ";
++    BMCWEB_LOG_ERROR("after do Task creation");
+ 
+-    std::shared_ptr<task::TaskData> task =
+-                        task::TaskData::createTask(
+-                            [](boost::system::error_code ec,
+-                               sdbusplus::message_t& msg,
+-                               const std::shared_ptr<task::TaskData>&
+-                               taskData) {
+-
+-                        if (ec)
+-                        {
+-                            taskData->messages.emplace_back(messages::internalError());
+-                            taskData->state = "Cancelled";
+-                            return task::completed;
+-                        }
++    std::shared_ptr<task::TaskData> task = task::TaskData::createTask(
++        [](boost::system::error_code ec, sdbusplus::message_t& msg,
++           const std::shared_ptr<task::TaskData>& taskData) {
++        if (ec)
++        {
++            taskData->messages.emplace_back(messages::internalError());
++            taskData->state = "Cancelled";
++            return task::completed;
++        }
+ 
+-                        std::string iface;
+-                        dbus::utility::DBusPropertiesMap values;
++        std::string iface;
++        dbus::utility::DBusPropertiesMap values;
+ 
+-                        std::string index = std::to_string(taskData->index);
++        std::string index = std::to_string(taskData->index);
+ 
+-                        msg.read(iface, values);
++        msg.read(iface, values);
+ 
+-                        if (iface == "xyz.openbmc_project.State.Chassis")
+-                        {
+-                                const uint16_t* timeOutValue = nullptr;
++        const char* servicePath = "xyz.openbmc_project.State.Host0";
++        const char* interfacePath =
++            "xyz.openbmc_project.State.OperatingSystem.Status";
++        const char* property_Name = "ChassisHostTransitionTimeOut";
++        const char* objectName = "/xyz/openbmc_project/state/os";
+ 
+-                            for (const auto& property : values)
+-                            {
++        auto timeOut_value = getchassisHostTransitionTimeOut(
++            servicePath, objectName, interfacePath, property_Name);
+ 
+-                                if (property.first ==
+-"ChassisHostTransitionTimeOut")
+-                                {
++        auto reqchassisHostTransitionTimeOut =
++            std::get<uint16_t>(timeOut_value);
+ 
+-                                      timeOutValue =
+-                                        std::get_if<uint16_t>(
+-                                            &property.second);
++        if (iface == "xyz.openbmc_project.State.OperatingSystem.Status")
++        {
++            const uint16_t* timeOutValue = nullptr;
++            const std::string* osState = nullptr;
+ 
+-                                    if (timeOutValue == nullptr)
+-                                    {
+-                                            taskData->messages.emplace_back(
+-                                                            messages::internalError());
+-                                            return task::completed;
+-                                    }
+-                                }
+-                            }
++            for (const auto& property : values)
++            {
++                if (property.first == "ChassisHostTransitionTimeOut")
++                {
++                    timeOutValue = std::get_if<uint16_t>(&property.second);
+ 
+-                            if (timeOutValue == nullptr)
+-                            {
+-                                return !task::completed;
+-                            }
++                    if (timeOutValue == nullptr)
++                    {
++                        taskData->messages.emplace_back(
++                            messages::internalError());
++                        return task::completed;
++                    }
++                }
+ 
+-                            if(*timeOutValue == 0)
+-                            {
+-                                             taskData->messages.emplace_back(
+-                                             messages::taskCompletedOK(index));
+-                                             taskData->state = "Completed";
+-                                             return task::completed;
+-                            }
+-                            taskData->extendTimer(std::chrono::minutes(5));
+-                        }
+-                        return !task::completed;
+-                            },
+-            "type='signal',interface='org.freedesktop.DBus.Properties',"
+-                            "member='PropertiesChanged',path='/xyz/openbmc_project/state/chassis0'");
+-                    task->startTimer(std::chrono::minutes(5));
+-                    task->populateResp(asyncResp->res);
+-                    task->payload.emplace(std::move(payload));
+-}*/
++                if (property.first == "OperatingSystemState")
++                {
++                    osState = std::get_if<std::string>(&property.second);
+ 
+-const PropertyValue getchassisHostTransitionTimeOut(
+-    const std::string& servicePath, const std::string& objectName,
+-    const std::string& interface, const std::string& property_Name)
+-{
+-    PropertyValue value{};
++                    if (osState == nullptr)
++                    {
++                        taskData->messages.emplace_back(
++                            messages::internalError());
++                        return task::completed;
++                    }
++                }
++            }
+ 
+-    auto b = sdbusplus::bus::new_default_system();
+-    auto method = b.new_method_call(servicePath.c_str(), objectName.c_str(),
+-                                    dbusPropertyInterface, "Get");
++            if (timeOutValue != nullptr && *timeOutValue != 0)
++            {
++                taskData->state = "Pending";
++                taskData->messages.emplace_back(messages::taskPaused(index));
++                taskData->extendTimer(std::chrono::minutes(10));
++                return !task::completed;
++            }
++            if (reqchassisHostTransitionTimeOut == 0 && osState != nullptr)
++            {
++                if (*osState ==
++                    "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Inactive")
++                {
++                    BMCWEB_LOG_ERROR("Running case for Inactive");
++                    taskData->state = "Running";
++                    taskData->messages.emplace_back(
++                        messages::taskStarted(index));
++                    taskData->extendTimer(std::chrono::minutes(5));
++                    return !task::completed;
++                }
+ 
+-    method.append(interface, property_Name);
+-    auto reply = b.call(method);
+-    reply.read(value);
+-    return value;
++                if (*osState ==
++                    "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Standby")
++                {
++                    BMCWEB_LOG_ERROR("Completed case for Standby");
++                    taskData->messages.emplace_back(
++                        messages::taskCompletedOK(index));
++                    taskData->state = "Completed";
++                    return task::completed;
++                }
++            }
++            taskData->extendTimer(std::chrono::minutes(5));
++        }
++        return !task::completed;
++    },
++        "type='signal',interface='org.freedesktop.DBus.Properties',"
++        "member='PropertiesChanged',path='/xyz/openbmc_project/state/os'");
++    task->startTimer(std::chrono::minutes(5));
++    task->populateResp(asyncResp->res);
++    task->payload.emplace(std::move(payload));
+ }
+ 
+ /**
+@@ -1255,10 +1255,11 @@ inline void handleChassisResetActionInfoPost(
+             const char* propName = "CurrentHostState";
+             const char* objectPath = "/xyz/openbmc_project/state/host0";
+ 
+-            const char* servicePath = "xyz.openbmc_project.State.Chassis";
+-            const char* interfacePath = "xyz.openbmc_project.State.Chassis";
++            const char* servicePath = "xyz.openbmc_project.State.Host0";
++            const char* interfacePath =
++                "xyz.openbmc_project.State.OperatingSystem.Status";
+             const char* property_Name = "ChassisHostTransitionTimeOut";
+-            const char* objectName = "/xyz/openbmc_project/state/chassis0";
++            const char* objectName = "/xyz/openbmc_project/state/os";
+ 
+             auto value = getHostState(processName, objectPath, interfaceName,
+                                       propName);
+@@ -1266,6 +1267,7 @@ inline void handleChassisResetActionInfoPost(
+ 
+             auto timeOut_value = getchassisHostTransitionTimeOut(
+                 servicePath, objectName, interfacePath, property_Name);
++
+             auto reqchassisHostTransitionTimeOut =
+                 std::get<uint16_t>(timeOut_value);
+ 
+@@ -1276,12 +1278,6 @@ inline void handleChassisResetActionInfoPost(
+                 return;
+             }
+ 
+-            if (reqchassisHostTransitionTimeOut != 0)
+-            {
+-                BMCWEB_LOG_ERROR("Already One Reboot Task is running");
+-                messages::resourceInUse(asyncResp->res);
+-                return;
+-            }
+             if (!json_util::readJsonAction(
+                     req, asyncResp->res, "ResetType", resetType,
+                     "OperationApplyTime", operationApplyTime,
+@@ -1335,6 +1331,13 @@ inline void handleChassisResetActionInfoPost(
+                 maintenanceWindowStartTime)
+             {
+                 BMCWEB_LOG_ERROR("AtMaintenanceWindowStart");
++
++                if (reqchassisHostTransitionTimeOut != 0)
++                {
++                    messages::resourceInUse(asyncResp->res);
++                    return;
++                }
++
+                 if (maintenanceWindowStartTime <= redfishDateTimeOffset)
+                 {
+                     messages::propertyValueIncorrect(
+@@ -1372,8 +1375,7 @@ inline void handleChassisResetActionInfoPost(
+                                                redfishDateTimeOffset);
+ 
+                 setPowerTransitionTimer(asyncResp, timeOut);
+-                // createMaintenanceWindowTask(asyncResp, std::move(payload));
+-                createImmediateResetTask(asyncResp, std::move(payload));
++                createMaintenanceWindowTask(asyncResp, std::move(payload));
+                 doChassisPowerCycle(asyncResp);
+                 return;
+             }
+diff --git a/redfish-core/lib/systems.hpp b/redfish-core/lib/systems.hpp
+index a6ffc2d2..6d7bab0d 100644
+--- a/redfish-core/lib/systems.hpp
++++ b/redfish-core/lib/systems.hpp
+@@ -68,8 +68,6 @@ const static std::array<std::pair<std::string_view, std::string_view>, 2>
+ constexpr const char* dbus_Property_Interface =
+     "org.freedesktop.DBus.Properties";
+ 
+-static bool flag = true;
+-
+ /**
+  * @brief Updates the Functional State of DIMMs
+  *
+@@ -3192,81 +3190,179 @@ inline void handleComputerSystemCollectionGet(
+         ifaceArray2.emplace_back(std::move(hypervisor));
+     });
+ }
++
++const PropertyValue getHostTransitionTimeOut(const std::string& servicePath,
++                                             const std::string& objectPath,
++                                             const std::string& interface,
++                                             const std::string& propertyName)
++{
++    BMCWEB_LOG_ERROR("getHostTransitionTimeOut");
++    PropertyValue value{};
++
++    auto b = sdbusplus::bus::new_default_system();
++    auto method = b.new_method_call(servicePath.c_str(), objectPath.c_str(),
++                                    dbus_Property_Interface, "Get");
++
++    method.append(interface, propertyName);
++    auto reply = b.call(method);
++    reply.read(value);
++    return value;
++}
++
++const PropertyValue getPowerTransitionTimeOut(const std::string& servicePath,
++                                              const std::string& objectPath,
++                                              const std::string& interface,
++                                              const std::string& propertyName)
++{
++    BMCWEB_LOG_ERROR("getPowerTransitionTimeOut");
++    PropertyValue value{};
++
++    auto b = sdbusplus::bus::new_default_system();
++    auto method = b.new_method_call(servicePath.c_str(), objectPath.c_str(),
++                                    dbus_Property_Interface, "Get");
++
++    method.append(interface, propertyName);
++    auto reply = b.call(method);
++    reply.read(value);
++    return value;
++}
++
+ /*
+  * Function to create the reboot status task
+  *
+  * @param[in] asyncResp - Shared pointer for completing asynchronous call
+  * @param[in] payload - Double pointer to get the task Data
+  */
+-/*void createResetMaintenanceWindowTask(const
+-std::shared_ptr<bmcweb::AsyncResp>& asyncResp, task::Payload&& payload)
++
++void createResetMaintenanceWindowTask(
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++    task::Payload&& payload, const std::string& resetType)
+ {
+-        BMCWEB_LOG_DEBUG << "after do Task creartion ";
++    BMCWEB_LOG_ERROR("after do Task creartion ");
++
++    std::shared_ptr<task::TaskData> task = task::TaskData::createTask(
++        [resetType](boost::system::error_code ec, sdbusplus::message_t& msg,
++                    const std::shared_ptr<task::TaskData>& taskData) {
++        if (ec)
++        {
++            taskData->messages.emplace_back(messages::internalError());
++            taskData->state = "Cancelled";
++            return task::completed;
++        }
+ 
+-    std::shared_ptr<task::TaskData> task =
+-                        task::TaskData::createTask(
+-                            [](boost::system::error_code ec,
+-                               sdbusplus::message_t& msg,
+-                               const std::shared_ptr<task::TaskData>&
+-                               taskData) {
++        std::string iface;
++        dbus::utility::DBusPropertiesMap values;
+ 
+-                        if (ec)
+-                        {
+-                            taskData->messages.emplace_back(messages::internalError());
+-                            taskData->state = "Cancelled";
+-                            return task::completed;
+-                        }
++        std::string index = std::to_string(taskData->index);
+ 
+-                        std::string iface;
+-                        dbus::utility::DBusPropertiesMap values;
++        msg.read(iface, values);
+ 
+-                        std::string index = std::to_string(taskData->index);
++        const char* processName = "xyz.openbmc_project.State.Host0";
++        const char* objectPath = "/xyz/openbmc_project/state/os";
++        const char* interfaceName =
++            "xyz.openbmc_project.State.OperatingSystem.Status";
++        const char* prop_Name = "HostTransitionTimeOut";
+ 
+-                        msg.read(iface, values);
++        auto host_Value = getHostTransitionTimeOut(processName, objectPath,
++                                                   interfaceName, prop_Name);
++        auto requestedHostTransition = std::get<uint16_t>(host_Value);
+ 
+-                        const uint16_t* timeOutValue = nullptr;
+-                        if (iface == "xyz.openbmc_project.State.Host")
+-                        {
+-                            for (const auto& property : values)
+-                            {
+-                                if (property.first == "HostTransitionTimeOut")
+-                                {
+-                                      timeOutValue =
+-                                        std::get_if<uint16_t>(
+-                                            &property.second);
+-
+-                                    if (timeOutValue == nullptr)
+-                                    {
+-                                            taskData->messages.emplace_back(
+-                                                            messages::internalError());
+-                                            return task::completed;
+-                                    }
+-                                }
+-                            }
++        if (iface == "xyz.openbmc_project.State.OperatingSystem.Status")
++        {
++            const uint16_t* timeOutValue = nullptr;
++            const std::string* osState = nullptr;
+ 
+-                            if (timeOutValue == nullptr)
+-                            {
+-                                return !task::completed;
+-                            }
++            for (const auto& property : values)
++            {
++                if (property.first == "HostTransitionTimeOut")
++                {
++                    timeOutValue = std::get_if<uint16_t>(&property.second);
+ 
+-                            if(*timeOutValue == 0)
+-                            {
++                    if (timeOutValue == nullptr)
++                    {
++                        taskData->messages.emplace_back(
++                            messages::internalError());
++                        return task::completed;
++                    }
++                }
+ 
+-                                             taskData->messages.emplace_back(
+-                                             messages::taskCompletedOK(index));
+-                                             taskData->state = "Completed";
+-                                             return task::completed;
+-                            }
+-                             taskData->extendTimer(std::chrono::minutes(5));
+-                        }
+-                        return !task::completed;
+-                            },
+-            "type='signal',interface='org.freedesktop.DBus.Properties',"
+-                            "member='PropertiesChanged',path='/xyz/openbmc_project/state/host0'");
+-                    task->startTimer(std::chrono::minutes(5));
+-                    task->populateResp(asyncResp->res);
+-                    task->payload.emplace(std::move(payload));
+-}*/
++                if (property.first == "OperatingSystemState")
++                {
++                    osState = std::get_if<std::string>(&property.second);
++
++                    if (osState == nullptr)
++                    {
++                        taskData->messages.emplace_back(
++                            messages::internalError());
++                        return task::completed;
++                    }
++                }
++            }
++
++            if ((timeOutValue != nullptr && *timeOutValue != 0))
++            {
++                taskData->state = "Pending";
++                taskData->messages.emplace_back(messages::taskPaused(index));
++                taskData->extendTimer(std::chrono::minutes(10));
++                return !task::completed;
++            }
++
++            if (osState != nullptr && requestedHostTransition == 0)
++            {
++                if (resetType != "GracefulShutdown" &&
++                    *osState ==
++                        "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Inactive")
++                {
++                    taskData->state = "Running";
++                    taskData->messages.emplace_back(
++                        messages::taskStarted(index));
++                    taskData->extendTimer(std::chrono::minutes(5));
++                    return !task::completed;
++                }
++                else if (
++                    resetType != "GracefulShutdown" &&
++                    *osState ==
++                        "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Standby")
++                {
++                    taskData->messages.emplace_back(
++                        messages::taskCompletedOK(index));
++                    taskData->state = "Completed";
++                    return task::completed;
++                }
++
++                else if (
++                    resetType == "GracefulShutdown" &&
++                    *osState ==
++                        "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Standby")
++                {
++                    taskData->state = "Running";
++                    taskData->messages.emplace_back(
++                        messages::taskStarted(index));
++                    taskData->extendTimer(std::chrono::minutes(5));
++                    return !task::completed;
++                }
++
++                else if (
++                    resetType == "GracefulShutdown" &&
++                    *osState ==
++                        "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Inactive")
++                {
++                    taskData->messages.emplace_back(
++                        messages::taskCompletedOK(index));
++                    taskData->state = "Completed";
++                    return task::completed;
++                }
++            }
++            taskData->extendTimer(std::chrono::minutes(5));
++        }
++        return !task::completed;
++    },
++        "type='signal',interface='org.freedesktop.DBus.Properties',"
++        "member='PropertiesChanged',path='/xyz/openbmc_project/state/os'");
++    task->startTimer(std::chrono::minutes(5));
++    task->populateResp(asyncResp->res);
++    task->payload.emplace(std::move(payload));
++}
+ 
+ /*
+  * Function to create the reboot status task
+@@ -3274,75 +3370,109 @@ std::shared_ptr<bmcweb::AsyncResp>& asyncResp, task::Payload&& payload)
+  * @param[in] asyncResp - Shared pointer for completing asynchronous call
+  * @param[in] payload - Double pointer to get the task Data
+  */
+-/*void createSystemMaintenanceWindowTask(const
+-std::shared_ptr<bmcweb::AsyncResp>& asyncResp, task::Payload&& payload)
++
++void createSystemMaintenanceWindowTask(
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++    task::Payload&& payload)
+ {
+-        BMCWEB_LOG_DEBUG << "after do Task creartion ";
++    BMCWEB_LOG_ERROR("after do Task creartion ");
+ 
+-    std::shared_ptr<task::TaskData> task =
+-                        task::TaskData::createTask(
+-                            [](boost::system::error_code ec,
+-                               sdbusplus::message_t& msg,
+-                               const std::shared_ptr<task::TaskData>&
+-                               taskData) {
++    std::shared_ptr<task::TaskData> task = task::TaskData::createTask(
++        [](boost::system::error_code ec, sdbusplus::message_t& msg,
++           const std::shared_ptr<task::TaskData>& taskData) {
++        if (ec)
++        {
++            taskData->messages.emplace_back(messages::internalError());
++            taskData->state = "Cancelled";
++            return task::completed;
++        }
+ 
+-                        if (ec)
+-                        {
+-                            taskData->messages.emplace_back(messages::internalError());
+-                            taskData->state = "Cancelled";
+-                            return task::completed;
+-                        }
++        std::string iface;
++        dbus::utility::DBusPropertiesMap values;
+ 
+-                        std::string iface;
+-                        dbus::utility::DBusPropertiesMap values;
++        std::string index = std::to_string(taskData->index);
+ 
+-                        std::string index = std::to_string(taskData->index);
++        msg.read(iface, values);
+ 
+-                        msg.read(iface, values);
++        const char* processName = "xyz.openbmc_project.State.Host0";
++        const char* objectPath = "/xyz/openbmc_project/state/os";
++        const char* interfaceName =
++            "xyz.openbmc_project.State.OperatingSystem.Status";
++        const char* propName = "PowerTransitionTimeOut";
+ 
+-                        const uint16_t* timeOutValue = nullptr;
+-                        if (iface == "xyz.openbmc_project.State.Chassis")
+-                        {
+-                            for (const auto& property : values)
+-                            {
+-                                if (property.first == "PowerTransitionTimeOut")
+-                                {
+-                                      timeOutValue =
+-                                        std::get_if<uint16_t>(
+-                                            &property.second);
+-
+-                                    if (timeOutValue == nullptr)
+-                                    {
+-                                            taskData->messages.emplace_back(
+-                                                            messages::internalError());
+-                                            return task::completed;
+-                                    }
+-                                }
+-                            }
++        auto chassis_Value = getPowerTransitionTimeOut(processName, objectPath,
++                                                       interfaceName, propName);
++        auto requestedPowerTransition = std::get<uint16_t>(chassis_Value);
+ 
+-                            if (timeOutValue == nullptr)
+-                            {
+-                                return !task::completed;
+-                            }
++        if (iface == "xyz.openbmc_project.State.OperatingSystem.Status")
++        {
++            const uint16_t* timeOutValue = nullptr;
++            const std::string* osState = nullptr;
+ 
+-                            if(*timeOutValue == 0)
+-                            {
++            for (const auto& property : values)
++            {
++                if (property.first == "PowerTransitionTimeOut")
++                {
++                    timeOutValue = std::get_if<uint16_t>(&property.second);
+ 
+-                                             BMCWEB_LOG_DEBUG << "  Sucesss
+-case" ; taskData->messages.emplace_back( messages::taskCompletedOK(index));
+-                                             taskData->state = "Completed";
+-                                             return task::completed;
+-                            }
+-                             taskData->extendTimer(std::chrono::minutes(5));
+-                        }
+-                        return !task::completed;
+-                            },
+-            "type='signal',interface='org.freedesktop.DBus.Properties',"
+-                            "member='PropertiesChanged',path='/xyz/openbmc_project/state/chassis0'");
+-                    task->startTimer(std::chrono::minutes(5));
+-                    task->populateResp(asyncResp->res);
+-                    task->payload.emplace(std::move(payload));
+-}*/
++                    if (timeOutValue == nullptr)
++                    {
++                        taskData->messages.emplace_back(
++                            messages::internalError());
++                        return task::completed;
++                    }
++                }
++
++                if (property.first == "OperatingSystemState")
++                {
++                    osState = std::get_if<std::string>(&property.second);
++
++                    if (osState == nullptr)
++                    {
++                        taskData->messages.emplace_back(
++                            messages::internalError());
++                        return task::completed;
++                    }
++                }
++            }
++
++            if (timeOutValue != nullptr && *timeOutValue != 0)
++            {
++                taskData->state = "Pending";
++                taskData->messages.emplace_back(messages::taskPaused(index));
++                taskData->extendTimer(std::chrono::minutes(10));
++                return !task::completed;
++            }
++
++            if (requestedPowerTransition == 0 && osState != nullptr &&
++                *osState ==
++                    "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Standby")
++            {
++                taskData->state = "Running";
++                taskData->messages.emplace_back(messages::taskStarted(index));
++                taskData->extendTimer(std::chrono::minutes(5));
++                return !task::completed;
++            }
++
++            if (requestedPowerTransition == 0 && osState != nullptr &&
++                *osState ==
++                    "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Inactive")
++            {
++                taskData->messages.emplace_back(
++                    messages::taskCompletedOK(index));
++                taskData->state = "Completed";
++                return task::completed;
++            }
++            taskData->extendTimer(std::chrono::minutes(5));
++        }
++        return !task::completed;
++    },
++        "type='signal',interface='org.freedesktop.DBus.Properties',"
++        "member='PropertiesChanged',path='/xyz/openbmc_project/state/os'");
++    task->startTimer(std::chrono::minutes(5));
++    task->populateResp(asyncResp->res);
++    task->payload.emplace(std::move(payload));
++}
+ 
+ /*
+  * Function to create the reboot status task
+@@ -3449,42 +3579,6 @@ void SystemsImmediateResetTask(
+     task->payload.emplace(std::move(payload));
+ }
+ 
+-const PropertyValue getHostTransitionTimeOut(const std::string& servicePath,
+-                                             const std::string& objectPath,
+-                                             const std::string& interface,
+-                                             const std::string& propertyName)
+-{
+-    BMCWEB_LOG_ERROR("getHostTransitionTimeOut");
+-    PropertyValue value{};
+-
+-    auto b = sdbusplus::bus::new_default_system();
+-    auto method = b.new_method_call(servicePath.c_str(), objectPath.c_str(),
+-                                    dbus_Property_Interface, "Get");
+-
+-    method.append(interface, propertyName);
+-    auto reply = b.call(method);
+-    reply.read(value);
+-    return value;
+-}
+-
+-const PropertyValue getPowerTransitionTimeOut(const std::string& servicePath,
+-                                              const std::string& objectPath,
+-                                              const std::string& interface,
+-                                              const std::string& propertyName)
+-{
+-    BMCWEB_LOG_ERROR("getPowerTransitionTimeOut");
+-    PropertyValue value{};
+-
+-    auto b = sdbusplus::bus::new_default_system();
+-    auto method = b.new_method_call(servicePath.c_str(), objectPath.c_str(),
+-                                    dbus_Property_Interface, "Get");
+-
+-    method.append(interface, propertyName);
+-    auto reply = b.call(method);
+-    reply.read(value);
+-    return value;
+-}
+-
+ /**
+  * Func give the timeout value in seconds
+  *
+@@ -3624,104 +3718,44 @@ inline void
+ {
+     BMCWEB_LOG_ERROR("systemResetAction");
+ 
+-    const char* processName = "xyz.openbmc_project.State.Host";
+-    const char* interfaceName = "xyz.openbmc_project.State.Host";
+-    const char* propName = "CurrentHostState";
+-    const char* objectPath = "/xyz/openbmc_project/state/host0";
+-
+-    auto value = getHostState(processName, objectPath, interfaceName, propName);
+-    auto reqHostState = std::get<std::string>(value);
+-
+     std::string command;
+     bool hostCommand = true;
+ 
+     if ((resetType == "On") || (resetType == "ForceOn"))
+     {
+-        if (reqHostState == "xyz.openbmc_project.State.Host.HostState.Running")
+-        {
+-            BMCWEB_LOG_ERROR("Host is in Standby state");
+-            NoOperation(asyncResp);
+-            flag = false;
+-        }
+-        else
+-        {
+-            command = "xyz.openbmc_project.State.Host.Transition.On";
+-            hostCommand = true;
+-        }
++        command = "xyz.openbmc_project.State.Host.Transition.On";
++        hostCommand = true;
+     }
+ 
+     else if (resetType == "ForceOff")
+     {
+-        if (reqHostState != "xyz.openbmc_project.State.Host.HostState.Running")
+-        {
+-            BMCWEB_LOG_ERROR("Host is in Inactive state");
+-            NoOperation(asyncResp);
+-            flag = false;
+-        }
+-        else
+-        {
+-            command = "xyz.openbmc_project.State.Chassis.Transition.Off";
+-            hostCommand = false;
+-        }
++        command = "xyz.openbmc_project.State.Chassis.Transition.Off";
++        hostCommand = false;
+     }
+ 
+     else if (resetType == "ForceRestart")
+     {
+-        if (reqHostState != "xyz.openbmc_project.State.Host.HostState.Running")
+-        {
+-            NoOperation(asyncResp);
+-            flag = false;
+-        }
+-        else
+-        {
+-            command =
+-                "xyz.openbmc_project.State.Host.Transition.ForceWarmReboot";
+-            hostCommand = true;
+-        }
++        command = "xyz.openbmc_project.State.Host.Transition.ForceWarmReboot";
++        hostCommand = true;
+     }
+ 
+     else if (resetType == "GracefulShutdown")
+     {
+-        if (reqHostState != "xyz.openbmc_project.State.Host.HostState.Running")
+-        {
+-            BMCWEB_LOG_ERROR("Host is in Inactive state");
+-            NoOperation(asyncResp);
+-            flag = false;
+-        }
+-        else
+-        {
+-            command = "xyz.openbmc_project.State.Host.Transition.Off";
+-            hostCommand = true;
+-        }
++        command = "xyz.openbmc_project.State.Host.Transition.Off";
++        hostCommand = true;
+     }
+ 
+     else if (resetType == "GracefulRestart")
+     {
+-        if (reqHostState != "xyz.openbmc_project.State.Host.HostState.Running")
+-        {
+-            NoOperation(asyncResp);
+-            flag = false;
+-        }
+-        else
+-        {
+-            command =
+-                "xyz.openbmc_project.State.Host.Transition.GracefulWarmReboot";
+-            hostCommand = true;
+-        }
++        command =
++            "xyz.openbmc_project.State.Host.Transition.GracefulWarmReboot";
++        hostCommand = true;
+     }
+ 
+     else if (resetType == "PowerCycle")
+     {
+-        if (reqHostState != "xyz.openbmc_project.State.Host.HostState.Running")
+-        {
+-            NoOperation(asyncResp);
+-            flag = false;
+-        }
+-        else
+-        {
+-            command = "xyz.openbmc_project.State.Host.Transition.Reboot";
+-            hostCommand = true;
+-        }
++        command = "xyz.openbmc_project.State.Host.Transition.Reboot";
++        hostCommand = true;
+     }
+     else if (resetType == "Nmi")
+     {
+@@ -3794,14 +3828,16 @@ inline void handleComputerSystemResetActionPost(
+         return;
+     }
+ 
+-    const char* processName = "xyz.openbmc_project.State.Chassis";
+-    const char* objectPath = "/xyz/openbmc_project/state/chassis0";
+-    const char* interfaceName = "xyz.openbmc_project.State.Chassis";
+-    const char* propName = "PowerTransitionTimeOut";
++    const char* process_Name = "xyz.openbmc_project.State.Host";
++    const char* interface_Name = "xyz.openbmc_project.State.Host";
++    const char* propertyName = "CurrentHostState";
++    const char* object_Path = "/xyz/openbmc_project/state/host0";
+ 
+-    const char* processPath = "xyz.openbmc_project.State.Host0";
+-    const char* objectName = "/xyz/openbmc_project/state/host0";
+-    const char* interfacePath = "xyz.openbmc_project.State.Host";
++    const char* processName = "xyz.openbmc_project.State.Host0";
++    const char* objectPath = "/xyz/openbmc_project/state/os";
++    const char* interfaceName =
++        "xyz.openbmc_project.State.OperatingSystem.Status";
++    const char* propName = "PowerTransitionTimeOut";
+     const char* prop_Name = "HostTransitionTimeOut";
+ 
+     std::string resetType;
+@@ -3815,14 +3851,18 @@ inline void handleComputerSystemResetActionPost(
+     std::string redfishDateTimeOffset =
+         crow::utility::getDateTimeOffsetNow().first;
+ 
+-    auto host_Value = getHostTransitionTimeOut(processPath, objectName,
+-                                               interfacePath, prop_Name);
++    auto host_Value = getHostTransitionTimeOut(processName, objectPath,
++                                               interfaceName, prop_Name);
+     auto requestedHostTransition = std::get<uint16_t>(host_Value);
+ 
+     auto chassis_Value = getPowerTransitionTimeOut(processName, objectPath,
+                                                    interfaceName, propName);
+     auto requestedPowerTransition = std::get<uint16_t>(chassis_Value);
+ 
++    auto value = getHostState(process_Name, object_Path, interface_Name,
++                              propertyName);
++    auto reqHostState = std::get<std::string>(value);
++
+     if (!json_util::readJsonAction(req, asyncResp->res, "ResetType", resetType,
+                                    "OperationApplyTime", operationApplyTime,
+                                    "MaintenanceWindowStartTime",
+@@ -3834,46 +3874,43 @@ inline void handleComputerSystemResetActionPost(
+     // To provide as a stringstream object
+     startTime = *maintenanceWindowStartTime;
+ 
+-    if ((resetType == "ForceOff" && requestedPowerTransition != 0) ||
+-        (resetType != "ForceOff" && requestedHostTransition != 0))
+-    {
+-        BMCWEB_LOG_ERROR("Already One Reboot Task is running");
+-        messages::resourceInUse(asyncResp->res);
+-        return;
+-    }
+-    if (!(resetType.empty()) && !operationApplyTime &&
+-        !maintenanceWindowStartTime)
++    if ((resetType == "On") || (resetType == "ForceOn"))
+     {
+-        systemResetAction(asyncResp, resetType);
+-        if (flag == true)
++        if (reqHostState == "xyz.openbmc_project.State.Host.HostState.Running")
+         {
+-            messages::success(asyncResp->res);
++            BMCWEB_LOG_ERROR(" Host is in Standby state");
++            NoOperation(asyncResp);
+             return;
+         }
+-        else
++    }
++
++    else if (resetType == "ForceOff" || resetType == "ForceRestart" ||
++             resetType == "GracefulShutdown" ||
++             resetType == "GracefulRestart" || resetType == "PowerCycle")
++    {
++        if (reqHostState != "xyz.openbmc_project.State.Host.HostState.Running")
+         {
+-            flag = true;
++            NoOperation(asyncResp);
+             return;
+         }
+     }
+ 
++    if (!(resetType.empty()) && !operationApplyTime &&
++        !maintenanceWindowStartTime)
++    {
++        systemResetAction(asyncResp, resetType);
++        messages::success(asyncResp->res);
++        return;
++    }
++
+     if (operationApplyTime == "Immediate")
+     {
+         BMCWEB_LOG_ERROR("Immediate Reset");
+         if (!(maintenanceWindowStartTime))
+         {
++            SystemsImmediateResetTask(asyncResp, std::move(payload), resetType);
+             systemResetAction(asyncResp, resetType);
+-            if (flag == true)
+-            {
+-                SystemsImmediateResetTask(asyncResp, std::move(payload),
+-                                          resetType);
+-                return;
+-            }
+-            else
+-            {
+-                flag = true;
+-                return;
+-            }
++            return;
+         }
+ 
+         else
+@@ -3927,40 +3964,32 @@ inline void handleComputerSystemResetActionPost(
+ 
+             if (resetType == "ForceOff")
+             {
+-                setSystemsPowerTransitionTimer(asyncResp, timeOut);
+-                systemResetAction(asyncResp, resetType);
+-                if (flag == true)
+-                {
+-                    //     createSystemMaintenanceWindowTask(asyncResp,
+-                    //     std::move(payload));
+-                    SystemsImmediateResetTask(asyncResp, std::move(payload),
+-                                              resetType);
+-                    return;
+-                }
+-                else
++                if (requestedPowerTransition != 0)
+                 {
+-                    flag = true;
++                    messages::resourceInUse(asyncResp->res);
+                     return;
+                 }
++
++                setSystemsPowerTransitionTimer(asyncResp, timeOut);
++                createSystemMaintenanceWindowTask(asyncResp,
++                                                  std::move(payload));
++                systemResetAction(asyncResp, resetType);
++                return;
+             }
+ 
+             if (resetType != "ForceOff")
+             {
+-                setHostTransitionTimer(asyncResp, timeOut);
+-                systemResetAction(asyncResp, resetType);
+-                if (flag == true)
+-                {
+-                    // createResetMaintenanceWindowTask(asyncResp,
+-                    // std::move(payload));
+-                    SystemsImmediateResetTask(asyncResp, std::move(payload),
+-                                              resetType);
+-                    return;
+-                }
+-                else
++                if (requestedHostTransition != 0)
+                 {
+-                    flag = true;
++                    messages::resourceInUse(asyncResp->res);
+                     return;
+                 }
++
++                setHostTransitionTimer(asyncResp, timeOut);
++                createResetMaintenanceWindowTask(asyncResp, std::move(payload),
++                                                 resetType);
++                systemResetAction(asyncResp, resetType);
++                return;
+             }
+         }
+         else
+diff --git a/redfish-core/lib/systems.hpp b/redfish-core/lib/systems.hpp
+index 6d7bab0d..78beb7d7 100644
+--- a/redfish-core/lib/systems.hpp
++++ b/redfish-core/lib/systems.hpp
+@@ -3623,10 +3623,10 @@ inline void setSystemsPowerTransitionTimer(
+             messages::internalError(asyncResp->res);
+         }
+     },
+-        "xyz.openbmc_project.State.Chassis",
+-        "/xyz/openbmc_project/state/chassis0",
++        "xyz.openbmc_project.State.Host0", "/xyz/openbmc_project/state/os",
+         "org.freedesktop.DBus.Properties", "Set",
+-        "xyz.openbmc_project.State.Chassis", "PowerTransitionTimeOut",
++        "xyz.openbmc_project.State.OperatingSystem.Status",
++        "PowerTransitionTimeOut",
+         dbus::utility::DbusVariantType(powerTransitionTimeOut));
+ }
+
+@@ -3642,9 +3642,10 @@ inline void
+             messages::internalError(asyncResp->res);
+         }
+     },
+-        "xyz.openbmc_project.State.Host", "/xyz/openbmc_project/state/host0",
++        "xyz.openbmc_project.State.Host0", "/xyz/openbmc_project/state/os",
+         "org.freedesktop.DBus.Properties", "Set",
+-        "xyz.openbmc_project.State.Host", "HostTransitionTimeOut",
++        "xyz.openbmc_project.State.OperatingSystem.Status",
++        "HostTransitionTimeOut",
+         dbus::utility::DbusVariantType(hostTransitionTimeOut));
+ }
+
+-- 
+2.25.1
+

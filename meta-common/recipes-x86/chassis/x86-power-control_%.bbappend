@@ -3,6 +3,7 @@ FILESEXTRAPATHS:append := "${THISDIR}/${PN}:"
 SRC_URI += " \
         file://0001-Apply-power-restore-policy-only-AC-power-loss.patch \
         file://0002-Timer-Support-for-Chassis-Systems-Reset-EGS.patch \
+        file://0003-Not-able-to-do-power-cycle-if-one-task-is-in-running.patch \
         "
 DEPENDS += "bmc-boot-check"
 
