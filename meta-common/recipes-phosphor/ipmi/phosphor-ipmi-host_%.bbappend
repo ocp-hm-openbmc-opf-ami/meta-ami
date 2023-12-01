@@ -47,6 +47,7 @@ SRC_URI += " \
            file://phosphor-ipmi-host-evb-ami.service \
            file://0053-Fix-For-Asset_Tag.patch \
            file://0054-Added-changes-to-fix-Set-SOLConf-parameters.patch \
+           file://0054-Fix-IPMI-Shows-Wrong-IPv4-Source.patch \
            "
 
 
