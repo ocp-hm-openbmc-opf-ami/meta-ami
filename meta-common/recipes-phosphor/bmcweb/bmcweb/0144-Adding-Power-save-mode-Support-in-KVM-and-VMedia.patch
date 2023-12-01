@@ -1,0 +1,125 @@
+From 20c5a40a88092c05d680a940e59753edda1bbac7 Mon Sep 17 00:00:00 2001
+From: Abinaya L <abinayal@ami.com>
+Date: Wed, 27 Dec 2023 12:39:54 +0530
+Subject: [PATCH 144/144] Adding-Power-save-mode-Support-in-KVM-and-VMedia
+
+---
+ include/kvm_websocket.hpp          |  3 +++
+ include/nbd_proxy.hpp              |  4 ++++
+ redfish-core/lib/virtual_media.hpp | 24 ++++++++++++++++++++++--
+ 3 files changed, 29 insertions(+), 2 deletions(-)
+
+diff --git a/include/kvm_websocket.hpp b/include/kvm_websocket.hpp
+index d23ff882..56a0d8fa 100644
+--- a/include/kvm_websocket.hpp
++++ b/include/kvm_websocket.hpp
+@@ -1,6 +1,7 @@
+ #pragma once
+ #include "app.hpp"
+ #include "async_resp.hpp"
++#include "virtual_media.hpp"
+ #include "websocket.hpp"
+ 
+ #include <sys/socket.h>
+@@ -176,11 +177,13 @@ inline void requestRoutes(App& app)
+         sessions[&conn] = std::make_unique<KvmSession>(conn);
+         conn.session->kvmConnections++;
+         kvmActiveStatus = 1;
++        redfish::powerSaveMode(POWER_SAVE_MODE_DISABLE);
+     })
+         .onclose([](crow::websocket::Connection& conn, const std::string&) {
+         sessions.erase(&conn);
+         conn.session->kvmConnections--;
+         kvmActiveStatus = 0;
++        redfish::powerSaveMode(POWER_SAVE_MODE_ENABLE);
+     })
+         .onmessage([](crow::websocket::Connection& conn,
+                       const std::string& data, bool) {
+diff --git a/include/nbd_proxy.hpp b/include/nbd_proxy.hpp
+index a12e5c3e..8c97d0f0 100644
+--- a/include/nbd_proxy.hpp
++++ b/include/nbd_proxy.hpp
+@@ -69,6 +69,8 @@ struct NbdProxyServer : std::enable_shared_from_this<NbdProxyServer>
+         BMCWEB_LOG_DEBUG("std::remove({})", socketId);
+         std::remove(socketId.c_str());
+ 
++        redfish::powerSaveMode(POWER_SAVE_MODE_ENABLE);
++
+         crow::connections::systemBus->async_method_call(
+             dbus::utility::logError, "xyz.openbmc_project.VirtualMedia", path,
+             "xyz.openbmc_project.VirtualMedia.Proxy", "Unmount");
+@@ -126,6 +128,8 @@ struct NbdProxyServer : std::enable_shared_from_this<NbdProxyServer>
+             }
+         };
+ 
++        redfish::powerSaveMode(POWER_SAVE_MODE_DISABLE);
++
+         crow::connections::systemBus->async_method_call(
+             std::move(mountHandler), "xyz.openbmc_project.VirtualMedia", path,
+             "xyz.openbmc_project.VirtualMedia.Proxy", "Mount");
+diff --git a/redfish-core/lib/virtual_media.hpp b/redfish-core/lib/virtual_media.hpp
+index fd55bdb9..de6d7966 100644
+--- a/redfish-core/lib/virtual_media.hpp
++++ b/redfish-core/lib/virtual_media.hpp
+@@ -38,6 +38,9 @@
+ #include <array>
+ #include <string_view>
+ 
++#define POWER_SAVE_MODE_ENABLE 1
++#define POWER_SAVE_MODE_DISABLE 0
++
+ namespace redfish
+ {
+ 
+@@ -51,6 +54,20 @@ enum class VmMode
+ static constexpr const char* legacyMode = "Legacy";
+ static constexpr const char* proxyMode = "Proxy";
+ 
++void powerSaveMode(int mode)
++{
++    BMCWEB_LOG_DEBUG("USB Power Save Mode Set: %d", mode);
++    crow::connections::systemBus->async_method_call(
++        [mode](const boost::system::error_code& ec) {
++        if (ec)
++        {
++            BMCWEB_LOG_DEBUG("Failed to Set PowerSaveMode: ");
++        }
++    },
++        "xyz.openbmc_project.Settings", "/xyz/openbmc_project/logging/settings",
++        "xyz.openbmc_project.USB", "SetUSBPowerSaveMode", mode);
++}
++
+ static std::string getModeName(bool isLegacy)
+ {
+     if (isLegacy)
+@@ -832,6 +849,9 @@ inline void doMountVmLegacy(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+     const std::string objectPath = "/xyz/openbmc_project/VirtualMedia/Legacy/" +
+                                    name;
+     const std::string action = "VirtualMedia.InsertMedia";
++
++    powerSaveMode(POWER_SAVE_MODE_DISABLE);
++
+     auto wrapper = doListenForCompletion(name, objectPath, action, true,
+                                          asyncResp);
+ 
+@@ -1025,6 +1045,8 @@ inline void doEjectAction(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+     const std::string ifaceName = "xyz.openbmc_project.VirtualMedia." + vmMode;
+     std::string action = "VirtualMedia.Eject";
+ 
++    powerSaveMode(POWER_SAVE_MODE_ENABLE);
++
+     auto wrapper = doListenForCompletion(name, objectPath, action, legacy,
+                                          asyncResp);
+ 
+@@ -1301,8 +1323,6 @@ inline void
+             return;
+         }
+     }
+-                
+-               
+ 
+     dbus::utility::getDbusObject(
+         "/xyz/openbmc_project/VirtualMedia", {},
+-- 
+2.25.1
+
