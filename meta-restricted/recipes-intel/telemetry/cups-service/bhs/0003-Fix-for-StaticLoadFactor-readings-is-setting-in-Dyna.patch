@@ -1,0 +1,86 @@
+From c449081e1d9157e0bde28fe6624074b0db90ff8a Mon Sep 17 00:00:00 2001
+From: Yaswanth <yaswanthsai@ami.com>
+Date: Wed, 27 Sep 2023 19:42:24 +0530
+Subject: [PATCH] Fix for StaticLoadFactor readings is setting in Dynamicstate
+
+---
+ src/utils/configuration.hpp | 33 ++++++++++++++++++++++++++++++---
+ 1 file changed, 30 insertions(+), 3 deletions(-)
+
+diff --git a/src/utils/configuration.hpp b/src/utils/configuration.hpp
+index c5546fe..6ad5dad 100644
+--- a/src/utils/configuration.hpp
++++ b/src/utils/configuration.hpp
+@@ -26,12 +26,16 @@
+ #include <sdbusplus/bus/match.hpp>
+ #include <sdbusplus/message.hpp>
+ 
++#include <sdbusplus/asio/object_server.hpp>
++#include <sdbusplus/asio/property.hpp>
++
+ #include <chrono>
+ #include <functional>
+ #include <regex>
+ 
+ namespace cups
+ {
++	std::string Val;
+ 
+ namespace utils
+ {
+@@ -283,10 +287,33 @@ class Configuration
+             bus, path, cupsConfig, "LoadFactorConfiguration", value);
+     }
+ 
+-    static bool validateStaticLoadFactors(double coreLoadFactor,
++    static bool validateStaticLoadFactors(std::shared_ptr<sdbusplus::asio::connection> bus, double coreLoadFactor,
+                                           double iioLoadFactor,
+                                           double memoryLoadFactor)
+     {
++	    std::string loadfactortype;
++            sdbusplus::asio::getProperty<std::string>(
++            *bus,"xyz.openbmc_project.CupsService", "/xyz/openbmc_project/CupsService",
++            "xyz.openbmc_project.CupsService.Configuration",
++            "LoadFactorConfiguration",
++             [&loadfactortype](const boost::system::error_code ec,
++                                        const std::string& loadfactor) {
++                if (ec)
++                {
++                    std::fprintf(stderr, "Couldn't get LoadFactorConfiguration\n");
++                }
++                else
++                {
++                    loadfactortype=loadfactor;
++                    Val=loadfactortype;
++                }
++
++            });
++
++	if(Val.compare("Dynamic") == 0)
++        {
++            return false;
++        }
+         if (coreLoadFactor < staticLoadFactorRange.min ||
+             coreLoadFactor > staticLoadFactorRange.max)
+         {
+@@ -326,7 +353,7 @@ class Configuration
+     {
+         auto [coreLoadFactor, iioLoadFactor, memoryLoadFactor] = values;
+ 
+-        if (!validateStaticLoadFactors(coreLoadFactor, iioLoadFactor,
++        if (!validateStaticLoadFactors(bus, coreLoadFactor, iioLoadFactor,
+                                        memoryLoadFactor))
+         {
+             return false;
+@@ -420,7 +447,7 @@ class Configuration
+                     return;
+                 }
+ 
+-                if (!validateStaticLoadFactors(*staticCoreLoadFactor,
++                if (!validateStaticLoadFactors(bus, *staticCoreLoadFactor,
+                                                *staticIioLoadFactor,
+                                                *staticMemoryLoadFactor))
+                 {
+-- 
+2.34.1
+
