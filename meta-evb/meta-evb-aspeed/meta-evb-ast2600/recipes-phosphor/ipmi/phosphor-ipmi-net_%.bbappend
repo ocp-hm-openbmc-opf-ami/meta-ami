@@ -2,6 +2,7 @@ FILESEXTRAPATHS:append := "${THISDIR}/${PN}:"
 
 SRC_URI += " \
            file://0001-Changes-are-added-to-support-multisol.patch \
+           file://0002-Added-fix-to-launch-SOL-session-in-Multi-SOL-support.patch \
            "
 
 ALT_RMCPP_IFACE = "eth1"
