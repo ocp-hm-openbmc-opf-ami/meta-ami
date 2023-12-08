@@ -79,6 +79,7 @@ SRC_URI:append = "   \
             file://0138-Fixed-Task-Monitor-response-after-Taskcompleted.patch \
             file://0139-Fix-For-Network-IPMI-Policy-in-Redfish.patch \
             file://0142-Redfish-Support-for-Delete-BSOD-image.patch \
+            file://0154-Validate-IPv6-address.patch \
         "
 SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
 "

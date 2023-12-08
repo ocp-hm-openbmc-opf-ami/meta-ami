@@ -1,0 +1,211 @@
+From 21e67c2cda660ebe20fc7407cf163152ca1d61b0 Mon Sep 17 00:00:00 2001
+From: nibinc <nibinc@ami.com>
+Date: Fri, 8 Dec 2023 07:43:35 -0500
+Subject: [PATCH 154/154] Validate IPv6 address
+
+---
+ redfish-core/include/utils/ip_utils.hpp | 79 +++++++++++++++++++++++++
+ redfish-core/lib/ethernet.hpp           | 70 ++++++++++++++++++++--
+ 2 files changed, 145 insertions(+), 4 deletions(-)
+
+diff --git a/redfish-core/include/utils/ip_utils.hpp b/redfish-core/include/utils/ip_utils.hpp
+index 9b18fccc..8e924afb 100644
+--- a/redfish-core/include/utils/ip_utils.hpp
++++ b/redfish-core/include/utils/ip_utils.hpp
+@@ -112,5 +112,84 @@ inline bool ipv4VerifyIpAndGetBitcount(const std::string& ip,
+     return true;
+ }
+ 
++enum class Type
++{
++    GATEWAY4_ADDRESS,
++    GATEWAY6_ADDRESS,
++    IP4_ADDRESS,
++    IP6_ADDRESS
++};
++inline bool in6AddrIetfProtocolAssignment(in6_addr* addr)
++{
++    return (ntohl(addr->__in6_u.__u6_addr32[0]) >= 0x20010000 &&
++            ntohl(addr->__in6_u.__u6_addr32[0]) <= 0x200101ff);
++}
++inline bool in6AddrDoc(in6_addr* addr)
++{
++    return ntohl(addr->__in6_u.__u6_addr32[0]) == 0x20010db8;
++}
++
++static void isValidIPv6Addr(in6_addr* addr, Type type)
++{
++    std::string strType{"Gateway"};
++    if (type == Type::IP6_ADDRESS)
++    {
++        strType = "IPv6";
++        if (in6AddrIetfProtocolAssignment(addr))
++        {
++            throw std::invalid_argument(
++                strType + " address is IETF Protocol Assignments.");
++        }
++        else if (in6AddrDoc(addr))
++        {
++            throw std::invalid_argument(strType + " address is Documentation.");
++        }
++        else if (IN6_IS_ADDR_LINKLOCAL(addr))
++        {
++            throw std::invalid_argument(strType + " address is Link-local.");
++        }
++    }
++
++    if (IN6_IS_ADDR_LOOPBACK(addr))
++    {
++        throw std::invalid_argument(strType + " is Loopback.");
++    }
++    else if (IN6_IS_ADDR_MULTICAST(addr))
++    {
++        throw std::invalid_argument(strType + " is Multicast.");
++    }
++    else if (IN6_IS_ADDR_SITELOCAL(addr))
++    {
++        throw std::invalid_argument(strType + " is Sitelocal.");
++    }
++    else if (IN6_IS_ADDR_V4MAPPED(addr))
++    {
++        throw std::invalid_argument(strType + " is V4Mapped.");
++    }
++    else if (IN6_IS_ADDR_UNSPECIFIED(addr))
++    {
++        throw std::invalid_argument(strType + " is Unspecified.");
++    }
++}
++
++inline bool validateIPv6address(const std::string& ipAddress)
++{
++    try
++    {
++        in6_addr addr;
++        if (inet_pton(AF_INET6, ipAddress.c_str(), &addr) != 1)
++        {
++            throw std::invalid_argument("Invalid IPv6 address format");
++        }
++        isValidIPv6Addr(&addr, Type::IP6_ADDRESS);
++    }
++    catch (const std::invalid_argument& e)
++    {
++        // Invalid IPv6 address.
++        return false;
++    }
++    return true;
++}
++
+ } // namespace ip_util
+ } // namespace redfish
+diff --git a/redfish-core/lib/ethernet.hpp b/redfish-core/lib/ethernet.hpp
+index 9551b19c..ab87220b 100644
+--- a/redfish-core/lib/ethernet.hpp
++++ b/redfish-core/lib/ethernet.hpp
+@@ -1956,6 +1956,53 @@ inline void afterDelete(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+     messages::internalError(asyncResp->res);
+ }
+ 
++inline bool validateipv6AddressJson(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                                 const nlohmann::json::array_t& input)
++{
++
++    if (input.empty())
++    {
++        messages::propertyValueTypeError(asyncResp->res, input, "IPv6StaticAddresses");
++        return false;
++    }
++
++    size_t entryIdx = 1;
++
++    for (const nlohmann::json& thisJson : input)
++    {
++        if (thisJson.is_null() || thisJson.empty())
++        {
++            continue; // Skip null or empty JSON entries
++        }
++
++        std::string pathString = "IPv6StaticAddresses/" + std::to_string(entryIdx);
++
++        std::optional<std::string> address;
++        std::optional<uint8_t> prefixLength;
++
++        nlohmann::json thisJsonCopy = thisJson;
++
++        if (!json_util::readJson(thisJsonCopy, asyncResp->res, "Address", address, "PrefixLength", prefixLength))
++        {
++            return false;
++        }
++
++        if (address)
++        {
++            const std::string& ipAddress = *address;
++            if(!(ip_util::validateIPv6address(ipAddress)))
++            {
++                messages::invalidip(asyncResp->res, "Address", ipAddress);
++                return false;
++            }
++        }
++
++        [[maybe_unused]] uint8_t prefix = prefixLength.value_or(0);
++    }
++
++    return true;
++}
++
+ inline void afterVlanCreate(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+                             const std::string& parentInterfaceUri,
+                             const std::string& vlanInterface,
+@@ -2299,6 +2346,8 @@ inline void requestEthernetInterfacesRoutes(App& app)
+                             messages::propertyValueConflict(asyncResp->res, "DHCPv4.DHCPEnabled","IPv4StaticAddresses");
+                             return;
+                         }
++                         handleDHCPPatch(ifaceId, ethData, v4dhcpParms, v6dhcpParms,
++                                asyncResp);
+                     }
+                 }
+ 
+@@ -2326,13 +2375,19 @@ inline void requestEthernetInterfacesRoutes(App& app)
+                                     messages::arraySizeTooLong(asyncResp->res,"IPv6StaticAddresses", 16);
+                                     return;
+                                 }
++                                if(!(validateipv6AddressJson(asyncResp,*ipv6StaticAddresses)))
++                                {
++                                    //Invalid IPv6 address
++                                    return;
++                                }
+                             }
++                            handleDHCPPatch(ifaceId, ethData, v4dhcpParms, v6dhcpParms,
++                                asyncResp);
++                            handleIPv6StaticAddressesPatch(ifaceId, *ipv6StaticAddresses, ipv6Data, ethData, v4dhcpParms, 
++                                v6dhcpParms,asyncResp);
+                         }
+                     }
+                 }
+-
+-                handleDHCPPatch(ifaceId, ethData, v4dhcpParms, v6dhcpParms,
+-                                asyncResp);
+             }
+ 
+             if (hostname)
+@@ -2388,10 +2443,17 @@ inline void requestEthernetInterfacesRoutes(App& app)
+                                               "IPv6DefaultGateway");
+             }
+ 
+-            if (ipv6StaticAddresses)
++            if (ipv6StaticAddresses && !dhcpv6)
+             {
++             if(!(validateipv6AddressJson(asyncResp,*ipv6StaticAddresses)))
++                {
++                   //Invalid IPv6 address
++                    return;
++                }
++                else{
+                 handleIPv6StaticAddressesPatch(ifaceId, *ipv6StaticAddresses, ipv6Data, ethData, v4dhcpParms, v6dhcpParms,
+                                                asyncResp);
++                }
+             }
+ 
+             if (interfaceEnabled)
+-- 
+2.34.1
+
