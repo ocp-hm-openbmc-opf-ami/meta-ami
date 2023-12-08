@@ -61,7 +61,6 @@ SRC_URI:append = "   \
             file://0124-Added-Success-Message-For-Clearing-Dump-Logs.patch \
 	    file://0045-FIXES-LED-button-Display-issue-in-Overview-Page.patch \
             file://0107-Adding-error-message-for-LDAPService.patch \
-	    file://0067-adding-support-for-HttpPushUriTargets.patch \
 	    file://0111-Adding-the-OEM-property-support-for-discrete-sensor.patch \
 	    file://0077-ADDING-propertyNotWritable-Error-Message-for-ReadOnl.patch \
 	    file://0017-Integrated-NVME-Interface.patch \
@@ -86,6 +85,9 @@ SRC_URI:append = "   \
             file://0153-Removing-NMI-Actions-from-Systems-URI.patch \
             file://0145-Fix-for-Duplicate-Etag-value-in-Redfish.patch \
         "
+SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
+SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
+
 SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
 "
 SRC_URI_BHS:append = "file://0108-Adding-condition-to-Patch-Min-Value-not-greater-than.patch \
