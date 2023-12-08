@@ -77,6 +77,7 @@ SRC_URI:append = "   \
             file://0081-Closing-SSE-stream-when-Subscription-is-deleted.patch \
             file://0112-ByPass-authentication-for-requests-redirected.patch \
             file://0138-Fixed-Task-Monitor-response-after-Taskcompleted.patch \
+            file://0139-Fix-For-Network-IPMI-Policy-in-Redfish.patch \
         "
 SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
 "
