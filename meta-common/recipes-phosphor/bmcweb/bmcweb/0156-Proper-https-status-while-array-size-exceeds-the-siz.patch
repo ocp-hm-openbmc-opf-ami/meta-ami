@@ -1,0 +1,85 @@
+From a355775dad48f2c6be1cf7ae57e79536051f0ffe Mon Sep 17 00:00:00 2001
+From: nibinc <nibinc@ami.com>
+Date: Mon, 11 Dec 2023 02:02:26 -0500
+Subject: [PATCH 156/156] Proper https status while array size exceeds the size
+ limit
+
+---
+ redfish-core/lib/ethernet.hpp | 30 ++++++++++++++----------------
+ 1 file changed, 14 insertions(+), 16 deletions(-)
+
+diff --git a/redfish-core/lib/ethernet.hpp b/redfish-core/lib/ethernet.hpp
+index 6aa27ad3..60b04c75 100644
+--- a/redfish-core/lib/ethernet.hpp
++++ b/redfish-core/lib/ethernet.hpp
+@@ -1956,17 +1956,22 @@ inline void afterDelete(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+     messages::internalError(asyncResp->res);
+ }
+ 
+-inline bool validateipv6AddressJson(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+-                                 const nlohmann::json::array_t& input)
++inline bool
++    validateipv6AddressJson(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                            const nlohmann::json::array_t& input)
+ {
+-
+     if (input.empty())
+     {
+-        messages::propertyValueTypeError(asyncResp->res, input, "IPv6StaticAddresses");
++        messages::propertyValueTypeError(asyncResp->res, input,
++                                         "IPv6StaticAddresses");
++        return false;
++    }
++    if (input.size() > 16)
++    {
++        messages::arraySizeTooLong(asyncResp->res, "IPv6StaticAddresses", 16);
++        asyncResp->res.result(boost::beast::http::status::bad_request);
+         return false;
+     }
+-
+-    size_t entryIdx = 1;
+ 
+     for (const nlohmann::json& thisJson : input)
+     {
+@@ -1975,14 +1980,13 @@ inline bool validateipv6AddressJson(const std::shared_ptr<bmcweb::AsyncResp>& as
+             continue; // Skip null or empty JSON entries
+         }
+ 
+-        std::string pathString = "IPv6StaticAddresses/" + std::to_string(entryIdx);
+-
+         std::optional<std::string> address;
+         std::optional<uint8_t> prefixLength;
+ 
+         nlohmann::json thisJsonCopy = thisJson;
+ 
+-        if (!json_util::readJson(thisJsonCopy, asyncResp->res, "Address", address, "PrefixLength", prefixLength))
++        if (!json_util::readJson(thisJsonCopy, asyncResp->res, "Address",
++                                 address, "PrefixLength", prefixLength))
+         {
+             return false;
+         }
+@@ -1990,7 +1994,7 @@ inline bool validateipv6AddressJson(const std::shared_ptr<bmcweb::AsyncResp>& as
+         if (address)
+         {
+             const std::string& ipAddress = *address;
+-            if(!(ip_util::validateIPv6address(ipAddress)))
++            if (!(ip_util::validateIPv6address(ipAddress)))
+             {
+                 messages::invalidip(asyncResp->res, "Address", ipAddress);
+                 return false;
+@@ -2369,12 +2373,6 @@ inline void requestEthernetInterfacesRoutes(App& app)
+                             }
+                             else if(ipv6StaticAddresses) // and IPv6StaticAddresses attribute is present
+                             {
+-                                nlohmann::json IPv6Static = *ipv6StaticAddresses;
+-                                if(IPv6Static.size() > 16)
+-                                {
+-                                    messages::arraySizeTooLong(asyncResp->res,"IPv6StaticAddresses", 16);
+-                                    return;
+-                                }
+                                 if(!(validateipv6AddressJson(asyncResp,*ipv6StaticAddresses)))
+                                 {
+                                     //Invalid IPv6 address
+-- 
+2.34.1
+
