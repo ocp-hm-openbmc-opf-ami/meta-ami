@@ -80,6 +80,7 @@ SRC_URI:append = "   \
             file://0139-Fix-For-Network-IPMI-Policy-in-Redfish.patch \
             file://0142-Redfish-Support-for-Delete-BSOD-image.patch \
             file://0154-Validate-IPv6-address.patch \
+            file://0146-NTP-severs-count-fix-under-Network-protocol.patch \
         "
 SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
 "
