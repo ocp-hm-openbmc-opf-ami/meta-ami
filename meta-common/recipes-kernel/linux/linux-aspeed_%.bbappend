@@ -23,11 +23,11 @@ NON_PFR_SRC_URI_AMI = "file://0012-Add-new-layout-as-per-AMI-requirements.patch 
                        file://0019-Fix-for-JFFS2-issue-due-to-SPI-tx-bus-width.patch \
                       "
 
-SRC_URI += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '',NON_PFR_SRC_URI_AMI, d)}"
+SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '',NON_PFR_SRC_URI_AMI, d)}"
 
 SRC_URI_NON_PFR_DUAL:append = "file://0013-Added-dts-configuration-for-dual-image-support.patch \
                               "
-SRC_URI:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'dual-image', SRC_URI_NON_PFR_DUAL,'', d)}"
+SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'dual-image', SRC_URI_NON_PFR_DUAL,'', d)}"
 
 SRC_CPLD_JTAG = "file://jtag-fragment.cfg"
 
