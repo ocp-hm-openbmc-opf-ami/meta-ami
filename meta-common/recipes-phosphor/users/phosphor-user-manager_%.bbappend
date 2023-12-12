@@ -10,6 +10,7 @@ SRC_URI += " \
 	     file://0015-passwordchangerequired.patch \
              file://0017-SSH-Active-User-Delete-Fix.patch \
              file://0018-Added-group-user-for-host-interface.patch \
+             file://0019-manual-lockout-fix.patch \
            "
 
 FILES:${PN} += "${datadir}/dbus-1/system.d/phosphor-nslcd-cert-config.conf"
