@@ -35,6 +35,7 @@ SRC_URI:append = " \
              file://0028-Write-VLAN-Interface-Configuration-File-when-VLAN-Interface-Created.patch \
              file://0027-Add-Interface-Count-in-SystemConfiguration.patch \
              file://0028-Flush-IP-Index-List-when-changing-to-DHCP.patch \
+             file://0029-Write-Configuration-File-after-Setting-Default-Gateway.patch \
           "
 
 
