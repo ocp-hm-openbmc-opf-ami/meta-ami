@@ -17,6 +17,10 @@ SRC_URI += "file://nfs.cfg \
             file://CVE-2023-4147.patch \
             file://CVE-2023-35001.patch \
             file://CVE-2023-3269.patch \
+            file://CVE-2023-4622.patch \
+            file://CVE-2023-5717.patch \
+            file://CVE-2023-31085.patch \
+            file://CVE-2023-42754.patch \
            "
 
 NON_PFR_SRC_URI_AMI = "file://0012-Add-new-layout-as-per-AMI-requirements.patch \
