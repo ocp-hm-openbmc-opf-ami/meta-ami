@@ -14,6 +14,7 @@ SRC_URI:append = " \
             file://0017-Update-Discrete-Processor-and-Watchdog2-sensors.patch \
             file://0018-Add-OS-Critical-Stop-DS-Support.patch \
             file://0019-Fix-for-Nm-Sensor-Threshold.patch \
+            file://0020-Add-D-Bus-logging-support-for-Discrete-Sensor.patch \
             "
 
 PACKAGECONFIG[processorstatus] = "-Dprocstatus=enabled, -Dprocstatus=disabled"

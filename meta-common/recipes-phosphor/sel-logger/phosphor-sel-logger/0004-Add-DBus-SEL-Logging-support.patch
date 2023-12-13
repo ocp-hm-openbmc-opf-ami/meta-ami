@@ -1,0 +1,478 @@
+From 0f1f1e5cd52bc4983c29031b2216104083e2b9b6 Mon Sep 17 00:00:00 2001
+From: vipinc <vipinc@ami.com>
+Date: Tue, 14 Nov 2023 11:59:35 +0530
+Subject: [PATCH 1/1] Add linear and circular SEL policy support
+
+By default phosphor-logging support logging SEL event in
+circular approach, Once the error/info capacity is reached
+the oldest entry will get removed and will create space for
+new entry.
+This patch add support to log event based on the policy
+configuration.Whenever and event is logged, the capacity
+will be verified and if already full the event will be
+ignored when policy configuration is Linear.but for the
+same scenario the oldest event will be cleared when the
+policy configuration is Circular.Default SEL policy will
+remain as circular policy.
+
+Tested in Ast2600evb and Intel Archercity Platform:
+
+For testing configured error cap : 10 and info cap : 12
+
+1) Set the policy to Linear policy:
+
+root@intel-obmc:~# ipmitool raw 0x32 0x7e
+ 01		// Circular Policy
+root@intel-obmc:~# ipmitool raw 0x32 0x7f 0x00
+		//success
+root@intel-obmc:~# ipmitool raw 0x32 0x7e
+ 00		// Linear Policy
+root@intel-obmc:~#
+
+2) Now log the SEL Event such that the limit is reached, in the
+case 12.
+
+root@intel-obmc:~# ipmitool sel info
+SEL Information
+Version          : 1.5 (v1.5, v2 compliant)
+Entries          : 12
+Free Space       : 65535 bytes or more
+Percent Used     : unknown
+Last Add Time    : 11/09/23 16:52:56 UTC
+Last Del Time    : 11/09/23 16:28:38 UTC
+Overflow         : false
+Supported Cmds   : 'Delete' 'Reserve'
+root@intel-obmc:~# ipmitool sel list
+   1 | 11/09/23 | 16:50:57 UTC | OS Critical Stop | Run-time critical stop | Asserted
+   2 | 11/09/23 | 16:51:08 UTC | Temperature | Lower Non-critical going high | Asserted
+   3 | 11/09/23 | 16:51:18 UTC | Processor |  | Asserted
+   4 | 11/09/23 | 16:51:23 UTC | Power Supply |  | Asserted
+   5 | 11/09/23 | 16:51:31 UTC | Fan | Lower Non-critical going high | Asserted
+   6 | 11/09/23 | 16:51:40 UTC | System Event |  | Asserted
+   7 | 11/09/23 | 16:51:56 UTC | System Event |  | Asserted
+   8 | 11/09/23 | 16:52:07 UTC | System Event #0x05 |  | Asserted
+   9 | 11/09/23 | 16:52:20 UTC | OS Critical Stop | Run-time critical stop | Asserted
+   a | 11/09/23 | 16:52:25 UTC | System Event | OEM System boot event | Asserted
+   b | 11/09/23 | 16:52:34 UTC | OS Boot | C: boot completed | Asserted
+   c | 11/09/23 | 16:52:56 UTC | Watchdog2 | Hard reset | Asserted
+root@intel-obmc:~#
+
+3) As the limit is reached try to add few more logs and to confirm
+Linear SEL policy is working.
+
+root@intel-obmc:~# ipmitool raw 0x0a 0x44 0x00 0x00 0x02 0x00 0x00 0x00 0x00 0x41 0x0 0x04 0x23 0x0 0x6f 0x01 0xff 0xff
+ 0d 00
+root@intel-obmc:~# ipmitool raw 0x0a 0x44 0x00 0x00 0x02 0x00 0x00 0x00 0x00 0x41 0x0 0x04 0x23 0x0 0x6f 0x01 0xff 0xff
+ 0d 00
+root@intel-obmc:~# ipmitool sel info
+SEL Information
+Version          : 1.5 (v1.5, v2 compliant)
+Entries          : 12
+Free Space       : 65535 bytes or more
+Percent Used     : unknown
+Last Add Time    : 11/09/23 16:52:56 UTC
+Last Del Time    : 11/09/23 16:28:38 UTC
+Overflow         : false
+Supported Cmds   : 'Delete' 'Reserve'
+root@intel-obmc:~# ipmitool sel list
+   1 | 11/09/23 | 16:50:57 UTC | OS Critical Stop | Run-time critical stop | Asserted
+   2 | 11/09/23 | 16:51:08 UTC | Temperature | Lower Non-critical going high | Asserted
+   3 | 11/09/23 | 16:51:18 UTC | Processor |  | Asserted
+   4 | 11/09/23 | 16:51:23 UTC | Power Supply |  | Asserted
+   5 | 11/09/23 | 16:51:31 UTC | Fan | Lower Non-critical going high | Asserted
+   6 | 11/09/23 | 16:51:40 UTC | System Event |  | Asserted
+   7 | 11/09/23 | 16:51:56 UTC | System Event |  | Asserted
+   8 | 11/09/23 | 16:52:07 UTC | System Event #0x05 |  | Asserted
+   9 | 11/09/23 | 16:52:20 UTC | OS Critical Stop | Run-time critical stop | Asserted
+   a | 11/09/23 | 16:52:25 UTC | System Event | OEM System boot event | Asserted
+   b | 11/09/23 | 16:52:34 UTC | OS Boot | C: boot completed | Asserted
+   c | 11/09/23 | 16:52:56 UTC | Watchdog2 | Hard reset | Asserted
+root@intel-obmc:~#
+
+4) Now set the policy to circular SEL
+
+root@intel-obmc:~# ipmitool raw 0x32 0x7e
+ 00			// Linear Policy
+root@intel-obmc:~# ipmitool raw 0x32 0x7f 0x01
+			// success
+root@intel-obmc:~# ipmitool raw 0x32 0x7e
+ 01			// Circular Policy
+root@intel-obmc:~#
+
+5)Now log few more entries and confirm its added by
+clearing the oldest entry
+//Added processor sensor event clear OS Critical event
+
+root@intel-obmc:~# ipmitool sel list
+   1 | 11/09/23 | 16:50:57 UTC | OS Critical Stop | Run-time critical stop | Asserted
+   2 | 11/09/23 | 16:51:08 UTC | Temperature | Lower Non-critical going high | Asserted
+   3 | 11/09/23 | 16:51:18 UTC | Processor |  | Asserted
+   4 | 11/09/23 | 16:51:23 UTC | Power Supply |  | Asserted
+   5 | 11/09/23 | 16:51:31 UTC | Fan | Lower Non-critical going high | Asserted
+   6 | 11/09/23 | 16:51:40 UTC | System Event |  | Asserted
+   7 | 11/09/23 | 16:51:56 UTC | System Event |  | Asserted
+   8 | 11/09/23 | 16:52:07 UTC | System Event #0x05 |  | Asserted
+   9 | 11/09/23 | 16:52:20 UTC | OS Critical Stop | Run-time critical stop | Asserted
+   a | 11/09/23 | 16:52:25 UTC | System Event | OEM System boot event | Asserted
+   b | 11/09/23 | 16:52:34 UTC | OS Boot | C: boot completed | Asserted
+   c | 11/09/23 | 16:52:56 UTC | Watchdog2 | Hard reset | Asserted
+root@intel-obmc:~# ipmitool raw 0x0a 0x44 0x00 0x00 0x02 0x00 0x00 0x00 0x00 0x41 0x0 0x04 0x07 0x0 0x6f 0x01 0xff 0xff
+ 0d 00
+root@intel-obmc:~# ipmitool sel list
+   2 | 11/09/23 | 16:51:08 UTC | Temperature | Lower Non-critical going high | Asserted
+   3 | 11/09/23 | 16:51:18 UTC | Processor |  | Asserted
+   4 | 11/09/23 | 16:51:23 UTC | Power Supply |  | Asserted
+   5 | 11/09/23 | 16:51:31 UTC | Fan | Lower Non-critical going high | Asserted
+   6 | 11/09/23 | 16:51:40 UTC | System Event |  | Asserted
+   7 | 11/09/23 | 16:51:56 UTC | System Event |  | Asserted
+   8 | 11/09/23 | 16:52:07 UTC | System Event #0x05 |  | Asserted
+   9 | 11/09/23 | 16:52:20 UTC | OS Critical Stop | Run-time critical stop | Asserted
+   a | 11/09/23 | 16:52:25 UTC | System Event | OEM System boot event | Asserted
+   b | 11/09/23 | 16:52:34 UTC | OS Boot | C: boot completed | Asserted
+   c | 11/09/23 | 16:52:56 UTC | Watchdog2 | Hard reset | Asserted
+   d | 11/09/23 | 16:59:25 UTC | Processor | Thermal Trip | Asserted
+root@intel-obmc:~#
+
+Signed-off-by: vipinc <vipinc@ami.com>
+---
+ include/sel_logger.hpp              |  60 +++++++++++++
+ include/threshold_event_monitor.hpp |  10 +++
+ include/watchdog_event_monitor.hpp  |  14 +++
+ src/sel_logger.cpp                  | 133 ++++++++++++++++------------
+ 4 files changed, 160 insertions(+), 57 deletions(-)
+
+diff --git a/include/sel_logger.hpp b/include/sel_logger.hpp
+index 31fbc6a..529ccdc 100644
+--- a/include/sel_logger.hpp
++++ b/include/sel_logger.hpp
+@@ -60,9 +60,69 @@ static constexpr uint8_t selEvtDataUnspecified = 0xFF;
+ static const std::filesystem::path selLogDir = "/var/log";
+ static const std::string selLogFilename = "ipmi_sel";
+ 
++static void toHexStr(const std::vector<uint8_t>& data, std::string& hexStr)
++{
++    std::stringstream stream;
++    stream << std::hex << std::uppercase << std::setfill('0');
++    for (int v : data)
++    {
++        stream << std::setw(2) << v;
++    }
++    hexStr = stream.str();
++}
++
++static void doPefTask(std::shared_ptr<sdbusplus::asio::connection> conn,
++                      const std::string& path, bool assert,
++                      const uint16_t& recordId,
++                      const std::vector<uint8_t>& selData,
++                      const std::string& message,
++                      const std::optional<uint8_t> addSenType)
++{
++    // Assign default values if none are provided
++    uint8_t senNum = 0xff;
++    uint8_t evtype = 0xff;
++    uint8_t sentype = 0xff;
++
++    if (!path.empty())
++    {
++        senNum = getSensorNumberFromPath(path);
++        evtype = getSensorEventTypeFromPath(path);
++        sentype = getSensorTypeFromPath(path);
++    }
++    else if (addSenType.has_value())
++    {
++        sentype = addSenType.value();
++        evtype = getEventType(sentype);
++    }
++    evtype |= assert ? 0x00 : 0x80;
++    std::chrono::microseconds timeout = DBUS_TIMEOUT;
++    auto startPefTask =
++        conn->new_method_call(pefService, pefObjPath, pefIface, pefTaskMethod);
++    startPefTask.append(static_cast<uint16_t>(recordId), sentype, senNum,
++                        evtype, selData[0], selData[1], selData[2], selBMCGenID,
++                        message.c_str());
++    try
++    {
++        conn->call(startPefTask, timeout.count());
++    }
++    catch (sdbusplus::exception_t&)
++    {
++        std::cerr << "Failed to call doPefTask\n";
++    }
++}
++#ifdef SEL_LOGGER_SEND_TO_LOGGING_SERVICE
++using AdditionalData = std::map<std::string, std::string>;
++static void
++    selAddSystemRecord(std::shared_ptr<sdbusplus::asio::connection> conn,
++                       const std::string& message, const std::string& path,
++                       const std::vector<uint8_t>& selData, const bool& assert,
++                       const uint16_t& genId,
++                       const std::optional<AdditionalData>& addData);
++#else
+ template <typename... T>
+ static void
+     selAddSystemRecord(std::shared_ptr<sdbusplus::asio::connection> conn,
+                        const std::string& message, const std::string& path,
+                        const std::vector<uint8_t>& selData, const bool& assert,
+                        const uint16_t& genId, T&&... metadata);
++#endif
+diff --git a/include/threshold_event_monitor.hpp b/include/threshold_event_monitor.hpp
+index c380c30..dc838e0 100644
+--- a/include/threshold_event_monitor.hpp
++++ b/include/threshold_event_monitor.hpp
+@@ -311,6 +311,10 @@ inline static sdbusplus::bus::match_t startThresholdAssertMonitor(
+         }
+         if (eventType != eventNone)
+         {
++            unsigned int recordId;
++            std::string selDataStr;
++            toHexStr(eventData, selDataStr);
++
+             sdbusplus::message_t AddToLog = conn->new_method_call(
+                 "xyz.openbmc_project.Logging", "/xyz/openbmc_project/logging",
+                 "xyz.openbmc_project.Logging.Create", "Create");
+@@ -318,10 +322,16 @@ inline static sdbusplus::bus::match_t startThresholdAssertMonitor(
+                             std::map<std::string, std::string>(
+                                 {{"SENSOR_PATH", std::string(msg.get_path())},
+                                  {"EVENT", threshold},
++                                 {"SENSOR_DATA", selDataStr},
++                                 {"GENERATOR_ID", std::to_string(selBMCGenID)},
++                                 {"RECORD_TYPE", std::to_string(selSystemType)},
++                                 {"EVENT_DIR", std::to_string(assert)},
+                                  {"DIRECTION", direction},
+                                  {"THRESHOLD", std::to_string(thresholdVal)},
+                                  {"READING", std::to_string(assertValue)}}));
+             conn->call(AddToLog);
++            doPefTask(conn, msg.get_path(), assert, recordId, eventData,
++                      journalMsg, std::nullopt);
+         }
+ #else
+         selAddSystemRecord(
+diff --git a/include/watchdog_event_monitor.hpp b/include/watchdog_event_monitor.hpp
+index 777ac16..1a81ffb 100644
+--- a/include/watchdog_event_monitor.hpp
++++ b/include/watchdog_event_monitor.hpp
+@@ -225,12 +225,26 @@ inline static void sendWatchdogEventLog(
+             "watchdog countdown " + std::to_string(watchdogInterval / 1000) +
+             " seconds " + std::string(*expireAction) + " action");
+ 
++#ifdef SEL_LOGGER_SEND_TO_LOGGING_SERVICE
++        sdbusplus::message_t newLogEntry = conn->new_method_call(
++            "xyz.openbmc_project.Logging", "/xyz/openbmc_project/logging",
++            "xyz.openbmc_project.Logging.Create", "Create");
++        const std::string logLevel =
++            "xyz.openbmc_project.Logging.Entry.Level.Informational";
++        const std::string watchdogActionName = "WATCHDOG_ACTION";
++        newLogEntry.append(std::move(journalMsg), std::move(logLevel),
++                           std::map<std::string, std::string>(
++                               {{std::move(watchdogActionName),
++                                 std::move(std::string(*expireAction))}}));
++        conn->call(newLogEntry);
++#else
+         std::string redfishMessageID = "OpenBMC.0.1.IPMIWatchdog";
+ 
+         selAddSystemRecord(
+             conn, journalMsg, std::string(msg.get_path()), eventData, assert,
+             selBMCGenID, "REDFISH_MESSAGE_ID=%s", redfishMessageID.c_str(),
+             "REDFISH_MESSAGE_ARGS=%s", eventMessageArgs.c_str(), NULL);
++#endif
+     }
+ }
+ 
+diff --git a/src/sel_logger.cpp b/src/sel_logger.cpp
+index 04eff44..f1565e1 100644
+--- a/src/sel_logger.cpp
++++ b/src/sel_logger.cpp
+@@ -253,72 +253,80 @@ static unsigned int getNewRecordId(void)
+ }
+ #endif
+ 
+-static void toHexStr(const std::vector<uint8_t>& data, std::string& hexStr)
+-{
+-    std::stringstream stream;
+-    stream << std::hex << std::uppercase << std::setfill('0');
+-    for (int v : data)
+-    {
+-        stream << std::setw(2) << v;
+-    }
+-    hexStr = stream.str();
+-}
+-
++#ifdef SEL_LOGGER_SEND_TO_LOGGING_SERVICE
++static void selAddSystemRecord(
++    [[maybe_unused]] std::shared_ptr<sdbusplus::asio::connection> conn,
++    [[maybe_unused]] const std::string& message, const std::string& path,
++    const std::vector<uint8_t>& selData, const bool& assert,
++    const uint16_t& genId, const std::optional<AdditionalData>& additionalData)
++#else
+ template <typename... T>
+ static void selAddSystemRecord(
+     [[maybe_unused]] std::shared_ptr<sdbusplus::asio::connection> conn,
+     [[maybe_unused]] const std::string& message, const std::string& path,
+     const std::vector<uint8_t>& selData, const bool& assert,
+     const uint16_t& genId, [[maybe_unused]] T&&... metadata)
++#endif
+ {
+     // Only 3 bytes of SEL event data are allowed in a system record
+     if (selData.size() > selEvtDataMaxSize)
+     {
+         throw std::invalid_argument("Event data too large");
+     }
++    unsigned int recordId;
++    uint8_t sensorType = 0xFF;
+     std::string selDataStr;
+     toHexStr(selData, selDataStr);
+ 
+ #ifdef SEL_LOGGER_SEND_TO_LOGGING_SERVICE
++
+     sdbusplus::message_t AddToLog = conn->new_method_call(
+         "xyz.openbmc_project.Logging", "/xyz/openbmc_project/logging",
+         "xyz.openbmc_project.Logging.Create", "Create");
++    std::string journalMsg = message;
++    if (journalMsg.empty())
++    {
++        std::string journalMsg(message + " from " + path + ": " +
++                               " RecordType=" + std::to_string(selSystemType) +
++                               ", GeneratorID=" + std::to_string(genId) +
++                               ", EventDir=" + std::to_string(assert) +
++                               ", EventData=" + selDataStr);
++    }
++    auto initialize = [&]() -> std::map<std::string, std::string> {
++        std::map<std::string, std::string> response{
++            {"SENSOR_PATH", path},
++            {"GENERATOR_ID", std::to_string(genId)},
++            {"RECORD_TYPE", std::to_string(selSystemType)},
++            {"EVENT_DIR", std::to_string(assert)},
++            {"SENSOR_DATA", selDataStr}};
++
++        if (additionalData.has_value())
++        {
++            auto addData = additionalData.value();
++            auto itr = addData.find("SENSOR_TYPE");
++            if (itr != addData.end())
++            {
++                sensorType =
++                    static_cast<uint8_t>(std::stoi(addData["SENSOR_TYPE"]));
++                return addData;
++            }
++            else
++            {
++                sensorType = getSensorTypeFromPath(path);
++                return response;
++            }
++        }
++        return response;
++    };
+ 
+-    std::string journalMsg(message + " from " + path + ": " +
+-                           " RecordType=" + std::to_string(selSystemType) +
+-                           ", GeneratorID=" + std::to_string(genId) +
+-                           ", EventDir=" + std::to_string(assert) +
+-                           ", EventData=" + selDataStr);
+-
++    //    std::map<std::string, std::string> response = initialize();
++    // TODO: based on the event only the the severigy hsould be defined
+     AddToLog.append(journalMsg,
+                     "xyz.openbmc_project.Logging.Entry.Level.Informational",
+-                    std::map<std::string, std::string>(
+-                        {{"SENSOR_PATH", path},
+-                         {"GENERATOR_ID", std::to_string(genId)},
+-                         {"RECORD_TYPE", std::to_string(selSystemType)},
+-                         {"EVENT_DIR", std::to_string(assert)},
+-                         {"SENSOR_DATA", selDataStr}}));
++                    initialize());
+     conn->call(AddToLog);
+ #else
+-    // check for OS Critical Sensor Event
+-    uint8_t sentype = getSensorTypeFromPath(path);
+-    uint8_t senNum = getSensorNumberFromPath(path);
+-    uint8_t evtype = getSensorEventTypeFromPath(path);
+-    if (sentype == osCriticalStop && evtype == sensorSpecificEvent)
+-    {
+-        auto bus = sdbusplus::bus::new_default();
+-        ipmi::Value event = static_cast<uint16_t>(1 << selData[0]);
+-        auto method = bus.new_method_call(
+-            osService, path.c_str(), "org.freedesktop.DBus.Properties", "Set");
+-        method.append(DiscreteIntf, "State", event);
+-        auto reply = bus.call(method);
+-        if (reply.is_method_error())
+-        {
+-            std::cerr << "Failed to update OS Critical Stop sensor";
+-        }
+-    }
+-
+-    unsigned int recordId = getNewRecordId();
++    recordId = getNewRecordId();
+     if (recordId != 0)
+     {
+         sd_journal_send(
+@@ -328,27 +336,27 @@ static void selAddSystemRecord(
+             "IPMI_SEL_GENERATOR_ID=%x", genId, "IPMI_SEL_SENSOR_PATH=%s",
+             path.c_str(), "IPMI_SEL_EVENT_DIR=%x", assert, "IPMI_SEL_DATA=%s",
+             selDataStr.c_str(), std::forward<T>(metadata)..., NULL);
++    }
+ 
+-        // Do PEF Action
+-        evtype |= assert ? 0x00 : 0x80;
++#endif
+ 
+-        std::chrono::microseconds timeout = DBUS_TIMEOUT;
+-        auto startPefTask = conn->new_method_call(pefService, pefObjPath,
+-                                                  pefIface, pefTaskMethod);
+-        startPefTask.append(static_cast<uint16_t>(recordId), sentype, senNum,
+-                            evtype, selData[0], selData[1], selData[2],
+-                            static_cast<uint16_t>(genId), message.c_str());
+-        try
+-        {
+-            conn->call(startPefTask, timeout.count());
+-        }
+-        catch (sdbusplus::exception_t&)
++    // check for OS Critical Sensor Event
++    uint8_t evtype = getSensorEventTypeFromPath(path);
++    if (sensorType == osCriticalStop && evtype == sensorSpecificEvent)
++    {
++        auto bus = sdbusplus::bus::new_default();
++        ipmi::Value event = static_cast<uint16_t>(1 << selData[0]);
++        auto method = bus.new_method_call(
++            osService, path.c_str(), "org.freedesktop.DBus.Properties", "Set");
++        method.append(DiscreteIntf, "State", event);
++        auto reply = bus.call(method);
++        if (reply.is_method_error())
+         {
+-            std::cerr << "Failed to call doPefTask\n";
++            std::cerr << "Failed to update OS Critical Stop sensor";
+         }
+     }
+ 
+-#endif
++    doPefTask(conn, path, assert, recordId, selData, message, sensorType);
+ }
+ 
+ static void selAddOemRecord(
+@@ -407,6 +415,16 @@ int main(int, char*[])
+         server.add_interface(ipmiSelPath, ipmiSelAddInterface);
+ 
+     // Add a new SEL entry
++#ifdef SEL_LOGGER_SEND_TO_LOGGING_SERVICE
++    ifaceAddSel->register_method(
++        "IpmiSelAdd",
++        [conn](const std::string& message, const std::string& path,
++               const std::vector<uint8_t>& selData, const bool& assert,
++               const uint16_t& genId, const AdditionalData& addData) {
++            return selAddSystemRecord(conn, message, path, selData, assert,
++                                      genId, addData);
++        });
++#else
+     ifaceAddSel->register_method(
+         "IpmiSelAdd",
+         [conn](const std::string& message, const std::string& path,
+@@ -414,6 +432,7 @@ int main(int, char*[])
+                const uint16_t& genId) {
+         return selAddSystemRecord(conn, message, path, selData, assert, genId);
+         });
++#endif
+     // Add a new OEM SEL entry
+     ifaceAddSel->register_method("IpmiSelAddOem",
+                                  [conn](const std::string& message,
+-- 
+2.25.1
+

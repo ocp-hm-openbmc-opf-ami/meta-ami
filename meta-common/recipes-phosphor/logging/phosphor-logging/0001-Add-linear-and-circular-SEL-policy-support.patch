@@ -1,0 +1,285 @@
+From 8551b46c21be3c64e19d07791b58b369b3d25f37 Mon Sep 17 00:00:00 2001
+From: vipinc <vipinc@ami.com>
+Date: Thu, 9 Nov 2023 22:29:51 +0530
+Subject: [PATCH 1/1] Add linear and circular SEL policy support
+
+By default phosphor-logging support logging SEL event in
+circular approach, Once the error/info capacity is reached
+the oldest entry will get removed and will create space for
+new entry.
+This patch add support to log event based on the policy
+configuration.Whenever and event is logged, the capacity
+will be verified and if already full the event will be
+ignored when policy configuration is Linear.but for the
+same scenario the oldest event will be cleared when the
+policy configuration is Circular.Default SEL policy will
+remain as circular policy.
+
+Tested in Ast2600evb and Intel Archercity Platform:
+For testing configured error cap : 10 and info cap : 12
+
+1) Set the policy to Linear policy:
+
+root@intel-obmc:~# ipmitool raw 0x32 0x7e
+ 01		// Circular Policy
+root@intel-obmc:~# ipmitool raw 0x32 0x7f 0x00
+		//success
+root@intel-obmc:~# ipmitool raw 0x32 0x7e
+ 00		// Linear Policy
+root@intel-obmc:~#
+
+2) Now log the SEL Event such that the limit is reached, in the
+case 12.
+
+root@intel-obmc:~# ipmitool sel info
+SEL Information
+Version          : 1.5 (v1.5, v2 compliant)
+Entries          : 12
+Free Space       : 65535 bytes or more
+Percent Used     : unknown
+Last Add Time    : 11/09/23 16:52:56 UTC
+Last Del Time    : 11/09/23 16:28:38 UTC
+Overflow         : false
+Supported Cmds   : 'Delete' 'Reserve'
+root@intel-obmc:~# ipmitool sel list
+   1 | 11/09/23 | 16:50:57 UTC | OS Critical Stop | Run-time critical stop | Asserted
+   2 | 11/09/23 | 16:51:08 UTC | Temperature | Lower Non-critical going high | Asserted
+   3 | 11/09/23 | 16:51:18 UTC | Processor |  | Asserted
+   4 | 11/09/23 | 16:51:23 UTC | Power Supply |  | Asserted
+   5 | 11/09/23 | 16:51:31 UTC | Fan | Lower Non-critical going high | Asserted
+   6 | 11/09/23 | 16:51:40 UTC | System Event |  | Asserted
+   7 | 11/09/23 | 16:51:56 UTC | System Event |  | Asserted
+   8 | 11/09/23 | 16:52:07 UTC | System Event #0x05 |  | Asserted
+   9 | 11/09/23 | 16:52:20 UTC | OS Critical Stop | Run-time critical stop | Asserted
+   a | 11/09/23 | 16:52:25 UTC | System Event | OEM System boot event | Asserted
+   b | 11/09/23 | 16:52:34 UTC | OS Boot | C: boot completed | Asserted
+   c | 11/09/23 | 16:52:56 UTC | Watchdog2 | Hard reset | Asserted
+root@intel-obmc:~#
+
+3) As the limit is reached try to add few more logs and to confirm
+Linear SEL policy is working.
+
+root@intel-obmc:~# ipmitool raw 0x0a 0x44 0x00 0x00 0x02 0x00 0x00 0x00 0x00 0x41 0x0 0x04 0x23 0x0 0x6f 0x01 0xff 0xff
+ 0d 00
+root@intel-obmc:~# ipmitool raw 0x0a 0x44 0x00 0x00 0x02 0x00 0x00 0x00 0x00 0x41 0x0 0x04 0x23 0x0 0x6f 0x01 0xff 0xff
+ 0d 00
+root@intel-obmc:~# ipmitool sel info
+SEL Information
+Version          : 1.5 (v1.5, v2 compliant)
+Entries          : 12
+Free Space       : 65535 bytes or more
+Percent Used     : unknown
+Last Add Time    : 11/09/23 16:52:56 UTC
+Last Del Time    : 11/09/23 16:28:38 UTC
+Overflow         : false
+Supported Cmds   : 'Delete' 'Reserve'
+root@intel-obmc:~# ipmitool sel list
+   1 | 11/09/23 | 16:50:57 UTC | OS Critical Stop | Run-time critical stop | Asserted
+   2 | 11/09/23 | 16:51:08 UTC | Temperature | Lower Non-critical going high | Asserted
+   3 | 11/09/23 | 16:51:18 UTC | Processor |  | Asserted
+   4 | 11/09/23 | 16:51:23 UTC | Power Supply |  | Asserted
+   5 | 11/09/23 | 16:51:31 UTC | Fan | Lower Non-critical going high | Asserted
+   6 | 11/09/23 | 16:51:40 UTC | System Event |  | Asserted
+   7 | 11/09/23 | 16:51:56 UTC | System Event |  | Asserted
+   8 | 11/09/23 | 16:52:07 UTC | System Event #0x05 |  | Asserted
+   9 | 11/09/23 | 16:52:20 UTC | OS Critical Stop | Run-time critical stop | Asserted
+   a | 11/09/23 | 16:52:25 UTC | System Event | OEM System boot event | Asserted
+   b | 11/09/23 | 16:52:34 UTC | OS Boot | C: boot completed | Asserted
+   c | 11/09/23 | 16:52:56 UTC | Watchdog2 | Hard reset | Asserted
+root@intel-obmc:~#
+
+4) Now set the policy to circular SEL
+
+root@intel-obmc:~# ipmitool raw 0x32 0x7e
+ 00			// Linear Policy
+root@intel-obmc:~# ipmitool raw 0x32 0x7f 0x01
+			// success
+root@intel-obmc:~# ipmitool raw 0x32 0x7e
+ 01			// Circular Policy
+root@intel-obmc:~#
+
+5)Now log few more entries and confirm its added by
+clearing the oldest entry
+//Added processor sensor event clear OS Critical event
+
+root@intel-obmc:~# ipmitool sel list
+   1 | 11/09/23 | 16:50:57 UTC | OS Critical Stop | Run-time critical stop | Asserted
+   2 | 11/09/23 | 16:51:08 UTC | Temperature | Lower Non-critical going high | Asserted
+   3 | 11/09/23 | 16:51:18 UTC | Processor |  | Asserted
+   4 | 11/09/23 | 16:51:23 UTC | Power Supply |  | Asserted
+   5 | 11/09/23 | 16:51:31 UTC | Fan | Lower Non-critical going high | Asserted
+   6 | 11/09/23 | 16:51:40 UTC | System Event |  | Asserted
+   7 | 11/09/23 | 16:51:56 UTC | System Event |  | Asserted
+   8 | 11/09/23 | 16:52:07 UTC | System Event #0x05 |  | Asserted
+   9 | 11/09/23 | 16:52:20 UTC | OS Critical Stop | Run-time critical stop | Asserted
+   a | 11/09/23 | 16:52:25 UTC | System Event | OEM System boot event | Asserted
+   b | 11/09/23 | 16:52:34 UTC | OS Boot | C: boot completed | Asserted
+   c | 11/09/23 | 16:52:56 UTC | Watchdog2 | Hard reset | Asserted
+root@intel-obmc:~# ipmitool raw 0x0a 0x44 0x00 0x00 0x02 0x00 0x00 0x00 0x00 0x41 0x0 0x04 0x07 0x0 0x6f 0x01 0xff 0xff
+ 0d 00
+root@intel-obmc:~# ipmitool sel list
+   2 | 11/09/23 | 16:51:08 UTC | Temperature | Lower Non-critical going high | Asserted
+   3 | 11/09/23 | 16:51:18 UTC | Processor |  | Asserted
+   4 | 11/09/23 | 16:51:23 UTC | Power Supply |  | Asserted
+   5 | 11/09/23 | 16:51:31 UTC | Fan | Lower Non-critical going high | Asserted
+   6 | 11/09/23 | 16:51:40 UTC | System Event |  | Asserted
+   7 | 11/09/23 | 16:51:56 UTC | System Event |  | Asserted
+   8 | 11/09/23 | 16:52:07 UTC | System Event #0x05 |  | Asserted
+   9 | 11/09/23 | 16:52:20 UTC | OS Critical Stop | Run-time critical stop | Asserted
+   a | 11/09/23 | 16:52:25 UTC | System Event | OEM System boot event | Asserted
+   b | 11/09/23 | 16:52:34 UTC | OS Boot | C: boot completed | Asserted
+   c | 11/09/23 | 16:52:56 UTC | Watchdog2 | Hard reset | Asserted
+   d | 11/09/23 | 16:59:25 UTC | Processor | Thermal Trip | Asserted
+
+Signed-off-by: vipinc <vipinc@ami.com>
+---
+ log_manager.cpp | 96 ++++++++++++++++++++++++++++++++++++++++++++++---
+ log_manager.hpp |  5 +++
+ 2 files changed, 96 insertions(+), 5 deletions(-)
+
+diff --git a/log_manager.cpp b/log_manager.cpp
+index d3a50cd..7849b98 100644
+--- a/log_manager.cpp
++++ b/log_manager.cpp
+@@ -35,6 +35,22 @@ extern const std::map<
+     phosphor::logging::metadata::Metadata,
+     std::function<phosphor::logging::metadata::associations::Type>>
+     meta;
++static constexpr auto mapperBusName = "xyz.openbmc_project.ObjectMapper";
++static constexpr auto mapperObjPath = "/xyz/openbmc_project/object_mapper";
++static constexpr auto mapperIntf = "xyz.openbmc_project.ObjectMapper";
++constexpr auto dbusProperty = "org.freedesktop.DBus.Properties";
++constexpr auto policyInterface = "xyz.openbmc_project.Logging.Settings";
++constexpr auto policyLinear =
++    "xyz.openbmc_project.Logging.Settings.Policy.Linear";
++constexpr auto policyDefault =
++    "xyz.openbmc_project.Logging.Settings.Policy.Circular";
++
++using DBusInterface = std::string;
++using DBusService = std::string;
++using DBusPath = std::string;
++using DBusInterfaceList = std::vector<DBusInterface>;
++using DBusSubTree =
++    std::map<DBusPath, std::map<DBusService, DBusInterfaceList>>;
+ 
+ namespace phosphor
+ {
+@@ -194,24 +210,94 @@ void Manager::_commit(uint64_t transactionId [[maybe_unused]],
+     createEntry(errMsg, errLvl, additionalData);
+ }
+ 
++std::string Manager::getSelPolicy()
++{
++
++    DBusSubTree subtree;
++
++    auto method = this->busLog.new_method_call(mapperBusName, mapperObjPath,
++                                               mapperIntf, "GetSubTree");
++    method.append(std::string{"/"}, 0,
++                  std::vector<std::string>{policyInterface});
++    auto reply = this->busLog.call(method);
++    reply.read(subtree);
++
++    if (subtree.empty())
++    {
++        lg2::info("Compatible interface not on D-Bus. Continuing with default "
++                  "Circular Policy");
++        return policyDefault;
++    }
++
++    const auto& object = *(subtree.begin());
++    const auto& policyPath = object.first;
++    const auto& policyService = object.second.begin()->first;
++
++    std::variant<std::string> property;
++    method = this->busLog.new_method_call(
++        policyService.c_str(), policyPath.c_str(), dbusProperty, "Get");
++    method.append(policyInterface, "SelPolicy");
++
++    try
++    {
++        auto reply = this->busLog.call(method);
++        reply.read(property);
++    }
++    catch (...)
++    {
++        lg2::error("Error reading SelPolicy  property. Continuing with default "
++                   "Circular Policy");
++        return policyDefault;
++    }
++
++    return std::get<std::string>(property);
++}
++
+ void Manager::createEntry(std::string errMsg, Entry::Level errLvl,
+                           std::vector<std::string> additionalData,
+                           const FFDCEntries& ffdc)
+ {
+     if (!Extensions::disableDefaultLogCaps())
+     {
+-        if (errLvl < Entry::sevLowerLimit)
++        std::string currentPolicy = getSelPolicy();
++        if (currentPolicy == policyLinear)
+         {
+-            if (realErrors.size() >= ERROR_CAP)
++            if (errLvl < Entry::sevLowerLimit)
+             {
+-                erase(realErrors.front());
++                if (realErrors.size() >= ERROR_CAP)
++                {
++                    lg2::info(
++                        "Linear SEL: Error Capacity limit reached {ERROR_CAP}",
++                        "ERROR_CAP", ERROR_CAP);
++                    return;
++                }
++            }
++            else
++            {
++                if (infoErrors.size() >= ERROR_INFO_CAP)
++                {
++                    lg2::info("Linear SEL: Information Error Capacity limit "
++                              "reached {ERROR_CAP}",
++                              "ERROR_CAP", ERROR_INFO_CAP);
++                    return;
++                }
+             }
+         }
+         else
+         {
+-            if (infoErrors.size() >= ERROR_INFO_CAP)
++            if (errLvl < Entry::sevLowerLimit)
++            {
++                if (realErrors.size() >= ERROR_CAP)
++                {
++                    erase(realErrors.front());
++                }
++            }
++            else
+             {
+-                erase(infoErrors.front());
++                if (infoErrors.size() >= ERROR_INFO_CAP)
++                {
++                    erase(infoErrors.front());
++                }
+             }
+         }
+     }
+diff --git a/log_manager.hpp b/log_manager.hpp
+index 275530e..9c0fadb 100644
+--- a/log_manager.hpp
++++ b/log_manager.hpp
+@@ -70,6 +70,11 @@ class Manager : public details::ServerObject<details::ManagerIface>
+         details::ServerObject<details::ManagerIface>(bus, objPath), busLog(bus),
+         entryId(0), fwVersion(readFWVersion()){};
+ 
++    /* @fn getSelPolicy()
++     * @brief retrive current sel policy from Settingsd.
++     */
++    virtual std::string getSelPolicy();
++
+     /*
+      * @fn commit()
+      * @brief sd_bus Commit method implementation callback.
+-- 
+2.25.1
+
