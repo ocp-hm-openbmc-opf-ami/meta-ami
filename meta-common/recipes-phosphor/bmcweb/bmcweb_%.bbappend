@@ -83,6 +83,7 @@ SRC_URI:append = "   \
             file://0146-NTP-severs-count-fix-under-Network-protocol.patch \
             file://0155-Fixed-LocalRole-Patch-error-in-redfish.patch \
 	    file://0156-Proper-https-status-while-array-size-exceeds-the-siz.patch \
+            file://0153-Removing-NMI-Actions-from-Systems-URI.patch \
         "
 SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
 "
