@@ -95,6 +95,7 @@ SRC_URI_BHS:append = "file://0108-Adding-condition-to-Patch-Min-Value-not-greate
                       file://0110-Fix-For-Pmt-Sensor-Not-listed-in-Redfish.patch \
                       file://0118-removing-the-created-policy-get-calls-after-post.patch \
                       file://0134-StaticLoadfactor-patch-in-Dynamic-mode-issue.patch \
+		      file://0136-support-domain-Capabilities-reset.patch \
 "
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'restricted', SRC_URI_NM, '', d)}"
 
