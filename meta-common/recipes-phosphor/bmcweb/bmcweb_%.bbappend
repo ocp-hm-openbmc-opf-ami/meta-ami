@@ -84,6 +84,7 @@ SRC_URI:append = "   \
 	    file://0156-Proper-https-status-while-array-size-exceeds-the-siz.patch \
             file://0153-Removing-NMI-Actions-from-Systems-URI.patch \
             file://0145-Fix-for-Duplicate-Etag-value-in-Redfish.patch \
+	    file://0122-Added-Media-account-type-in-redfish.patch \
         "
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
