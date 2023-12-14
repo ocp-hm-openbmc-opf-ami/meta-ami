@@ -20,6 +20,7 @@ UPDATE_PERCENT_SUCCESS=100
 UPDATE_PERCENT_FAIL=100
 SECURE_BOOT_STRAP_ENABLED=1
 update=/run/initramfs/update
+whitelist=/run/initramfs/whitelist
 
 update_percentage() {
     if [ -n "$img_obj" ]; then
@@ -27,6 +28,35 @@ update_percentage() {
                /xyz/openbmc_project/software/$img_obj \
                xyz.openbmc_project.Software.ActivationProgress Progress \
                y $1 || return 0
+    fi
+}
+
+check_preserv_config() {
+    value=$(busctl get-property xyz.openbmc_project.Software.BMC.Updater \
+            /xyz/openbmc_project/software \
+            xyz.openbmc_project.Software.ApplyOptions ClearConfig \
+            | awk '{print $2}' )
+    if [ -n "$value" ]; then
+        # Dont preserve if clearconfig is true
+        if [ "$value" = "true" ]; then
+            if test -x $update
+            then
+                truncate -s 0 "$whitelist"
+            fi
+            log "BMC Full Flash - Not Preserved the Config"
+        else
+            log "BMC Full Flash - Start Preserve Config"
+            #mount nv rwfs mtd partition
+            mount -t jffs2 -o sync,ro mtd:rwfs /tmp/.rwfs
+            #start nv sync
+            systemctl start nv-sync.service
+            #stop nv sync to dump overlay files to nv storage
+            wait_for_log_sync
+            systemctl stop nv-sync.service
+            log "BMC Full Flash - Preserve Config Done"
+        fi
+    else
+        log "ClearConfig is not available"
     fi
 }
 
@@ -181,6 +211,7 @@ bmc_full_flash() {
     # Use update script to update Firmware for non-intel platforms
     if test -x $update
     then
+        check_preserv_config
         cp $LOCAL_PATH /run/initramfs/
         redfish_log_fw_evt success
         update_percentage $UPDATE_PERCENT_SUCCESS
@@ -240,17 +271,7 @@ bmc_full_flash() {
             return 1
         fi
         log "BMC Full Flash - Image update successful"
-
-        log "BMC Full Flash - Start Preserve Config"
-        #mount nv rwfs mtd partition
-        mount -t jffs2 -o sync,ro mtd:rwfs /tmp/.rwfs
-        #start nv sync
-        systemctl start nv-sync.service
-        #stop nv sync to dump overlay files to nv storage
-        wait_for_log_sync
-        systemctl stop nv-sync.service
-        log "BMC Full Flash - Preserve Config Done"
-
+        check_preserv_config
         redfish_log_fw_evt success
         update_percentage $UPDATE_PERCENT_SUCCESS
         set_activation_status Active 
