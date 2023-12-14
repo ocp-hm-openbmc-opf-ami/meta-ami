@@ -48,6 +48,7 @@ SRC_URI += " \
            file://0054-Added-changes-to-fix-Set-SOLConf-parameters.patch \
            file://0054-Fix-IPMI-Shows-Wrong-IPv4-Source.patch \
            file://0055-Check-IPv4-IPv6-Address-before-Delete-IPv4-IPv6-Addr.patch \
+           file://0056-media-group.patch \
            "
 
 
