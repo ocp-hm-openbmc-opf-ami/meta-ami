@@ -85,6 +85,7 @@ SRC_URI:append = "   \
             file://0153-Removing-NMI-Actions-from-Systems-URI.patch \
             file://0145-Fix-for-Duplicate-Etag-value-in-Redfish.patch \
 	    file://0122-Added-Media-account-type-in-redfish.patch \
+            file://0160-Update-DHCPEnabled-based-on-the-values-of-DHCPv4-DHC.patch \
         "
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
