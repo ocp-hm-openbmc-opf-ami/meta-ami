@@ -87,6 +87,7 @@ SRC_URI:append = "   \
 	    file://0122-Added-Media-account-type-in-redfish.patch \
             file://0160-Update-DHCPEnabled-based-on-the-values-of-DHCPv4-DHC.patch \
             file://0150-Not-able-to-do-power-cycle-if-one-task-is-in-running.patch \
+            file://0128-DDNS-Update-Feature-Support-in-Network.patch \
         "
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"

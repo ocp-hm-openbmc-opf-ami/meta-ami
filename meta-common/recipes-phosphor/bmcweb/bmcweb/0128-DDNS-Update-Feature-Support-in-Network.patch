@@ -1,0 +1,709 @@
+From 2de4b2e85659950b64cae75d525a3447df9d9415 Mon Sep 17 00:00:00 2001
+From: Ginu George <ginugeorge@ami.com>
+Date: Fri, 15 Dec 2023 01:33:50 -0500
+Subject: [PATCH 128/128] DDNS Update Feature Support in Network
+
+---
+ include/dbus_utility.hpp                |   3 +
+ redfish-core/include/error_messages.hpp |   8 +-
+ redfish-core/include/schemas.hpp        |   1 +
+ redfish-core/lib/ethernet.hpp           | 564 ++++++++++++------------
+ redfish-core/src/error_messages.cpp     |  12 +-
+ scripts/update_schemas.py               |   6 +
+ static/redfish/v1/$metadata/index.xml   |   4 +
+ 7 files changed, 307 insertions(+), 291 deletions(-)
+
+diff --git a/include/dbus_utility.hpp b/include/dbus_utility.hpp
+index 948b8f09..c166b6b1 100644
+--- a/include/dbus_utility.hpp
++++ b/include/dbus_utility.hpp
+@@ -49,6 +49,9 @@ namespace utility
+ 
+ // clang-format off
+ using DbusVariantType = std::variant<
++    std::tuple<bool,std::string>,
++    std::vector<std::tuple<std::string, bool, bool, std::string>>,
++    std::tuple<bool, uint8_t, std::string>,
+     std::vector<std::tuple<std::string, std::string, std::string>>,
+     std::vector<std::string>,
+     std::vector<double>,
+diff --git a/redfish-core/include/error_messages.hpp b/redfish-core/include/error_messages.hpp
+index aae938e0..9837de3a 100644
+--- a/redfish-core/include/error_messages.hpp
++++ b/redfish-core/include/error_messages.hpp
+@@ -491,11 +491,11 @@ void propertyValueExternalConflict(crow::Response& res, std::string_view arg1,
+  * @param[in] arg2 Parameter of message that will replace %2 in its body.
+  *
+  * @returns Message PropertyValueIncorrect formatted to JSON */
+-nlohmann::json propertyValueIncorrect(const nlohmann::json& arg1,
+-                                      std::string_view arg2);
++nlohmann::json propertyValueIncorrect(std::string_view arg1,
++                                      const nlohmann::json& arg2);
+ 
+-void propertyValueIncorrect(crow::Response& res, const nlohmann::json& arg1,
+-                            std::string_view arg2);
++void propertyValueIncorrect(crow::Response& res, std::string_view arg1,
++                            const nlohmann::json& arg2);
+ 
+ /**
+  * @brief Formats ResourceCreationConflict message into JSON
+diff --git a/redfish-core/include/schemas.hpp b/redfish-core/include/schemas.hpp
+index fa3143d5..6ac89cd0 100644
+--- a/redfish-core/include/schemas.hpp
++++ b/redfish-core/include/schemas.hpp
+@@ -15,6 +15,7 @@
+ namespace redfish
+ {
+     constexpr std::array schemas {
++        "AmiNetworkConfiguration",
+         "AccountService",
+         "ActionInfo",
+         "AggregationService",
+diff --git a/redfish-core/lib/ethernet.hpp b/redfish-core/lib/ethernet.hpp
+index ab09f776..eaa2afb8 100644
+--- a/redfish-core/lib/ethernet.hpp
++++ b/redfish-core/lib/ethernet.hpp
+@@ -2068,6 +2068,287 @@ inline void afterVlanCreate(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+     asyncResp->res.addHeader("Location", vlanInterfaceUri.buffer());
+ }
+ 
++inline void handleEthernetInterfaceInstanceGet(App& app, const crow::Request& req, const std::shared_ptr<bmcweb::AsyncResp>& asyncResp, const std::string& ifaceId)
++{
++    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++    {
++        return;
++    }
++    getEthernetIfaceData(
++        ifaceId,
++        [asyncResp, ifaceId](const bool& success,
++                                const EthernetInterfaceData& ethData,
++                                const std::vector<IPv4AddressData>& ipv4Data,
++                                const std::vector<IPv6AddressData>& ipv6Data) {
++        if (!success)
++        {
++            // TODO(Pawel)consider distinguish between non
++            // existing object, and other errors
++            messages::resourceNotFound(asyncResp->res, "EthernetInterface",
++                                        ifaceId);
++            return;
++        }
++
++        asyncResp->res.jsonValue["@odata.type"] =
++            "#EthernetInterface.v1_9_0.EthernetInterface";
++        asyncResp->res.jsonValue["Name"] = "Manager Ethernet Interface";
++        asyncResp->res.jsonValue["Description"] =
++            "Management Network Interface";
++
++        parseInterfaceData(asyncResp, ifaceId, ethData, ipv4Data, ipv6Data);
++    });
++}
++
++inline void handleEthernetInterfaceInstancePatch(App& app, const crow::Request& req, const std::shared_ptr<bmcweb::AsyncResp>& asyncResp, const std::string& ifaceId)
++{
++    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++    {
++        return;
++    }
++    std::optional<std::string> hostname;
++    std::optional<std::string> fqdn;
++    std::optional<std::string> macAddress;
++    std::optional<std::string> ipv6DefaultGateway;
++    std::optional<nlohmann::json> ipv6StaticDefaultGateways;
++    std::optional<nlohmann::json::array_t> ipv4StaticAddresses;
++    std::optional<nlohmann::json::array_t> ipv6StaticAddresses;
++    std::optional<std::vector<std::string>> staticNameServers;
++    std::optional<nlohmann::json> dhcpv4;
++    std::optional<nlohmann::json> dhcpv6;
++    std::optional<bool> ipv6AutoConfigEnabled;
++    std::optional<bool> interfaceEnabled;
++    std::optional<size_t> mtuSize;
++    DHCPParameters v4dhcpParms;
++    DHCPParameters v6dhcpParms;
++    // clang-format off
++    if (!json_util::readJsonPatch(
++            req, asyncResp->res,
++            "DHCPv4", dhcpv4,
++            "DHCPv6", dhcpv6,
++            "FQDN", fqdn,
++            "HostName", hostname,
++            "IPv4StaticAddresses", ipv4StaticAddresses,
++            "IPv6DefaultGateway", ipv6DefaultGateway,
++            "IPv6StaticDefaultGateways",ipv6StaticDefaultGateways,
++            "IPv6StaticAddresses", ipv6StaticAddresses,
++            "InterfaceEnabled", interfaceEnabled,
++            "MACAddress", macAddress,
++            "MTUSize", mtuSize,
++            "StatelessAddressAutoConfig/IPv6AutoConfigEnabled", ipv6AutoConfigEnabled,
++            "StaticNameServers", staticNameServers
++            )
++        )
++    {
++        return;
++    }
++    //clang-format on
++    if (dhcpv4)
++    {
++        if (!json_util::readJson(*dhcpv4, asyncResp->res, "DHCPEnabled",
++                                    v4dhcpParms.dhcpv4Enabled, "UseDNSServers",
++                                    v4dhcpParms.useDnsServers, "UseNTPServers",
++                                    v4dhcpParms.useNtpServers, "UseDomainName",
++                                    v4dhcpParms.useDomainName))
++        {
++            return;
++        }
++    }
++
++    if (dhcpv6)
++    {
++        if (!json_util::readJson(*dhcpv6, asyncResp->res, "OperatingMode",
++                                    v6dhcpParms.dhcpv6OperatingMode,
++                                    "UseDNSServers", v6dhcpParms.useDnsServers,
++                                    "UseNTPServers", v6dhcpParms.useNtpServers,
++                                    "UseDomainName",
++                                    v6dhcpParms.useDomainName))
++        {
++            return;
++        }
++    }
++
++    // Get single eth interface data, and call the below callback
++    // for JSON preparation
++    getEthernetIfaceData(
++        ifaceId,
++        [asyncResp, ifaceId, hostname = std::move(hostname),
++            fqdn = std::move(fqdn), macAddress = std::move(macAddress),
++            ipv4StaticAddresses = std::move(ipv4StaticAddresses),
++            ipv6DefaultGateway = std::move(ipv6DefaultGateway),
++            ipv6StaticDefaultGateways =
++                                    std::move(ipv6StaticDefaultGateways),
++            ipv6StaticAddresses = std::move(ipv6StaticAddresses),
++            staticNameServers = std::move(staticNameServers),
++            dhcpv4 = std::move(dhcpv4), dhcpv6 = std::move(dhcpv6), mtuSize,
++            ipv6AutoConfigEnabled, v4dhcpParms = std::move(v4dhcpParms),
++            v6dhcpParms = std::move(v6dhcpParms), interfaceEnabled](
++            const bool& success, const EthernetInterfaceData& ethData,
++            const std::vector<IPv4AddressData>& ipv4Data,
++            const std::vector<IPv6AddressData>& ipv6Data) {
++        if (!success)
++        {
++            // ... otherwise return error
++            // TODO(Pawel)consider distinguish between non
++            // existing object, and other errors
++            messages::resourceNotFound(asyncResp->res, "EthernetInterface",
++                                        ifaceId);
++            return;
++        }
++
++        bool ipv6AddressValid = true;
++        if(ipv6StaticAddresses) // IPv6StaticAddresses attribute is present
++        {
++            if(!(validateipv6AddressJson(asyncResp, *ipv6StaticAddresses)))
++            {
++                //Invalid IPv6 address provided
++                ipv6AddressValid = false;
++            }
++        }
++
++        bool ipv6AcceptRA;
++        if (ipv6AutoConfigEnabled.has_value())
++        {
++            ipv6AcceptRA = ipv6AutoConfigEnabled.value();
++        }
++        else
++        {
++            ipv6AcceptRA = ethData.ipv6AcceptRa;
++        }
++
++        if (dhcpv4 || dhcpv6)
++        {
++            if(dhcpv4)
++            {
++                if(v4dhcpParms.dhcpv4Enabled)
++                {
++                    const bool v4Value = *v4dhcpParms.dhcpv4Enabled;
++
++                    if (!v4Value) // DHCPv4.DHCPEnabled attribute is false
++                    {
++                        if (!ipv4StaticAddresses) // and IPv4StaticAddresses attribute is not present
++                        {
++                            messages::propertyMissing(asyncResp->res, "IPv4StaticAddresses");
++                            return;
++                        }
++                        else if (ipv4StaticAddresses) // and IPv4StaticAddresses attribute is present
++                        {
++                            nlohmann::json IPv4Static = *ipv4StaticAddresses;
++                            if(IPv4Static.size() > 1)
++                            {
++                                messages::arraySizeTooLong(asyncResp->res,"IPv4StaticAddresses", 1);
++                                return;
++                            }
++                        }
++                    }
++                    else if(v4Value && ipv4StaticAddresses) // DHCPv4.DHCPEnabled attribute is true and IPv4StaticAddresses attribute is present
++                    {
++                        messages::propertyValueConflict(asyncResp->res, "DHCPv4.DHCPEnabled","IPv4StaticAddresses");
++                        return;
++                    }
++                    handleDHCPPatch(ifaceId, ethData, v4dhcpParms, v6dhcpParms, ipv6AcceptRA,
++                            asyncResp);
++                }
++            }
++
++            if(dhcpv6)
++            {
++                if (v6dhcpParms.dhcpv6OperatingMode) // DHCPv6 -> OperatingMode is present
++                {
++                    if ((*v6dhcpParms.dhcpv6OperatingMode == "Enabled") && ipv6StaticAddresses)
++                    {
++                        messages::propertyValueConflict(asyncResp->res, "DHCPv6.OperatingMode","IPv6StaticAddresses");
++                        return;
++                    }
++                    else if (*v6dhcpParms.dhcpv6OperatingMode == "Disabled")
++                    {
++                        if (!ipv6StaticAddresses) // and IPv6StaticAddresses attribute is not present
++                        {
++                            messages::propertyMissing(asyncResp->res, "IPv6StaticAddresses");
++                            return;
++                        }
++                    }
++
++                    if(ipv6AddressValid)
++                    {
++                        handleDHCPPatch(ifaceId, ethData, v4dhcpParms, v6dhcpParms, ipv6AcceptRA,
++                            asyncResp);
++                    }
++                }
++            }
++        }
++
++        if (hostname)
++        {
++            handleHostnamePatch(*hostname, asyncResp);
++        }
++
++        if (ipv6AutoConfigEnabled)
++        {
++            handleSLAACAutoConfigPatch(ifaceId, *ipv6AutoConfigEnabled,
++                                        asyncResp);
++        }
++
++        if (fqdn)
++        {
++            handleFqdnPatch(ifaceId, *fqdn, asyncResp);
++        }
++
++        if (macAddress)
++        {
++            handleMACAddressPatch(ifaceId, *macAddress, asyncResp);
++        }
++
++        if (ipv4StaticAddresses)
++        {
++            // TODO(ed) for some reason the capture of
++            // ipv4Addresses above is returning a const value,
++            // not a non-const value. This doesn't really work
++            // for us, as we need to be able to efficiently move
++            // out the intermedia nlohmann::json objects. This
++            // makes a copy of the structure, and operates on
++            // that, but could be done more efficiently
++            nlohmann::json::array_t ipv4Static = *ipv4StaticAddresses;
++            handleIPv4StaticPatch(ifaceId, ipv4Static, ipv4Data, ethData, v4dhcpParms, v6dhcpParms, ipv6AcceptRA, asyncResp);
++        }
++
++        if (ipv6StaticDefaultGateways)
++        {
++            nlohmann::json ipv6Gateways = *ipv6StaticDefaultGateways;
++            handleIPv6StaticDefaultGatewaysPatch(ifaceId, ipv6Gateways,
++                            asyncResp);
++        }
++
++        if (staticNameServers)
++        {
++            handleStaticNameServersPatch(ifaceId, *staticNameServers,
++                                            asyncResp);
++        }
++
++        if (ipv6DefaultGateway)
++        {
++            messages::propertyNotWritable(asyncResp->res,
++                                            "IPv6DefaultGateway");
++        }
++
++        if (ipv6StaticAddresses && ipv6AddressValid)
++        {
++            handleIPv6StaticAddressesPatch(ifaceId, *ipv6StaticAddresses, ipv6Data, ethData, v4dhcpParms, v6dhcpParms, ipv6AcceptRA,
++                                            asyncResp);
++        }
++
++        if (interfaceEnabled)
++        {
++            setEthernetInterfaceBoolProperty(ifaceId, "NICEnabled",
++                                                *interfaceEnabled, asyncResp);
++        }
++
++        if (mtuSize)
++        {
++            handleMTUSizePatch(ifaceId, *mtuSize, asyncResp);
++        }
++    });
++}
++
+ inline void requestEthernetInterfacesRoutes(App& app)
+ {
+     BMCWEB_ROUTE(app, "/redfish/v1/Managers/bmc/EthernetInterfaces/")
+@@ -2204,292 +2485,13 @@ inline void requestEthernetInterfacesRoutes(App& app)
+     BMCWEB_ROUTE(app, "/redfish/v1/Managers/bmc/EthernetInterfaces/<str>/")
+         .privileges(redfish::privileges::getEthernetInterface)
+         .methods(boost::beast::http::verb::get)(
+-            [&app](const crow::Request& req,
+-                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+-                   const std::string& ifaceId) {
+-        if (!redfish::setUpRedfishRoute(app, req, asyncResp))
+-        {
+-            return;
+-        }
+-        getEthernetIfaceData(
+-            ifaceId,
+-            [asyncResp, ifaceId](const bool& success,
+-                                 const EthernetInterfaceData& ethData,
+-                                 const std::vector<IPv4AddressData>& ipv4Data,
+-                                 const std::vector<IPv6AddressData>& ipv6Data) {
+-            if (!success)
+-            {
+-                // TODO(Pawel)consider distinguish between non
+-                // existing object, and other errors
+-                messages::resourceNotFound(asyncResp->res, "EthernetInterface",
+-                                           ifaceId);
+-                return;
+-            }
+-
+-            asyncResp->res.jsonValue["@odata.type"] =
+-                "#EthernetInterface.v1_9_0.EthernetInterface";
+-            asyncResp->res.jsonValue["Name"] = "Manager Ethernet Interface";
+-            asyncResp->res.jsonValue["Description"] =
+-                "Management Network Interface";
+-
+-            parseInterfaceData(asyncResp, ifaceId, ethData, ipv4Data, ipv6Data);
+-        });
+-    });
++            std::bind_front(handleEthernetInterfaceInstanceGet, std::ref(app)));
+ 
+     BMCWEB_ROUTE(app, "/redfish/v1/Managers/bmc/EthernetInterfaces/<str>/")
+         .privileges(
+             redfish::privileges::patchSubOverManagerEthernetInterfaceCollection)
+         .methods(boost::beast::http::verb::patch)(
+-            [&app](const crow::Request& req,
+-                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+-                   const std::string& ifaceId) {
+-        if (!redfish::setUpRedfishRoute(app, req, asyncResp))
+-        {
+-            return;
+-        }
+-        std::optional<std::string> hostname;
+-        std::optional<std::string> fqdn;
+-        std::optional<std::string> macAddress;
+-        std::optional<std::string> ipv6DefaultGateway;
+-        std::optional<nlohmann::json> ipv6StaticDefaultGateways;
+-        std::optional<nlohmann::json::array_t> ipv4StaticAddresses;
+-        std::optional<nlohmann::json::array_t> ipv6StaticAddresses;
+-        std::optional<std::vector<std::string>> staticNameServers;
+-        std::optional<nlohmann::json> dhcpv4;
+-        std::optional<nlohmann::json> dhcpv6;
+-        std::optional<bool> ipv6AutoConfigEnabled;
+-        std::optional<bool> interfaceEnabled;
+-        std::optional<size_t> mtuSize;
+-        DHCPParameters v4dhcpParms;
+-        DHCPParameters v6dhcpParms;
+-        // clang-format off
+-        if (!json_util::readJsonPatch(
+-                req, asyncResp->res,
+-                "DHCPv4", dhcpv4,
+-                "DHCPv6", dhcpv6,
+-                "FQDN", fqdn,
+-                "HostName", hostname,
+-                "IPv4StaticAddresses", ipv4StaticAddresses,
+-                "IPv6DefaultGateway", ipv6DefaultGateway,
+-                "IPv6StaticDefaultGateways",ipv6StaticDefaultGateways,
+-                "IPv6StaticAddresses", ipv6StaticAddresses,
+-                "InterfaceEnabled", interfaceEnabled,
+-                "MACAddress", macAddress,
+-                "MTUSize", mtuSize,
+-                "StatelessAddressAutoConfig/IPv6AutoConfigEnabled", ipv6AutoConfigEnabled,
+-                "StaticNameServers", staticNameServers
+-                )
+-            )
+-        {
+-            return;
+-        }
+-        //clang-format on
+-        if (dhcpv4)
+-        {
+-            if (!json_util::readJson(*dhcpv4, asyncResp->res, "DHCPEnabled",
+-                                     v4dhcpParms.dhcpv4Enabled, "UseDNSServers",
+-                                     v4dhcpParms.useDnsServers, "UseNTPServers",
+-                                     v4dhcpParms.useNtpServers, "UseDomainName",
+-                                     v4dhcpParms.useDomainName))
+-            {
+-                return;
+-            }
+-        }
+-
+-        if (dhcpv6)
+-        {
+-            if (!json_util::readJson(*dhcpv6, asyncResp->res, "OperatingMode",
+-                                     v6dhcpParms.dhcpv6OperatingMode,
+-                                     "UseDNSServers", v6dhcpParms.useDnsServers,
+-                                     "UseNTPServers", v6dhcpParms.useNtpServers,
+-                                     "UseDomainName",
+-                                     v6dhcpParms.useDomainName))
+-            {
+-                return;
+-            }
+-        }
+-
+-        // Get single eth interface data, and call the below callback
+-        // for JSON preparation
+-        getEthernetIfaceData(
+-            ifaceId,
+-            [asyncResp, ifaceId, hostname = std::move(hostname),
+-             fqdn = std::move(fqdn), macAddress = std::move(macAddress),
+-             ipv4StaticAddresses = std::move(ipv4StaticAddresses),
+-             ipv6DefaultGateway = std::move(ipv6DefaultGateway),
+-             ipv6StaticDefaultGateways =
+-                                        std::move(ipv6StaticDefaultGateways),
+-             ipv6StaticAddresses = std::move(ipv6StaticAddresses),
+-             staticNameServers = std::move(staticNameServers),
+-             dhcpv4 = std::move(dhcpv4), dhcpv6 = std::move(dhcpv6), mtuSize,
+-             ipv6AutoConfigEnabled, v4dhcpParms = std::move(v4dhcpParms),
+-             v6dhcpParms = std::move(v6dhcpParms), interfaceEnabled](
+-                const bool& success, const EthernetInterfaceData& ethData,
+-                const std::vector<IPv4AddressData>& ipv4Data,
+-                const std::vector<IPv6AddressData>& ipv6Data) {
+-            if (!success)
+-            {
+-                // ... otherwise return error
+-                // TODO(Pawel)consider distinguish between non
+-                // existing object, and other errors
+-                messages::resourceNotFound(asyncResp->res, "EthernetInterface",
+-                                           ifaceId);
+-                return;
+-            }
+-
+-            bool ipv6AddressValid = true;
+-            if(ipv6StaticAddresses) // IPv6StaticAddresses attribute is present
+-            {
+-                if(!(validateipv6AddressJson(asyncResp, *ipv6StaticAddresses)))
+-                {
+-                    //Invalid IPv6 address provided
+-                    ipv6AddressValid = false;
+-                }
+-            }
+-
+-            bool ipv6AcceptRA;
+-            if (ipv6AutoConfigEnabled.has_value())
+-            {
+-                ipv6AcceptRA = ipv6AutoConfigEnabled.value();
+-            }
+-            else
+-            {
+-                ipv6AcceptRA = ethData.ipv6AcceptRa;
+-            }
+-
+-            if (dhcpv4 || dhcpv6)
+-            {
+-                if(dhcpv4)
+-                {
+-                    if(v4dhcpParms.dhcpv4Enabled)
+-                    {
+-                        const bool v4Value = *v4dhcpParms.dhcpv4Enabled;
+-
+-                        if (!v4Value) // DHCPv4.DHCPEnabled attribute is false
+-                        {
+-                            if (!ipv4StaticAddresses) // and IPv4StaticAddresses attribute is not present
+-                            {
+-                                messages::propertyMissing(asyncResp->res, "IPv4StaticAddresses");
+-                                return;  
+-                            }
+-                            else if (ipv4StaticAddresses) // and IPv4StaticAddresses attribute is present
+-                            {
+-                                nlohmann::json IPv4Static = *ipv4StaticAddresses;
+-                                if(IPv4Static.size() > 1)
+-                                {
+-                                    messages::arraySizeTooLong(asyncResp->res,"IPv4StaticAddresses", 1);
+-                                    return;
+-                                }
+-                            }
+-                        }
+-                        else if(v4Value && ipv4StaticAddresses) // DHCPv4.DHCPEnabled attribute is true and IPv4StaticAddresses attribute is present
+-                        {
+-                            messages::propertyValueConflict(asyncResp->res, "DHCPv4.DHCPEnabled","IPv4StaticAddresses");
+-                            return;
+-                        }
+-                        handleDHCPPatch(ifaceId, ethData, v4dhcpParms, v6dhcpParms, ipv6AcceptRA,
+-                                asyncResp);
+-                    }
+-                }
+-
+-                if(dhcpv6)
+-                {
+-                    if (v6dhcpParms.dhcpv6OperatingMode) // DHCPv6 -> OperatingMode is present
+-                    {
+-                        if ((*v6dhcpParms.dhcpv6OperatingMode == "Enabled") && ipv6StaticAddresses)
+-                        {
+-                            messages::propertyValueConflict(asyncResp->res, "DHCPv6.OperatingMode","IPv6StaticAddresses");
+-                            return;
+-                        }
+-                        else if (*v6dhcpParms.dhcpv6OperatingMode == "Disabled")
+-                        {
+-                            if (!ipv6StaticAddresses) // and IPv6StaticAddresses attribute is not present
+-                            {
+-                                messages::propertyMissing(asyncResp->res, "IPv6StaticAddresses");
+-                                return;
+-                            }
+-                        }
+-
+-                        if(ipv6AddressValid)
+-                        {
+-                            handleDHCPPatch(ifaceId, ethData, v4dhcpParms, v6dhcpParms, ipv6AcceptRA,
+-                                asyncResp);
+-                        }
+-                    }
+-                }
+-            }
+-
+-            if (hostname)
+-            {
+-                handleHostnamePatch(*hostname, asyncResp);
+-            }
+-
+-            if (ipv6AutoConfigEnabled)
+-            {
+-                handleSLAACAutoConfigPatch(ifaceId, *ipv6AutoConfigEnabled,
+-                                           asyncResp);
+-            }
+-
+-            if (fqdn)
+-            {
+-                handleFqdnPatch(ifaceId, *fqdn, asyncResp);
+-            }
+-
+-            if (macAddress)
+-            {
+-                handleMACAddressPatch(ifaceId, *macAddress, asyncResp);
+-            }
+-
+-            if (ipv4StaticAddresses)
+-            {
+-                // TODO(ed) for some reason the capture of
+-                // ipv4Addresses above is returning a const value,
+-                // not a non-const value. This doesn't really work
+-                // for us, as we need to be able to efficiently move
+-                // out the intermedia nlohmann::json objects. This
+-                // makes a copy of the structure, and operates on
+-                // that, but could be done more efficiently
+-                nlohmann::json::array_t ipv4Static = *ipv4StaticAddresses;
+-                handleIPv4StaticPatch(ifaceId, ipv4Static, ipv4Data, ethData, v4dhcpParms, v6dhcpParms, ipv6AcceptRA, asyncResp);
+-            }
+-
+-            if (ipv6StaticDefaultGateways)
+-            {
+-                nlohmann::json ipv6Gateways = *ipv6StaticDefaultGateways;
+-                handleIPv6StaticDefaultGatewaysPatch(ifaceId, ipv6Gateways,
+-                                asyncResp);
+-            }
+-
+-            if (staticNameServers)
+-            {
+-                handleStaticNameServersPatch(ifaceId, *staticNameServers,
+-                                             asyncResp);
+-            }
+-
+-            if (ipv6DefaultGateway)
+-            {
+-                messages::propertyNotWritable(asyncResp->res,
+-                                              "IPv6DefaultGateway");
+-            }
+-
+-            if (ipv6StaticAddresses && ipv6AddressValid)
+-            {
+-                handleIPv6StaticAddressesPatch(ifaceId, *ipv6StaticAddresses, ipv6Data, ethData, v4dhcpParms, v6dhcpParms, ipv6AcceptRA,
+-                                               asyncResp);
+-            }
+-
+-            if (interfaceEnabled)
+-            {
+-                setEthernetInterfaceBoolProperty(ifaceId, "NICEnabled",
+-                                                 *interfaceEnabled, asyncResp);
+-            }
+-
+-            if (mtuSize)
+-            {
+-                handleMTUSizePatch(ifaceId, *mtuSize, asyncResp);
+-            }
+-            });
+-        });
++            std::bind_front(handleEthernetInterfaceInstancePatch, std::ref(app)));
+ 
+     BMCWEB_ROUTE(app, "/redfish/v1/Managers/bmc/EthernetInterfaces/<str>/")
+         .privileges(redfish::privileges::deleteEthernetInterface)
+diff --git a/redfish-core/src/error_messages.cpp b/redfish-core/src/error_messages.cpp
+index e7ca63f1..8afcbf96 100644
+--- a/redfish-core/src/error_messages.cpp
++++ b/redfish-core/src/error_messages.cpp
+@@ -860,17 +860,17 @@ void propertyValueExternalConflict(crow::Response& res, std::string_view arg1,
+  * See header file for more information
+  * @endinternal
+  */
+-nlohmann::json propertyValueIncorrect(const nlohmann::json& arg1,
+-                                      std::string_view arg2)
++nlohmann::json propertyValueIncorrect(std::string_view arg1,
++                                      const nlohmann::json& arg2)
+ {
+-    std::string arg1Str = arg1.dump(2, ' ', true,
++    std::string arg2Str = arg2.dump(2, ' ', true,
+                                     nlohmann::json::error_handler_t::replace);
+     return getLog(redfish::registries::base::Index::propertyValueIncorrect,
+-                  std::to_array<std::string_view>({arg1Str, arg2}));
++                  std::to_array<std::string_view>({arg1, arg2Str}));
+ }
+ 
+-void propertyValueIncorrect(crow::Response& res, const nlohmann::json& arg1,
+-                            std::string_view arg2)
++void propertyValueIncorrect(crow::Response& res, std::string_view arg1,
++                            const nlohmann::json& arg2)
+ {
+     res.result(boost::beast::http::status::bad_request);
+     addMessageToErrorJson(res.jsonValue, propertyValueIncorrect(arg1, arg2));
+diff --git a/scripts/update_schemas.py b/scripts/update_schemas.py
+index ae64b868..a8102da1 100755
+--- a/scripts/update_schemas.py
++++ b/scripts/update_schemas.py
+@@ -406,6 +406,12 @@ with open(metadata_index_path, "w") as metadata_index:
+     metadata_index.write("        <edmx:Include Namespace=\"AMIChassisFRU.v1_0_0\"/>\n")
+     metadata_index.write("    </edmx:Reference>\n")
+ 
++    metadata_index.write(
++        "    <edmx:Reference Uri=\"/redfish/v1/schema/AmiNetworkConfiguration_v1.xml\">\n")
++    metadata_index.write("        <edmx:Include Namespace=\"AmiNetworkConfiguration\"/>\n")
++    metadata_index.write("        <edmx:Include Namespace=\"AmiNetworkConfiguration.v1_0_0\"/>\n")
++    metadata_index.write("    </edmx:Reference>\n")
++
+     metadata_index.write("</edmx:Edmx>\n")
+ 
+ 
+diff --git a/static/redfish/v1/$metadata/index.xml b/static/redfish/v1/$metadata/index.xml
+index 7d841814..92bef238 100644
+--- a/static/redfish/v1/$metadata/index.xml
++++ b/static/redfish/v1/$metadata/index.xml
+@@ -3476,4 +3476,8 @@
+         <edmx:Include Namespace="OemStorage"/>
+         <edmx:Include Namespace="OemStorage.v1_0_0"/>
+     </edmx:Reference>
++    <edmx:Reference Uri="/redfish/v1/schema/AmiNetworkConfiguration_v1.xml">
++        <edmx:Include Namespace="AmiNetworkConfiguration"/>
++        <edmx:Include Namespace="AmiNetworkConfiguration.v1_0_0"/>
++    </edmx:Reference>
+ </edmx:Edmx>
+-- 
+2.34.1
+
