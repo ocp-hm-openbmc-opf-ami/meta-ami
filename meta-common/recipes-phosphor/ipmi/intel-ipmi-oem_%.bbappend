@@ -33,8 +33,7 @@ SRC_URI += "\
 SRC_URI_CORE:append = "file://0032-Add-Support-for-OS-Critical-Discrete-Sensor.patch"
 SRC_URI_RESTRICTED:append = "file://0032-Rest-Add-Support-for-OS-Critical-Discrete-Sensor.patch"
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'restricted', SRC_URI_RESTRICTED, SRC_URI_CORE, d)}"
-
-
 SRC_URI:append =" \
        file://0036-Add-DBus-SEL-Logging-support-over-IPMI.patch \
+       file://0037-Handle-extra-byte-issue-in-SMTP.patch \
 "
