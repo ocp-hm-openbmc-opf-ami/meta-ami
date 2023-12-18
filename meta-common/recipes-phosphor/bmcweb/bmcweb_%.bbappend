@@ -89,6 +89,7 @@ SRC_URI:append = "   \
             file://0150-Not-able-to-do-power-cycle-if-one-task-is-in-running.patch \
             file://0128-DDNS-Update-Feature-Support-in-Network.patch \
 	    file://0123-Added-USB-PowerSave-Mode-Support-in-Redfish.patch \
+            file://0147-Create-Subscription-with-SNMPTrap-for-MessageIds-and-RegistryPrefixes.patch \
         "
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
