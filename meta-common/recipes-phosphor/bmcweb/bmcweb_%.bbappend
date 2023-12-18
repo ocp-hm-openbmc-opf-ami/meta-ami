@@ -94,6 +94,7 @@ SRC_URI:append = "   \
             file://0149-Delete-other-existing-Ipv6Address-while-patch-new-Ip.patch \
             file://0159-Add-Error-message-when-create-Subscription-with-SubscriptionType-as-RedfishEvent.patch \
             file://0151-While-PATCH-in-AccountService-Thrown-proper-Error-message-for-RemoteRoleMapping.patch \
+            file://0158-Fixed-invalid-staticNameServer-Error-Msg.patch \
         "
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
