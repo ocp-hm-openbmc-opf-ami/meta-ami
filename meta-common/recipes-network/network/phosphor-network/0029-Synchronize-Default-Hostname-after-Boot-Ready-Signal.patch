@@ -1,0 +1,194 @@
+From f510174ab8d6a86b1f3008b2230041d9d234c4ec Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Thu, 30 Nov 2023 19:18:44 -0800
+Subject: [PATCH] Synchronize Default Hostname after Boot Ready Signel Received
+
+---
+ src/dns_updater.cpp          | 69 +++++++++++++++++++++++-------------
+ src/dns_updater.hpp          |  1 +
+ src/system_configuration.cpp |  8 -----
+ src/util.cpp                 | 16 +++++++++
+ src/util.hpp                 |  7 ++++
+ 5 files changed, 68 insertions(+), 33 deletions(-)
+
+diff --git a/src/dns_updater.cpp b/src/dns_updater.cpp
+index 8927f15..ea002c4 100644
+--- a/src/dns_updater.cpp
++++ b/src/dns_updater.cpp
+@@ -77,6 +77,9 @@ constexpr auto DHCP_SERVICE_PATH = "/xyz/openbmc_project/network/dhcp";
+ constexpr auto SYSTEMCONF_PROP_INTERFACE = "xyz.openbmc_project.Network.SystemConfiguration";
+ constexpr auto SYSTEMCONF_SERVICE_PATH = "/xyz/openbmc_project/network/config";
+ 
++constexpr auto BMC_STATE_PROP_INTERFACE = "xyz.openbmc_project.State.BMC";
++constexpr auto BMC_STATE_SERVICE_PATH = "/xyz/openbmc_project/state/bmc0";
++
+ constexpr char HOSTNAMED_SVC[] = "org.freedesktop.hostname1";
+ constexpr char HOSTNAMED_OBJ[] = "/org/freedesktop/hostname1";
+ constexpr char HOSTNAMED_INTF[] = "org.freedesktop.hostname1";
+@@ -148,6 +151,7 @@ std::map<std::string, std::unique_ptr<sdbusplus::bus::match_t>> Configuration::i
+     std::map<std::string, std::unique_ptr<sdbusplus::bus::match_t>> mp;
+     mp["DHCPSignal"] = nullptr;
+     mp["SystemconfigSignal"] = nullptr;
++    mp["BMCStateSignal"] = nullptr;
+     return mp;
+ }
+ 
+@@ -208,6 +212,36 @@ void Configuration::registerSignal(sdbusplus::bus_t& bus) {
+                     }
+                 }
+             );
++        } // else if
++        else if (signal.second == nullptr && signal.first == "BMCStateSignal") {
++            signal.second = std::make_unique<sdbusplus::bus::match_t>(
++                bus,
++                sdbusplus::bus::match::rules::propertiesChanged(BMC_STATE_SERVICE_PATH,
++                                                                BMC_STATE_PROP_INTERFACE),
++                [&](sdbusplus::message::message& msg) {
++                    std::map<std::string, std::variant<std::string, std::vector<std::string>,  bool>> props;
++                    std::string iface;
++                    msg.read(iface, props);
++                    for (const auto& t : props)
++                    {
++                        if (t.first == "CurrentBMCState")
++                        {
++                            sdbusplus::common::xyz::openbmc_project::state::BMC::BMCState state = sdbusplus::common::xyz::openbmc_project::state::BMC::convertBMCStateFromString(std::get<std::string>(t.second));
++                            if (state == sdbusplus::common::xyz::openbmc_project::state::BMC::BMCState::Ready) {
++                                if (!std::filesystem::exists(DEFAULT_HOSTNAME_PATH)) {
++                                    std::ofstream ofs;
++                                    ofs.open(DEFAULT_HOSTNAME_PATH);
++                                    if (ofs.is_open()) {
++                                        ofs << manager.get().getSystemConf().hostName();
++                                        ofs.close();
++                                        hostConf(std::make_tuple(true, manager.get().getSystemConf().hostName()));
++                                    }
++                                }
++                            }
++                        }
++                    }
++                }
++            );
+         }
+     }
+ }
+@@ -437,32 +471,17 @@ int16_t Configuration::setHostConf(bool hostSetting, std::string hostName) {
+     bool different = false;
+     std::string hostname;
+     const char invalidChar[] = "{}()<>&*`|=?;[]$#~!\"%/\\:+,'.";
+-    if (std::get<0>(ddnsIface::hostConf()) != hostSetting) {
+-        if (hostSetting) {
+-            std::fstream inStream(DEFAULT_HOSTNAME_PATH, std::fstream::in);
+-            if (!inStream.is_open())
+-            {
+-                lg2::error("Unable to open the input file.");
+-                return -1;
+-            }
+-            else {
+-                std::getline(inStream, hostname);
+-                inStream.close();
+-            }
+-        } // if
++    if (hostSetting) {
++        std::fstream inStream(DEFAULT_HOSTNAME_PATH, std::fstream::in);
++        if (!inStream.is_open())
++        {
++            lg2::error("Unable to open the input file.");
++            return -1;
++        }
+         else {
+-            if (hostName.size() > 63) {
+-                lg2::error("Unable to hostname since hostname size isn't in range ( 0 - 64 )");
+-                return -1;
+-            } // if
+-            else if (strstr(hostname.c_str(), "--") != NULL || strpbrk(hostName.c_str(), invalidChar) != NULL ) {
+-                lg2::error("Unable to hostname since hostname contains invalid charactor\n");
+-                return -1;
+-            }
+-
+-            hostname = hostName;
+-        } // else
+-
++            std::getline(inStream, hostname);
++            inStream.close();
++        }
+         different = true;
+     } // if
+     else if (!hostSetting) {
+diff --git a/src/dns_updater.hpp b/src/dns_updater.hpp
+index 71bc346..5781120 100644
+--- a/src/dns_updater.hpp
++++ b/src/dns_updater.hpp
+@@ -2,6 +2,7 @@
+ 
+ #include <filesystem>
+ #include <xyz/openbmc_project/Network/DDNS/server.hpp>
++#include <xyz/openbmc_project/State/BMC/server.hpp>
+ #include <stdplus/zstring.hpp>
+ #include <sdbusplus/bus.hpp>
+ #include <sdbusplus/server/object.hpp>
+diff --git a/src/system_configuration.cpp b/src/system_configuration.cpp
+index 61c7f0e..99c5c0e 100644
+--- a/src/system_configuration.cpp
++++ b/src/system_configuration.cpp
+@@ -58,14 +58,6 @@ SystemConfiguration::SystemConfiguration(
+         auto reply = req.call();
+         reply.read(name);
+         SystemConfigIntf::hostName(std::get<std::string>(name), true);
+-        if (!std::filesystem::exists(DEFAULT_HOSTNAME_PATH)) {
+-            std::ofstream ofs;
+-            ofs.open(DEFAULT_HOSTNAME_PATH);
+-            if (ofs.is_open()) {
+-                ofs << std::get<std::string>(name);
+-                ofs.close();
+-            }
+-        }
+     }
+     catch (const std::exception& e)
+     {
+diff --git a/src/util.cpp b/src/util.cpp
+index 3f074e3..431348f 100644
+--- a/src/util.cpp
++++ b/src/util.cpp
+@@ -286,6 +286,22 @@ std::tuple<std::vector<std::optional<std::string>>,std::vector<std::optional<std
+     return std::make_tuple(ipv4List, ipv6List);
+ }
+ 
++std::vector<std::string> splitStr(std::string line, std::string delimiter) {
++    std::vector<std::string> vec;
++    for (auto index = line.find(delimiter); index != std::string::npos; index = line.find(delimiter)) {
++        if (index == 0) {
++            continue;
++        } // if
++        else {
++            vec.push_back(line.substr(0, index));
++        }
++        line = line.substr(index+1, line.length());
++    }
++
++    vec.push_back(line);
++    return vec;
++}
++
+ namespace ip_address {
+ 
+ bool in6AddrIetfProtocolAssignment(in6_addr* addr) {
+diff --git a/src/util.hpp b/src/util.hpp
+index 83e31d2..f621492 100644
+--- a/src/util.hpp
++++ b/src/util.hpp
+@@ -183,6 +183,13 @@ void execute(stdplus::const_zstring path, ArgTypes&&... tArgs)
+     internal::executeCommandinChildProcess(path, args);
+ }
+ 
++/* @Split string into serveral tokens by delimeter
++ * @param[in] line - line to be splitted
++ * @param[in] delimiter
++ * @returns list of tokens
++ */
++std::vector<std::string> splitStr(std::string line, std::string delimiter);
++
+ } // namespace network
+ 
+ } // namespace phosphor
+-- 
+2.25.1
+
