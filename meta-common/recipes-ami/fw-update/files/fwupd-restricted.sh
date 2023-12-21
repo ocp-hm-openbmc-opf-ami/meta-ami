@@ -21,6 +21,8 @@ UPDATE_PERCENT_FAIL=100
 SECURE_BOOT_STRAP_ENABLED=1
 update=/run/initramfs/update
 whitelist=/run/initramfs/whitelist
+uboot_env_bin_file="uboot_env_data.bin"
+NON_INTEL_PLATFORMS_MODE=1
 
 update_percentage() {
     if [ -n "$img_obj" ]; then
@@ -54,6 +56,14 @@ check_preserv_config() {
             wait_for_log_sync
             systemctl stop nv-sync.service
             log "BMC Full Flash - Preserve Config Done"
+
+            if [ "$1" = "$NON_INTEL_PLATFORMS_MODE" ];then
+                log "BMC Full Flash - Backup u-boot-env partition"
+                backup_uboot_env_data $1
+            else
+                log "BMC Full Flash - Restore u-boot-env partition"
+                restore_uboot_env_data
+            fi
         fi
     else
         log "ClearConfig is not available"
@@ -201,6 +211,29 @@ ifwi_full_flash() {
     fi
 }
 
+backup_uboot_env_data() {
+    local mtdPart=$( cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"u-boot-env\"" {print $1}')
+    local mtd_size=$(printf "%x\n" $(cat /sys/class/mtd/${mtdPart}/size))
+    if test "$1" == "$NON_INTEL_PLATFORMS_MODE"; then
+        local rc=$(mtd_debug read /dev/${mtdPart} 0 0x${mtd_size} /run/initramfs/${uboot_env_bin_file})
+    else
+        local rc=$(mtd_debug read /dev/${mtdPart} 0 0x${mtd_size} /tmp/${uboot_env_bin_file})
+    fi
+    if test "$rc" == ""; then
+        log "BMC Full Flash - backup u-boot-env parition failed"
+        redfish_log_abort " BMC Full Flash - backup u-boot-env parition failed"
+    fi
+}
+
+restore_uboot_env_data() {
+    local mtdPart=$( cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"u-boot-env\"" {print $1}')
+    local rc=$(mtd-util -d /dev/${mtdPart} c /tmp/${uboot_env_bin_file} 0)
+    if [[ "$rc" -ne 0 ]]; then
+        log "BMC Full Flash - restore u-boot-env parition failed"
+        redfish_log_abort " BMC Full Flash - restore u-boot-env parition failed"
+    fi
+}
+
 bmc_full_flash() {
     # Reading the version from 128MB binary is not possible.
     # So setting FWVER to "NA".
@@ -211,7 +244,7 @@ bmc_full_flash() {
     # Use update script to update Firmware for non-intel platforms
     if test -x $update
     then
-        check_preserv_config
+        check_preserv_config $NON_INTEL_PLATFORMS_MODE
         cp $LOCAL_PATH /run/initramfs/
         redfish_log_fw_evt success
         update_percentage $UPDATE_PERCENT_SUCCESS
@@ -256,6 +289,9 @@ bmc_full_flash() {
         systemctl stop nv-sync.service
         #unmount rwfs  
         umount /tmp/.rwfs
+
+        log "BMC Full Flash - Backup u-boot-env partition"
+        backup_uboot_env_data
 
         # Flash: writing to BMC SPI device
         log "BMC Full Flash - Starting the SPI write. It will take ~8 minutes...."
