@@ -98,6 +98,7 @@ SRC_URI:append = "   \
             file://0143-Support-Bond-Feature-in-Network-via-Redfish.patch \
             file://0163-validate-IPv4-address.patch \
             file://0162-While-Patch-DHCPv4-and-DHCPv6-Attribute-throw-500-In.patch \
+            file://0168-Fix-the-datatype-Error-in-Memory-Instance.patch \
             file://0165-Generating-proper-SSE-Id.patch \
         "
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
