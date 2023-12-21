@@ -97,6 +97,7 @@ SRC_URI:append = "   \
             file://0158-Fixed-invalid-staticNameServer-Error-Msg.patch \
             file://0143-Support-Bond-Feature-in-Network-via-Redfish.patch \
             file://0163-validate-IPv4-address.patch \
+            file://0162-While-Patch-DHCPv4-and-DHCPv6-Attribute-throw-500-In.patch \
         "
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
