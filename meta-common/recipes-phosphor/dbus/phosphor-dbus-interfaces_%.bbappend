@@ -1,8 +1,8 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-dbus-interfaces.git;branch=adding-initial-commit-oob-inventory-config;protocol=https;name=override;"
+SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-dbus-interfaces.git;branch=main;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "021aa0db2b71cd1cbcde112c3fb08a81e885a7f6"
+SRCREV_override = "889ca863f480ab0090a686d50feb767e6361fc11"
 
 SRC_URI += "file://0001-ARP-Control-property.patch\
             file://0003-ARP-VLAN-YAML.patch \
