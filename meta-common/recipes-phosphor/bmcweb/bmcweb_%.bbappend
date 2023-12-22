@@ -3,6 +3,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 EXTRA_OEMESON += "-Dredfish-dump-log=enabled"
 EXTRA_OEMESON += "-Dredfish-new-powersubsystem-thermalsubsystem=enabled"
 EXTRA_OEMESON += "-Dredfish-provisioning-feature=enabled"
+EXTRA_OEMESON += "-Dredfish-dbus-log=enabled"
 
 # add "redfish-hostiface" group
 GROUPADD_PARAM:${PN}:append = ";redfish-hostiface"
@@ -100,6 +101,7 @@ SRC_URI:append = "   \
             file://0162-While-Patch-DHCPv4-and-DHCPv6-Attribute-throw-500-In.patch \
             file://0168-Fix-the-datatype-Error-in-Memory-Instance.patch \
             file://0165-Generating-proper-SSE-Id.patch \
+            file://0135-Enabled-Dbus-Sel-Logging-Support.patch \
         "
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
