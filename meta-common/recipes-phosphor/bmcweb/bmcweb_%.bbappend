@@ -116,6 +116,7 @@ SRC_URI:append = "   \
             file://0170-Give-range-for-RememberOldPasswordTimes-property.patch \
             file://0172-Provide-delay-for-set-SSH-properties.patch \
             file://0167-task-starts-event-redfish-listner.patch \
+            file://0171-Displaying-a-Password-Reset-Failed-error-message-whe.patch \
         "
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
