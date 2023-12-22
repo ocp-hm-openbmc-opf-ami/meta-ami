@@ -1,7 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI_NON_PFR:append = "file://0001-Add-Purpose-for-other-components-and-add-image-mtd-s.patch \
-                   file://0002-populate-cpld-inventory-with-version-on-bootup.patch \
                    file://0004-Add-write-public-key-in-image-support.patch \
                    file://fwupdinband@.service "
 

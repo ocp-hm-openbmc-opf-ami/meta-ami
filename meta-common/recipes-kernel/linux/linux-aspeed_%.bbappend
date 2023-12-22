@@ -53,8 +53,18 @@ SRC_BIOS = "file://0020-bios-patch-to-enable-pnor-mtd.patch "
 
 SRC_URI:append:intel-ast2600  = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'bios-update', SRC_BIOS,'', d)}"
 
-SRC_CPLD = " file://0019-Enabling-JTAG0-for-CPLD-update-using-jatg.patch "
+SRC_CPLD_SPI = "file://cpld-spidev.cfg \
+file://0021-Enable-spidev-for-spi2-for-cpld-upgrade-via-spi.patch \
+"
+SRC_URI:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'cpld-update', SRC_CPLD_SPI,'', d)}"
+
+SRC_CPLD = " file://0019-Enabling-JTAG0-for-CPLD-update-using-jatg.patch \
+file://0022-Enable-spidev-for-spi2-for-cpld-upgrade-via-spi-intel-dts.patch \
+"
 SRC_URI:append:intel-ast2600  = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'cpld-update', SRC_CPLD,'', d)}"
+
+SRC_CPLD_EVB = "file://0023-Enable-spidev-for-spi2-for-cpld-upgrade-via-spi-evb-dts.patch "
+SRC_URI:append:evb-ast2600  = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'cpld-update', SRC_CPLD_EVB,'', d)}"
 
 
 

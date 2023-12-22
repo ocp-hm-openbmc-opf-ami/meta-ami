@@ -1,0 +1,191 @@
+From 5f2db8b8921acb623f456758e3112889ea8c8b93 Mon Sep 17 00:00:00 2001
+From: dhananjayb <dhananjayb@ami.com>
+Date: Tue, 19 Dec 2023 20:25:34 +0530
+Subject: [PATCH] Enable spidev for spi2 for cpld upgrade via spi interface
+
+---
+ arch/arm/boot/dts/aspeed-g6.dtsi | 20 ++++++++
+ drivers/spi/spi-aspeed-smc.c     | 87 +++++++++++++++++++++++++++++++-
+ drivers/spi/spidev.c             |  2 +
+ 3 files changed, 108 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm/boot/dts/aspeed-g6.dtsi b/arch/arm/boot/dts/aspeed-g6.dtsi
+index dcf71526be67..d4021585e084 100644
+--- a/arch/arm/boot/dts/aspeed-g6.dtsi
++++ b/arch/arm/boot/dts/aspeed-g6.dtsi
+@@ -193,6 +193,26 @@ flash@2 {
+ 				spi-rx-bus-width = <2>;
+ 				status = "disabled";
+ 			};
++			spidev@0 { 
++                compatible = "linux,spidev"; // specify which driver will be used for this device
++	            spi-max-frequency = <50000000>; // specify clock frequency for this SPIDEV
++	            reg = <0>; // this definition will be used as CS number of SPIDEV
++                status = "disabled";
++           	};
++
++           	spidev@1 { 
++                compatible = "linux,spidev"; // specify which driver will be used for this device
++	            spi-max-frequency = <50000000>; // specify clock frequency for this SPIDEV
++	            reg = <1>; // this definition will be used as CS number of SPIDEV
++                status = "disabled";
++           	};
++
++           	spidev@2 { 
++                compatible = "linux,spidev"; // specify which driver will be used for this device
++	            spi-max-frequency = <50000000>; // specify clock frequency for this SPIDEV
++	            reg = <2>; // this definition will be used as CS number of SPIDEV
++                status = "disabled";
++           	};
+ 		};
+ 
+ 		mdio0: mdio@1e650000 {
+diff --git a/drivers/spi/spi-aspeed-smc.c b/drivers/spi/spi-aspeed-smc.c
+index fe7940a8c438..a4e37d45af33 100644
+--- a/drivers/spi/spi-aspeed-smc.c
++++ b/drivers/spi/spi-aspeed-smc.c
+@@ -46,6 +46,7 @@
+ #define   CTRL_IO_MODE_READ		0x1
+ #define   CTRL_IO_MODE_WRITE		0x2
+ #define   CTRL_IO_MODE_USER		0x3
++#define   CTRL_STOP_ACTIVE	BIT(2)
+ 
+ #define   CTRL_IO_CMD_MASK		0xf0ff40c3
+ #define   CTRL_IO_CMD_MASK_CMDMODE	0xf0ff40c7
+@@ -830,6 +831,8 @@ static int aspeed_spi_dirmap_create(struct spi_mem_dirmap_desc *desc)
+ 
+ 	/* Define the default IO read settings */
+ 	ctl_val = readl(chip->ctl) & ~CTRL_IO_CMD_MASK;
++	/* adjust spi clk for write */
++	ctl_val = (ctl_val & (~0x0f000f00)) | 0x03000000;
+ 	ctl_val |= aspeed_spi_get_io_mode(op) |
+ 		op->cmd.opcode << CTRL_COMMAND_SHIFT |
+ 		CTRL_IO_MODE_READ;
+@@ -986,6 +989,82 @@ static void aspeed_spi_enable(struct aspeed_spi *aspi, bool enable)
+ 		aspeed_spi_chip_enable(aspi, cs, enable);
+ }
+ 
++static void aspeed_spi_set_cs(struct spi_device *spi, bool enable)
++{
++	struct aspeed_spi *aspi =
++		spi_controller_get_devdata(spi->controller);
++	const struct aspeed_spi_data *data = aspi->data;
++	u8 cs = spi->chip_select;
++	void __iomem *ce_ctrl_reg =
++		aspi->regs + data->ctl0  + cs * 4;
++
++	if (!enable)
++		writel(CTRL_IO_MODE_USER, ce_ctrl_reg);
++	else
++		writel(CTRL_STOP_ACTIVE | CTRL_IO_MODE_USER, ce_ctrl_reg);
++}
++
++static int aspeed_spi_transfer_one(struct spi_controller *ctlr,
++				   struct spi_device *spi,
++				   struct spi_transfer *transfer)
++{
++	struct aspeed_spi *aspi =
++		spi_controller_get_devdata(ctlr);
++	u8 cs = spi->chip_select;
++	struct aspeed_spi_chip *chip = &aspi->chips[cs];
++	int i;
++	const u8 *tx_buf;
++	u8 *rx_buf;
++
++	tx_buf = transfer->tx_buf;
++	rx_buf = transfer->rx_buf;
++	if (tx_buf)
++		for (i = 0; i < transfer->len; i++)
++			writeb(tx_buf[i], chip->ahb_base);
++	else if (rx_buf)
++		for (i = 0; i < transfer->len; i++)
++			rx_buf[i] = readb(chip->ahb_base);
++
++	return 0;
++}
++
++#define ASPEED_SPI_MAX_CS 5
++static void aspeed_spi_chip_initialize_window(struct spi_controller *ctlr)
++{
++	struct aspeed_spi *aspi = spi_controller_get_devdata(ctlr);
++	struct aspeed_spi_chip *chip = aspi->chips;
++	const struct aspeed_spi_data *data = aspi->data;
++	uint32_t decode_reg_val;
++	uint32_t start_addr_phy, end_addr_phy, pre_end_addr_phy = 0;
++	uint32_t cs;
++	uint32_t decode_sz_arr[ASPEED_SPI_MAX_CS];
++	for (cs = 0; cs < data->max_cs && cs < ASPEED_SPI_MAX_CS; cs++)
++		decode_sz_arr[cs] = 0x200000;
++
++	for (cs = 0; cs < data->max_cs; cs++) {
++		if (cs == 0)
++			start_addr_phy = aspi->ahb_base_phy;
++		else
++			start_addr_phy = pre_end_addr_phy;
++
++		chip[cs].ahb_base = (void __iomem *)start_addr_phy;
++
++		chip[cs].ahb_window_size = decode_sz_arr[cs];
++		end_addr_phy = start_addr_phy + decode_sz_arr[cs];
++
++		decode_reg_val = data->segment_reg(aspi, start_addr_phy,
++						   end_addr_phy);
++
++		writel(decode_reg_val,
++		       aspi->regs + CE0_SEGMENT_ADDR_REG + cs * 4);
++
++		pre_end_addr_phy = end_addr_phy;
++
++		dev_dbg(aspi->dev,"cs: %d, decode_reg: 0x%x\n", cs,
++			decode_reg_val);
++	}
++}
++
+ static int aspeed_spi_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -1061,6 +1140,12 @@ static int aspeed_spi_probe(struct platform_device *pdev)
+ 	ctlr->cleanup = aspeed_spi_cleanup;
+ 	ctlr->num_chipselect = data->max_cs;
+ 	ctlr->dev.of_node = dev->of_node;
++	ctlr->flags = SPI_CONTROLLER_HALF_DUPLEX;
++    ctlr->set_cs = aspeed_spi_set_cs;	
++    ctlr->transfer_one = aspeed_spi_transfer_one;
++	if (aspi->data == &ast2600_spi_data)
++		aspeed_spi_chip_initialize_window(ctlr);
++
+ 	if (aspi->data == &ast2600_fmc_data) {
+ 		if (devm_device_add_groups(dev, bcurrent_boot_groups))
+ 				dev_warn(dev, "Could not add current_boot\n");
+@@ -1475,7 +1560,7 @@ static const struct aspeed_spi_data ast2600_fmc_data = {
+ };
+ 
+ static const struct aspeed_spi_data ast2600_spi_data = {
+-	.max_cs	       = 2,
++	.max_cs	       = 3,
+ 	.hastype       = false,
+ 	.mode_bits     = SPI_RX_QUAD | SPI_TX_QUAD,
+ 	.we0	       = 16,
+diff --git a/drivers/spi/spidev.c b/drivers/spi/spidev.c
+index 71c3db60e968..f547f759ac07 100644
+--- a/drivers/spi/spidev.c
++++ b/drivers/spi/spidev.c
+@@ -700,6 +700,7 @@ static const struct spi_device_id spidev_spi_ids[] = {
+ 	{ .name = "m53cpld" },
+ 	{ .name = "spi-petra" },
+ 	{ .name = "spi-authenta" },
++	{ .name = "spidev" },
+ 	{},
+ };
+ MODULE_DEVICE_TABLE(spi, spidev_spi_ids);
+@@ -726,6 +727,7 @@ static const struct of_device_id spidev_dt_ids[] = {
+ 	{ .compatible = "menlo,m53cpld", .data = &spidev_of_check },
+ 	{ .compatible = "cisco,spi-petra", .data = &spidev_of_check },
+ 	{ .compatible = "micron,spi-authenta", .data = &spidev_of_check },
++	{ .compatible = "linux,spidev", .data = &spidev_of_check },
+ 	{},
+ };
+ MODULE_DEVICE_TABLE(of, spidev_dt_ids);
+-- 
+2.34.1
+

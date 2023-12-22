@@ -387,12 +387,22 @@ cpld_full_flash()
     update_percentage $UPDATE_PERCENT_PRESTAGE_VERIFY_START
     update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_START
     # Flash: writing to cpld device
+    service="xyz.openbmc_project.EntityManager"
+    interface="xyz.openbmc_project.Configuration.CPLD"
+    cpldpath=$(busctl --system call xyz.openbmc_project.ObjectMapper /xyz/openbmc_project/object_mapper \
+         xyz.openbmc_project.ObjectMapper GetSubTreePaths sias "/" 0 1 "xyz.openbmc_project.Inventory.Item.Cpld" | awk '/s/ {print $3}' | tr -d '"')
+    extractedCpldName=$(basename "$cpldpath")
+    objpath="/xyz/openbmc_project/inventory/system/board/Cpld/$extractedCpldName"
+    InputParameters=$(busctl get-property $service $objpath $interface InputParameters | cut -d' ' -f2- | tr -d '"')
     log "CPLD Flash - Starting the cpld write....."
     # Log Event: Update percentage and log event
     update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
-    cpld-tool -n /dev/jtag0 -p $LOCAL_PATH 
-    if [ $? -ne 0  ]; then
+    cmd="cpld-tool $InputParameters -p $LOCAL_PATH"
+    log "issuing... $cmd" 
+    cpld_output=$($cmd)
+    if echo "$cpld_output" | grep -q "failed"; then
         log "CPLD Flash - Image update failed"
+        log "$cpld_output"
         redfish_log_abort " CPLD Flash - Image update failed"
         set_activation_status Failed
         update_percentage $UPDATE_PERCENT_FAIL
@@ -402,14 +412,24 @@ cpld_full_flash()
         update_percentage $UPDATE_PERCENT_SUCCESS
         redfish_log_fw_evt success
         set_activation_status Active
-	local output=$(cpld-tool -n /dev/jtag0 -u)
-	local usercode=$(echo "$output" | sed -n 's/.*USERCODE=\(0x[0-9a-fA-F]*\).*/\1/p')
-    log "CPLD Flash - USERCODE = $usercode"
-	busctl set-property xyz.openbmc_project.Software.BMC.Updater \
-            /xyz/openbmc_project/software/cpld_active \
+        cmd="cpld-tool $InputParameters -u"
+        echo $cmd >&2
+        cpld_output=$( $cmd )
+        # Check the exit status of the cpld-tool command
+        if [ $? -eq 0 ]; then
+            # Extract the usercode from the output
+            if echo "$cpld_output" | grep -q "Lattice USERCODE="; then
+            usercode=$(echo "$cpld_output" | grep "Lattice USERCODE" |  cut -d= -f2 )
+            else
+            usercode="NA"
+            fi
+        fi
+        log "CPLD Flash - USERCODE = $usercode"
+        servicename=$(mapper get-service $cpldpath)
+	    busctl set-property $servicename \
+            $cpldpath \
             xyz.openbmc_project.Software.Version Version \
             s $usercode
-
         return 0
 }
 
