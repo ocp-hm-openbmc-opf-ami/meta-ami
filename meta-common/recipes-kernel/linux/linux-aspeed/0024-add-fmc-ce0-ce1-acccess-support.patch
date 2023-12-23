@@ -1,0 +1,205 @@
+From 9ae6628a29fc51ef5666498e373189ad89a4df74 Mon Sep 17 00:00:00 2001
+From: dhananjayb <dhananjayb@ami.com>
+Date: Tue, 19 Dec 2023 20:11:48 +0530
+Subject: [PATCH] add fmc ce0 ce1 acccess support
+
+---
+ drivers/spi/spi-aspeed-smc.c | 168 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 168 insertions(+)
+
+diff --git a/drivers/spi/spi-aspeed-smc.c b/drivers/spi/spi-aspeed-smc.c
+index 70c4e6e3e2e8..fe7940a8c438 100644
+--- a/drivers/spi/spi-aspeed-smc.c
++++ b/drivers/spi/spi-aspeed-smc.c
+@@ -56,6 +56,17 @@
+ /* CEx Read timing compensation register */
+ #define CE0_TIMING_COMPENSATION_REG	0x94
+ 
++
++#define OFFSET_ABR_CTRL_STATUS 0x64
++#define OFFSET_ABR_TIMER_RELOAD 0x68
++#define OFFSET_ABR_TIMER_RESTART 0x6c
++
++#define ABR_WDT_ENABLE BIT(0)
++#define ABR_BOOT_SRC_INDICATE BIT(4)
++#define ABR_RESTART_MAGIC 0x4755
++#define ABR_CLEAR_BOOT_SRC_MAGIC (0xEA << 16)
++#define ABR_RELOAD_MAX_VALUE 0x3ff
++
+ enum aspeed_spi_ctl_reg_value {
+ 	ASPEED_SPI_BASE,
+ 	ASPEED_SPI_READ,
+@@ -110,6 +121,149 @@ struct aspeed_spi {
+ 	u8			*op_buf;
+ };
+ 
++static inline ssize_t _access_primary_show(void __iomem *regs,
++					   struct device_attribute *attr,
++					   char *buf)
++{
++	u32 status = readl(regs + OFFSET_ABR_CTRL_STATUS);
++
++	return sysfs_emit(buf, "%u\n", !(status & ABR_BOOT_SRC_INDICATE));
++}
++
++static inline ssize_t _access_primary_store(void __iomem *regs,
++					    struct device_attribute *attr,
++					    const char *buf, size_t size)
++{
++	unsigned long val;
++
++	if (kstrtoul(buf, 10, &val))
++		return -EINVAL;
++
++	/* write bit[23:16] = 0xEA */
++	if (val)
++		writel(readl(regs + OFFSET_ABR_CTRL_STATUS) |
++			       ABR_CLEAR_BOOT_SRC_MAGIC,
++		       regs + OFFSET_ABR_CTRL_STATUS);
++
++	return size;
++}
++
++static inline ssize_t _access_backup_show(void __iomem *regs,
++					  struct device_attribute *attr,
++					  char *buf)
++{
++	u32 status = readl(regs + OFFSET_ABR_CTRL_STATUS);
++	u32 timer_reload = readl(regs + OFFSET_ABR_TIMER_RELOAD);
++
++	if (!(status & ABR_WDT_ENABLE))
++		return sysfs_emit(buf, "%u\n", 0);
++	/* [31:16] Counter value status */
++	return sysfs_emit(buf, "%u\n", timer_reload >> 16);
++}
++
++static inline ssize_t _access_backup_store(void __iomem *regs,
++					   struct device_attribute *attr,
++					   const char *buf, size_t size)
++{
++	unsigned long count;
++
++	if (kstrtoul(buf, 10, &count))
++		return -EINVAL;
++
++	/* disable watchdog */
++	if (count == 0) {
++		writel(0, regs + OFFSET_ABR_CTRL_STATUS);
++		return size;
++	}
++
++	/*
++	 * bit[12:0] : Reload value of expire time
++	 * The time unit is 0.1 second. Default set at 22 seconds
++	 * 0: Immediately timeout
++	 */
++	count = count < ABR_RELOAD_MAX_VALUE ? count : ABR_RELOAD_MAX_VALUE;
++
++	writel(0, regs + OFFSET_ABR_CTRL_STATUS);
++	writel(count, regs + OFFSET_ABR_TIMER_RELOAD);
++
++	/* Write 0x4755 value to load the reload value into watchdog counter */
++	writel(ABR_RESTART_MAGIC, regs + OFFSET_ABR_TIMER_RESTART);
++
++	/* Enable watchdog */
++	writel(ABR_WDT_ENABLE, regs + OFFSET_ABR_CTRL_STATUS);
++	return size;
++}
++
++static inline ssize_t _current_boot_show(void __iomem *regs,
++					  struct device_attribute *attr,
++					  char *buf)
++{
++	bool current_boot = (readl(regs + OFFSET_ABR_CTRL_STATUS) & ABR_BOOT_SRC_INDICATE) ? 1 : 0 ;
++	return sysfs_emit(buf, "%u\n", current_boot);
++}
++
++static ssize_t access_primary_show(struct device *dev,
++				   struct device_attribute *attr, char *buf)
++{
++	struct aspeed_spi *aspi = dev_get_drvdata(dev);
++
++	return _access_primary_show(aspi->regs, attr, buf);
++}
++
++static ssize_t access_primary_store(struct device *dev,
++				    struct device_attribute *attr,
++				    const char *buf, size_t size)
++{
++	struct aspeed_spi *aspi = dev_get_drvdata(dev);
++
++	return _access_primary_store(aspi->regs, attr, buf, size);
++}
++
++static ssize_t access_backup_show(struct device *dev,
++				  struct device_attribute *attr, char *buf)
++{
++	struct aspeed_spi *aspi = dev_get_drvdata(dev);
++
++	return _access_backup_show(aspi->regs, attr, buf);
++}
++
++static ssize_t access_backup_store(struct device *dev,
++				   struct device_attribute *attr,
++				   const char *buf, size_t size)
++{
++	struct aspeed_spi *aspi = dev_get_drvdata(dev);
++
++	return _access_backup_store(aspi->regs, attr, buf, size);
++}
++
++static ssize_t current_boot_show(struct device *dev,
++				  struct device_attribute *attr, char *buf)
++{
++	struct aspeed_spi *aspi = dev_get_drvdata(dev);
++
++	return _current_boot_show(aspi->regs, attr, buf);
++}
++
++static DEVICE_ATTR_RW(access_primary);
++static DEVICE_ATTR_RW(access_backup);
++static DEVICE_ATTR_RO(current_boot);
++
++static struct attribute *bswitch_primary_attrs[] = {
++	&dev_attr_access_primary.attr, NULL
++};
++
++static struct attribute *bswitch_backup_attrs[] = {
++	&dev_attr_access_backup.attr, NULL
++};
++
++static struct attribute *bcurrent_boot_attrs[] = {
++	&dev_attr_current_boot.attr, NULL
++};
++
++ATTRIBUTE_GROUPS(bswitch_primary);
++ATTRIBUTE_GROUPS(bswitch_backup);
++ATTRIBUTE_GROUPS(bcurrent_boot);
++
+ static u32 aspeed_spi_get_io_mode(const struct spi_mem_op *op)
+ {
+ 	switch (op->data.buswidth) {
+@@ -907,6 +1061,20 @@ static int aspeed_spi_probe(struct platform_device *pdev)
+ 	ctlr->cleanup = aspeed_spi_cleanup;
+ 	ctlr->num_chipselect = data->max_cs;
+ 	ctlr->dev.of_node = dev->of_node;
++	if (aspi->data == &ast2600_fmc_data) {
++		if (devm_device_add_groups(dev, bcurrent_boot_groups))
++				dev_warn(dev, "Could not add current_boot\n");
++		/* if boot from alt source, show access_primary, otherwise show access_backup */
++		if (readl(aspi->regs + OFFSET_ABR_CTRL_STATUS) &
++		    ABR_BOOT_SRC_INDICATE) {
++
++			if (devm_device_add_groups(dev, bswitch_primary_groups))
++				dev_warn(dev, "Could not add access_primary\n");
++		} else {
++			if (devm_device_add_groups(dev, bswitch_backup_groups))
++				dev_warn(dev, "Could not add access_backup\n");
++		}
++	}
+ 
+ 	ret = devm_spi_register_controller(dev, ctlr);
+ 	if (ret) {
+-- 
+2.34.1
+

@@ -16,22 +16,40 @@ EXTRA_OEMESON += "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image','-Da
 
 SRC_URI_NON_PFR_DUAL:append = "file://intel-flash-bmc \
                                 file://obmc-flash-bmc-static-mount-alt.service.in \
-                                file://0003-adding-support-for-non-pfr-dual-image-inventory-popu.patch "
+                                file://intel-flash-bmc-static-mount-alt.service.in \
+                                file://0003-adding-support-for-non-pfr-dual-image-inventory-popu.patch \
+                                file://obmc-flash-bmc \
+                                file://detect-slot-aspeed \
+                                file://reset-cs0-aspeed  \
+                                "
 
 SRC_URI:append = " ${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', SRC_URI_NON_PFR_DUAL , '', d)}"
 FILES:${PN}-updater:append:intel-ast2600 = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/intel-flash-bmc ', '', d)}" 
 FILES:${PN}-updater:append:intel-ast2600 = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${systemd_unitdir}/system/obmc-flash-bmc-static-mount-alt.service ', '', d)}" 
+FILES:${PN}-updater:append = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/detect-slot-aspeed ', '', d)}" 
+FILES:${PN}-updater:append = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/reset-cs0-aspeed ', '', d)}" 
 
 do_install:append () {
       if ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', 'false', 'true', d)}; then
          install -m 0644 ${WORKDIR}/fwupdinband@.service ${D}${systemd_unitdir}/system/fwupd@.service
+         if ${@bb.utils.contains('PACKAGECONFIG','static-dual-image','true','false',d)}; then
+            install -m 0755 ${WORKDIR}/detect-slot-aspeed ${D}${bindir}/detect-slot-aspeed
+         fi  
       fi
 }
 
 do_install:append:intel-ast2600 () {
    if ${@bb.utils.contains('PACKAGECONFIG','static-dual-image','true','false',d)}; then
-        install -m 0644 ${WORKDIR}/obmc-flash-bmc-static-mount-alt.service.in  ${D}${systemd_unitdir}/system/obmc-flash-bmc-static-mount-alt.service
+        install -m 0644 ${WORKDIR}/intel-flash-bmc-static-mount-alt.service.in  ${D}${systemd_unitdir}/system/obmc-flash-bmc-static-mount-alt.service
         install -m 0755 ${WORKDIR}/intel-flash-bmc ${D}${bindir}/intel-flash-bmc
+   fi
+}
+
+do_install:append:evb-ast2600() {
+   if ${@bb.utils.contains('PACKAGECONFIG','static-dual-image','true','false',d)}; then
+        install -m 0644 ${WORKDIR}/obmc-flash-bmc-static-mount-alt.service.in  ${D}${systemd_unitdir}/system/obmc-flash-bmc-static-mount-alt.service
+        install -m 0755 ${WORKDIR}/obmc-flash-bmc ${D}${bindir}/obmc-flash-bmc
+        install -m 0755 ${WORKDIR}/detect-slot-aspeed ${D}${bindir}/reset-cs0-aspeed
    fi
 }
 

@@ -242,48 +242,130 @@ bmc_full_flash() {
 
     update_percentage $UPDATE_PERCENT_PRESTAGE_VERIFY_START
     # Use update script to update Firmware for non-intel platforms
-    if test -x $update
-    then
-        check_preserv_config $NON_INTEL_PLATFORMS_MODE
-        cp $LOCAL_PATH /run/initramfs/
-        redfish_log_fw_evt success
-        update_percentage $UPDATE_PERCENT_SUCCESS
-        set_activation_status Active
-        reboot
-        return 0
-    else
-
-        update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_START
-        local requestedactivationstate=$(get_requestedactivation_status bmc_bkup)
-        if [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
-            log "BMC Full Flash - Starting the SPI write on bkup CS1 spi . It will take ~8 minutes...."
-            local mtdPart=$( cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"alt-bmc\"" {print $1}')
-            echo "mtdPart=$mtdPart"
-            if [ -z "$mtdPart" ]; then
-                log "BMC Full Flash - alt-bmc mtd patition not found"
-                redfish_log_abort " BMC Full Flash - Image update failed"
-                set_activation_status Failed
-                set_requestedactivation_status None
-                update_percentage $UPDATE_PERCENT_FAIL
-                return 1
+    if test -x $update; then
+        if test -x $SLOT_FILE; then
+            SLOT_FILE="/run/media/slot"
+            BOOT_SOURCE=$(cat "$SLOT_FILE")
+            check_preserv_config
+            local requestedactivationstate=$(get_requestedactivation_status bmc_bkup)
+            if [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
+                if [ "$BOOT_SOURCE" -eq 0 ]; then
+                    cp $LOCAL_PATH /run/initramfs/image-alt-bmc
+                else
+                    cp $LOCAL_PATH /run/initramfs/
+                fi
+            else
+                if [ "$BOOT_SOURCE" -eq 0 ]; then
+                    cp $LOCAL_PATH /run/initramfs/
+                else
+                    cp $LOCAL_PATH /run/initramfs/image-alt-bmc
+                    /usr/bin/reset-cs0-aspeed
+                fi
             fi
-            local rc=$(mtd-util -d /dev/$mtdPart c $LOCAL_PATH 0)
-            # Log Event: Update percentage and log event
-            if [[ "$rc" -ne 0 ]]; then
-                log "BMC Full Flash - Image update failed"
-                redfish_log_abort " BMC Full Flash - Image update failed"
-                set_activation_status Failed
-                set_requestedactivation_status None
-                update_percentage $UPDATE_PERCENT_FAIL
-                return 1
-            fi
-            update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
-            log "BMC Full Flash - Image update successful on bkup spi"
             redfish_log_fw_evt success
             update_percentage $UPDATE_PERCENT_SUCCESS
-            set_activation_status Active 
-            sleep 5
-            reboot -f
+            set_activation_status Active
+            reboot
+            return 0
+        else
+            check_preserv_config
+            cp $LOCAL_PATH /run/initramfs/
+            redfish_log_fw_evt success
+            update_percentage $UPDATE_PERCENT_SUCCESS
+            set_activation_status Active
+            reboot
+            return 0
+        fi  # This was missing
+    else
+        if test -x $SLOT_FILE; then
+            SLOT_FILE="/run/media/slot"
+            BOOT_SOURCE=$(cat "$SLOT_FILE")
+            log "BMC Full Flash - Booted from CS$BOOT_SOURCE"
+            update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_START
+            local requestedactivationstate=$(get_requestedactivation_status bmc_bkup)
+            if [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
+                if [ "$BOOT_SOURCE" -eq 0 ]; then
+                    log "BMC Full Flash - Starting the SPI write on bkup CS1 spi. It will take ~8 minutes...."
+                    local mtdPart=$(cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"alt-bmc\"" {print $1}')
+                else
+                    log "BMC Full Flash - Starting the SPI write on bkup CS1 spi. It will take ~8 minutes...."
+                    local mtdPart=$(cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"bmc\"" {print $1}')
+                    # stop nv sync
+                    systemctl stop nv-sync.service
+                    # unmount rwfs
+                    umount /tmp/.rwfs
+                fi
+                echo "mtdPart=$mtdPart"
+                if [ -z "$mtdPart" ]; then
+                    log "BMC Full Flash - mtd $mtdPart partition not found"
+                    redfish_log_abort " BMC Full Flash - Image update failed"
+                    set_activation_status Failed
+                    set_requestedactivation_status None
+                    update_percentage $UPDATE_PERCENT_FAIL
+                    return 1
+                fi
+                local rc=$(mtd-util -d /dev/$mtdPart c $LOCAL_PATH 0)
+                # Log Event: Update percentage and log event
+                if [[ "$rc" -ne 0 ]]; then
+                    log "BMC Full Flash - Image update failed"
+                    redfish_log_abort " BMC Full Flash - Image update failed"
+                    set_activation_status Failed
+                    set_requestedactivation_status None
+                    update_percentage $UPDATE_PERCENT_FAIL
+                    return 1
+                fi
+                update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
+                if [ "$BOOT_SOURCE" -eq 1 ]; then
+                    check_preserv_config
+                fi
+                log "BMC Full Flash - Image update successful on bkup spi"
+                redfish_log_fw_evt success
+                update_percentage $UPDATE_PERCENT_SUCCESS
+                set_activation_status Active
+                sleep 5
+                reboot -f
+            else
+                if [ "$BOOT_SOURCE" -eq 0 ]; then
+                    log "BMC Full Flash - Starting the SPI write on active CS0 spi. It will take ~8 minutes...."
+                    local mtdPart=$(cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"bmc\"" {print $1}')
+                    # stop nv sync
+                    systemctl stop nv-sync.service
+                    # unmount rwfs
+                    umount /tmp/.rwfs
+                else
+                    log "BMC Full Flash - Starting the SPI write on active CS0 spi. It will take ~8 minutes...."
+                    local mtdPart=$(cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"alt-bmc\"" {print $1}')
+                fi
+
+                local rc=$(mtd-util -d /dev/$mtdPart c $LOCAL_PATH 0)
+
+                # Log Event: Update percentage and log event
+                update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
+                if [[ "$rc" -ne 0 ]]; then
+                    log "BMC Full Flash - Image update failed"
+                    redfish_log_abort " BMC Full Flash - Image update failed"
+                    set_activation_status Failed
+                    update_percentage $UPDATE_PERCENT_FAIL
+                    return 1
+                fi
+                log "BMC Full Flash - Image update successful"
+                if [ "$BOOT_SOURCE" -eq 0 ]; then
+                    check_preserv_config
+                else
+                    ACCESS_CS0="/sys/class/spi_master/spi0/device/access_primary"
+                    if [ -f "${ACCESS_CS0}" ]; then
+                        echo "Reset aspeed chip select"
+                        echo 1 > "${ACCESS_CS0}"
+                    fi
+                fi
+                redfish_log_fw_evt success
+                update_percentage $UPDATE_PERCENT_SUCCESS
+                set_activation_status Active
+                # reboot
+                sleep 5
+                reboot -f
+                return 0
+            fi
         fi
         #stop nv sync
         systemctl stop nv-sync.service
