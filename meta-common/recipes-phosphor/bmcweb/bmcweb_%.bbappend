@@ -111,6 +111,7 @@ SRC_URI:append = "   \
 	    file://0144-Adding-Power-save-mode-Support-in-KVM-and-VMedia.patch \
             file://0121-Add-message-registry-entry-for-ACPI-system-and-device.patch \
             file://0176-Add-Restart-always-to-unit-service-file.patch \
+            file://0176-powersubsystem-powersupply-properties.patch \
         "
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
