@@ -1,0 +1,131 @@
+From 2c88b698fc460d780290d02ce2c0bdee2944e7ad Mon Sep 17 00:00:00 2001
+From: prasannas <prasannas@ami.com>
+Date: Wed, 13 Dec 2023 23:31:37 +0530
+Subject: [PATCH 150/150]  Redfish Support for Trigger BSOD
+
+---
+ redfish-core/include/redfish.hpp |  1 +
+ redfish-core/lib/bsodjpeg.hpp    | 83 +++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 82 insertions(+), 2 deletions(-)
+
+diff --git a/redfish-core/include/redfish.hpp b/redfish-core/include/redfish.hpp
+index 85af1bb..ddd927c 100644
+--- a/redfish-core/include/redfish.hpp
++++ b/redfish-core/include/redfish.hpp
+@@ -126,6 +126,7 @@ class RedfishService
+         requestRoutesManagerDiagnosticData(app);
+         requestRoutesBsodjpeg(app);
+         requestRoutesDeleteBsodjpeg(app);
++        requestRoutesTriggerBsodjpeg(app);
+         requestRoutesChassisCollection(app);
+         requestRoutesChassis(app);
+         requestRoutesChassisResetAction(app);
+diff --git a/redfish-core/lib/bsodjpeg.hpp b/redfish-core/lib/bsodjpeg.hpp
+index 1a9c362..a9449c3 100644
+--- a/redfish-core/lib/bsodjpeg.hpp
++++ b/redfish-core/lib/bsodjpeg.hpp
+@@ -7,6 +7,7 @@
+ namespace redfish
+ {
+ std::string inputImagePath = "/etc/bsod/screenShotBSOD.jpeg";
++uint16_t State = 0;
+ 
+ inline void getBsodjpeg(std::shared_ptr<bmcweb::AsyncResp> asyncResp)
+ {
+@@ -72,8 +73,24 @@ inline void requestRoutesDeleteBsodjpeg(App& app)
+ 
+         if (fs::exists(inputImagePath))
+         {
+-            fs::remove(inputImagePath);
+-            messages::success(asyncResp->res);
++            if (fs::remove(inputImagePath))
++            {
++                crow::connections::systemBus->async_method_call(
++                    [asyncResp](const boost::system::error_code ec) {
++                    if (ec)
++                    {
++                        BMCWEB_LOG_ERROR("DBUS response error {}", ec);
++                        messages::internalError(asyncResp->res);
++                        return;
++                    }
++                    messages::success(asyncResp->res);
++                },
++                    "xyz.openbmc_project.OSSStatusSensor",
++                    "/xyz/openbmc_project/sensors/os/OS_Stop_Status",
++                    "org.freedesktop.DBus.Properties", "Set",
++                    "xyz.openbmc_project.Sensor.State", "State",
++                    dbus::utility::DbusVariantType(State));
++            }
+         }
+         else
+         {
+@@ -83,4 +100,66 @@ inline void requestRoutesDeleteBsodjpeg(App& app)
+     });
+ }
+ 
++inline void requestRoutesTriggerBsodjpeg(App& app)
++{
++    BMCWEB_ROUTE(app, "/redfish/v1/Managers/bmc/Oem/OpenBmc/Jpeg")
++        .privileges({{"Login"}, {"ConfigureComponents"}})
++        .methods(boost::beast::http::verb::post)(
++            [&app](const crow::Request& req,
++                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp) {
++        if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++        {
++            return;
++        }
++        if (fs::exists(inputImagePath))
++        {
++            crow::connections::systemBus->async_method_call(
++                [asyncResp](const boost::system::error_code ec) {
++                if (ec)
++                {
++                    BMCWEB_LOG_ERROR("DBUS response error {}", ec);
++                    messages::internalError(asyncResp->res);
++                    return;
++                }
++            },
++                "xyz.openbmc_project.OSSStatusSensor",
++                "/xyz/openbmc_project/sensors/os/OS_Stop_Status",
++                "org.freedesktop.DBus.Properties", "Set",
++                "xyz.openbmc_project.Sensor.State", "State",
++                dbus::utility::DbusVariantType(State));
++        }
++        uint8_t netfn = 0x0a;
++        uint8_t lun = 0x00;
++        uint8_t cmdno = 0x44;
++        std::vector<uint8_t> commandData = {0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
++                                            0x00, 0x41, 0x0,  0x04, 0x20, 0x0,
++                                            0x6f, 0x01, 0xff, 0xf};
++
++        auto bus = sdbusplus::bus::new_default_system();
++
++        const char* serviceName = "xyz.openbmc_project.Ipmi.Host";
++        const char* objectPath = "/xyz/openbmc_project/Ipmi";
++        const char* interfaceName = "xyz.openbmc_project.Ipmi.Server";
++        const char* methodName = "execute";
++
++        std::vector<std::pair<std::string, std::variant<std::string, uint64_t>>>
++            options;
++
++        auto methodCall = bus.new_method_call(serviceName, objectPath,
++                                              interfaceName, methodName);
++        methodCall.append(netfn, lun, cmdno, commandData, options);
++        auto response = bus.call(methodCall);
++        if (response.is_method_error())
++        {
++            BMCWEB_LOG_ERROR("DBUS Method Call Failed");
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        else
++        {
++            messages::success(asyncResp->res);
++        }
++    });
++}
++
+ } // namespace redfish
+-- 
+2.9.5
+
