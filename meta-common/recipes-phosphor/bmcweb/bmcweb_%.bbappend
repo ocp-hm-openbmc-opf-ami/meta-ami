@@ -104,6 +104,7 @@ SRC_URI:append = "   \
             file://0135-Enabled-Dbus-Sel-Logging-Support.patch \
 	    file://0157-Added-Redfish-Support-for-BRCM-PCIE-Switch.patch \
             file://0150-Redfish-Support-for-Trigger-BSOD.patch \
+            file://0161-While-POST-Invalid-KeyCurveId-in-CertificateService-get-proper-Error-Msg.patch \
         "
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
