@@ -1,0 +1,208 @@
+From 0618a1a5c6ad6216bce9fb8fa8ac6ffd950d291d Mon Sep 17 00:00:00 2001
+From: Dhineshkumar M <mdhineshkumar@ami.com>
+Date: Tue, 12 Dec 2023 19:57:44 +0530
+Subject: [PATCH] JPEG encoding support
+
+New feature: Added new encoding JPEG(21) support in libvncserver for RealVNC & JViewer clients.
+
+Signed-off-by: Dhineshkumar M <mdhineshkumar@ami.com>
+---
+ include/rfb/rfb.h            |  1 +
+ include/rfb/rfbproto.h       |  1 +
+ src/libvncserver/rfbserver.c | 21 ++++++++++++++++++---
+ src/libvncserver/stats.c     |  1 +
+ src/libvncserver/tight.c     | 30 +++++++++++++++++-------------
+ 5 files changed, 38 insertions(+), 16 deletions(-)
+
+diff --git a/include/rfb/rfb.h b/include/rfb/rfb.h
+index ecbfe43d..ede7b126 100644
+--- a/include/rfb/rfb.h
++++ b/include/rfb/rfb.h
+@@ -911,6 +911,7 @@ extern int rfbNumCodedRectsTight(rfbClientPtr cl, int x,int y,int w,int h);
+ extern rfbBool rfbSendRectEncodingTight(rfbClientPtr cl, int x,int y,int w,int h);
+ extern rfbBool rfbSendTightHeader(rfbClientPtr cl, int x, int y, int w, int h);
+ extern rfbBool rfbSendCompressedDataTight(rfbClientPtr cl, char *buf, int compressedLen);
++extern rfbBool rfbTightEncodingSupported(void);
+ 
+ #if defined(LIBVNCSERVER_HAVE_LIBPNG)
+ extern rfbBool rfbSendRectEncodingTightPng(rfbClientPtr cl, int x,int y,int w,int h);
+diff --git a/include/rfb/rfbproto.h b/include/rfb/rfbproto.h
+index ebcd303c..79e1fd48 100644
+--- a/include/rfb/rfbproto.h
++++ b/include/rfb/rfbproto.h
+@@ -459,6 +459,7 @@ typedef struct {
+ #define rfbEncodingTRLE 15
+ #define rfbEncodingZRLE 16
+ #define rfbEncodingZYWRLE 17
++#define rfbEncodingJPEG 21 /* RealVNC JPEG Support */
+ 
+ #define rfbEncodingH264               0x48323634
+ 
+diff --git a/src/libvncserver/rfbserver.c b/src/libvncserver/rfbserver.c
+index a80fd1ae..5d608c5d 100644
+--- a/src/libvncserver/rfbserver.c
++++ b/src/libvncserver/rfbserver.c
+@@ -150,6 +150,9 @@ struct rfbClientIterator {
+   rfbBool closedToo;
+ };
+ 
++/* RealVNC JPEG Support */
++static tightEncodingSupport = FALSE;
++
+ void
+ rfbClientListInit(rfbScreenInfoPtr rfbScreen)
+ {
+@@ -1048,6 +1051,7 @@ rfbSendSupportedEncodings(rfbClientPtr cl)
+ #endif
+ #ifdef LIBVNCSERVER_HAVE_LIBJPEG
+ 	rfbEncodingTight,
++       rfbEncodingJPEG, /* RealVNC JPEG Support */
+ #endif
+ #ifdef LIBVNCSERVER_HAVE_LIBPNG
+ 	rfbEncodingTightPng,
+@@ -2335,7 +2339,7 @@ rfbProcessClientNormalMessage(rfbClientPtr cl)
+ #endif
+ #endif
+ 
+-
++        tightEncodingSupport = FALSE; /* RealVNC JPEG Support */
+         for (i = 0; i < msg.se.nEncodings; i++) {
+             if ((n = rfbReadExact(cl, (char *)&enc, 4)) <= 0) {
+                 if (n != 0)
+@@ -2344,6 +2348,9 @@ rfbProcessClientNormalMessage(rfbClientPtr cl)
+                 return;
+             }
+             enc = Swap32IfLE(enc);
++            /* RealVNC JPEG Support */
++            if(rfbEncodingTight == enc)
++                tightEncodingSupport = TRUE;
+ 
+             switch (enc) {
+ 
+@@ -2361,6 +2368,7 @@ rfbProcessClientNormalMessage(rfbClientPtr cl)
+             case rfbEncodingZYWRLE:
+ #ifdef LIBVNCSERVER_HAVE_LIBJPEG
+ 	    case rfbEncodingTight:
++        case rfbEncodingJPEG: /* RealVNC JPEG Support */
+ #endif
+ #endif
+ #ifdef LIBVNCSERVER_HAVE_LIBPNG
+@@ -3388,6 +3396,9 @@ rfbSendFramebufferUpdate(rfbClientPtr cl,
+ 	}
+ 	sraRgnReleaseIterator(i); i=NULL;
+ #ifdef LIBVNCSERVER_HAVE_LIBJPEG
++    /* RealVNC JPEG Support */
++    } else if (cl->preferredEncoding == rfbEncodingJPEG) {
++    nUpdateRegionRects = 0;
+     } else if (cl->preferredEncoding == rfbEncodingTight) {
+ 	nUpdateRegionRects = 0;
+ 
+@@ -3449,6 +3460,7 @@ rfbSendFramebufferUpdate(rfbClientPtr cl,
+ #ifdef LIBVNCSERVER_HAVE_LIBJPEG
+ 	   /* Tight encoding counts the rectangles differently */
+ 	   && cl->preferredEncoding != rfbEncodingTight
++          && cl->preferredEncoding != rfbEncodingJPEG /* RealVNC JPEG Support */
+ #endif
+ #endif
+ #ifdef LIBVNCSERVER_HAVE_LIBPNG
+@@ -3575,7 +3587,6 @@ rfbSendFramebufferUpdate(rfbClientPtr cl,
+ updateFailed:
+ 	result = FALSE;
+     }
+-
+     if (!cl->enableCursorShapeUpdates) {
+       rfbHideCursor(cl);
+     }
+@@ -3907,7 +3918,6 @@ rfbSendUpdateBuf(rfbClientPtr cl)
+         rfbCloseClient(cl);
+         return FALSE;
+     }
+-
+     cl->ublen = 0;
+     return TRUE;
+ }
+@@ -4170,4 +4180,9 @@ rfbProcessUDPInput(rfbScreenInfoPtr rfbScreen)
+     }
+ }
+ 
++/* RealVNC JPEG Support */
++rfbBool rfbTightEncodingSupported(void)
++{
++    return tightEncodingSupport;
++}
+ 
+diff --git a/src/libvncserver/stats.c b/src/libvncserver/stats.c
+index 8af04e3f..45de4faa 100644
+--- a/src/libvncserver/stats.c
++++ b/src/libvncserver/stats.c
+@@ -101,6 +101,7 @@ char *encodingName(uint32_t type, char *buf, int len) {
+     case rfbEncodingHextile:            snprintf(buf, len, "hextile");     break;
+     case rfbEncodingZlib:               snprintf(buf, len, "zlib");        break;
+     case rfbEncodingTight:              snprintf(buf, len, "tight");       break;
++    case rfbEncodingJPEG:               snprintf(buf, len, "JPEG");        break; /* RealVNC JPEG Support */
+     case rfbEncodingTightPng:           snprintf(buf, len, "tightPng");    break;
+     case rfbEncodingZlibHex:            snprintf(buf, len, "zlibhex");     break;
+     case rfbEncodingUltra:              snprintf(buf, len, "ultra");       break;
+diff --git a/src/libvncserver/tight.c b/src/libvncserver/tight.c
+index 2dcf1ab8..85aebd60 100644
+--- a/src/libvncserver/tight.c
++++ b/src/libvncserver/tight.c
+@@ -737,8 +737,9 @@ rfbSendTightHeader(rfbClientPtr cl,
+                 int h)
+ {
+     rfbFramebufferUpdateRectHeader rect;
+-
+-    if (cl->ublen + sz_rfbFramebufferUpdateRectHeader > UPDATE_BUF_SIZE) {
++    /* RealVNC JPEG Support */
++    int len = (rfbTightEncodingSupported() ? sz_rfbFramebufferUpdateRectHeader : 12);
++    if (cl->ublen + len > UPDATE_BUF_SIZE) {
+         if (!rfbSendUpdateBuf(cl))
+             return FALSE;
+     }
+@@ -750,12 +751,12 @@ rfbSendTightHeader(rfbClientPtr cl,
+     rect.encoding = Swap32IfLE(cl->tightEncoding);
+ 
+     memcpy(&cl->updateBuf[cl->ublen], (char *)&rect,
+-           sz_rfbFramebufferUpdateRectHeader);
+-    cl->ublen += sz_rfbFramebufferUpdateRectHeader;
++           len);
++    cl->ublen += len;
+ 
+     rfbStatRecordEncodingSent(cl, cl->tightEncoding,
+-                              sz_rfbFramebufferUpdateRectHeader,
+-                              sz_rfbFramebufferUpdateRectHeader
++                              len,
++                              len
+                                   + w * (cl->format.bitsPerPixel / 8) * h);
+ 
+     return TRUE;
+@@ -1057,16 +1058,19 @@ rfbBool rfbSendCompressedDataTight(rfbClientPtr cl, char *buf,
+ {
+     int i, portionLen;
+ 
+-    cl->updateBuf[cl->ublen++] = compressedLen & 0x7F;
+-    rfbStatRecordEncodingSentAdd(cl, cl->tightEncoding, 1);
+-    if (compressedLen > 0x7F) {
+-        cl->updateBuf[cl->ublen-1] |= 0x80;
+-        cl->updateBuf[cl->ublen++] = compressedLen >> 7 & 0x7F;
++    if (rfbTightEncodingSupported()) /* RealVNC JPEG Support */
++    {
++        cl->updateBuf[cl->ublen++] = compressedLen & 0x7F;
+         rfbStatRecordEncodingSentAdd(cl, cl->tightEncoding, 1);
+-        if (compressedLen > 0x3FFF) {
++        if (compressedLen > 0x7F) {
+             cl->updateBuf[cl->ublen-1] |= 0x80;
+-            cl->updateBuf[cl->ublen++] = compressedLen >> 14 & 0xFF;
++            cl->updateBuf[cl->ublen++] = compressedLen >> 7 & 0x7F;
+             rfbStatRecordEncodingSentAdd(cl, cl->tightEncoding, 1);
++            if (compressedLen > 0x3FFF) {
++                cl->updateBuf[cl->ublen-1] |= 0x80;
++                cl->updateBuf[cl->ublen++] = compressedLen >> 14 & 0xFF;
++                rfbStatRecordEncodingSentAdd(cl, cl->tightEncoding, 1);
++            }
+         }
+     }
+ 
+-- 
+2.34.1
+
