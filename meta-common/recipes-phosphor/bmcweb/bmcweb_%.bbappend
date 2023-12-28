@@ -107,6 +107,7 @@ SRC_URI:append = "   \
             file://0161-While-POST-Invalid-KeyCurveId-in-CertificateService-get-proper-Error-Msg.patch \
             file://0174-Fixed-Bmcweb-Crash-when-VirtualMedia-disconnected.patch \
             file://0168-Enabled-DestinationType-when-Event-is-triggered-for-created-SNMP-Subscription.patch \
+            file://0175-solution-for-kvm-websocket-session-out.patch \
         "
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"

@@ -1,0 +1,145 @@
+From 3e13ba6b64cf0054e31df9b96e7504bbe8da29e8 Mon Sep 17 00:00:00 2001
+From: Nibin Chacko <nibinc@ami.com>
+Date: Wed, 27 Dec 2023 07:02:06 -0500
+Subject: [PATCH 175/175] solution for kvm websocket session out
+
+---
+ include/kvm_websocket.hpp | 80 ++++++++++++++++++++++++++++++++++++++-
+ include/sessions.hpp      |  4 ++
+ 2 files changed, 83 insertions(+), 1 deletion(-)
+
+diff --git a/include/kvm_websocket.hpp b/include/kvm_websocket.hpp
+index d23ff882..2867b01a 100644
+--- a/include/kvm_websocket.hpp
++++ b/include/kvm_websocket.hpp
+@@ -20,7 +20,9 @@ class KvmSession
+ {
+   public:
+     explicit KvmSession(crow::websocket::Connection& connIn) :
+-        conn(connIn), hostSocket(conn.getIoContext())
++        conn(connIn), hostSocket(conn.getIoContext()),
++        timeoutInSeconds(
++            persistent_data::SessionStore::getInstance().getTimeoutInSeconds())
+     {
+         boost::asio::ip::tcp::endpoint endpoint(
+             boost::asio::ip::make_address("127.0.0.1"), 5900);
+@@ -40,6 +42,8 @@ class KvmSession
+ 
+             doRead();
+         });
++        startTimeoutTimer(); // Invoke the timer function when the KVM WebSocket
++                             // is opened.
+     }
+ 
+     void onMessage(const std::string& data)
+@@ -63,6 +67,12 @@ class KvmSession
+         BMCWEB_LOG_DEBUG("conn:{}, inputbuffer size {}", logPtr(&conn),
+                          inputBuffer.size());
+         doWrite();
++        lastActivityTime = persistent_data::SessionStore::getInstance().getTimeSinceLastTimeoutInSeconds();
++    }
++
++    ~KvmSession()
++    {
++        stopTimeoutTimer();
+     }
+ 
+   protected:
+@@ -145,11 +155,79 @@ class KvmSession
+         });
+     }
+ 
++    void startTimeoutTimer()
++    {
++        if (!timerRunning) // Check if the timer is not already running
++        {
++            timerRunning = true;
++            lastActivityTime = persistent_data::SessionStore::getInstance().getTimeSinceLastTimeoutInSeconds(); // Get the current time and store it in lastActivityTime
++
++            // Start a new thread (timeoutTimer) to handle the timeout logic
++            timeoutTimer = std::thread([this]() {
++                while (timerRunning)
++                {
++                    std::this_thread::sleep_for(std::chrono::seconds(1));
++                    // Get the timeout value from the persistent data store
++                    int64_t timeoutValue =
++                        persistent_data::SessionStore::getInstance()
++                            .getTimeoutInSeconds();
++                    timeoutInSeconds = std::chrono::seconds(
++                        timeoutValue);      // Convert the timeout value to
++                                            // std::chrono::seconds and update
++                                            // timeoutInSeconds
++                    applySessionTimeouts(); // Call the function to apply
++                                            // session timeouts
++                }
++            });
++        }
++    }
++
++    void stopTimeoutTimer()
++    {
++        if (timerRunning)         // Check if the timer is currently running
++        {
++            timerRunning = false; // Set the flag to indicate that the timer is
++                                  // no longer running
++            if (timeoutTimer.joinable()) // Check if the thread associated with
++                                         // the timeoutTimer is joinable
++            {
++                timeoutTimer.join(); // If it's joinable, join (wait for) the
++                                     // thread to finish its execution
++            }
++        }
++    }
++
++    void applySessionTimeouts()
++    {
++        auto timeNow = std::chrono::steady_clock::now();
++        int64_t timeoutValue =
++            persistent_data::SessionStore::getInstance().getTimeoutInSeconds();
++        timeoutInSeconds = std::chrono::seconds(timeoutValue);
++        if (timeNow - lastActivityTime >=
++            timeoutInSeconds) // This condition checks if the time elapsed since
++                              // the last activity in the KVM session is greater
++                              // than or equal to the configured timeout. If
++                              // true, it means that the session has been
++                              // inactive for the specified timeout duration.
++        {
++            closeWebSocket();
++        }
++    }
++
++    void closeWebSocket()
++    {
++        conn.close("Session timeout");
++    }
++
+     crow::websocket::Connection& conn;
+     boost::asio::ip::tcp::socket hostSocket;
+     boost::beast::flat_static_buffer<1024UL * 50UL> outputBuffer;
+     boost::beast::flat_static_buffer<1024UL> inputBuffer;
+     bool doingWrite{false};
++    std::atomic<bool> timerRunning{false};
++    std::thread timeoutTimer;
++    std::chrono::time_point<std::chrono::steady_clock> lastActivityTime;
++    std::chrono::seconds timeoutInSeconds;
+ };
+ 
+ using SessionMap = boost::container::flat_map<crow::websocket::Connection*,
+diff --git a/include/sessions.hpp b/include/sessions.hpp
+index ed338c24..c5f75478 100644
+--- a/include/sessions.hpp
++++ b/include/sessions.hpp
+@@ -370,6 +370,10 @@ class SessionStore
+     {
+         return std::chrono::seconds(timeoutInSeconds).count();
+     }
++    std::chrono::time_point<std::chrono::steady_clock> getTimeSinceLastTimeoutInSeconds() const
++    {
++        return lastTimeoutUpdate;
++    }
+ 
+     void updateSessionTimeout(std::chrono::seconds newTimeoutInSeconds)
+     {
+-- 
+2.34.1
+
