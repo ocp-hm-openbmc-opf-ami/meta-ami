@@ -29,6 +29,7 @@ SRC_URI += "\
        file://0034-SDR-Info-Free-space-support.patch \
        file://0035-fix-for-get-sdr-count.patch \
        file://0036-Add-Support-for-Battery-Discrete-Sensor.patch \
+       file://0038-Create-ipmi-OEM-command-for-enable-and-disable-KCS-state.patch \
     "
 
 SRC_URI_CORE:append = "file://0032-Add-Support-for-OS-Critical-Discrete-Sensor.patch"
