@@ -16,15 +16,12 @@ DEPENDS += "phosphor-dbus-interfaces"
 DEPENDS += "net-snmp"
 
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/snmp-agent.git;branch=alpha;protocol=https"
+SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/snmp-agent.git;branch=main;protocol=https"
 SRC_URI += "file://xyz.openbmc_project.Snmp.SnmpAgent.service"
 
-#SRCREV = "274017224a93aeb9de272c5858b08c7f5e318c21"
-# Use AUTOREV to get the latest revision from the repository
-SRCREV = "${AUTOREV}"
+SRCREV = "f97d80a96ae1dab9ff411c28c6a5a448697f4bd7"
 
 S = "${WORKDIR}/git"
-
 
 SYSTEMD_SERVICE:${PN} += "xyz.openbmc_project.Snmp.SnmpAgent.service"
 
