@@ -1,0 +1,130 @@
+--- a/ipmi-allowlist.conf	2023-12-28 20:04:40.129398506 +0530
++++ b/ipmi-allowlist.conf	2023-12-28 20:08:13.126587317 +0530
+@@ -327,6 +327,7 @@
+ 0x32:0x63:0xff7f   //<Intel OEM Platform>:<Get Tach Information>
+ 0x32:0x7E:0xff7f   //<AMI OEM General>::<Get SEL Policy>
+ 0x32:0x7F:0xff7f   //<AMI OEM General>::<Set SEL Policy>
++0x32:0xB1:0xff7f   //<AMI OEM General>::<Cancel Task>
+ 0x32:0x3E:0xff7f   //<AMI OEM General>::<Get KCS Status>
+ 0x32:0x3F:0xff7f   //<AMI OEM General>::<Set KCS Status>
+ 0x32:0x80:0xff7f   //<Intel OEM Platform>:<Get SOL Log Number>
+--- a/include/oemcommands.hpp	2023-12-28 20:10:14.355129487 +0530
++++ b/include/oemcommands.hpp	2023-12-28 20:11:29.091426732 +0530
+@@ -251,6 +251,7 @@
+ static constexpr Cmd cmdOEMSetSELPolicy = 0x7F;
+ static constexpr Cmd cmdOEMGetKCSStatus = 0x3E;
+ static constexpr Cmd cmdOEMSetKCSStatus = 0x3F;
++static constexpr Cmd cmdOEMCancelTask = 0xB1;
+ } // namespace general
+ } // namespace ami
+ 
+--- a/src/oemcommands.cpp	2023-12-28 20:12:33.191662726 +0530
++++ b/src/oemcommands.cpp	2023-12-28 20:34:19.692827014 +0530
+@@ -163,6 +163,15 @@
+ constexpr auto activeState = "active";
+ constexpr auto activatingState = "activating";
+ 
++// Task
++static constexpr auto taskIntf = "xyz.openbmc_project.Common.Task";
++static constexpr auto systemRoot = "/xyz/openbmc_project/";
++static constexpr uint8_t INVALID_ID = 0x00;
++static constexpr auto cancelTask =
++    "xyz.openbmc_project.Common.Task.OperationStatus.Cancelled";
++static constexpr auto newTask =
++    "xyz.openbmc_project.Common.Task.OperationStatus.New";
++
+ enum class NmiSource : uint8_t
+ {
+     none = 0,
+@@ -5275,6 +5284,80 @@
+     }
+ 
+ }
++
++ipmi::RspType<> ipmiOEMCancelTask(ipmi::Context::ptr ctx, uint8_t req)
++{
++    if (req == INVALID_ID)
++    {
++        return ipmi::responseInvalidFieldRequest();
++    }
++    ipmi::ObjectTree objectTree;
++
++    boost::system::error_code ec =
++        ipmi::getAllDbusObjects(ctx, systemRoot, taskIntf, objectTree);
++
++    if (ec)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Failed to fetch Task object from dbus",
++            phosphor::logging::entry("INTERFACE=%s", taskIntf),
++            phosphor::logging::entry("ERROR=%s", ec.message().c_str()));
++        return ipmi::responseUnspecifiedError();
++    }
++
++    for (auto& softObject : objectTree)
++    {
++        const std::string& objPath = softObject.first;
++        const std::string& serviceName = softObject.second.begin()->first;
++        ipmi::PropertyMap result;
++
++        ec = ipmi::getAllDbusProperties(ctx, serviceName, objPath, taskIntf,
++                                        result);
++        if (ec)
++        {
++            phosphor::logging::log<phosphor::logging::level::ERR>(
++                "Failed to fetch Task properties",
++                phosphor::logging::entry("ERROR=%s", ec.message().c_str()));
++            return ipmi::responseUnspecifiedError();
++        }
++
++        const uint16_t* id = nullptr;
++        std::string status;
++
++        for (const auto& [propName, propVariant] : result)
++        {
++            if (propName == "TaskId")
++            {
++                id = std::get_if<uint16_t>(&propVariant);
++            }
++            else if (propName == "Status")
++            {
++                status = std::get<std::string>(propVariant);
++            }
++        }
++
++        if (*id == req && (status.compare(newTask) == 0))
++        {
++            try
++            {
++                ipmi::setDbusProperty(ctx, serviceName, objPath, taskIntf,
++                                      "Status", cancelTask);
++                return ipmi::response(ipmi::ccSuccess);
++            }
++            catch (const sdbusplus::exception_t& e)
++            {
++                phosphor::logging::log<phosphor::logging::level::ERR>(
++                    "ipmiOEMCancelTask: can't set Task Status!",
++                    phosphor::logging::entry("EXCEPTION=%s", e.what()));
++                return ipmi::responseResponseError();
++            }
++        }
++    }
++
++    // couldn't find requested ID
++    return ipmi::responseInvalidFieldRequest();
++}
++
+ static void registerOEMFunctions(void)
+ {
+     phosphor::logging::log<phosphor::logging::level::INFO>(
+@@ -5560,6 +5643,10 @@
+                     ami::general::cmdOEMSetKCSStatus, Privilege::User,
+                     ipmiOEMSetKCSStatus);
+ 
++    // <Cancel Task>
++    registerHandler(prioOemBase, ami::netFnGeneral,
++                    ami::general::cmdOEMCancelTask, Privilege::User,
++                    ipmiOEMCancelTask);
+ 
+ }
+ 
