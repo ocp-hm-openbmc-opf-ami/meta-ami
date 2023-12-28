@@ -20,7 +20,8 @@ SRC_URI += "file://0001-ARP-Control-property.patch\
             file://0016-Fix-build-error-due-to-Software.Image-yaml.patch \
             file://0017-Add-Interface-Count-in-SystemConfiguation.patch \
             file://0037-backupRestore.patch \
-	    "
+            file://0018-snmp-agent.patch \
+        "
 
 EXTRA_OEMESON += "-Ddata_com_ami=true"
 EXTRA_OEMESON += "-Ddata_org_open_power=true"
