@@ -3,9 +3,7 @@ DESCRIPTION = "Backup and Restore backend implementing Backup and Restoring Conf
 LICENSE = "CLOSED"
 # Modify these as desired
 PV = "1.0+git${SRCPV}"
-#SRCREV = "37b6dd71852e66ce8a1352732d7ed105cf579c88"
-# Use AUTOREV to get the latest revision from the repository
-SRCREV = "${AUTOREV}"
+SRCREV = "e0db7697dcd9cdf0bbd56381e2527f5364fbfcbd"
 
 inherit meson pkgconfig
 inherit obmc-phosphor-dbus-service
@@ -21,7 +19,7 @@ DEPENDS += "nlohmann-json"
 
 DBUS_PACKAGES = "${PN}"
 
-SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/backup-restore.git;protocol=https;branch=backuprestore-start"
+SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/backup-restore.git;protocol=https;branch=main"
 SRC_URI += "file://xyz.openbmc_project.Backup.BackupRestore.service"
 SRC_URI += "file://backupconf.json"
 
