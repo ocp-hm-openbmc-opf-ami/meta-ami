@@ -1,0 +1,605 @@
+From 11fb355d1efc05209496210217b3b4ae8a4e44e0 Mon Sep 17 00:00:00 2001
+From: vipinc <vipinc@ami.com>
+Date: Fri, 25 Aug 2023 11:17:56 +0530
+Subject: [PATCH] Add Power Supply Sensor Support
+
+This patch add support for Detected when a power supply module is connected
+to the platform. Once the PSU is detected a D-Bus instance will be created and
+update the current state of the power supply.
+ This patch supports following events
+-  Presence detected
+-  Power Supply AC Lost
+-  Predictive Failure
+
+-Presence detected:
+When a Power Supply is physically connected to the slot,this dosen't
+require the power cable to be connected to PSU.
+
+-Power Supply AC Lost:
+When the Power Supply is physically connected but the Input AC cable is
+not connected is considered as AC Lost state
+
+- Predictive Failure:
+When the Power Supply is physically connected but not in a working state is
+considered as Predictive Failure
+
+Based on the Discrete sensor Desgin the power supply service will update the status
+to State D-Bus property which can be used by IPMI & Redfish.
+
+Tested & Verified in Archrecity & AVC 2SPC PPO
+
+Case 1 - when both PSU is connected & power cable connected to both PSU:
+root@AMIOT-fafe25edbb4f:~# ipmitool sensor | grep -i "Status PSU"
+Status PSU1      | 0x0        | discrete   | 0x0100| na        | na        | na        | na        | na        | na
+Status PSU2      | 0x0        | discrete   | 0x0100| na        | na        | na        | na        | na        | na
+root@AMIOT-fafe25edbb4f:~# ipmitool sdr elist | grep -i "Status PSU"
+Status PSU1      | 32h | ok  | 10.1 | Presence detected
+Status PSU2      | 33h | ok  | 10.1 | Presence detected
+
+Case 2 - when both PSU is connected, but PSU2 Power cable is removed:
+root@AMIOT-fafe25edbb4f:~# ipmitool sensor | grep -i "Status PSU"
+Status PSU1      | 0x0        | discrete   | 0x0100| na        | na        | na        | na        | na        | na
+Status PSU2      | 0x0        | discrete   | 0x0d00| na        | na        | na        | na        | na        | na
+root@AMIOT-fafe25edbb4f:~# ipmitool sdr elist | grep -i "Status PSU"
+Status PSU1      | 32h | ok  | 10.1 | Presence detected
+Status PSU2      | 33h | ok  | 10.1 | Presence detected, Predictive failure, Power Supply AC lost
+root@AMIOT-fafe25edbb4f:~#
+
+Case 3 - Connect back the PSU2 power cable:
+root@AMIOT-fafe25edbb4f:~# ipmitool sensor | grep -i "Status PSU"
+Status PSU1      | 0x0        | discrete   | 0x0100| na        | na        | na        | na        | na        | na
+Status PSU2      | 0x0        | discrete   | 0x0100| na        | na        | na        | na        | na        | na
+root@AMIOT-fafe25edbb4f:~# ipmitool sdr elist | grep -i "Status PSU"
+Status PSU1      | 32h | ok  | 10.1 | Presence detected
+Status PSU2      | 33h | ok  | 10.1 | Presence detected
+
+Signed-off-by: vipinc <vipinc@ami.com>
+---
+ meson_options.txt                             |   1 +
+ service_files/meson.build                     |   1 +
+ .../xyz.openbmc_project.psustatus.service     |  13 +
+ src/PsuStatus.cpp                             | 136 ++++++++++
+ src/PsuStatus.hpp                             |  69 +++++
+ src/PsuStatusMain.cpp                         | 245 ++++++++++++++++++
+ src/meson.build                               |  16 ++
+ 7 files changed, 481 insertions(+)
+ create mode 100644 service_files/xyz.openbmc_project.psustatus.service
+ create mode 100644 src/PsuStatus.cpp
+ create mode 100644 src/PsuStatus.hpp
+ create mode 100644 src/PsuStatusMain.cpp
+
+diff --git a/meson_options.txt b/meson_options.txt
+index 13856d3..c2e3402 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -16,3 +16,4 @@ option('insecure-sensor-override', type : 'feature', value : 'disabled', descrip
+ option('procstatus', type: 'feature', value: 'enabled', description: 'Enable processor status sensor.',)
+ option('system', type: 'feature', value: 'disabled', description: 'Enable system sensor watchdog2 status.',)
+ option('acpisystem', type: 'feature', value: 'disabled', description: 'Enable acpi system status sensor.',)
++option('psustatus', type: 'feature', value: 'disabled', description: 'Enable PSU Status sensor.',)
+diff --git a/service_files/meson.build b/service_files/meson.build
+index 22a4a44..398c6b2 100644
+--- a/service_files/meson.build
++++ b/service_files/meson.build
+@@ -14,6 +14,7 @@ unit_files = [
+     ['system', 'xyz.openbmc_project.systemsensor.service'],
+     ['powerunit', 'xyz.openbmc_project.powerunitstatus.service'],
+     ['acpisystem', 'xyz.openbmc_project.acpisystemstatus.service'],
++    ['psustatus', 'xyz.openbmc_project.psustatus.service'],
+ ]
+ 
+ foreach tuple : unit_files
+diff --git a/service_files/xyz.openbmc_project.psustatus.service b/service_files/xyz.openbmc_project.psustatus.service
+new file mode 100644
+index 0000000..fa52d3e
+--- /dev/null
++++ b/service_files/xyz.openbmc_project.psustatus.service
+@@ -0,0 +1,13 @@
++[Unit]
++Description=Power Supply Sensor
++StopWhenUnneeded=false
++Requires=xyz.openbmc_project.EntityManager.service
++After=xyz.openbmc_project.EntityManager.service
++
++[Service]
++Restart=always
++RestartSec=5
++ExecStart=/usr/bin/psustatus
++
++[Install]
++WantedBy=multi-user.target
+diff --git a/src/PsuStatus.cpp b/src/PsuStatus.cpp
+new file mode 100644
+index 0000000..ed2396f
+--- /dev/null
++++ b/src/PsuStatus.cpp
+@@ -0,0 +1,136 @@
++#include <unistd.h>
++
++#include <PsuStatus.hpp>
++
++#include <exception>
++#include <fstream>
++#include <iostream>
++#include <optional>
++#include <string>
++#include <vector>
++
++PsuStatus::PsuStatus(
++    sdbusplus::asio::object_server& objectServer,
++    std::shared_ptr<sdbusplus::asio::connection>& conn,
++    boost::asio::io_context& io __attribute__((unused)),
++    const std::string& sensorName, const std::string& path,
++    boost::container::flat_map<std::string, std::vector<std::string>> pathList,
++    const std::string& sensorConfiguration) :
++    Discrete(escapeName(sensorName), sensorConfiguration, conn),
++    objServer(objectServer), inputDev(io), waitTimer(io), fsPath(path),
++    eventPathList(pathList)
++{
++    sensorInterface = objectServer.add_interface(
++        "/xyz/openbmc_project/sensors/powersupply/" + name,
++        "xyz.openbmc_project.Sensor.State");
++
++    association = objectServer.add_interface(
++        "/xyz/openbmc_project/sensors/powersupply/" + name,
++        association::interface);
++    setInitialProperties();
++    initHwmonPath(path);
++}
++void PsuStatus::initHwmonPath(const std::string path)
++{
++    fsPath = path;
++    updateState(sensorInterface,
++                (static_cast<uint16_t>(PsuEvent::psuPresenceDetected)));
++
++    for (const auto& match : eventMatch)
++    {
++        const std::vector<std::string>& eventAttrs = match.second;
++        const std::string& eventName = match.first;
++        for (const auto& eventAttr : eventAttrs)
++        {
++            std::string eventPath = fsPath;
++            eventPath += "/";
++            eventPath += eventAttr;
++            std::ifstream eventFile(eventPath);
++            if (!eventFile.good())
++            {
++                continue;
++            }
++            eventPathList[eventName].push_back(eventPath);
++        }
++    }
++}
++void PsuStatus::setupRead()
++{
++    for (const auto& match : eventPathList)
++    {
++        const std::vector<std::string>& eventAttrs = match.second;
++        for (const auto& eventAttr : eventAttrs)
++        {
++            int value = 0;
++            uint16_t offset = 0;
++            std::string hwmonPath = eventAttr;
++            std::ifstream stream(hwmonPath);
++            if (!stream.good())
++            {
++                continue;
++            }
++            std::string line;
++            if (!std::getline(stream, line))
++            {
++                std::cerr << "Error reading status at " << hwmonPath << "\n";
++                continue;
++            }
++            value = std::stoi(line);
++
++            std::string strr = match.first;
++            auto findEvent = eventType.find(strr.c_str());
++            if (findEvent == eventType.end())
++            {
++                continue;
++            }
++
++            offset = static_cast<uint16_t>(findEvent->second);
++            updateEvent(offset, value);
++            restartRead();
++        }
++    }
++}
++void PsuStatus::updateEvent(uint16_t offset, uint16_t value)
++{
++    uint16_t newValue = state;
++    if (value)
++    {
++        newValue |= offset;
++    }
++    else if (value == 0)
++    {
++        newValue &= (~offset);
++    }
++    if (newValue != state)
++    {
++        updateState(sensorInterface, (static_cast<uint16_t>(newValue)));
++    }
++}
++void PsuStatus::restartRead(void)
++{
++    static constexpr double defaultSensorPoll = 1.0;
++
++    static constexpr unsigned int defaultSensorPollMs =
++        static_cast<unsigned int>(defaultSensorPoll * 1000);
++
++    unsigned int sensorPollMs = defaultSensorPollMs;
++    std::weak_ptr<PsuStatus> weakRef = weak_from_this();
++    waitTimer.expires_after(std::chrono::milliseconds(sensorPollMs));
++    waitTimer.async_wait([weakRef](const boost::system::error_code& ec) {
++        if (ec == boost::asio::error::operation_aborted)
++        {
++            return;
++        }
++        std::shared_ptr<PsuStatus> self = weakRef.lock();
++        if (self)
++        {
++            self->setupRead();
++        }
++    });
++}
++
++PsuStatus::~PsuStatus()
++{
++    objServer.remove_interface(sensorInterface);
++    objServer.remove_interface(association);
++}
+diff --git a/src/PsuStatus.hpp b/src/PsuStatus.hpp
+new file mode 100644
+index 0000000..85c4e06
+--- /dev/null
++++ b/src/PsuStatus.hpp
+@@ -0,0 +1,69 @@
++#pragma once
++
++#include <Discrete.hpp>
++#include <Utils.hpp>
++#include <boost/asio/deadline_timer.hpp>
++#include <boost/asio/io_context.hpp>
++#include <boost/container/flat_map.hpp>
++#include <sdbusplus/asio/connection.hpp>
++#include <sdbusplus/asio/object_server.hpp>
++
++#include <memory>
++#include <optional>
++#include <stdexcept>
++#include <string>
++#include <vector>
++
++namespace fs = std::filesystem;
++struct CmpStr
++{
++    bool operator()(const char* a, const char* b) const
++    {
++        return std::strcmp(a, b) < 0;
++    }
++};
++
++// list of supported Power Supply Events
++enum class PsuEvent : uint16_t
++{
++    psuPresenceDetected = (1 << 0),
++    PredictiveFailure = (1 << 2),
++    psuInputACLost = (1 << 3),
++};
++
++static boost::container::flat_map<std::string, std::vector<std::string>>
++    eventMatch{{"PredictiveFailure", {"power1_alarm"}},
++               {"ACLost", {"in1_beep"}}};
++
++const static boost::container::flat_map<const char*, PsuEvent, CmpStr>
++    eventType{{
++        {"ACLost", PsuEvent::psuInputACLost},
++        {"PredictiveFailure", PsuEvent::PredictiveFailure},
++    }};
++
++class PsuStatus :
++    public Discrete,
++    public std::enable_shared_from_this<PsuStatus>
++{
++  public:
++    PsuStatus(sdbusplus::asio::object_server& objectServer,
++              std::shared_ptr<sdbusplus::asio::connection>& conn,
++              boost::asio::io_context& io, const std::string& sensorName,
++              const std::string& path,
++              boost::container::flat_map<std::string, std::vector<std::string>>
++                  eventPathList,
++              const std::string& sensorConfiguration);
++    ~PsuStatus() override;
++    void setupRead(void);
++    void restartRead(void);
++    void updateEvent(uint16_t, uint16_t);
++    void initHwmonPath(const std::string);
++
++  private:
++    sdbusplus::asio::object_server& objServer;
++    boost::asio::posix::stream_descriptor inputDev;
++    boost::asio::steady_timer waitTimer;
++    std::string fsPath;
++    boost::container::flat_map<std::string, std::vector<std::string>>
++        eventPathList;
++};
+diff --git a/src/PsuStatusMain.cpp b/src/PsuStatusMain.cpp
+new file mode 100644
+index 0000000..c12fdaa
+--- /dev/null
++++ b/src/PsuStatusMain.cpp
+@@ -0,0 +1,245 @@
++#include <PsuStatus.hpp>
++#include <VariantVisitors.hpp>
++#include <boost/algorithm/string/case_conv.hpp>
++#include <boost/algorithm/string/predicate.hpp>
++#include <boost/algorithm/string/replace.hpp>
++#include <boost/container/flat_set.hpp>
++#include <sdbusplus/bus/match.hpp>
++
++#include <filesystem>
++#include <fstream>
++#include <functional>
++#include <memory>
++#include <optional>
++#include <regex>
++#include <string>
++#include <variant>
++#include <vector>
++
++static constexpr auto sensorTypes{std::to_array<const char*>({"Powersupply"})};
++
++void createSensors(
++    boost::asio::io_context& io, sdbusplus::asio::object_server& objectServer,
++    boost::container::flat_map<std::string, std::shared_ptr<PsuStatus>>&
++        sensors,
++    std::shared_ptr<sdbusplus::asio::connection>& dbusConnection,
++    const std::shared_ptr<boost::container::flat_set<std::string>>&
++        sensorsChanged)
++{
++    auto getter = std::make_shared<
++        GetSensorConfiguration>(dbusConnection, [&io, &objectServer, &sensors,
++                                                 &dbusConnection,
++                                                 sensorsChanged](
++                                                    const ManagedObjectType&
++                                                        sensorConfigs) {
++        bool firstScan = sensorsChanged == nullptr;
++        std::vector<fs::path> pmbusPaths;
++        if (!findFiles(fs::path("/sys/class/hwmon"), "name", pmbusPaths))
++        {
++            std::cerr << "No PSU sensors in system\n";
++            return;
++        }
++        boost::container::flat_set<std::string> directories;
++        for (const auto& pmbusPath : pmbusPaths)
++        {
++
++            std::ifstream nameFile(pmbusPath);
++            if (!nameFile.good())
++            {
++                std::cerr << " Failure finding power supply path \n";
++                continue;
++            }
++
++            std::string pmbusName;
++            std::getline(nameFile, pmbusName);
++            nameFile.close();
++
++            if (pmbusName != "pmbus")
++            {
++                continue;
++            }
++
++            auto directory = pmbusPath.parent_path();
++
++            auto ret = directories.insert(directory.string());
++            if (!ret.second)
++            {
++                std::cerr << " Duplicate path " << directory.string() << "\n";
++                continue;
++            }
++            fs::path device = directory / "device";
++            std::string deviceName = fs::canonical(device).stem();
++            auto findHyphen = deviceName.find('-');
++            if (findHyphen == std::string::npos)
++            {
++                std::cerr << " Found bad device " << deviceName << "\n";
++                continue;
++            }
++
++            std::string busStr = deviceName.substr(0, findHyphen);
++            std::string addrStr = deviceName.substr(findHyphen + 1);
++
++            size_t bus = 0;
++            size_t addr = 0;
++
++            try
++            {
++
++                bus = std::stoi(busStr);
++                addr = std::stoi(addrStr, nullptr, 16);
++            }
++
++            catch (const std::invalid_argument&)
++            {
++                std::cerr << " Error parsing bus " << busStr << " addr "
++                          << addrStr << "\n";
++                continue;
++            }
++            const SensorBaseConfigMap* baseConfig = nullptr;
++            const SensorData* sensorData = nullptr;
++            const std::string* interfacePath = nullptr;
++            for (const auto& [path, cfgData] : sensorConfigs)
++            {
++                sensorData = &cfgData;
++                for (const char* type : sensorTypes)
++                {
++
++                    auto sensorBase =
++                        sensorData->find(configInterfaceName(type));
++                    if (sensorBase != sensorData->end())
++                    {
++                        baseConfig = &sensorBase->second;
++                        break;
++                    }
++                }
++                interfacePath = &path.str;
++
++                if (baseConfig == nullptr)
++                {
++                    std::cerr << " error finding base configuration for "
++                              << deviceName << "\n";
++                    continue;
++                }
++                auto configBus = baseConfig->find("Bus");
++                auto configAddress = baseConfig->find("Address");
++
++                if (configBus == baseConfig->end() ||
++                    configAddress == baseConfig->end())
++                {
++                    std::cerr
++                        << "error finding necessary entry in configuration\n";
++                    continue;
++                }
++                const uint64_t* confBus =
++                    std::get_if<uint64_t>(&(configBus->second));
++                const uint64_t* confAddr =
++                    std::get_if<uint64_t>(&(configAddress->second));
++                if (confBus == nullptr || confAddr == nullptr)
++                {
++                    std::cerr << " Cannot get bus or address, invalid "
++                                 "configuration \n";
++                    continue;
++                }
++                if ((*confBus != bus) || (*confAddr != addr))
++                {
++                    std::cerr << "Skipping as configuration not matching\n";
++                    continue;
++                }
++                break;
++            }
++
++            auto findSensorName = baseConfig->find("Name");
++            if (findSensorName == baseConfig->end())
++            {
++                std::cerr << " could not determine config name for "
++                          << deviceName << "\n";
++                continue;
++            }
++            std::string sensorName =
++                std::get<std::string>(findSensorName->second);
++
++            auto findSensor = sensors.find(sensorName);
++
++            if (!firstScan && findSensor != sensors.end())
++            {
++                bool found = false;
++                for (auto it = sensorsChanged->begin();
++                     it != sensorsChanged->end(); it++)
++                {
++                    if (findSensor->second &&
++                        boost::ends_with(*it, findSensor->second->name))
++                    {
++                        sensorsChanged->erase(it);
++                        findSensor->second = nullptr;
++                        found = true;
++                        break;
++                    }
++                }
++                if (!found)
++                {
++                    continue;
++                }
++            }
++            auto& sensorConstruct = sensors[sensorName];
++            sensorConstruct = nullptr;
++            boost::container::flat_map<std::string, std::vector<std::string>>
++                pathList;
++            sensorConstruct = std::make_shared<PsuStatus>(
++                objectServer, dbusConnection, io, sensorName, directory,
++                pathList, *interfacePath);
++            sensorConstruct->setupRead();
++        }
++    });
++
++    getter->getConfiguration(
++        std::vector<std::string>{sensorTypes.begin(), sensorTypes.end()});
++}
++
++int main()
++{
++    boost::asio::io_context io;
++    auto systemBus = std::make_shared<sdbusplus::asio::connection>(io);
++    sdbusplus::asio::object_server objectServer(systemBus, true);
++    objectServer.add_manager("/xyz/openbmc_project/sensors");
++    systemBus->request_name("xyz.openbmc_project.PsuStatus");
++    boost::container::flat_map<std::string, std::shared_ptr<PsuStatus>> sensors;
++    auto sensorsChanged =
++        std::make_shared<boost::container::flat_set<std::string>>();
++
++    boost::asio::post(io, [&]() {
++        createSensors(io, objectServer, sensors, systemBus, nullptr);
++    });
++
++    boost::asio::deadline_timer filterTimer(io);
++    std::function<void(sdbusplus::message::message&)> eventHandler =
++        [&](sdbusplus::message::message& message) {
++            if (message.is_method_error())
++            {
++                std::cerr << "callback method error\n";
++                return;
++            }
++            sensorsChanged->insert(message.get_path());
++            // this implicitly cancels the timer
++            filterTimer.expires_from_now(boost::posix_time::seconds(1));
++
++            filterTimer.async_wait([&](const boost::system::error_code& ec) {
++                if (ec == boost::asio::error::operation_aborted)
++                {
++                    /* we were canceled*/
++                    return;
++                }
++                if (ec)
++                {
++                    std::cerr << "timer error\n";
++                    return;
++                }
++                createSensors(io, objectServer, sensors, systemBus,
++                              sensorsChanged);
++            });
++        };
++
++    std::vector<std::unique_ptr<sdbusplus::bus::match_t>> matches =
++        setupPropertiesChangedMatches(*systemBus, sensorTypes, eventHandler);
++
++    io.run();
++}
+diff --git a/src/meson.build b/src/meson.build
+index c69b5a6..3d6cc38 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -301,3 +301,19 @@ if get_option('acpisystem').enabled()
+         install: true,
+     )
+ endif
++
++if get_option('psustatus').enabled()
++    executable(
++        'psustatus',
++        'PsuStatus.cpp',
++        'PsuStatusMain.cpp',
++        dependencies: [
++            default_deps,
++            i2c,
++            utils_dep,
++        ],
++        cpp_args: uring_args,
++        install: true,
++        )
++endif
++
+-- 
+2.25.1
+

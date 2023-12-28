@@ -1,0 +1,680 @@
+From b588ad5976eb10c9a25d04b1a1bbd0fcbd67131d Mon Sep 17 00:00:00 2001
+From: krishnar4 <krishnar@ami.com>
+Date: Fri, 22 Sep 2023 19:26:18 +0530
+Subject: [PATCH 7/7] ACPIDevice-discrete-sensor
+
+---
+ meson_options.txt                             |   2 +-
+ service_files/meson.build                     |   1 +
+ ...z.openbmc_project.acpidevicestatus.service |  13 ++
+ src/ACPIDeviceStatus.cpp                      | 198 ++++++++++++++++++
+ src/ACPIDeviceStatus.hpp                      |  57 +++++
+ src/ACPIDeviceStatusMain.cpp                  | 177 ++++++++++++++++
+ src/ACPISystemStatus.cpp                      |  48 ++++-
+ src/ACPISystemStatus.hpp                      |   3 +
+ src/Utils.cpp                                 |   1 +
+ src/meson.build                               |  14 ++
+ 10 files changed, 508 insertions(+), 6 deletions(-)
+ create mode 100644 service_files/xyz.openbmc_project.acpidevicestatus.service
+ create mode 100644 src/ACPIDeviceStatus.cpp
+ create mode 100644 src/ACPIDeviceStatus.hpp
+ create mode 100644 src/ACPIDeviceStatusMain.cpp
+
+diff --git a/service_files/xyz.openbmc_project.acpidevicestatus.service b/service_files/xyz.openbmc_project.acpidevicestatus.service
+new file mode 100644
+index 0000000..0125205
+--- /dev/null
++++ b/service_files/xyz.openbmc_project.acpidevicestatus.service
+@@ -0,0 +1,13 @@
++[Unit]
++Description=ACPI Device Status
++StopWhenUnneeded=false
++Requires=xyz.openbmc_project.EntityManager.service
++After=xyz.openbmc_project.EntityManager.service
++
++[Service]
++Restart=always
++RestartSec=5
++ExecStart=/usr/bin/acpidevicestatus
++
++[Install]
++WantedBy=multi-user.target
+diff --git a/src/ACPIDeviceStatus.cpp b/src/ACPIDeviceStatus.cpp
+new file mode 100644
+index 0000000..f9ccc9a
+--- /dev/null
++++ b/src/ACPIDeviceStatus.cpp
+@@ -0,0 +1,198 @@
++#include <unistd.h>
++
++#include <ACPIDeviceStatus.hpp>
++
++#include <exception>
++#include <fstream>
++#include <functional>
++#include <iostream>
++#include <map>
++#include <optional>
++#include <string>
++#include <utility>
++#include <vector>
++
++ACPIDeviceStatus::ACPIDeviceStatus(
++    sdbusplus::asio::object_server& objectServer,
++    std::shared_ptr<sdbusplus::asio::connection>& conn,
++    boost::asio::io_context& io, const std::string& sensorName,
++    const std::string& deviceName, std::optional<uint8_t> deviceBus,
++    std::optional<uint8_t> deviceAddress,
++    const std::string& sensorConfiguration) :
++    Discrete(escapeName(sensorName), sensorConfiguration, conn),
++    objServer(objectServer), waitTimer(io), deviceName(deviceName),
++    deviceBus(deviceBus), deviceAddress(deviceAddress), conn(conn)
++{
++
++    sensorInterface = objectServer.add_interface(
++        "/xyz/openbmc_project/sensors/acpidevice/" + name,
++        "xyz.openbmc_project.Sensor.State");
++
++    association = objectServer.add_interface(
++        "/xyz/openbmc_project/sensors/acpidevice/" + name,
++        association::interface);
++    setInitialProperties();
++}
++
++ACPIDeviceStatus::~ACPIDeviceStatus()
++{
++    objServer.remove_interface(sensorInterface);
++    objServer.remove_interface(association);
++}
++
++void ACPIDeviceStatus::setupRead(void)
++{
++
++    deviceFunction = {
++        {"PowerSupply", [this]() { psuMonitorState(); }},
++    };
++
++    auto it = deviceFunction.find(deviceName);
++    if (it != deviceFunction.end())
++    {
++        it->second();
++    }
++}
++
++// Function to search for a file recursively
++fs::path ACPIDeviceStatus::findFile(const fs::path& directory,
++                                    const std::string& filename)
++{
++    for (const auto& entry : fs::recursive_directory_iterator(directory))
++    {
++        if (entry.is_regular_file() && entry.path().filename() == filename)
++        {
++            return entry.path();
++        }
++    }
++    return ""; // Return an empty path if the file is not found
++}
++
++void ACPIDeviceStatus::psuMonitorState()
++{
++
++    const std::string objPath =
++        "/xyz/openbmc_project/sensors/acpidevice/" + name;
++    std::vector<std::string> logData(logDataMaxSize);
++    std::vector<uint8_t> eventData(selEvtDataMaxSize, 0xFF);
++    std::pair<uint8_t, bool> offsetAndEvent;
++    uint8_t oldValue = reading;
++    logData[0] = name;
++    logData[2] = objPath;
++    logData[3] = "SensorDeviceACPIPowerStateAssert";
++
++    reading = 0;
++    if (!(deviceAddress.has_value()) || !(deviceAddress.has_value()))
++    {
++        std::cerr << "i2c bus address not configured \n";
++        logData[1] = "D3";
++        eventData[0] = static_cast<uint8_t>(ACPI::D3);
++        addSelEntry(conn, logData, eventData, true);
++        updateState(sensorInterface, reading);
++        return;
++    }
++
++    std::ostringstream hex;
++    hex << std::hex << static_cast<int>(deviceAddress.value());
++    const std::string& addrHexStr = hex.str();
++    int data;
++    fs::path hwmonPath = "/sys/bus/i2c/devices/" +
++                         std::to_string(deviceBus.value()) + "-00" + addrHexStr;
++    if (fs::exists(hwmonPath) && fs::is_directory(hwmonPath))
++    {
++        std::string targetFilename = "power1_input";
++        fs::path filePath = findFile(hwmonPath, targetFilename);
++        if (filePath.empty())
++        {
++            std::cerr << "filePath not found \n";
++            return; // temptest
++        }
++        std::optional<std::string> val = openAndRead(filePath);
++        if (val.has_value())
++        {
++            try
++            {
++                std::cerr << filePath << "\n";
++                data = std::stoi(val.value());
++            }
++            catch (const std::invalid_argument& e)
++            {
++                data = -1;
++                std::cerr << "Invalid argument: " << e.what() << std::endl;
++            }
++            if (data > 0)
++            {
++                reading = reading | (1 << static_cast<uint8_t>(ACPI::D0));
++                logData[1] = "D0";
++                eventData[0] = static_cast<uint8_t>(ACPI::D0);
++                offsetAndEvent = {static_cast<uint8_t>(ACPI::D0), true};
++                if (assertedEvents.insert(offsetAndEvent).second == true)
++                {
++                    addSelEntry(conn, logData, eventData, true);
++                }
++                offsetAndEvent = {static_cast<uint8_t>(ACPI::D1), true};
++                if (assertedEvents.erase(offsetAndEvent) == 1)
++                {
++                    logData[1] = "D1";
++                    logData[3] = "SensorDeviceACPIPowerStateDeassert";
++                    eventData[0] = static_cast<uint8_t>(ACPI::D1);
++                    addSelEntry(conn, logData, eventData, false);
++                }
++            }
++            else if (data == 0)
++            {
++                reading = reading | (1 << static_cast<uint8_t>(ACPI::D1));
++                logData[1] = "D1";
++                eventData[0] = static_cast<uint8_t>(ACPI::D1);
++                offsetAndEvent = {static_cast<uint8_t>(ACPI::D1), true};
++                if (assertedEvents.insert(offsetAndEvent).second == true)
++                {
++                    addSelEntry(conn, logData, eventData, true);
++                }
++            }
++            else
++            {
++                reading = reading | (1 << static_cast<uint8_t>(ACPI::D3));
++                logData[1] = "D3";
++                eventData[0] = static_cast<uint8_t>(ACPI::D3);
++                offsetAndEvent = {static_cast<uint8_t>(ACPI::D3), true};
++                if (assertedEvents.insert(offsetAndEvent).second == true)
++                {
++                    addSelEntry(conn, logData, eventData, true);
++                }
++
++                offsetAndEvent = {static_cast<uint8_t>(ACPI::D1), true};
++                if (assertedEvents.erase(offsetAndEvent) == 1)
++                {
++                    logData[1] = "D1";
++                    logData[3] = "SensorDeviceACPIPowerStateDeassert";
++                    eventData[0] = static_cast<uint8_t>(ACPI::D1);
++                    addSelEntry(conn, logData, eventData, false);
++                }
++            }
++        }
++    }
++    if (oldValue != reading)
++    {
++        updateState(sensorInterface, reading);
++    }
++    restartRead();
++}
++
++void ACPIDeviceStatus::restartRead()
++{
++    std::weak_ptr<ACPIDeviceStatus> weakRef = weak_from_this();
++    waitTimer.expires_after(std::chrono::milliseconds(sensorPollMs));
++    waitTimer.async_wait([weakRef](const boost::system::error_code& ec) {
++        if (ec == boost::asio::error::operation_aborted)
++        {
++            return; // we're being canceled
++        }
++        std::shared_ptr<ACPIDeviceStatus> self = weakRef.lock();
++        if (!self)
++        {
++            return;
++        }
++        self->setupRead();
++    });
++}
+diff --git a/src/ACPIDeviceStatus.hpp b/src/ACPIDeviceStatus.hpp
+new file mode 100644
+index 0000000..3726dd2
+--- /dev/null
++++ b/src/ACPIDeviceStatus.hpp
+@@ -0,0 +1,57 @@
++#include <Discrete.hpp>
++#include <Utils.hpp>
++#include <boost/asio/deadline_timer.hpp>
++#include <boost/asio/io_context.hpp>
++#include <boost/container/flat_map.hpp>
++#include <boost/container/flat_set.hpp>
++#include <sdbusplus/asio/object_server.hpp>
++
++#include <filesystem>
++#include <memory>
++#include <optional>
++#include <stdexcept>
++#include <string>
++#include <vector>
++
++namespace fs = std::filesystem;
++static constexpr unsigned int sensorPollMs = 2000;
++static constexpr size_t selEvtDataMaxSize = 3;
++static constexpr size_t logDataMaxSize = 4;
++
++enum class ACPI
++{
++    D0,
++    D1,
++    D2,
++    D3,
++};
++
++class ACPIDeviceStatus :
++    public Discrete,
++    public std::enable_shared_from_this<ACPIDeviceStatus>
++{
++  public:
++    ACPIDeviceStatus(sdbusplus::asio::object_server& objectServer,
++                     std::shared_ptr<sdbusplus::asio::connection>& conn,
++                     boost::asio::io_context& io, const std::string& sensorName,
++                     const std::string& deviceName,
++                     std::optional<uint8_t> deviceBus,
++                     std::optional<uint8_t> deviceAddress,
++                     const std::string& sensorConfiguration);
++    ~ACPIDeviceStatus() override;
++    void setupRead(void);
++
++  private:
++    uint8_t reading = 0;
++    std::map<std::string, std::function<void(void)>> deviceFunction;
++    sdbusplus::asio::object_server& objServer;
++    boost::asio::steady_timer waitTimer;
++    std::string deviceName;
++    std::optional<uint8_t> deviceBus;
++    std::optional<uint8_t> deviceAddress;
++    std::shared_ptr<sdbusplus::asio::connection>& conn;
++    boost::container::flat_set<std::pair<uint8_t, bool>> assertedEvents;
++    fs::path findFile(const fs::path& directory, const std::string& filename);
++    void restartRead();
++    void psuMonitorState();
++};
+diff --git a/src/ACPIDeviceStatusMain.cpp b/src/ACPIDeviceStatusMain.cpp
+new file mode 100644
+index 0000000..d54ca5e
+--- /dev/null
++++ b/src/ACPIDeviceStatusMain.cpp
+@@ -0,0 +1,177 @@
++#include <ACPIDeviceStatus.hpp>
++#include <VariantVisitors.hpp>
++#include <boost/algorithm/string/case_conv.hpp>
++#include <boost/algorithm/string/predicate.hpp>
++#include <boost/algorithm/string/replace.hpp>
++#include <boost/container/flat_set.hpp>
++#include <sdbusplus/bus/match.hpp>
++
++#include <functional>
++#include <memory>
++#include <optional>
++#include <regex>
++#include <string>
++#include <variant>
++#include <vector>
++
++static constexpr const char* sensorType = "ACPIDevice";
++
++void createSensors(
++    boost::asio::io_context& io, sdbusplus::asio::object_server& objectServer,
++    boost::container::flat_map<std::string, std::shared_ptr<ACPIDeviceStatus>>&
++        sensors,
++    std::shared_ptr<sdbusplus::asio::connection>& dbusConnection,
++    const std::shared_ptr<boost::container::flat_set<std::string>>&
++        sensorsChanged)
++{
++    auto getter = std::make_shared<GetSensorConfiguration>(
++        dbusConnection,
++        [&io, &objectServer, &sensors, &dbusConnection,
++         sensorsChanged](const ManagedObjectType& sensorConfigurations) {
++        bool firstScan = sensorsChanged == nullptr;
++        const std::string* interfacePath = nullptr;
++        const std::pair<std::string, SensorBaseConfigMap>* baseConfiguration =
++            nullptr;
++
++        for (const auto& [path, cfgData] : sensorConfigurations)
++        {
++            // clear it out each loop
++            baseConfiguration = nullptr;
++            auto sensorBase = cfgData.find(configInterfaceName(sensorType));
++            if (sensorBase == cfgData.end())
++            {
++                continue;
++            }
++            baseConfiguration = &(*sensorBase);
++            interfacePath = &path.str;
++
++            if (baseConfiguration == nullptr)
++            {
++                std::cerr << "error finding base configuration"
++                          << "\n";
++                continue;
++            }
++            auto findSensorName = baseConfiguration->second.find("Name");
++            if (findSensorName == baseConfiguration->second.end())
++            {
++                std::cerr << "could not determine configuration name"
++                          << "\n";
++                continue;
++            }
++            std::string sensorName =
++                std::get<std::string>(findSensorName->second);
++
++            auto findDeviceName = baseConfiguration->second.find("DeviceName");
++            if (findDeviceName == baseConfiguration->second.end())
++            {
++                std::cerr << "could not determine DeviceName from configuration"
++                          << "\n";
++                continue;
++            }
++            std::string deviceName =
++                std::get<std::string>(findDeviceName->second);
++
++            auto configurationBus = baseConfiguration->second.find("Bus");
++            auto configurationAddress =
++                baseConfiguration->second.find("Address");
++
++            std::optional<uint8_t> deviceBus = std::nullopt;
++            std::optional<uint8_t> deviceAddress = std::nullopt;
++            if (configurationBus != baseConfiguration->second.end() ||
++                configurationAddress != baseConfiguration->second.end())
++            {
++                deviceAddress = std::visit(VariantToUnsignedIntVisitor(),
++                                           configurationAddress->second);
++                deviceBus = std::visit(VariantToUnsignedIntVisitor(),
++                                       configurationBus->second);
++            }
++            // on rescans, only update sensors we were signaled by
++            auto findSensor = sensors.find(sensorName);
++            if (!firstScan && findSensor != sensors.end())
++            {
++                bool found = false;
++                for (auto it = sensorsChanged->begin();
++                     it != sensorsChanged->end(); it++)
++                {
++                    if (findSensor->second &&
++                        boost::ends_with(*it, findSensor->second->name))
++                    {
++                        sensorsChanged->erase(it);
++                        findSensor->second = nullptr;
++                        found = true;
++                        break;
++                    }
++                }
++                if (!found)
++                {
++                    continue;
++                }
++            }
++            auto& sensorConstruct = sensors[sensorName];
++            sensorConstruct = nullptr;
++
++            sensorConstruct = std::make_shared<ACPIDeviceStatus>(
++                objectServer, dbusConnection, io, sensorName, deviceName,
++                deviceBus, deviceAddress, *interfacePath);
++
++            sensorConstruct->setupRead();
++        }
++        });
++
++    getter->getConfiguration(std::vector<std::string>{sensorType});
++}
++
++int main()
++{
++    boost::asio::io_context io;
++    auto systemBus = std::make_shared<sdbusplus::asio::connection>(io);
++    sdbusplus::asio::object_server objectServer(systemBus, true);
++    objectServer.add_manager("/xyz/openbmc_project/sensors");
++    systemBus->request_name("xyz.openbmc_project.ACPIDeviceStatus");
++
++    boost::container::flat_map<std::string, std::shared_ptr<ACPIDeviceStatus>>
++        sensors;
++    std::vector<std::unique_ptr<sdbusplus::bus::match::match>> matches;
++    auto sensorsChanged =
++        std::make_shared<boost::container::flat_set<std::string>>();
++
++    boost::asio::post(io, [&]() {
++        createSensors(io, objectServer, sensors, systemBus, nullptr);
++    });
++
++    boost::asio::deadline_timer filterTimer(io);
++    std::function<void(sdbusplus::message::message&)> eventHandler =
++        [&](sdbusplus::message::message& message) {
++        if (message.is_method_error())
++        {
++            std::cerr << "callback method error\n";
++            return;
++        }
++        sensorsChanged->insert(message.get_path());
++        // this implicitly cancels the timer
++        filterTimer.expires_from_now(boost::posix_time::seconds(1));
++        filterTimer.async_wait([&](const boost::system::error_code& ec) {
++            if (ec == boost::asio::error::operation_aborted)
++            {
++                /* we were canceled*/
++                return;
++            }
++            if (ec)
++            {
++                std::cerr << "timer error\n";
++                return;
++            }
++            createSensors(io, objectServer, sensors, systemBus, sensorsChanged);
++        });
++    };
++
++    auto match = std::make_unique<sdbusplus::bus::match::match>(
++        static_cast<sdbusplus::bus::bus&>(*systemBus),
++        "type='signal',member='PropertiesChanged',path_namespace='" +
++            std::string(inventoryPath) + "',arg0namespace='" +
++            configInterfaceName(sensorType) + "'",
++        eventHandler);
++    matches.emplace_back(std::move(match));
++
++    io.run();
++}
+diff --git a/src/ACPISystemStatus.cpp b/src/ACPISystemStatus.cpp
+index 9634837..b68e61f 100644
+--- a/src/ACPISystemStatus.cpp
++++ b/src/ACPISystemStatus.cpp
+@@ -14,7 +14,7 @@ ACPISystemStatus::ACPISystemStatus(
+     std::shared_ptr<sdbusplus::asio::connection>& conn,
+     const std::string& sensorName, const std::string& sensorConfiguration) :
+     Discrete(escapeName(sensorName), sensorConfiguration, conn),
+-    objServer(objectServer)
++    objServer(objectServer), conn(conn)
+ {
+ 
+     sensorInterface = objectServer.add_interface(
+@@ -38,20 +38,38 @@ ACPISystemStatus::~ACPISystemStatus()
+ void ACPISystemStatus::propertyInitialize(
+     std::shared_ptr<sdbusplus::asio::connection>& conn)
+ {
++    std::vector<uint8_t> eventData(selEvtDataMaxSize, 0xFF);
++    std::vector<std::string> logData(logDataMaxSize);
+ 
+     reading = reading | (1 << static_cast<uint16_t>(ACPI::LEGACY_OFF));
++    const std::string objPath =
++        "/xyz/openbmc_project/sensors/acpisystem/" + name;
++    logData[0] = name;
++    logData[1] = "LEGACY_OFF";
++    logData[2] = objPath;
++    logData[3] = "SensorSystemACPIPowerState";
++    eventData[0] = static_cast<uint8_t>(ACPI::LEGACY_OFF);
++    addSelEntry(conn, logData, eventData, true);
++
+     if (getHostStatus(conn) == static_cast<uint8_t>(HostState::Running))
+     {
++        eventData[0] = static_cast<uint8_t>(ACPI::S0_G0);
++        logData[1] = "S0_G0";
+         reading = reading | (1 << static_cast<uint16_t>(ACPI::S0_G0));
+     }
+     else if (getHostStatus(conn) == static_cast<uint8_t>(HostState::Off))
+     {
++        eventData[0] = static_cast<uint8_t>(ACPI::S4_S5);
++        logData[1] = "S4_S5";
+         reading = reading | (1 << static_cast<uint16_t>(ACPI::S4_S5));
+     }
+     else
+     {
++        eventData[0] = static_cast<uint8_t>(ACPI::Unknown);
++        logData[1] = "Unknown";
+         reading = reading | (1 << static_cast<uint16_t>(ACPI::Unknown));
+     }
++    addSelEntry(conn, logData, eventData, true);
+     updateState(sensorInterface, reading);
+ }
+ 
+@@ -60,12 +78,18 @@ void ACPISystemStatus::monitorState(
+ {
+ 
+     propertyInitialize(conn);
+-    auto powerStatusMatcherCallback = [this, conn](sdbusplus::message_t& msg) {
++
++    auto powerStatusMatcherCallback = [this, &conn](sdbusplus::message_t& msg) {
+         std::cerr << "power state changed\n";
+         std::string objectName;
+         boost::container::flat_map<std::string, std::variant<std::string>>
+             values;
++        uint16_t oldValue = reading;
+         reading = 0;
++        const std::string objPath =
++            "/xyz/openbmc_project/sensors/acpisystem/" + name;
++        std::vector<uint8_t> eventData(selEvtDataMaxSize, 0xFF);
++        std::vector<std::string> logData(logDataMaxSize);
+         reading = reading | (1 << static_cast<uint16_t>(ACPI::LEGACY_OFF));
+         msg.read(objectName, values);
+         auto findState = values.find(power::property);
+@@ -74,22 +98,36 @@ void ACPISystemStatus::monitorState(
+             if (std::get<std::string>(findState->second) ==
+                 "xyz.openbmc_project.State.Host.HostState.Running")
+             {
+-                std::cerr << "chassis powered on\n";
+                 reading = reading | (1 << static_cast<uint16_t>(ACPI::S0_G0));
++                eventData[0] = static_cast<uint8_t>(ACPI::S0_G0);
++                logData[1] = "S0_G0";
++                std::cerr << "chassis powered on\n";
+             }
+ 
+             else if (std::get<std::string>(findState->second) ==
+                      "xyz.openbmc_project.State.Host.HostState.Off")
+             {
++                eventData[0] = static_cast<uint8_t>(ACPI::S4_S5);
+                 reading = reading | (1 << static_cast<uint16_t>(ACPI::S4_S5));
++                logData[1] = "S4_S5";
+                 std::cerr << "chassis powered off\n";
+             }
+             else
+             {
+                 reading = reading | (1 << static_cast<uint16_t>(ACPI::Unknown));
+-                std::cerr << "chassis unknown\n";
++                eventData[0] = static_cast<uint8_t>(ACPI::Unknown);
++                logData[1] = "Unknown";
++                std::cerr << "chassis unknown state\n";
++            }
++            if (oldValue != reading)
++            {
++
++                logData[0] = name;
++                logData[2] = objPath;
++                logData[3] = "SensorSystemACPIPowerState";
++                addSelEntry(conn, logData, eventData, true);
++                updateState(sensorInterface, reading);
+             }
+-            updateState(sensorInterface, reading);
+         }
+     };
+ 
+diff --git a/src/ACPISystemStatus.hpp b/src/ACPISystemStatus.hpp
+index 08ea06c..8554661 100644
+--- a/src/ACPISystemStatus.hpp
++++ b/src/ACPISystemStatus.hpp
+@@ -12,6 +12,8 @@
+ #include <vector>
+ 
+ namespace fs = std::filesystem;
++static constexpr size_t selEvtDataMaxSize = 3;
++static constexpr size_t logDataMaxSize = 4;
+ 
+ enum class ACPI
+ {
+@@ -46,6 +48,7 @@ class ACPISystemStatus :
+     uint16_t reading = 0;
+     sdbusplus::asio::object_server& objServer;
+     std::shared_ptr<sdbusplus::bus::match_t> powerMonitor;
++    std::shared_ptr<sdbusplus::asio::connection>& conn;
+     void monitorState(std::shared_ptr<sdbusplus::asio::connection>& conn);
+     void propertyInitialize(std::shared_ptr<sdbusplus::asio::connection>& conn);
+ };
+diff --git a/src/Utils.cpp b/src/Utils.cpp
+index 727d3ab..48acacd 100644
+--- a/src/Utils.cpp
++++ b/src/Utils.cpp
+@@ -101,6 +101,7 @@ std::optional<std::string> openAndRead(const std::string& hwmonFile)
+         return std::nullopt;
+     }
+     std::getline(fileStream, fileVal);
++    fileStream.close();
+     return fileVal;
+ }
+ 
+diff --git a/src/meson.build b/src/meson.build
+index 8fb6e44..129d349 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -330,3 +330,17 @@ if get_option('osstatus').enabled()
+         install: true,
+         )
+ endif
++
++if get_option('acpidevice').enabled()
++    executable(
++        'acpidevicestatus',
++        'ACPIDeviceStatus.cpp',
++        'ACPIDeviceStatusMain.cpp',
++        dependencies: [
++            default_deps,
++            utils_dep,
++        ],
++        cpp_args: uring_args,
++        install: true,
++    )
++endif
+-- 
+2.41.0
+
+--- a/meson_options.txt	2023-12-28 15:26:33.087569198 +0530
++++ b/meson_options.txt	2023-12-28 15:27:06.023443887 +0530
+@@ -19,4 +19,4 @@
+ option('psustatus', type: 'feature', value: 'disabled', description: 'Enable PSU Status sensor.',)
+ option('osstatus', type: 'feature', value: 'disabled', description: 'Enable OS Critical sensor.',)
+ option('batterystatus', type: 'feature', value: 'disabled', description: 'Enable Battery sensor.',)
+-
++option('acpidevice', type: 'feature', value: 'disabled', description: 'Enable acpi device status sensor.',)
+--- a/service_files/meson.build	2023-12-28 15:28:36.659164477 +0530
++++ b/service_files/meson.build	2023-12-28 15:29:51.586997220 +0530
+@@ -17,7 +17,7 @@
+     ['psustatus', 'xyz.openbmc_project.psustatus.service'],
+     ['osstatus', 'xyz.openbmc_project.osstatus.service'],
+     ['batterystatus', 'xyz.openbmc_project.batterystatus.service'],
+-
++    ['acpidevice', 'xyz.openbmc_project.acpidevicestatus.service'],
+ ]
+ 
+ foreach tuple : unit_files

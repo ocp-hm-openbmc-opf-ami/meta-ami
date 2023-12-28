@@ -109,6 +109,7 @@ SRC_URI:append = "   \
             file://0168-Enabled-DestinationType-when-Event-is-triggered-for-created-SNMP-Subscription.patch \
             file://0175-solution-for-kvm-websocket-session-out.patch \
 	    file://0144-Adding-Power-save-mode-Support-in-KVM-and-VMedia.patch \
+            file://0121-Add-message-registry-entry-for-ACPI-system-and-device.patch \
         "
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
