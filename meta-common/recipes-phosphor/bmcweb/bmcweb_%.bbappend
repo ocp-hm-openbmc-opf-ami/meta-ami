@@ -127,6 +127,8 @@ SRC_URI_BHS:append = "file://0108-Adding-condition-to-Patch-Min-Value-not-greate
                       file://0134-StaticLoadfactor-patch-in-Dynamic-mode-issue.patch \
 		      file://0136-support-domain-Capabilities-reset.patch \
 "
+SRC_URI:append:evb-ast2600   = "file://0179-Fixed-RestoreOptions-in-EVB.patch "
+
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'restricted', SRC_URI_NM, '', d)}"
 
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'bhs', "${@bb.utils.contains('BBFILE_COLLECTIONS', 'restricted', SRC_URI_BHS, '', d)}", '', d)}"
