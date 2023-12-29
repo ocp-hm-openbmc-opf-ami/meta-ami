@@ -118,6 +118,7 @@ SRC_URI:append = "   \
             file://0167-task-starts-event-redfish-listner.patch \
             file://0171-Displaying-a-Password-Reset-Failed-error-message-whe.patch \
             file://0178-Added-Error-Message-for-Multiple-IPv6StaticDefaultGa.patch \
+            file://0180-Added-Property-Value-Incorrect-error-message-while-post-invalid-vlanid.patch \
         "
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
