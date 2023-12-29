@@ -1,7 +1,7 @@
-From 93a551e460031c3c099b3af5d6b06f81d8fe881d Mon Sep 17 00:00:00 2001
+From a1544da3ac11ed28fd29b86963b8489aaa054dbd Mon Sep 17 00:00:00 2001
 From: Pranoy Goru <gorumanip@ami.com>
-Date: Thu, 30 Nov 2023 11:33:32 +0530
-Subject: [PATCH 160/160] Integrated RAID Interface in Redfish
+Date: Thu, 28 Dec 2023 21:28:51 +0530
+Subject: [PATCH 31/31] Integrated RAID Interface in Redfish
 
 Description
 Added RAID, HBA and MSCC Interface in Redfish
@@ -351,7 +351,6 @@ https://{{BMCIP}}/redfish/v1/Systems/system/Storage/Raid_0/Volumes
     "Members@odata.count": 1,
     "Name": "Volume Collection"
 }
-
 
 4) Get Logical Drive instance
 
@@ -850,9 +849,9 @@ https://{{BMCIP}}/redfish/v1/Systems/system/Storage/mscc_0/Drives/16
     "SerialNumber": "Z3TNF3RK"
 }
 
-12) Create Logical Drive for MSCC 
+12) Create Logical Drive for MSCC
 
-POST 
+POST
 https://{{BMCIP}}/redfish/v1/Systems/system/Storage/mscc_0/Actions/StorageMSCCLDrive.Create
 {
     "LDName": "RAID TEST 9",
@@ -908,9 +907,9 @@ Signed-off-by: Pranoy Goru <gorumanip@ami.com>
  redfish-core/include/redfish.hpp              |    9 +
  redfish-core/include/utils/collection.hpp     |    5 +
  redfish-core/lib/raid.hpp                     |   37 +
- redfish-core/lib/storage.hpp                  |   10 +
+ redfish-core/lib/storage.hpp                  |   15 +-
  redfish-core/lib/storage_mscc.hpp             |  169 +++
- redfish-core/lib/storage_raid.hpp             | 1269 +++++++++++++++++
+ redfish-core/lib/storage_raid.hpp             | 1271 +++++++++++++++++
  static/redfish/v1/$metadata/index.xml         |    8 +
  .../v1/JsonSchemas/OemDrive/index.json        |   13 +-
  .../v1/JsonSchemas/OemStorage/index.json      |   56 +
@@ -918,7 +917,7 @@ Signed-off-by: Pranoy Goru <gorumanip@ami.com>
  static/redfish/v1/schema/OemDrive_v1.xml      |    9 +-
  static/redfish/v1/schema/OemStorage_v1.xml    |   61 +
  static/redfish/v1/schema/OemVolume_v1.xml     |   60 +
- 13 files changed, 1764 insertions(+), 4 deletions(-)
+ 13 files changed, 1770 insertions(+), 5 deletions(-)
  create mode 100644 redfish-core/lib/raid.hpp
  create mode 100644 redfish-core/lib/storage_mscc.hpp
  create mode 100644 redfish-core/lib/storage_raid.hpp
@@ -928,10 +927,10 @@ Signed-off-by: Pranoy Goru <gorumanip@ami.com>
  create mode 100644 static/redfish/v1/schema/OemVolume_v1.xml
 
 diff --git a/redfish-core/include/redfish.hpp b/redfish-core/include/redfish.hpp
-index bb1990f9..94e973a9 100644
+index b025ef6f..408b2282 100644
 --- a/redfish-core/include/redfish.hpp
 +++ b/redfish-core/include/redfish.hpp
-@@ -60,6 +60,7 @@
+@@ -61,6 +61,7 @@
  #include "sensors.hpp"
  #include "service_root.hpp"
  #include "storage.hpp"
@@ -939,7 +938,7 @@ index bb1990f9..94e973a9 100644
  #include "systems.hpp"
  #include "task.hpp"
  #include "telemetry_service.hpp"
-@@ -144,6 +145,14 @@ class RedfishService
+@@ -146,6 +147,14 @@ class RedfishService
          requestRoutesNvmePorts(app);
          requestRoutesNvmePortsInstance(app);
  
@@ -1021,7 +1020,7 @@ index 00000000..bb1bbfe8
 +
 +} // namespace redfish
 diff --git a/redfish-core/lib/storage.hpp b/redfish-core/lib/storage.hpp
-index 79197f08..93f8a3b8 100644
+index 9cdc9596..e3798410 100644
 --- a/redfish-core/lib/storage.hpp
 +++ b/redfish-core/lib/storage.hpp
 @@ -25,6 +25,7 @@
@@ -1031,10 +1030,23 @@ index 79197f08..93f8a3b8 100644
 +#include "raid.hpp"
  #include "redfish_util.hpp"
  #include "registries/privilege_registry.hpp"
- #include "utils/collection.hpp"
-@@ -207,6 +208,15 @@ inline void
+ #include "storage_nvme.hpp"
+@@ -174,7 +175,11 @@ inline void afterSystemsStorageGetSubtree(
+     });
+     if (storage == subtree.end())
      {
-         return;
+-        if ((storageId == "Nvme"))
++        std::size_t raid = storageId.find("Raid_");
++        std::size_t hba = storageId.find("HBA_");
++        std::size_t mscc = storageId.find("mscc_");
++        if ((storageId == "Nvme") || (raid != std::string::npos) ||
++            (hba != std::string::npos) || (mscc != std::string::npos))
+         {
+             return;
+         }
+@@ -218,6 +223,14 @@ inline void
+     {
+         getStorageNvmeInstance(asyncResp);
      }
 +    std::size_t raid = storageId.find("Raid_");
 +    std::size_t hba = storageId.find("HBA_");
@@ -1043,7 +1055,6 @@ index 79197f08..93f8a3b8 100644
 +        (mscc != std::string::npos))
 +    {
 +        getStorageInstance(asyncResp, storageId);
-+        //return;
 +    }
      if constexpr (bmcwebEnableMultiHost)
      {
@@ -1225,10 +1236,10 @@ index 00000000..071f5c3d
 +} // namespace redfish
 diff --git a/redfish-core/lib/storage_raid.hpp b/redfish-core/lib/storage_raid.hpp
 new file mode 100644
-index 00000000..a0827239
+index 00000000..55c61c82
 --- /dev/null
 +++ b/redfish-core/lib/storage_raid.hpp
-@@ -0,0 +1,1269 @@
+@@ -0,0 +1,1271 @@
 +/*
 +// Copyright (c) 2021 AMI Corporation
 +//
@@ -1713,7 +1724,7 @@ index 00000000..a0827239
 +        if (ec)
 +        {
 +            BMCWEB_LOG_ERROR("Drive mapper call error");
-+            //messages::internalError(asyncResp->res);
++            // messages::internalError(asyncResp->res);
 +            return;
 +        }
 +
@@ -1856,7 +1867,7 @@ index 00000000..a0827239
 +        asyncResp->res.jsonValue["@odata.id"] =
 +            "/redfish/v1/Systems/system/Storage/" + name + "/Volumes/" + drive;
 +        asyncResp->res.jsonValue["Id"] = drive;
-+        //asyncResp->res.jsonValue["Name"] = "LogicalDrive_" + drive;
++        // asyncResp->res.jsonValue["Name"] = "LogicalDrive_" + drive;
 +        asyncResp->res.jsonValue["Oem"]["OpenBmc"]["@odata.type"] =
 +            "#OemVolume.v1_0_0.Volume";
 +        std::size_t type = name.find("_");
@@ -2009,7 +2020,8 @@ index 00000000..a0827239
 +                asyncResp->res.jsonValue["Links"]["Drives"];
 +            storageControllerArray = nlohmann::json::array();
 +            auto& count =
-+                asyncResp->res.jsonValue["Links"]["Drives@odata.count"];count = 0;
++                asyncResp->res.jsonValue["Links"]["Drives@odata.count"];
++            count = 0;
 +            const std::array<const char*, 1> interfaces = {driveInf};
 +            getPhysicalDrives(asyncResp, name.substr(type + 1),
 +                              storageControllerArray, count, flag, pdPath,
@@ -2126,7 +2138,7 @@ index 00000000..a0827239
 +        }
 +        else
 +        {
-+            //messages::internalError(asyncResp->res);
++            // messages::internalError(asyncResp->res);
 +            return;
 +        }
 +
@@ -2149,7 +2161,8 @@ index 00000000..a0827239
 +        nlohmann::json& storageControllerArray =
 +            asyncResp->res.jsonValue["Drives"];
 +        storageControllerArray = nlohmann::json::array();
-+        auto& count = asyncResp->res.jsonValue["Drives@odata.count"];count = 0;
++        auto& count = asyncResp->res.jsonValue["Drives@odata.count"];
++        count = 0;
 +        const std::array<const char*, 1> interfaces = {driveInf};
 +        getPhysicalDrives(asyncResp, name.substr(type + 1),
 +                          storageControllerArray, count, flag, pdPath,
@@ -2199,7 +2212,7 @@ index 00000000..a0827239
 +                                 std::vector<std::string>>>>& propertiesList) {
 +            if (ec2)
 +            {
-+                //messages::internalError(asyncResp->res);
++                // messages::internalError(asyncResp->res);
 +                return;
 +            }
 +
@@ -2379,7 +2392,7 @@ index 00000000..a0827239
 +                                     double, uint8_t>>>& propertiesList) {
 +                if (ec2)
 +                {
-+                    //messages::internalError(asyncResp->res);
++                    // messages::internalError(asyncResp->res);
 +                    return;
 +                }
 +                for (const std::pair<
@@ -2499,7 +2512,7 @@ index 00000000..a0827239
 +
 +} // namespace redfish
 diff --git a/static/redfish/v1/$metadata/index.xml b/static/redfish/v1/$metadata/index.xml
-index 72397ad7..7d841814 100644
+index 8f9c515e..a26425b0 100644
 --- a/static/redfish/v1/$metadata/index.xml
 +++ b/static/redfish/v1/$metadata/index.xml
 @@ -3468,4 +3468,12 @@

@@ -1,6 +1,6 @@
-From af06ee22f7bc3ad828f7f33dd89e8d9c0cc0cd74 Mon Sep 17 00:00:00 2001
+From 1be97be505c28ee4c1f0c66f4b9b131ced2e4c8c Mon Sep 17 00:00:00 2001
 From: Pranoy Goru <gorumanip@ami.com>
-Date: Mon, 16 Oct 2023 18:44:30 +0530
+Date: Thu, 28 Dec 2023 20:59:17 +0530
 Subject: [PATCH 17/17] Integrated NVME Interface
 
 Description
@@ -8,7 +8,7 @@ Added NVME interface in redfish with backend
 
 Test case:
 
-busctl tree xyz.openbmc_project.NVMEMgt
+$ busctl tree xyz.openbmc_project.NVMEMgt
 `-/xyz
   `-/xyz/openbmc_project
     `-/xyz/openbmc_project/Nvme
@@ -415,10 +415,10 @@ Signed-off-by: Pranoy Goru <gorumanip@ami.com>
  config/meson.build                            |    1 +
  meson.build                                   |    2 +-
  meson_options.txt                             |    7 +
- redfish-core/include/redfish.hpp              |    8 +
+ redfish-core/include/redfish.hpp              |    7 +
  redfish-core/include/utils/collection.hpp     |   15 +-
- redfish-core/lib/storage.hpp                  |    3 +-
- redfish-core/lib/storage_nvme.hpp             | 1637 +++++++++++++++++
+ redfish-core/lib/storage.hpp                  |   20 +-
+ redfish-core/lib/storage_nvme.hpp             | 1630 +++++++++++++++++
  static/redfish/v1/$metadata/index.xml         |   10 +
  .../v1/JsonSchemas/AMINVMeMIPort/index.json   |  145 ++
  .../v1/JsonSchemas/OemDrive/index.json        |   69 +
@@ -426,7 +426,7 @@ Signed-off-by: Pranoy Goru <gorumanip@ami.com>
  static/redfish/v1/schema/AMINVMeMIPort_v1.xml |   87 +
  static/redfish/v1/schema/OemDrive_v1.xml      |   57 +
  static/redfish/v1/schema/OemNvme_v1.xml       |  433 +++++
- 15 files changed, 3154 insertions(+), 4 deletions(-)
+ 15 files changed, 3183 insertions(+), 8 deletions(-)
  create mode 100644 redfish-core/lib/storage_nvme.hpp
  create mode 100644 static/redfish/v1/JsonSchemas/AMINVMeMIPort/index.json
  create mode 100644 static/redfish/v1/JsonSchemas/OemDrive/index.json
@@ -487,15 +487,14 @@ index baeff269..69c4d987 100644
 +    description: 'nvme object path.'
 +)
 diff --git a/redfish-core/include/redfish.hpp b/redfish-core/include/redfish.hpp
-index a40f4ab0..0de88006 100644
+index c80d2d31..b025ef6f 100644
 --- a/redfish-core/include/redfish.hpp
 +++ b/redfish-core/include/redfish.hpp
-@@ -136,6 +136,14 @@ class RedfishService
+@@ -139,6 +139,13 @@ class RedfishService
          requestRoutesStorageControllerCollection(app);
          requestRoutesStorageController(app);
          requestRoutesDrive(app);
 +
-+        requestRoutesNvmeStorage(app);
 +        requestRoutesNvmeDrive(app);
 +        requestRoutesNvmeControllers(app);
 +        requestRoutesNvmeControllersInstance(app);
@@ -506,7 +505,7 @@ index a40f4ab0..0de88006 100644
          requestRoutesCableCollection(app);
  #ifdef BMCWEB_INSECURE_ENABLE_REDFISH_FW_TFTP_UPDATE
 diff --git a/redfish-core/include/utils/collection.hpp b/redfish-core/include/utils/collection.hpp
-index 862be90..374a275 100644
+index 862be90e..374a275b 100644
 --- a/redfish-core/include/utils/collection.hpp
 +++ b/redfish-core/include/utils/collection.hpp
 @@ -5,6 +5,7 @@
@@ -514,7 +513,7 @@ index 862be90..374a275 100644
  #include "http/utility.hpp"
  #include "human_sort.hpp"
 +#include "storage_nvme.hpp"
-
+ 
  #include <boost/url/url.hpp>
  #include <nlohmann/json.hpp>
 @@ -35,12 +36,13 @@ inline void
@@ -547,20 +546,20 @@ index 862be90..374a275 100644
 +        }
 +    });
  }
-
+ 
  } // namespace collection_util
 diff --git a/redfish-core/lib/storage.hpp b/redfish-core/lib/storage.hpp
-index 42a2a03e..39415845 100644
+index 42a2a03e..9cdc9596 100644
 --- a/redfish-core/lib/storage.hpp
 +++ b/redfish-core/lib/storage.hpp
-@@ -29,6 +29,7 @@
+@@ -27,6 +27,7 @@
+ #include "query.hpp"
+ #include "redfish_util.hpp"
  #include "registries/privilege_registry.hpp"
++#include "storage_nvme.hpp"
  #include "utils/collection.hpp"
  #include "utils/dbus_utils.hpp"
-+#include "storage_nvme.hpp"
  
- #include <boost/system/error_code.hpp>
- #include <boost/url/format.hpp>
 @@ -67,7 +68,7 @@ inline void handleSystemsStorageCollectionGet(
          "xyz.openbmc_project.Inventory.Item.Storage"};
      collection_util::getCollectionMembers(
@@ -570,12 +569,43 @@ index 42a2a03e..39415845 100644
  }
  
  inline void handleStorageCollectionGet(
+@@ -173,9 +174,16 @@ inline void afterSystemsStorageGetSubtree(
+     });
+     if (storage == subtree.end())
+     {
+-        messages::resourceNotFound(asyncResp->res, "#Storage.v1_13_0.Storage",
+-                                   storageId);
+-        return;
++        if ((storageId == "Nvme"))
++        {
++            return;
++        }
++        else
++        {
++            messages::resourceNotFound(asyncResp->res,
++                                       "#Storage.v1_13_0.Storage", storageId);
++            return;
++        }
+     }
+ 
+     asyncResp->res.jsonValue["@odata.type"] = "#Storage.v1_13_0.Storage";
+@@ -206,6 +214,10 @@ inline void
+     {
+         return;
+     }
++    if (storageId == "Nvme")
++    {
++        getStorageNvmeInstance(asyncResp);
++    }
+     if constexpr (bmcwebEnableMultiHost)
+     {
+         // Option currently returns no systems.  TBD
 diff --git a/redfish-core/lib/storage_nvme.hpp b/redfish-core/lib/storage_nvme.hpp
 new file mode 100644
-index 00000000..f544b6f5
+index 00000000..dfaea9b3
 --- /dev/null
 +++ b/redfish-core/lib/storage_nvme.hpp
-@@ -0,0 +1,1637 @@
+@@ -0,0 +1,1630 @@
 +/*
 +// Copyright (c) 2021 AMI Corporation
 +//
@@ -680,57 +710,50 @@ index 00000000..f544b6f5
 +        nvmeInterfaceName, "Count");
 +}
 +
-+inline void requestRoutesNvmeStorage(App& app)
++void getStorageNvmeInstance(std::shared_ptr<bmcweb::AsyncResp> asyncResp)
 +{
-+    BMCWEB_ROUTE(app, "/redfish/v1/Systems/system/Storage/Nvme/")
-+        .privileges(redfish::privileges::getStorage)
-+        .methods(boost::beast::http::verb::get)(
-+            [](const crow::Request&,
-+               const std::shared_ptr<bmcweb::AsyncResp>& asyncResp) {
-+        asyncResp->res.jsonValue["@odata.type"] = "#Storage.v1_14_0.Storage";
-+        asyncResp->res.jsonValue["@odata.id"] =
-+            "/redfish/v1/Systems/system/Storage/Nvme";
-+        asyncResp->res.jsonValue["Name"] = "Storage";
-+        asyncResp->res.jsonValue["Id"] = "Nvme";
-+        asyncResp->res.jsonValue["Controllers"]["@odata.id"] =
-+            "/redfish/v1/Systems/system/Storage/Nvme/Controllers";
-+        crow::connections::systemBus->async_method_call(
-+            [asyncResp](const boost::system::error_code ec,
-+                        const std::vector<std::string>& storageList) {
-+            nlohmann::json& storageArray = asyncResp->res.jsonValue["Drives"];
-+            storageArray = nlohmann::json::array();
-+            auto& count = asyncResp->res.jsonValue["Drives@odata.count"];
-+            count = 0;
++    asyncResp->res.jsonValue["@odata.type"] = "#Storage.v1_14_0.Storage";
++    asyncResp->res.jsonValue["@odata.id"] =
++        "/redfish/v1/Systems/system/Storage/Nvme";
++    asyncResp->res.jsonValue["Name"] = "Storage";
++    asyncResp->res.jsonValue["Id"] = "Nvme";
++    asyncResp->res.jsonValue["Controllers"]["@odata.id"] =
++        "/redfish/v1/Systems/system/Storage/Nvme/Controllers";
++    crow::connections::systemBus->async_method_call(
++        [asyncResp](const boost::system::error_code ec,
++                    const std::vector<std::string>& storageList) {
++        nlohmann::json& storageArray = asyncResp->res.jsonValue["Drives"];
++        storageArray = nlohmann::json::array();
++        auto& count = asyncResp->res.jsonValue["Drives@odata.count"];
++        count = 0;
 +
-+            if (ec)
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("Drive mapper call error");
++            messages::internalError(asyncResp->res);
++            return;
++        }
++
++        for (const std::string& objpath : storageList)
++        {
++            std::size_t lastPos = objpath.rfind('/');
++            if (lastPos == std::string::npos || (objpath.size() <= lastPos + 1))
 +            {
-+                BMCWEB_LOG_ERROR("Drive mapper call error");
-+                messages::internalError(asyncResp->res);
-+                return;
++                BMCWEB_LOG_ERROR("Failed to find '/' in ", objpath);
++                continue;
 +            }
 +
-+            for (const std::string& objpath : storageList)
-+            {
-+                std::size_t lastPos = objpath.rfind('/');
-+                if (lastPos == std::string::npos ||
-+                    (objpath.size() <= lastPos + 1))
-+                {
-+                    BMCWEB_LOG_ERROR("Failed to find '/' in ", objpath);
-+                    continue;
-+                }
-+
-+                storageArray.push_back(
-+                    {{"@odata.id", "/redfish/v1/Systems/system/Storage/Nvme/"
-+                                   "Drives/" +
-+                                       objpath.substr(lastPos + 1)}});
-+            }
-+            count = storageArray.size();
-+        },
-+            "xyz.openbmc_project.ObjectMapper",
-+            "/xyz/openbmc_project/object_mapper",
-+            "xyz.openbmc_project.ObjectMapper", "GetSubTreePaths", nvmeObjPath,
-+            0, std::array<const char*, 1>{nvmeInterfaceName});
-+    });
++            storageArray.push_back(
++                {{"@odata.id", "/redfish/v1/Systems/system/Storage/Nvme/"
++                               "Drives/" +
++                                   objpath.substr(lastPos + 1)}});
++        }
++        count = storageArray.size();
++    },
++        "xyz.openbmc_project.ObjectMapper",
++        "/xyz/openbmc_project/object_mapper",
++        "xyz.openbmc_project.ObjectMapper", "GetSubTreePaths", nvmeObjPath, 0,
++        std::array<const char*, 1>{nvmeInterfaceName});
 +}
 +
 +inline void getControllers(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
@@ -2214,7 +2237,7 @@ index 00000000..f544b6f5
 +}
 +} // namespace redfish
 diff --git a/static/redfish/v1/$metadata/index.xml b/static/redfish/v1/$metadata/index.xml
-index ef1a9229..a648e79e 100644
+index acba3039..a26425b0 100644
 --- a/static/redfish/v1/$metadata/index.xml
 +++ b/static/redfish/v1/$metadata/index.xml
 @@ -3455,4 +3455,14 @@
@@ -2385,7 +2408,7 @@ index 00000000..33523591
 +
 diff --git a/static/redfish/v1/JsonSchemas/OemDrive/index.json b/static/redfish/v1/JsonSchemas/OemDrive/index.json
 new file mode 100644
-index 00000000..a1762d3d
+index 00000000..be754a9f
 --- /dev/null
 +++ b/static/redfish/v1/JsonSchemas/OemDrive/index.json
 @@ -0,0 +1,69 @@
@@ -3243,7 +3266,7 @@ index 00000000..1901a66c
 +
 diff --git a/static/redfish/v1/schema/OemDrive_v1.xml b/static/redfish/v1/schema/OemDrive_v1.xml
 new file mode 100644
-index 00000000..d1789515
+index 00000000..1341da06
 --- /dev/null
 +++ b/static/redfish/v1/schema/OemDrive_v1.xml
 @@ -0,0 +1,57 @@
