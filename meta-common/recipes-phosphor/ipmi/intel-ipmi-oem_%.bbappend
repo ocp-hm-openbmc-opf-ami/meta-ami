@@ -31,6 +31,7 @@ SRC_URI += "\
        file://0036-Add-Support-for-Battery-Discrete-Sensor.patch \
        file://0038-Create-ipmi-OEM-command-for-enable-and-disable-KCS-state.patch \
        file://0039-Add-CancelTask-IPMI-OEM-Commands-Support.patch \
+       file://0039-Setting-a-sensor-upper-critical-value-affecting-othe.patch \
     "
 
 SRC_URI_CORE:append = "file://0032-Add-Support-for-OS-Critical-Discrete-Sensor.patch"
