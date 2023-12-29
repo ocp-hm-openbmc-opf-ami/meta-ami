@@ -47,6 +47,9 @@ do_install:append() {
     install -m 0755 ${WORKDIR}/ipv6-advanced-route.sh ${D}${bindir}
     install -m 0755 ${WORKDIR}/ipv4-advanced-route.sh ${D}${bindir}
 
+    install -d -m 0755 ${D}/etc/sysctl.d
+    echo "net.ipv4.conf.all.arp_ignore=1" >> ${D}/etc/sysctl.d/99-network.conf
+    echo "net.ipv4.conf.default.arp_ignore=1" >> ${D}/etc/sysctl.d/99-network.conf
 }
 
 EXTRA_OEMESON:append = " -Dpersist-mac=true"
