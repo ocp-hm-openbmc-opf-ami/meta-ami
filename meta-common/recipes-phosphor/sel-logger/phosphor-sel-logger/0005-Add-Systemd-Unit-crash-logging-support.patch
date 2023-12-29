@@ -1,0 +1,143 @@
+From 1de97a0bf4eb9a4a3edde46c2e80b7ba65d967fd Mon Sep 17 00:00:00 2001
+From: vipinc <vipinc@ami.com>
+Date: Thu, 28 Dec 2023 00:45:29 +0530
+Subject: [PATCH] Add Systemd Unit crash logging support
+
+This commit add support for logging systemd service crashing.
+enabling "log-crash" in sel-logger will enable logging service
+crash events.
+
+Tested in INTEL AVC:
+- Verified service crash is successfully logged
+root@AMIOT-8e2d41348c27:~# busctl introspect xyz.openbmc_project.Logging /xyz/openbmc_project/logging/entry/1 xyz.openbmc_project.Logging.Entry
+NAME                              TYPE      SIGNATURE RESULT/VALUE                             FLAGS
+.GetEntry                         method    -         h                                        -
+.AdditionalData                   property  as        1 "UNIT_NAME=phos-psu-monitor.service"   emits-change writable
+.EventId                          property  s         ""                                       emits-change writable
+.Id                               property  u         1                                        emits-change writable
+.Message                          property  s         "Service phos-psu-monitor.service has... emits-change writable
+.Resolution                       property  s         ""                                       emits-change writable
+.Resolved                         property  b         false                                    emits-change writable
+.ServiceProviderNotify            property  s         "xyz.openbmc_project.Logging.Entry.No... emits-change writable
+.Severity                         property  s         "xyz.openbmc_project.Logging.Entry.Le... emits-change writable
+.Timestamp                        property  t         1703703744719                            emits-change writable
+.UpdateTimestamp                  property  t         1703703744719                            emits-change writable
+root@AMIOT-8e2d41348c27:~#
+
+Signed-off-by: vipinc <vipinc@ami.com>
+---
+ include/crash_event_monitor.hpp | 49 +++++++++++++++++++++++++++++++++
+ meson.build                     |  3 ++
+ meson_options.txt               |  2 ++
+ src/sel_logger.cpp              |  8 ++++++
+ 4 files changed, 62 insertions(+)
+ create mode 100644 include/crash_event_monitor.hpp
+
+diff --git a/include/crash_event_monitor.hpp b/include/crash_event_monitor.hpp
+new file mode 100644
+index 0000000..1611a85
+--- /dev/null
++++ b/include/crash_event_monitor.hpp
+@@ -0,0 +1,49 @@
++#pragma once
++#include <sel_logger.hpp>
++
++#include <string>
++#include <string_view>
++#include <variant>
++
++inline static void
++    sendCrashEventLog(std::shared_ptr<sdbusplus::asio::connection> conn,
++                      const std::string unitName)
++{
++    std::string eventMessage =
++        "Service " + unitName + " has exited unsuccessfully";
++    sdbusplus::message_t newLogEntry = conn->new_method_call(
++        "xyz.openbmc_project.Logging", "/xyz/openbmc_project/logging",
++        "xyz.openbmc_project.Logging.Create", "Create");
++    const std::string logLevel =
++        "xyz.openbmc_project.Logging.Entry.Level.Error";
++    const std::string serviceName = "UNIT_NAME";
++    newLogEntry.append(std::move(eventMessage), std::move(logLevel),
++                       std::map<std::string, std::string>(
++                           {{std::move(serviceName), std::move(unitName)}}));
++    conn->call(newLogEntry);
++}
++inline static sdbusplus::bus::match_t
++    crashErrorEventMonitor(std::shared_ptr<sdbusplus::asio::connection> conn)
++{
++    auto crashEventMatcherCallback = [conn](sdbusplus::message_t& msg) {
++        uint32_t jobID{};
++        sdbusplus::message::object_path jobPath;
++        std::string jobUnit{};
++        std::string jobResult{};
++        msg.read(jobID, jobPath, jobUnit, jobResult);
++        std::string test = jobPath.str;
++
++        if (jobResult == "failed")
++        {
++            sendCrashEventLog(conn, jobUnit);
++        }
++    };
++
++    sdbusplus::bus::match_t crashEventMatcher(
++        static_cast<sdbusplus::bus_t&>(*conn),
++        "type='signal',interface='org.freedesktop.systemd1.Manager',"
++        "member='JobRemoved'",
++        std::move(crashEventMatcherCallback));
++
++    return crashEventMatcher;
++}
+diff --git a/meson.build b/meson.build
+index 72a1c7e..7331a20 100644
+--- a/meson.build
++++ b/meson.build
+@@ -39,6 +39,9 @@ endif
+ if get_option('clears-sel')
+   cpp_args += '-DSEL_LOGGER_CLEARS_SEL'
+ endif
++if get_option('log-crash')
++  cpp_args += '-DSEL_LOGGER_LOG_CRASH'
++endif
+ 
+ executable(
+   'sel-logger',
+diff --git a/meson_options.txt b/meson_options.txt
+index 81ab2f6..d2e2686 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -12,3 +12,5 @@ option('send-to-logger', type: 'boolean',
+        description: 'Automatically log events to Redfish for pulse type assert-deassert sensor events')
+ option('clears-sel', type: 'boolean',
+        description: 'Expose method for SEL Logger to clear the SEL records stored in ipmi_sel')
++option('log-crash', type: 'boolean',
++       description: 'Automaticall log events to Redfish for systemd service failure')
+diff --git a/src/sel_logger.cpp b/src/sel_logger.cpp
+index f1565e1..ccf83e1 100644
+--- a/src/sel_logger.cpp
++++ b/src/sel_logger.cpp
+@@ -31,6 +31,9 @@
+ #ifdef SEL_LOGGER_MONITOR_HOST_ERROR_EVENTS
+ #include <host_error_event_monitor.hpp>
+ #endif
++#ifdef SEL_LOGGER_LOG_CRASH
++#include <crash_event_monitor.hpp>
++#endif
+ 
+ #include <filesystem>
+ #include <fstream>
+@@ -470,6 +473,11 @@ int main(int, char*[])
+ #ifdef SEL_LOGGER_MONITOR_HOST_ERROR_EVENTS
+     startHostErrorEventMonitor(conn);
+ #endif
++
++#ifdef SEL_LOGGER_LOG_CRASH
++    sdbusplus::bus::match_t crashEventMonitorH = crashErrorEventMonitor(conn);
++    syslog(LOG_INFO, "DD27:: SEL_LOGGER_LOG_CRASH is enabled in SELLogger\n");
++#endif
+     io.run();
+ 
+     return 0;
+-- 
+2.25.1
+
