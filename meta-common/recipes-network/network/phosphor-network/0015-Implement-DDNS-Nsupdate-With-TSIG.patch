@@ -3376,3 +3376,146 @@ index 0d375a5..f5204e2 100644
      stdplus::PinnedRef<sdbusplus::bus_t> bus;
 -- 
 2.25.1
+diff --git a/src/dns_updater.cpp b/src/dns_updater.cpp
+index 8927f15..12bf0c7 100644
+--- a/src/dns_updater.cpp
++++ b/src/dns_updater.cpp
+@@ -128,6 +128,9 @@ Configuration::Configuration(sdbusplus::bus_t& bus, stdplus::const_zstring path,
+                 ddnsIface::domainConf(std::make_tuple(false,0, ""));
+             }
+         }
++        {
++            ddnsIface::useMDNS(true, true);
++        }
+     }
+ 
+     signals = initSignals();
+@@ -204,6 +207,11 @@ void Configuration::registerSignal(sdbusplus::bus_t& bus) {
+                         {
+                             value = std::get<std::string>(t.second);
+                             hostConf(std::make_tuple(false, value));
++                            if (ddnsIface::useMDNS()) {
++                                execute("/bin/systemctl", "systemctl", "restart", "avahi-daemon");
++                                std::this_thread::sleep_for(std::chrono::seconds(1));
++                                execute("/bin/systemctl", "systemctl", "reset-failed", "avahi-daemon");
++                            }
+                         }
+                     }
+                 }
+@@ -489,6 +497,12 @@ int16_t Configuration::setHostConf(bool hostSetting, std::string hostName) {
+         bus.call_noreply(method);
+     }
+ 
++    if (ddnsIface::useMDNS()) {
++        execute("/bin/systemctl", "systemctl", "restart", "avahi-daemon");
++        std::this_thread::sleep_for(std::chrono::seconds(1));
++        execute("/bin/systemctl", "systemctl", "reset-failed", "avahi-daemon");
++    }
++
+     return 0;
+ 
+ }
+@@ -753,6 +767,28 @@ void Configuration::addInterfaceConf(std::string interface) {
+     }
+ }
+ 
++bool Configuration::useMDNS(bool value) {
++    if (value == ddnsIface::useMDNS()) {
++        return value;
++    }
++
++    ddnsIface::useMDNS(value);
++    if (value) {
++        execute("/bin/systemctl", "systemctl", "enable", "avahi-daemon");
++        execute("/bin/systemctl", "systemctl", "start", "avahi-daemon");
++        execute("/bin/systemctl", "systemctl", "reset-failed", "avahi-daemon");
++    } // if
++    else {
++        execute("/bin/systemctl", "systemctl", "stop", "avahi-daemon");
++        execute("/bin/systemctl", "systemctl", "reset-failed", "avahi-daemon");
++        execute("/bin/systemctl", "systemctl", "disable", "avahi-daemon");
++    } // else
++
++    writeConfigurationFile();
++
++    return value;
++}
++
+ void Configuration::writeConfigurationFile() {
+     if (!fs::exists(DNS_CONF_DIR))
+         return;
+@@ -765,6 +801,10 @@ void Configuration::writeConfigurationFile() {
+         hostConf["Automatic"].emplace_back(setting == true ? "true" : "false");
+         hostConf["Hostname"].emplace_back(hn);
+     }
++    {
++        auto& mDNS = config.map["mDNS"].emplace_back();
++        mDNS["UseMDNS"].emplace_back(ddnsIface::useMDNS() ? "true" : "false");
++    }
+     {
+         auto [DHCP, priority, name] = ddnsIface::domainConf();
+         auto& domain = config.map["DomainConf"].emplace_back();
+@@ -840,7 +880,7 @@ void Configuration::updateDNSInfo(bool bakupInfo) {
+     std::tuple<bool, std::string> tmpHost;
+     std::vector<std::tuple<std::string, bool, bool, ddnsIface::Method>> tmpInterface;
+     std::tuple<bool, uint8_t, std::string> tmpDomain;
+-
++    bool mDNS = false;
+ 
+     if (fs::exists(filePath)) {
+         conf.setFile(filePath);
+@@ -875,8 +915,12 @@ void Configuration::updateDNSInfo(bool bakupInfo) {
+                 );
+             }
+         }
++        {
++            mDNS = *conf.map.getLastValueString("mDNS", "UseMDNS") == "true" ? true : false;
++        }
+ 
+         if (bakupInfo) {
++            preUseMDNS = mDNS;
+             preHost = std::move(tmpHost);
+             preIfaceConf = std::move(tmpInterface);
+             preDns.clear();
+@@ -898,6 +942,7 @@ void Configuration::updateDNSInfo(bool bakupInfo) {
+             ddnsIface::hostConf(tmpHost);
+             ddnsIface::domainConf(tmpDomain);
+             ddnsIface::interfacesConf(tmpInterface);
++            ddnsIface::useMDNS(mDNS);
+         }
+     }
+ }
+diff --git a/src/dns_updater.hpp b/src/dns_updater.hpp
+index 71bc346..eeceebe 100644
+--- a/src/dns_updater.hpp
++++ b/src/dns_updater.hpp
+@@ -2,6 +2,7 @@
+ 
+ #include <filesystem>
+ #include <xyz/openbmc_project/Network/DDNS/server.hpp>
++#include <xyz/openbmc_project/State/BMC/server.hpp>
+ #include <stdplus/zstring.hpp>
+ #include <sdbusplus/bus.hpp>
+ #include <sdbusplus/server/object.hpp>
+@@ -172,6 +173,9 @@ class Configuration : Iface {
+ 
+         bool dnsEnabled(bool value) override;
+ 
++        /** Set value of useMDNS */
++        bool useMDNS(bool value) override;
++
+         std::tuple<bool, std::string> hostConf(std::tuple<bool, std::string> value) override;
+ 
+         std::vector<std::tuple<std::string, bool, bool, ddnsIface::Method>> interfacesConf(std::vector<std::tuple<std::string, bool, bool, Method>> value) override;
+@@ -200,6 +204,7 @@ class Configuration : Iface {
+         std::vector<std::tuple<std::string, std::string>> preDomain;
+         std::vector<std::tuple<std::string, std::vector<std::string>>> preDns;
+         std::vector<std::tuple<std::string, std::vector<std::string>>> preIPAddr;
++        bool preUseMDNS;
+     private:
+         /** @brief sdbusplus DBus bus connection. */
+         sdbusplus::bus_t& bus;
+-- 
+2.25.1
+
+
