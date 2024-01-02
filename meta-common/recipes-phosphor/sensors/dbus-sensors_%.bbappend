@@ -17,6 +17,8 @@ SRC_URI:append = " \
             file://0020-Add-D-Bus-logging-support-for-Discrete-Sensor.patch \
             file://0020-CMOS-Battery-Discrete-Sensor.patch \
             file://0019-ACPIDevice-discrete-sensor.patch \
+            file://0021-Add-event-generation-support-for-powerunit-sensor.patch \
+            file://0021-Digital-discrete-sensor-support.patch \
             "
 
 PACKAGECONFIG[processorstatus] = "-Dprocstatus=enabled, -Dprocstatus=disabled"
@@ -27,6 +29,7 @@ PACKAGECONFIG[psustatus] = "-Dpsustatus=enabled, -Dpsustatus=disabled"
 PACKAGECONFIG[osstatus] = "-Dosstatus=enabled, -Dosstatus=disabled"
 PACKAGECONFIG[batterystatus] = "-Dbatterystatus=enabled, -Dbatterystatus=disabled"
 PACKAGECONFIG[acpidevicestatus] = "-Dacpidevice=enabled, -Dacpidevice=disabled"
+PACKAGECONFIG[digital] = "-Ddigital=enabled, -Ddigital=disabled"
 
 PACKAGECONFIG:append = " processorstatus \
             systemsensor \
@@ -36,6 +39,7 @@ PACKAGECONFIG:append = " processorstatus \
             osstatus \
             batterystatus \
             acpidevicestatus \
+            digital \
 "
 
 SYSTEMD_SERVICE:${PN}:append = " ${@bb.utils.contains('PACKAGECONFIG', 'processorstatus', \
@@ -68,4 +72,8 @@ SYSTEMD_SERVICE:${PN} += "${@bb.utils.contains('PACKAGECONFIG', 'batterystatus',
 
 SYSTEMD_SERVICE:${PN} += "${@bb.utils.contains('PACKAGECONFIG', 'acpidevicestatus', \
                                                'xyz.openbmc_project.acpidevicestatus.service', \
+                                               '', d)}"
+
+SYSTEMD_SERVICE:${PN}:append = " ${@bb.utils.contains('PACKAGECONFIG', 'digital', \
+                                               'xyz.openbmc_project.digitaldiscrete.service', \
                                                '', d)}"

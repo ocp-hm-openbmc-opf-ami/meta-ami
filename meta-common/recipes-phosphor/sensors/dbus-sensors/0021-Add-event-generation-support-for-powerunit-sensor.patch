@@ -1,0 +1,93 @@
+From d587ce1223d9777d7f39cb81bd5d6c081661dba9 Mon Sep 17 00:00:00 2001
+From: selvaganapathi <selvaganapathim@ami.com>
+Date: Fri, 22 Sep 2023 11:59:50 +0530
+Subject: [PATCH] Add event generation support for powerunit sensor
+
+- Patch adding event generation support for power unit
+discrete sensor.
+- When power unit status goes power down, event will
+be generated and added into SEL.
+- IPMI get SEL entry shows the the record.
+
+Tested:
+Successfully build and able to add log into SEL.
+
+After chassis power on:
+4 | 09/21/23 | 07:14:05 UTC | Power Unit #0x14 | Power off/down | Deasserted
+
+After chassis power off:
+  9 | 09/21/23 | 07:14:13 UTC | Power Unit #0x14 | Power off/down | Asserted
+
+Signed-off-by: selvaganapathi <selvaganapathim@ami.com>
+---
+ src/PowerUnit.cpp | 22 ++++++++++++++++------
+ src/PowerUnit.hpp |  3 +++
+ 2 files changed, 19 insertions(+), 6 deletions(-)
+
+diff --git a/src/PowerUnit.cpp b/src/PowerUnit.cpp
+index 9eadba7..9a6e2c5 100644
+--- a/src/PowerUnit.cpp
++++ b/src/PowerUnit.cpp
+@@ -18,20 +18,22 @@ PowerUnit::PowerUnit(sdbusplus::asio::object_server& objectServer,
+     objServer(objectServer)
+ {
+     sensorInterface = objectServer.add_interface(
+-        "/xyz/openbmc_project/sensors/powerunit/" + name,
+-        "xyz.openbmc_project.Sensor.State");
++        baseObj + name, "xyz.openbmc_project.Sensor.State");
+ 
+-    association = objectServer.add_interface(
+-        "/xyz/openbmc_project/sensors/powerunit/" + name,
+-        association::interface);
++    association =
++        objectServer.add_interface(baseObj + name, association::interface);
+     setInitialProperties();
+ 
+     // write sensor specific code
+-    auto powerStatusMatcherCallback = [this, conn](sdbusplus::message_t& msg) {
++    auto powerStatusMatcherCallback = [this, &conn](sdbusplus::message_t& msg) {
+         std::cerr << "power state changed\n";
+         std::string objectName;
+         boost::container::flat_map<std::string, std::variant<std::string>>
+             values;
++
++        std::vector<uint8_t> eventData(selEvtDataMaxSize, 0xFF);
++        bool assertion = false;
++
+         msg.read(objectName, values);
+         auto findState = values.find(powerProperty);
+         if (findState != values.end())
+@@ -40,11 +42,19 @@ PowerUnit::PowerUnit(sdbusplus::asio::object_server& objectServer,
+                 "xyz.openbmc_project.State.Host.HostState.Off")
+             {
+                 updateState(sensorInterface, 0x01);
++                assertion = true;
+             }
+             else
+             {
+                 updateState(sensorInterface, 0x00);
++                assertion = false;
+             }
++
++            std::vector<std::string> logData{name, "Power Down", baseObj + name,
++                                             "PowerUnit"};
++            eventData[0] = static_cast<uint8_t>(0x00);
++
++            addSelEntry(conn, logData, eventData, assertion);
+         }
+     };
+ 
+diff --git a/src/PowerUnit.hpp b/src/PowerUnit.hpp
+index 6e215ab..e6f0708 100644
+--- a/src/PowerUnit.hpp
++++ b/src/PowerUnit.hpp
+@@ -26,6 +26,9 @@ class PowerUnit :
+               const std::string& sensorConfiguration);
+     ~PowerUnit() override;
+ 
++    static constexpr size_t selEvtDataMaxSize = 3;
++    std::string baseObj = "/xyz/openbmc_project/sensors/powerunit/";
++
+   private:
+     sdbusplus::asio::object_server& objServer;
+     std::shared_ptr<sdbusplus::bus::match_t> powerMonitor;
