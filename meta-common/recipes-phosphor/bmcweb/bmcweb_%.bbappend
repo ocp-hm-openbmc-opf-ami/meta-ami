@@ -122,6 +122,7 @@ SRC_URI:append = "   \
             file://0177-Fixed-invalid-subnetmask-IP.patch \
             file://0169-bad-request-status-if-the-ipv4-array-size-exceeds-th.patch \
             file://0173-Fixed-500-InternalError-in-trigger_PostCall.patch \
+            file://0164-Support-HostName-FQDN-Validation.patch \
         "
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
