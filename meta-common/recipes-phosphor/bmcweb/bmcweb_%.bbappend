@@ -124,6 +124,7 @@ SRC_URI:append = "   \
             file://0173-Fixed-500-InternalError-in-trigger_PostCall.patch \
             file://0164-Support-HostName-FQDN-Validation.patch \
             file://0183-Added-the-condition-to-check-IPV6-is-DHCP-while-patch-IPv6StaticDefaultGateways.patch \
+            file://0182-TaskID-TaskName-TaskStatus-updation-to-IPMI.patch \
         "
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"

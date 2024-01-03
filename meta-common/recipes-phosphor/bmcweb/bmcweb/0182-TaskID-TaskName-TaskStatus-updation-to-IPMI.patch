@@ -1,0 +1,429 @@
+From b4b06c50726b26f078bc25f640136acfb5b23ab0 Mon Sep 17 00:00:00 2001
+From: ramadevip <ramadevip@ami.com>
+Date: Wed, 3 Jan 2024 21:55:50 +0530
+Subject: [PATCH] TaskID,TaskStatus and TaskName updation to IPMI
+
+Signed-off-by: ramadevip <ramadevip@ami.com>
+---
+ redfish-core/lib/chassis.hpp | 102 +++++++++++++++++++++++++++++++----
+ redfish-core/lib/systems.hpp |  64 ++++++++++++++++++----
+ redfish-core/lib/task.hpp    |   2 +-
+ 3 files changed, 148 insertions(+), 20 deletions(-)
+
+diff --git a/redfish-core/lib/chassis.hpp b/redfish-core/lib/chassis.hpp
+index 639040bc..02ef4e07 100644
+--- a/redfish-core/lib/chassis.hpp
++++ b/redfish-core/lib/chassis.hpp
+@@ -879,6 +879,66 @@ inline void
+         dbus::utility::DbusVariantType(chassisHostTransitionTimeOut));
+ }
+ 
++inline void setTaskId(const uint16_t index)
++{
++    auto bus = sdbusplus::bus::new_default();
++    auto method = bus.new_method_call("xyz.openbmc_project.State.Host0",
++                                      "/xyz/openbmc_project/state/os",
++                                      "org.freedesktop.DBus.Properties", "Set");
++
++    method.append("xyz.openbmc_project.Common.Task", "TaskId",
++                  dbus::utility::DbusVariantType(index));
++
++    try
++    {
++        auto reply = bus.call(method);
++    }
++    catch (const sdbusplus::exception::SdBusError& e)
++    {
++        BMCWEB_LOG_ERROR("D-Bus error:", e.what());
++    }
++}
++
++inline void setStatus(const std::string status)
++{
++    auto bus = sdbusplus::bus::new_default();
++    auto method = bus.new_method_call("xyz.openbmc_project.State.Host0",
++                                      "/xyz/openbmc_project/state/os",
++                                      "org.freedesktop.DBus.Properties", "Set");
++
++    method.append("xyz.openbmc_project.Common.Task", "Status",
++                  dbus::utility::DbusVariantType(status));
++
++    try
++    {
++        auto reply = bus.call(method);
++    }
++    catch (const sdbusplus::exception::SdBusError& e)
++    {
++        BMCWEB_LOG_ERROR("D-Bus error:", e.what());
++    }
++}
++
++inline void setTaskName(const std::string taskName)
++{
++    auto bus = sdbusplus::bus::new_default();
++    auto method = bus.new_method_call("xyz.openbmc_project.State.Host0",
++                                      "/xyz/openbmc_project/state/os",
++                                      "org.freedesktop.DBus.Properties", "Set");
++
++    method.append("xyz.openbmc_project.Common.Task", "TaskName",
++                  dbus::utility::DbusVariantType(taskName));
++
++    try
++    {
++        auto reply = bus.call(method);
++    }
++    catch (const sdbusplus::exception::SdBusError& e)
++    {
++        BMCWEB_LOG_ERROR("D-Bus error:", e.what());
++    }
++}
++
+ inline void
+     doChassisPowerCycle(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
+ {
+@@ -992,13 +1052,13 @@ const PropertyValue getchassisHostTransitionTimeOut(
+  */
+ void createImmediateResetTask(
+     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+-    task::Payload&& payload)
++    task::Payload&& payload, const std::string& resetType)
+ {
+     BMCWEB_LOG_ERROR("after do Task creartion");
+ 
+     std::shared_ptr<task::TaskData> task = task::TaskData::createTask(
+-        [](boost::system::error_code ec, sdbusplus::message_t& msg,
+-           const std::shared_ptr<task::TaskData>& taskData) {
++        [resetType](boost::system::error_code ec, sdbusplus::message_t& msg,
++                    const std::shared_ptr<task::TaskData>& taskData) {
+         if (ec)
+         {
+             taskData->messages.emplace_back(messages::internalError());
+@@ -1011,6 +1071,12 @@ void createImmediateResetTask(
+ 
+         std::string index = std::to_string(taskData->index);
+ 
++        int convertedIndex = std::stoi(index);
++
++        setTaskId(static_cast<uint16_t>(convertedIndex));
++
++        setTaskName(resetType);
++
+         msg.read(iface, values);
+ 
+         if (iface == "xyz.openbmc_project.State.OperatingSystem.Status")
+@@ -1040,6 +1106,8 @@ void createImmediateResetTask(
+             if (*osState ==
+                 "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Inactive")
+             {
++                setStatus(
++                    "xyz.openbmc_project.Common.Task.OperationStatus.InProgress");
+                 taskData->state = "Running";
+                 taskData->messages.emplace_back(messages::taskStarted(index));
+                 taskData->extendTimer(std::chrono::minutes(5));
+@@ -1049,6 +1117,8 @@ void createImmediateResetTask(
+             if (*osState ==
+                 "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Standby")
+             {
++                setStatus(
++                    "xyz.openbmc_project.Common.Task.OperationStatus.Completed");
+                 taskData->messages.emplace_back(
+                     messages::taskCompletedOK(index));
+                 taskData->state = "Completed";
+@@ -1073,13 +1143,13 @@ void createImmediateResetTask(
+  */
+ void createMaintenanceWindowTask(
+     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+-    task::Payload&& payload)
++    task::Payload&& payload, const std::string& resetType)
+ {
+     BMCWEB_LOG_ERROR("after do Task creation");
+ 
+     std::shared_ptr<task::TaskData> task = task::TaskData::createTask(
+-        [](boost::system::error_code ec, sdbusplus::message_t& msg,
+-           const std::shared_ptr<task::TaskData>& taskData) {
++        [resetType](boost::system::error_code ec, sdbusplus::message_t& msg,
++                    const std::shared_ptr<task::TaskData>& taskData) {
+         if (ec)
+         {
+             taskData->messages.emplace_back(messages::internalError());
+@@ -1092,6 +1162,12 @@ void createMaintenanceWindowTask(
+ 
+         std::string index = std::to_string(taskData->index);
+ 
++        int convertedIndex = std::stoi(index);
++
++        setTaskId(static_cast<uint16_t>(convertedIndex));
++
++        setTaskName(resetType);
++
+         msg.read(iface, values);
+ 
+         const char* servicePath = "xyz.openbmc_project.State.Host0";
+@@ -1140,6 +1216,8 @@ void createMaintenanceWindowTask(
+ 
+             if (timeOutValue != nullptr && *timeOutValue != 0)
+             {
++                setStatus(
++                    "xyz.openbmc_project.Common.Task.OperationStatus.New");
+                 taskData->state = "Pending";
+                 taskData->messages.emplace_back(messages::taskPaused(index));
+                 taskData->extendTimer(std::chrono::minutes(10));
+@@ -1150,7 +1228,8 @@ void createMaintenanceWindowTask(
+                 if (*osState ==
+                     "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Inactive")
+                 {
+-                    BMCWEB_LOG_ERROR("Running case for Inactive");
++                    setStatus(
++                        "xyz.openbmc_project.Common.Task.OperationStatus.InProgress");
+                     taskData->state = "Running";
+                     taskData->messages.emplace_back(
+                         messages::taskStarted(index));
+@@ -1161,7 +1240,8 @@ void createMaintenanceWindowTask(
+                 if (*osState ==
+                     "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Standby")
+                 {
+-                    BMCWEB_LOG_ERROR("Completed case for Standby");
++                    setStatus(
++                        "xyz.openbmc_project.Common.Task.OperationStatus.Completed");
+                     taskData->messages.emplace_back(
+                         messages::taskCompletedOK(index));
+                     taskData->state = "Completed";
+@@ -1312,7 +1392,8 @@ inline void handleChassisResetActionInfoPost(
+                 if (!(maintenanceWindowStartTime))
+                 {
+                     BMCWEB_LOG_ERROR("Not of maintenanceWindowStartTime");
+-                    createImmediateResetTask(asyncResp, std::move(payload));
++                    createImmediateResetTask(asyncResp, std::move(payload),
++                                             resetType);
+                     doChassisPowerCycle(asyncResp);
+                     return;
+                 }
+@@ -1375,7 +1456,8 @@ inline void handleChassisResetActionInfoPost(
+                                                redfishDateTimeOffset);
+ 
+                 setPowerTransitionTimer(asyncResp, timeOut);
+-                createMaintenanceWindowTask(asyncResp, std::move(payload));
++                createMaintenanceWindowTask(asyncResp, std::move(payload),
++                                            resetType);
+                 doChassisPowerCycle(asyncResp);
+                 return;
+             }
+diff --git a/redfish-core/lib/systems.hpp b/redfish-core/lib/systems.hpp
+index ff8e0366..4db26d3f 100644
+--- a/redfish-core/lib/systems.hpp
++++ b/redfish-core/lib/systems.hpp
+@@ -3255,6 +3255,12 @@ void createResetMaintenanceWindowTask(
+ 
+         std::string index = std::to_string(taskData->index);
+ 
++        int convertedIndex = std::stoi(index);
++
++        setTaskId(static_cast<uint16_t>(convertedIndex));
++
++        setTaskName(resetType);
++
+         msg.read(iface, values);
+ 
+         const char* processName = "xyz.openbmc_project.State.Host0";
+@@ -3301,6 +3307,8 @@ void createResetMaintenanceWindowTask(
+ 
+             if ((timeOutValue != nullptr && *timeOutValue != 0))
+             {
++                setStatus(
++                    "xyz.openbmc_project.Common.Task.OperationStatus.New");
+                 taskData->state = "Pending";
+                 taskData->messages.emplace_back(messages::taskPaused(index));
+                 taskData->extendTimer(std::chrono::minutes(10));
+@@ -3309,10 +3317,13 @@ void createResetMaintenanceWindowTask(
+ 
+             if (osState != nullptr && requestedHostTransition == 0)
+             {
+-                if ((resetType != "GracefulShutdown" && resetType != "ForceOff") &&
++                if ((resetType != "GracefulShutdown" &&
++                     resetType != "ForceOff") &&
+                     *osState ==
+                         "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Inactive")
+                 {
++                    setStatus(
++                        "xyz.openbmc_project.Common.Task.OperationStatus.InProgress");
+                     taskData->state = "Running";
+                     taskData->messages.emplace_back(
+                         messages::taskStarted(index));
+@@ -3320,10 +3331,13 @@ void createResetMaintenanceWindowTask(
+                     return !task::completed;
+                 }
+                 else if (
+-                    (resetType != "GracefulShutdown" && resetType != "ForceOff") &&
++                    (resetType != "GracefulShutdown" &&
++                     resetType != "ForceOff") &&
+                     *osState ==
+                         "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Standby")
+                 {
++                    setStatus(
++                        "xyz.openbmc_project.Common.Task.OperationStatus.Completed");
+                     taskData->messages.emplace_back(
+                         messages::taskCompletedOK(index));
+                     taskData->state = "Completed";
+@@ -3331,10 +3345,13 @@ void createResetMaintenanceWindowTask(
+                 }
+ 
+                 else if (
+-                    (resetType == "ForceOff" || resetType == "GracefulShutdown") && 
++                    (resetType == "ForceOff" ||
++                     resetType == "GracefulShutdown") &&
+                     *osState ==
+                         "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Standby")
+                 {
++                    setStatus(
++                        "xyz.openbmc_project.Common.Task.OperationStatus.InProgress");
+                     taskData->state = "Running";
+                     taskData->messages.emplace_back(
+                         messages::taskStarted(index));
+@@ -3343,10 +3360,13 @@ void createResetMaintenanceWindowTask(
+                 }
+ 
+                 else if (
+-                    (resetType == "ForceOff" || resetType == "GracefulShutdown") &&
++                    (resetType == "ForceOff" ||
++                     resetType == "GracefulShutdown") &&
+                     *osState ==
+                         "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Inactive")
+                 {
++                    setStatus(
++                        "xyz.openbmc_project.Common.Task.OperationStatus.Completed");
+                     taskData->messages.emplace_back(
+                         messages::taskCompletedOK(index));
+                     taskData->state = "Completed";
+@@ -3373,13 +3393,13 @@ void createResetMaintenanceWindowTask(
+ 
+ void createSystemMaintenanceWindowTask(
+     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+-    task::Payload&& payload)
++    task::Payload&& payload, const std::string& resetType)
+ {
+     BMCWEB_LOG_ERROR("after do Task creartion ");
+ 
+     std::shared_ptr<task::TaskData> task = task::TaskData::createTask(
+-        [](boost::system::error_code ec, sdbusplus::message_t& msg,
+-           const std::shared_ptr<task::TaskData>& taskData) {
++        [resetType](boost::system::error_code ec, sdbusplus::message_t& msg,
++                    const std::shared_ptr<task::TaskData>& taskData) {
+         if (ec)
+         {
+             taskData->messages.emplace_back(messages::internalError());
+@@ -3392,6 +3412,12 @@ void createSystemMaintenanceWindowTask(
+ 
+         std::string index = std::to_string(taskData->index);
+ 
++        int convertedIndex = std::stoi(index);
++
++        setTaskId(static_cast<uint16_t>(convertedIndex));
++
++        setTaskName(resetType);
++
+         msg.read(iface, values);
+ 
+         const char* processName = "xyz.openbmc_project.State.Host0";
+@@ -3438,6 +3464,8 @@ void createSystemMaintenanceWindowTask(
+ 
+             if (timeOutValue != nullptr && *timeOutValue != 0)
+             {
++                setStatus(
++                    "xyz.openbmc_project.Common.Task.OperationStatus.New");
+                 taskData->state = "Pending";
+                 taskData->messages.emplace_back(messages::taskPaused(index));
+                 taskData->extendTimer(std::chrono::minutes(10));
+@@ -3448,6 +3476,8 @@ void createSystemMaintenanceWindowTask(
+                 *osState ==
+                     "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Standby")
+             {
++                setStatus(
++                    "xyz.openbmc_project.Common.Task.OperationStatus.InProgress");
+                 taskData->state = "Running";
+                 taskData->messages.emplace_back(messages::taskStarted(index));
+                 taskData->extendTimer(std::chrono::minutes(5));
+@@ -3458,6 +3488,8 @@ void createSystemMaintenanceWindowTask(
+                 *osState ==
+                     "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Inactive")
+             {
++                setStatus(
++                    "xyz.openbmc_project.Common.Task.OperationStatus.Completed");
+                 taskData->messages.emplace_back(
+                     messages::taskCompletedOK(index));
+                 taskData->state = "Completed";
+@@ -3502,6 +3534,12 @@ void SystemsImmediateResetTask(
+ 
+         std::string index = std::to_string(taskData->index);
+ 
++        int convertedIndex = std::stoi(index);
++
++        setTaskId(static_cast<uint16_t>(convertedIndex));
++
++        setTaskName(resetType);
++
+         msg.read(iface, values);
+ 
+         if (iface == "xyz.openbmc_project.State.OperatingSystem.Status")
+@@ -3532,6 +3570,8 @@ void SystemsImmediateResetTask(
+                 *osState ==
+                     "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Inactive")
+             {
++                setStatus(
++                    "xyz.openbmc_project.Common.Task.OperationStatus.InProgress");
+                 taskData->state = "Running";
+                 taskData->messages.emplace_back(messages::taskStarted(index));
+                 taskData->extendTimer(std::chrono::minutes(5));
+@@ -3542,6 +3582,8 @@ void SystemsImmediateResetTask(
+                 *osState ==
+                     "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Standby")
+             {
++                setStatus(
++                    "xyz.openbmc_project.Common.Task.OperationStatus.InProgress");
+                 taskData->state = "Running";
+                 taskData->messages.emplace_back(messages::taskStarted(index));
+                 taskData->extendTimer(std::chrono::minutes(5));
+@@ -3552,6 +3594,8 @@ void SystemsImmediateResetTask(
+                 *osState ==
+                     "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Standby")
+             {
++                setStatus(
++                    "xyz.openbmc_project.Common.Task.OperationStatus.Completed");
+                 taskData->messages.emplace_back(
+                     messages::taskCompletedOK(index));
+                 taskData->state = "Completed";
+@@ -3563,6 +3607,8 @@ void SystemsImmediateResetTask(
+                 *osState ==
+                     "xyz.openbmc_project.State.OperatingSystem.Status.OSStatus.Inactive")
+             {
++                setStatus(
++                    "xyz.openbmc_project.Common.Task.OperationStatus.Completed");
+                 taskData->messages.emplace_back(
+                     messages::taskCompletedOK(index));
+                 taskData->state = "Completed";
+@@ -3943,8 +3989,8 @@ inline void handleComputerSystemResetActionPost(
+                 }
+ 
+                 setSystemsPowerTransitionTimer(asyncResp, timeOut);
+-                createSystemMaintenanceWindowTask(asyncResp,
+-                                                  std::move(payload));
++                createSystemMaintenanceWindowTask(asyncResp, std::move(payload),
++                                                  resetType);
+                 systemResetAction(asyncResp, resetType);
+                 return;
+             }
+diff --git a/redfish-core/lib/task.hpp b/redfish-core/lib/task.hpp
+index 4714ad83..29344613 100644
+--- a/redfish-core/lib/task.hpp
++++ b/redfish-core/lib/task.hpp
+@@ -101,7 +101,7 @@ struct TaskData : std::enable_shared_from_this<TaskData>
+         matchStr(matchIn), index(idx),
+         startTime(std::chrono::system_clock::to_time_t(
+             std::chrono::system_clock::now())),
+-        status("OK"), state("Running"), messages(nlohmann::json::array()),
++        status("OK"), state("New"), messages(nlohmann::json::array()),
+         timer(crow::connections::systemBus->get_io_context())
+ 
+     {}
+-- 
+2.25.1
+
