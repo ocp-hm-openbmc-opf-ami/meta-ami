@@ -1,0 +1,72 @@
+From b64cc5d364cf2376340883fa69b55363549d2fad Mon Sep 17 00:00:00 2001
+From: Dhineshkumar M <mdhineshkumar@ami.com>
+Date: Fri, 22 Dec 2023 17:27:00 +0530
+Subject: [PATCH] reduce-time-for-throwing-error-during-nfs-mount
+
+#issue
+During mounting if wrong credential given throwing error take long time.
+
+#fix
+If wrong credential given mounting hangs for long time and throwing
+error get's delay. Added code change to kill the mount process after
+reaching certain time limit
+
+Signed-off-by: Dhineshkumar M <mdhineshkumar@ami.com>
+---
+ src/nfs.hpp | 26 +++++++++++++++++++++++++-
+ 1 file changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/src/nfs.hpp b/src/nfs.hpp
+index eb92ef8..e9e7435 100644
+--- a/src/nfs.hpp
++++ b/src/nfs.hpp
+@@ -10,6 +10,22 @@
+ 
+ namespace fs = std::filesystem;
+ #define MAX_CMD_NAME_LEN                ((4*256) + 256)
++#define MAX_IMG_PATH 256
++
++static const char* chkmountprocess = "pid=$!;"
++                                     "a=1;"
++                                     "while [ $a -lt 10 ];"
++                                     "do sleep 1;"
++                                     "a=`expr $a + 1`;"
++                                     "if [ -f /proc/$pid/exe ];"
++                                     "then continue;"
++                                     "else break;"
++                                     "fi;"
++                                     "done;"
++                                     "if [ $a == 10 ];"
++                                     "then echo killed;"
++                                     "kill -9 $pid;"
++                                     "fi;";
+ 
+ class NfsShare
+ {
+@@ -24,6 +40,7 @@ class NfsShare
+ 
+             char MountCmd [MAX_CMD_NAME_LEN]={0};
+             int size=sizeof(MountCmd);
++            char script[MAX_IMG_PATH*3] ={0};
+ 
+             int ret = snprintf (MountCmd, static_cast<size_t>(size), "mount -t nfs -o rw,nolock  %s %s",remote.c_str(), mountDir.c_str());
+             if(ret >= size || ret < 0)
+@@ -32,7 +49,14 @@ class NfsShare
+                 return false;
+             }
+ 
+-            auto ec = system(MountCmd);
++            ret = snprintf(script,MAX_IMG_PATH *3," %s > /dev/null & %s",MountCmd,chkmountprocess);
++            if ((ret >= MAX_IMG_PATH*3) || (ret < 0))
++            {
++                std::cerr << "Buffer Overflow\n";
++                return false;
++            }
++
++            auto ec = system(script);
+             if( ec != 0)
+             {
+                 LogMsg(Logger::Info, "Nfs Mount failed",
+-- 
+2.34.1
+
