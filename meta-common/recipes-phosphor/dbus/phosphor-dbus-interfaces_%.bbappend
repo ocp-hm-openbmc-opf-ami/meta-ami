@@ -22,6 +22,7 @@ SRC_URI += "file://0001-ARP-Control-property.patch\
             file://0037-backupRestore.patch \
             file://0018-snmp-agent.patch \
             file://0018-add-Task-yaml.interface.patch \
+            file://0019-Add-Error-Case-when-Setting-Static-Name-Server.patch \
         "
 
 EXTRA_OEMESON += "-Ddata_com_ami=true"

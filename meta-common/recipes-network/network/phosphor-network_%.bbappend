@@ -37,6 +37,7 @@ SRC_URI:append = " \
              file://0028-Flush-IP-Index-List-when-changing-to-DHCP.patch \
              file://0029-Write-Configuration-File-after-Setting-Default-Gateway.patch \
              file://0029-Synchronize-Default-Hostname-after-Boot-Ready-Signal.patch \
+             file://0030-Change-the-Behavior-of-Name-Server.patch \
           "
 
 
