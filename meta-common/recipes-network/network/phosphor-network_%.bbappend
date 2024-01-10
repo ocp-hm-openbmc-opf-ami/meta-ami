@@ -38,6 +38,7 @@ SRC_URI:append = " \
              file://0029-Write-Configuration-File-after-Setting-Default-Gateway.patch \
              file://0029-Synchronize-Default-Hostname-after-Boot-Ready-Signal.patch \
              file://0030-Change-the-Behavior-of-Name-Server.patch \
+             file://0029-Add-DBus-Control-for-Firewall-Configuration.patch \
           "
 
 

@@ -33,6 +33,7 @@ SRC_URI += "\
        file://0039-Add-CancelTask-IPMI-OEM-Commands-Support.patch \
        file://0039-Setting-a-sensor-upper-critical-value-affecting-othe.patch \
        file://0041-Enabled-flag-for-disable-the-get-chassis-power-statu.patch \
+       file://0036-Add-IPMI-OEM-Commands-for-Setting-Getting-Firewall-Configuration.patch \
     "
 
 SRC_URI_CORE:append = "file://0032-Add-Support-for-OS-Critical-Discrete-Sensor.patch"

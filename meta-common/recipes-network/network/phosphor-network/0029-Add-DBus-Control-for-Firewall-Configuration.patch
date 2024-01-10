@@ -1,0 +1,639 @@
+From 36f08c33a934ebb0653c98241fb97a1c6e21a296 Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Thu, 14 Dec 2023 00:07:05 -0800
+Subject: [PATCH] Add DBus Control for Firewall Configuration 	new file:  
+ src/firewall_configuration.cpp 	new file:  
+ src/firewall_configuration.hpp 	modified:   src/meson.build 
+ modified:   src/network_manager.cpp 	modified:   src/network_manager.hpp 
+ modified:   src/util.cpp 	modified:   src/util.hpp
+
+---
+ src/firewall_configuration.cpp | 359 +++++++++++++++++++++++++++++++++
+ src/firewall_configuration.hpp | 154 ++++++++++++++
+ src/meson.build                |   1 +
+ src/network_manager.cpp        |  14 ++
+ src/network_manager.hpp        |  12 ++
+ src/util.cpp                   |  16 ++
+ src/util.hpp                   |   7 +
+ 7 files changed, 563 insertions(+)
+ create mode 100644 src/firewall_configuration.cpp
+ create mode 100644 src/firewall_configuration.hpp
+
+diff --git a/src/firewall_configuration.cpp b/src/firewall_configuration.cpp
+new file mode 100644
+index 0000000..66931ca
+--- /dev/null
++++ b/src/firewall_configuration.cpp
+@@ -0,0 +1,359 @@
++#include "firewall_configuration.hpp"
++
++#include <phosphor-logging/elog-errors.hpp>
++#include <phosphor-logging/lg2.hpp>
++#include <xyz/openbmc_project/Common/error.hpp>
++#include <fmt/compile.h>
++#include <fmt/format.h>
++#include <arpa/inet.h>
++#include "util.hpp"
++#include "config.h"
++#include "config_parser.hpp"
++#include <sys/stat.h>
++#include "network_manager.hpp"
++#include "ethernet_interface.hpp"
++#include "types.hpp"
++#include <cstdlib>
++#include <fstream>
++
++
++
++namespace phosphor
++{
++namespace network
++{
++using namespace phosphor::network;
++using namespace phosphor::logging;
++namespace firewall
++{
++
++Configuration::Configuration(sdbusplus::bus_t& bus, stdplus::const_zstring path, Manager& parent) :
++    Iface(bus, path.c_str(), Iface::action::defer_emit),
++    bus(bus), manager(parent) 
++{
++
++    // Initial Rules File Path
++    rulesLists.push_back(fmt::format("{}/{}", AMI_IPTABLES_DIR, IPTABLES_RULES));
++    rulesLists.push_back(fmt::format("{}/{}", AMI_IPTABLES_DIR, IP6TABLES_RULES));
++    rulesLists.push_back(fmt::format("{}/{}", CUSTOM_IPTABLES_DIR, IPTABLES_RULES));
++    rulesLists.push_back(fmt::format("{}/{}", CUSTOM_IPTABLES_DIR, IP6TABLES_RULES));
++
++    // Restore Custom Rules
++    restoreConfigurationFile<in_addr>();
++    restoreConfigurationFile<in6_addr>();
++    emit_object_added();
++}
++
++/** @brief Implementation for AddRule
++ *  Add the rule with incoming parameters
++ */
++int16_t Configuration::addRule(FirewallIface::Target target, uint8_t control, FirewallIface::Protocol protocol, std::string startIPAddress, std::string endIPAddress, uint16_t startPort, uint16_t endPort, std::string macAddress, std::string startTime, std::string stopTime) {
++    int16_t ret = 0;
++    if (control == (uint8_t)ControlBit::TIMEOUT
++        || (control > (uint8_t)ControlBit::TIMEOUT && (control & (uint8_t)ControlBit::IP) == 0 && (control & (uint8_t)ControlBit::MAC) == 0 && (control & (uint8_t)ControlBit::PORT) == 0 && (control & (uint8_t)ControlBit::PROTOCOL) == 0) ) {
++        return -1;
++    } // if
++
++    if (startIPAddress.find(":") == std::string::npos && (getRules(FirewallIface::IP::IPV4)).size() >= MAX_RULE_NUM ) {
++        return -1;
++    } // if
++    else if (startIPAddress.find(":") != std::string::npos && (getRules(FirewallIface::IP::IPV6).size()) >= MAX_RULE_NUM ) {
++        return -1;
++    } // else if
++
++    std::string params = fmt::format("-A INPUT -j {}", target == FirewallIface::Target::ACCEPT ? "ACCEPT" : "DROP");
++
++    if ((control & (uint8_t)ControlBit::PROTOCOL) == (uint8_t)ControlBit::PROTOCOL) {
++        params = params + " -p " + (protocol == FirewallIface::Protocol::TCP ? "tcp" :
++                                    protocol == FirewallIface::Protocol::UDP ? "udp" :
++                                    protocol == FirewallIface::Protocol::ICMP ? "icmp" : "all");
++    } // if
++
++    if ((control & (uint8_t)ControlBit::IP) == (uint8_t)ControlBit::IP) {
++        std::variant<in_addr, in6_addr> addr1, addr2;
++        if (startIPAddress.find(":") != endIPAddress.find(":")) {
++            return -1;
++        } // if
++        else if (startIPAddress.find(":") != std::string::npos && endIPAddress.find(":") != std::string::npos) {
++            inet_pton(AF_INET6, startIPAddress.c_str(), &addr1);
++            inet_pton(AF_INET6, endIPAddress.c_str(), &addr2);
++        } // else if
++        else if (startIPAddress.find(".") != std::string::npos && endIPAddress.find(".") != std::string::npos) {
++            inet_pton(AF_INET, startIPAddress.c_str(), &addr1);
++            inet_pton(AF_INET, endIPAddress.c_str(), &addr2);
++        }
++
++        if (memcmp(&addr1, &addr2, sizeof(std::variant<in_addr, in6_addr>)) == 0) {
++            params += " -s " + startIPAddress;
++        } // if
++        else {
++            params += fmt::format(" -m iprange --src-range {}-{} ", startIPAddress, endIPAddress);;
++        }
++    } // if
++
++    if ((control & (uint8_t)ControlBit::PORT) == (uint8_t)ControlBit::PORT) {
++        if ((control & (uint8_t)ControlBit::PROTOCOL) != (uint8_t)ControlBit::PROTOCOL
++             || protocol == FirewallIface::Protocol::ICMP
++             || protocol == FirewallIface::Protocol::ALL
++             || startPort == 0) {
++            return -1;
++        }
++
++        params += fmt::format(" --dport {}:{} ", startPort, endPort != 0 ? endPort : MAX_PORT_NUM);
++    } // if
++
++    if ((control & (uint8_t)ControlBit::MAC) == (uint8_t)ControlBit::MAC) {
++        params += " -m mac --mac-source " + macAddress;
++    } // if
++
++    if ((control & (uint8_t)ControlBit::TIMEOUT) == (uint8_t)ControlBit::TIMEOUT) {
++        if (!startTime.empty())
++            params += " -m time --datestart " + startTime;
++        if (!stopTime.empty())
++            params += " -m time --datestop " + stopTime;
++    } // if
++
++    if ((control & (uint8_t)ControlBit::IP) != (uint8_t)ControlBit::IP) {
++        ret = std::system(fmt::format("iptables {}", params).c_str());
++        ret |= std::system(fmt::format("ip6tables {}", params).c_str());
++    } // if
++    else {
++        if (startIPAddress.find(":") == std::string::npos) {
++            ret = std::system(fmt::format("iptables {}", params).c_str());
++        } // if
++        else {
++            ret = std::system(fmt::format("ip6tables {}", params).c_str());
++        }
++    } // else
++
++    writeConfigurationFile<in_addr>();
++    writeConfigurationFile<in6_addr>();
++
++    return ret;
++}
++
++/** @brief Implementation for DelRule
++ *  Delete the rule with incoming parameters
++ */
++int16_t Configuration::delRule(FirewallIface::Target target, uint8_t control, FirewallIface::Protocol protocol, std::string startIPAddress, std::string endIPAddress, uint16_t startPort, uint16_t endPort, std::string macAddress, std::string startTime, std::string stopTime) {
++    int16_t ret;
++    if (control == (uint8_t)ControlBit::TIMEOUT
++        || (control > (uint8_t)ControlBit::TIMEOUT && (control & (uint8_t)ControlBit::IP) == 0 && (control & (uint8_t)ControlBit::MAC) == 0 && (control & (uint8_t)ControlBit::PORT) == 0 && (control & (uint8_t)ControlBit::PROTOCOL) == 0) ) {
++        return -1;
++    } // if
++
++    std::string params = fmt::format("-D INPUT -j {}", target == FirewallIface::Target::ACCEPT ? "ACCEPT" : "DROP");
++
++    if ((control & (uint8_t)ControlBit::PROTOCOL) == (uint8_t)ControlBit::PROTOCOL) {
++        params = params + " -p " + (protocol == FirewallIface::Protocol::TCP ? "tcp" :
++                                    protocol == FirewallIface::Protocol::UDP ? "udp" :
++                                    protocol == FirewallIface::Protocol::ICMP ? "icmp" : "all");
++    } // if
++
++    if ((control & (uint8_t)ControlBit::IP) == (uint8_t)ControlBit::IP) {
++        std::variant<in_addr, in6_addr> addr1, addr2;
++        if (startIPAddress.find(":") != std::string::npos && endIPAddress.find(".") != std::string::npos) {
++            return -1;
++        } // if
++        else if (startIPAddress.find(":") != std::string::npos && endIPAddress.find(":") != std::string::npos) {
++            inet_pton(AF_INET6, startIPAddress.c_str(), &addr1);
++            inet_pton(AF_INET6, endIPAddress.c_str(), &addr2);
++        } // else if
++        else if (startIPAddress.find(".") != std::string::npos && endIPAddress.find(".") != std::string::npos) {
++            inet_pton(AF_INET, startIPAddress.c_str(), &addr1);
++            inet_pton(AF_INET, endIPAddress.c_str(), &addr2);
++        }
++
++        if (memcmp(&addr1, &addr2, sizeof(std::variant<in_addr, in6_addr>)) == 0) {
++            params += " -s " + startIPAddress;
++        } // if
++        else {
++            params += fmt::format(" -m iprange --src-range {}-{} ", startIPAddress, endIPAddress);;
++        }
++    } // if
++
++    if ((control & (uint8_t)ControlBit::PORT) == (uint8_t)ControlBit::PORT) {
++        if ((control & (uint8_t)ControlBit::PROTOCOL) != (uint8_t)ControlBit::PROTOCOL
++             || protocol == FirewallIface::Protocol::ICMP
++             || protocol == FirewallIface::Protocol::ALL) {
++            return -1;
++        }
++        params += fmt::format(" --dport {}:{} ", startPort, endPort != 0 ? endPort : MAX_PORT_NUM);
++    } // if
++
++    if ((control & (uint8_t)ControlBit::MAC) == (uint8_t)ControlBit::MAC) {
++        params += " -m mac --mac-source " + macAddress;
++    } // if
++
++    if ((control & (uint8_t)ControlBit::TIMEOUT) == (uint8_t)ControlBit::TIMEOUT) {
++        if (!startTime.empty())
++            params += " -m time --datestart " + startTime;
++        if (!stopTime.empty())
++            params += " -m time --datestop " + stopTime;
++    } // if
++
++    if ((control & (uint8_t)ControlBit::IP) != (uint8_t)ControlBit::IP) {
++        ret = std::system(fmt::format("iptables {}", params).c_str());
++        ret |= std::system(fmt::format("ip6tables {}", params).c_str());
++    } // if
++    else {
++        if (startIPAddress.find(":") == std::string::npos) {
++            ret = std::system(fmt::format("iptables {}", params).c_str());
++        } // if
++        else {
++            ret = std::system(fmt::format("ip6tables {}", params).c_str());
++        }
++    } // else
++
++    writeConfigurationFile<in_addr>();
++    writeConfigurationFile<in6_addr>();
++    return ret;
++}
++
++/** @brief Implementation for FlushAll
++ *  Delete all the rules
++ */
++int16_t Configuration::flushAll(FirewallIface::IP ip){
++    switch (ip)
++    {
++        case FirewallIface::IP::IPV4:
++            execute("/usr/sbin/iptables", "iptables", "-F");
++            writeConfigurationFile<in_addr>();
++            break;
++        case FirewallIface::IP::IPV6:
++            execute("/usr/sbin/ip6tables", "ip6tables", "-F");
++            writeConfigurationFile<in6_addr>();
++            break;
++        case FirewallIface::IP::BOTH:
++            execute("/usr/sbin/iptables", "iptables", "-F");
++            execute("/usr/sbin/ip6tables", "ip6tables", "-F");
++            writeConfigurationFile<in_addr>();
++            writeConfigurationFile<in6_addr>();
++            break;
++        default:
++            log<level::INFO>("Error input.");
++            return -1;
++    }
++
++    return 0;
++}
++
++/** @brief Implementation for GetRules
++ *  Get all the rules
++ */
++std::vector<IPTableElementTuple> Configuration::getRules(FirewallIface::IP ip) {
++
++    std::ifstream ruleFile;
++    std::vector<IPTableElementTuple> returnVec;
++#if 1
++    if (ip == FirewallIface::IP::IPV4)
++        writeConfigurationFile<in_addr>();
++    else if (ip == FirewallIface::IP::IPV6)
++        writeConfigurationFile<in6_addr>();
++
++    for (auto elememt : rulesLists) {
++        if (ip == FirewallIface::IP::IPV4 && elememt.find(IP6TABLES_RULES) != std::string::npos)
++            continue;
++        if (ip == FirewallIface::IP::IPV6 && elememt.find(IPTABLES_RULES) != std::string::npos)
++            continue;
++        ruleFile.open(elememt, std::fstream::in);
++        if (ruleFile.is_open()) {
++            for (std::string line; std::getline(ruleFile, line);) {
++                if (!line.starts_with("-A"))
++                    continue;
++                if (line == "COMMIT")
++                    break;
++                std::vector<std::string> vec = splitStr(line, " ");
++                IPTableElementTuple element;
++                std::get<3>(element) = FirewallIface::Protocol::UNSPECIFIED;
++                for (int i = 0; i < vec.size(); i++) {
++                    if (vec.at(i) == "--comment") {
++                        i++;
++                        if (vec.at(i).find("Preload") != std::string::npos) {
++                            std::get<0>(element) = true;
++                        } // if
++                    } // if
++                    else if (vec.at(i) == "-j") {
++                        i++;
++                        std::get<1>(element) = vec.at(i) == "ACCEPT" ? FirewallIface::Target::ACCEPT : FirewallIface::Target::DROP;
++                    } // else if
++                    else if (vec.at(i) == "-p") {
++                        i++;
++                        std::get<3>(element) = vec.at(i) == "tcp" ? FirewallIface::Protocol::TCP : 
++                                                                    vec.at(i) == "udp" ? FirewallIface::Protocol::UDP : 
++                                                                    vec.at(i) == "icmp" ? FirewallIface::Protocol::ICMP : FirewallIface::Protocol::ALL;
++                        std::get<2>(element) |= (uint8_t)ControlBit::PROTOCOL;
++                    } // else if
++                    else if (vec.at(i) == "-s") {
++                        i++;
++                        std::get<4>(element) = vec.at(i);
++                        std::get<2>(element) |= (uint8_t)ControlBit::IP;
++                    } // else if
++                    else if (vec.at(i) == "--src-range") {
++                        i++;
++                        auto ips = splitStr(vec.at(i), "-");
++                        std::get<4>(element) = ips.at(0);
++                        std::get<5>(element) = ips.at(1);
++                        std::get<2>(element) |= (uint8_t)ControlBit::IP;
++                    } // else if
++                    else if (vec.at(i) == "--dport") {
++                        i++;
++                        auto ports = splitStr(vec.at(i), ":");
++                        std::get<6>(element) = std::stoi(ports.at(0));
++                        std::get<7>(element) = std::stoi(ports.at(1));
++                        std::get<2>(element) |= (uint8_t)ControlBit::PORT;
++                    } // else if
++                    else if (vec.at(i) == "--mac-source") {
++                        i++;
++                        std::get<8>(element) = vec.at(i);
++                        std::get<2>(element) |= (uint8_t)ControlBit::MAC;
++                    } // else if
++                    else if (vec.at(i) == "--datestart") {
++                        i++;
++                        std::get<9>(element) = vec.at(i);
++                        std::get<2>(element) |= (uint8_t)ControlBit::TIMEOUT;
++                    } // else if
++                    else if (vec.at(i) == "--datestop") {
++                        i++;
++                        std::get<10>(element) = vec.at(i);
++                        std::get<2>(element) |= (uint8_t)ControlBit::TIMEOUT;
++                    } // else if
++                } // for
++                returnVec.push_back(element);
++            }
++            ruleFile.close();
++        }
++    }
++
++#endif
++    return returnVec;
++}
++
++
++template <typename T>
++void Configuration::writeConfigurationFile(){
++    if (typeid(T) == typeid(in6_addr)) {
++        std::system(fmt::format("ip6tables-save | grep -iv AMI > {}/{}", CUSTOM_IPTABLES_DIR, IP6TABLES_RULES).c_str());
++    } // if
++    else {
++        std::system(fmt::format("iptables-save | grep -iv AMI > {}/{}", CUSTOM_IPTABLES_DIR, IPTABLES_RULES).c_str());
++    } // else
++}
++
++template <typename T>
++void Configuration::restoreConfigurationFile(){
++    if (typeid(T) == typeid(in6_addr)) {
++        if (fs::exists(fmt::format("{}/{}", CUSTOM_IPTABLES_DIR, IP6TABLES_RULES).c_str()))
++            std::system(fmt::format("ip6tables-restore --noflush < {}/{}", CUSTOM_IPTABLES_DIR, IP6TABLES_RULES).c_str());
++    } // if
++    else {
++        if (fs::exists(fmt::format("{}/{}", CUSTOM_IPTABLES_DIR, IP6TABLES_RULES).c_str()))
++            std::system(fmt::format("iptables-restore --noflush < {}/{}", CUSTOM_IPTABLES_DIR, IPTABLES_RULES).c_str());
++    } // else
++}
++
++
++
++} // namespace firewall
++} // namespace network
++} // namespace phosphor
+\ No newline at end of file
+diff --git a/src/firewall_configuration.hpp b/src/firewall_configuration.hpp
+new file mode 100644
+index 0000000..6ace4c9
+--- /dev/null
++++ b/src/firewall_configuration.hpp
+@@ -0,0 +1,154 @@
++#pragma once
++
++#include <filesystem>
++#include <xyz/openbmc_project/Network/FirewallConfiguration/server.hpp>
++#include <stdplus/zstring.hpp>
++#include <sdbusplus/bus.hpp>
++#include <sdbusplus/server/object.hpp>
++#include <stdplus/pinned.hpp>
++#include "types.hpp"
++
++namespace phosphor
++{
++namespace network
++{
++class Manager; // forward declaration of network manager
++
++
++namespace firewall
++{
++
++namespace fs = std::filesystem;
++using FirewallIface = sdbusplus::xyz::openbmc_project::Network::server::FirewallConfiguration;
++using Iface = sdbusplus::server::object_t<FirewallIface>;
++using IPTableElementTuple = std::tuple<bool, FirewallIface::Target, uint8_t, FirewallIface::Protocol, std::string, std::string, uint16_t, uint16_t, std::string, std::string, std::string>;
++
++
++constexpr auto AMI_IPTABLES_DIR = "/etc/iptables";
++constexpr auto CUSTOM_IPTABLES_DIR = "/etc/interface/iptables";
++constexpr auto IPTABLES_RULES = "iptables.rules";
++constexpr auto IP6TABLES_RULES = "ip6tables.rules";
++
++constexpr auto MAX_PORT_NUM = 65535;
++constexpr auto MAX_RULE_NUM = 64;
++
++
++enum class ControlBit {
++    PROTOCOL = 0x01,
++    IP = 0x02,
++    PORT = 0x04,
++    MAC = 0x08,
++    TIMEOUT = 0x10,
++};
++
++class Configuration : Iface {
++    public:
++        /* Define all of the basic class operations:
++         *     Not allowed:
++         *         - Default constructor to avoid nullptrs.
++         *         - Copy operations due to internal unique_ptr.
++         *         - Move operations due to 'this' being registered as the
++         *           'context' with sdbus.
++         *     Allowed:
++         *         - Destructor.
++         */
++        Configuration() = delete;
++        Configuration(const Configuration&) = delete;
++        Configuration& operator=(const Configuration&) = delete;
++        Configuration(Configuration&&) = delete;
++        Configuration& operator=(Configuration&&) = delete;
++        ~Configuration() = default;
++
++        /** @brief Constructor to put object onto bus at a dbus path.
++            *  @param[in] bus - Bus to attach to.
++            *  @param[in] path - Path to attach at.
++            */
++        Configuration(sdbusplus::bus_t& bus, stdplus::const_zstring path, Manager& parent);
++
++        /** @brief Implementation for AddRule
++         *  Add the rule with incoming parameters
++         *
++         *  @param[in] target - 
++         *  @param[in] control - 
++         *  @param[in] protocol - 
++         *  @param[in] startIPAddress - 
++         *  @param[in] endIPAddress - 
++         *  @param[in] startPort - 
++         *  @param[in] endPort - 
++         *  @param[in] macAddress - 
++         *  @param[in] startTime - 
++         *  @param[in] stop - 
++         *
++         *  @return result[int16_t] - 
++         */
++        int16_t addRule(
++            Target target,
++            uint8_t control,
++            Protocol protocol,
++            std::string startIPAddress,
++            std::string endIPAddress,
++            uint16_t startPort,
++            uint16_t endPort,
++            std::string macAddress,
++            std::string startTime,
++            std::string stop) override;
++        /** @brief Implementation for DelRule
++         *  Delete the rule with incoming parameters
++         *
++         *  @param[in] target - 
++         *  @param[in] control - 
++         *  @param[in] protocol - 
++         *  @param[in] startIPAddress - 
++         *  @param[in] endIPAddress - 
++         *  @param[in] startPort - 
++         *  @param[in] endPort - 
++         *  @param[in] macAddress - 
++         *  @param[in] startTime - 
++         *  @param[in] stop - 
++         *
++         *  @return result[int16_t] - 
++         */
++        int16_t delRule(
++            Target target,
++            uint8_t control,
++            Protocol protocol,
++            std::string startIPAddress,
++            std::string endIPAddress,
++            uint16_t startPort,
++            uint16_t endPort,
++            std::string macAddress,
++            std::string startTime,
++            std::string stop) override;
++        /** @brief Implementation for FlushAll
++         *  Delete all the rules according to IPv4, IPv6 or both
++         *
++         *  @param[in] ip - 
++         *
++         *  @return result[int16_t] - 
++         */
++        int16_t flushAll(IP ip) override;
++        /** @brief Implementation for GetRules
++         *  Get all the rules
++         *
++         *  @return rules[std::vector<std::tuple<bool, Target, uint8_t, Protocol, std::string, std::string, uint16_t, uint16_t, std::string, std::string, std::string>>] - 
++         */
++        std::vector<IPTableElementTuple> getRules(IP ip) override;
++
++        template <typename T>
++        void writeConfigurationFile();
++
++        template <typename T>
++        void restoreConfigurationFile();
++    private:
++        /** @brief sdbusplus DBus bus connection. */
++        sdbusplus::bus_t& bus;
++
++        /** @brief Network Manager object. */
++        stdplus::PinnedRef<Manager> manager;
++#if 1
++        std::vector<std::string> rulesLists;
++#endif
++}; // class Configuration
++} // namespace firewall
++} // namespace network
++} // namespace phosphor
+\ No newline at end of file
+diff --git a/src/meson.build b/src/meson.build
+index ba6805d..e2084bd 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -72,6 +72,7 @@ networkd_lib = static_library(
+   'system_configuration.cpp',
+   'system_queries.cpp',
+   'types.cpp',
++  'firewall_configuration.cpp',
+   'util.cpp',
+   'config_parser.cpp',
+   'dhcp_configuration.cpp',
+diff --git a/src/network_manager.cpp b/src/network_manager.cpp
+index 4019789..9cd9e08 100644
+--- a/src/network_manager.cpp
++++ b/src/network_manager.cpp
+@@ -168,6 +168,8 @@ Manager::Manager(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+         bus, (this->objPath / "dhcp").str, *this);
+     ddnsConf = std::make_unique<phosphor::network::dns::Configuration>(
+         bus, (this->objPath / "dns").str, *this);
++    firewallConf = std::make_unique<phosphor::network::firewall::Configuration>(
++        bus, (this->objPath / "firewall").str, *this);
+     setConfDir(confDir);
+     initSupportedPrivilges();
+ 
+@@ -777,6 +779,18 @@ void Manager::setConfDir(const fs::path& dir)
+             elog<InternalFailure>();
+         }
+     }
++
++    fs::path ipTablesDir(firewall::CUSTOM_IPTABLES_DIR);
++    customIPTablesDir = ipTablesDir;
++    if (!fs::exists(customIPTablesDir))
++    {
++        if (!fs::create_directories(customIPTablesDir))
++        {
++            log<level::ERR>("Unable to create the Custom IPTables Rule dir",
++                            entry("DIR=%s", customIPTablesDir.c_str()));
++            elog<InternalFailure>();
++        }
++    }
+ }
+ 
+ Manager::~Manager() {
+diff --git a/src/network_manager.hpp b/src/network_manager.hpp
+index 79f8ce0..8472a89 100644
+--- a/src/network_manager.hpp
++++ b/src/network_manager.hpp
+@@ -4,6 +4,7 @@
+ #include "system_configuration.hpp"
+ #include "types.hpp"
+ #include "dns_updater.hpp"
++#include "firewall_configuration.hpp"
+ #include "xyz/openbmc_project/Network/VLAN/Create/server.hpp"
+ 
+ #include <function2/function2.hpp>
+@@ -142,6 +143,11 @@ class Manager : public ManagerIface
+         return *ddnsConf;
+     }
+ 
++    inline auto& getFirewallConf()
++    {
++        return *firewallConf;
++    }
++
+     /** @brief Arms a timer to tell systemd-network to reload all of the network
+      * configurations
+      */
+@@ -202,6 +208,9 @@ class Manager : public ManagerIface
+     /** @brief pointer to ddns conf object. */
+     std::unique_ptr<dns::Configuration> ddnsConf = nullptr;
+ 
++    /** @brief pointer to firewall conf object. */
++    std::unique_ptr<firewall::Configuration> firewallConf = nullptr;
++
+     /** @brief Network Configuration directory. */
+     std::filesystem::path confDir;
+ 
+@@ -234,6 +243,9 @@ class Manager : public ManagerIface
+     /** @brief Bonding Interface Configuration backup directory. */
+     fs::path bondingConfBakDir;
+ 
++    /** @brief Custom IPTables Rule directory. */
++    fs::path customIPTablesDir;
++
+ #ifdef AMI_IP_ADVANCED_ROUTING_SUPPORT
+   private:
+     std::thread advanced_route_worker;
+-- 
+2.25.1
+
