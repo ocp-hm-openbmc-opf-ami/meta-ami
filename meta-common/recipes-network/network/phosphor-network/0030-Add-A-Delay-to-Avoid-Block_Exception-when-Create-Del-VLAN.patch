@@ -1,0 +1,101 @@
+From 966b529e9fe868f33a2995e2065b6367de64464a Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Thu, 4 Jan 2024 19:04:13 -0800
+Subject: [PATCH] Add A Delay to Avoid Block_Exception when Create/Delete VLAN
+ Interface. Fix VLAN Gateway Empty.
+
+	modified:   src/ethernet_interface.cpp
+	modified:   src/ethernet_interface.hpp
+	modified:   src/network_manager.cpp
+---
+ src/ethernet_interface.cpp | 23 ++++++++++++++++-------
+ src/ethernet_interface.hpp |  1 -
+ src/network_manager.cpp    |  3 +++
+ 3 files changed, 19 insertions(+), 8 deletions(-)
+
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index e710a77..1c0ee47 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -24,6 +24,7 @@
+ #include <string>
+ #include <unordered_map>
+ #include <variant>
++#include <chrono>
+ 
+ #include <sys/ioctl.h>        /* macro ioctl is defined */
+ #include <linux/if_packet.h>  /* struct sockaddr_ll (see man 7 packet) */
+@@ -1054,6 +1055,7 @@ ObjectPath EthernetInterface::createVLAN(uint16_t id)
+         elog<NotAllowed>(NotAllowedArgument::REASON(fmt::format("There are already {} VLAN interfaces. so not create VLAN with vid {}", VLAN_MAX_NUM, id).c_str()));
+     }
+ 
++    execute("/bin/systemctl", "systemctl", "stop", fmt::format("phosphor-ipmi-net@{}.service", interfaceName()).c_str());
+     auto objRoot = std::string_view(objPath).substr(0, objPath.rfind('/'));
+     auto macStr = MacAddressIntf::macAddress();
+     std::optional<stdplus::EtherAddr> mac;
+@@ -1090,12 +1092,16 @@ ObjectPath EthernetInterface::createVLAN(uint16_t id)
+         config::pathForIntfDev(manager.get().getConfDir(), intfName));
+ 
+     manager.get().addReloadPostHook(
+-            [ifname = interfaceName()]() {
+-                execute("/bin/systemctl", "systemctl", "restart", fmt::format("phosphor-ipmi-net@{}.service", ifname).c_str());
++            [&, ifname = interfaceName()]() {
++                if (ifname.find("usb0") == std::string::npos) {
++                    execute("/bin/systemctl", "systemctl", "reset-failed", fmt::format("phosphor-ipmi-net@{}.service", ifname).c_str());
++                    execute("/bin/systemctl", "systemctl", "start", fmt::format("phosphor-ipmi-net@{}.service", ifname).c_str());
++                }
+             }
+     );
+     writeConfigurationFile();
+     manager.get().reloadConfigs();
++    std::this_thread::sleep_for(std::chrono::seconds(3));
+ 
+     return ret;
+ }
+@@ -1697,6 +1703,7 @@ void EthernetInterface::VlanProperties::delete_()
+         if (intf->ifIdx == parentIdx)
+         {
+             parentIfName = intf->interfaceName();
++            execute("/bin/systemctl", "systemctl", "stop", fmt::format("phosphor-ipmi-net@{}.service", parentIfName).c_str());
+             intf->writeConfigurationFile();
+         }
+     }
+@@ -1708,8 +1715,12 @@ void EthernetInterface::VlanProperties::delete_()
+             [idx = eth.get().ifIdx]() { system::deleteIntf(idx); });
+ 
+         eth.get().manager.get().addReloadPostHook(
+-                    [parentIfName]() {
+-                        execute("/bin/systemctl", "systemctl", "restart", fmt::format("phosphor-ipmi-net@{}.service", parentIfName).c_str());
++                    [&, parentIfName]() {
++                        if (parentIfName.find("usb0") == std::string::npos) {
++                            execute("/bin/systemctl", "systemctl", "reset-failed", fmt::format("phosphor-ipmi-net@{}.service", parentIfName).c_str());
++                            execute("/bin/systemctl", "systemctl", "start", fmt::format("phosphor-ipmi-net@{}.service", parentIfName).c_str());
++                            execute("/bin/networkctl", "networkctl", "reconfigure", parentIfName.c_str());
++                        }
+                     }
+         );
+         // Ignore the interface so the reload doesn't re-query it
+@@ -1717,6 +1728,7 @@ void EthernetInterface::VlanProperties::delete_()
+     }
+ 
+     eth.get().manager.get().reloadConfigs();
++    std::this_thread::sleep_for(std::chrono::seconds(3));
+ }
+ 
+ nlohmann::json EthernetInterface::readJsonFile(const std::string& configFile)
+diff --git a/src/network_manager.cpp b/src/network_manager.cpp
+index a503741..20f64e2 100644
+--- a/src/network_manager.cpp
++++ b/src/network_manager.cpp
+@@ -296,6 +296,9 @@ void Manager::createInterface(const AllIntfInfo& info, bool enabled)
+         auto it = interfaces.find(*info.intf.name);
+         if (it != interfaces.end())
+         {
++            if (interfacesByIdx.find(info.intf.idx) == interfacesByIdx.end()) {
++                interfacesByIdx.insert_or_assign(info.intf.idx, it->second.get());
++            }
+             it->second->updateInfo(info.intf);
+             return;
+         }
+-- 
+2.25.1
