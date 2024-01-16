@@ -32,6 +32,11 @@ SRC_URI_NON_PFR = "file://0001-adding-Fieldmode-to-enable-failure-when-signature
 SRC_URI_NON_PFR_DUAL:append = " file://0002-adding-support-for-non-pfr-dual-image-feature.patch \
                                 "
 SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'dual-image', SRC_URI_NON_PFR_DUAL,'', d)}"
+
+SRC_URI_NON_PFR_HW_FAILSAFE_BOOT:append = " file://0003-add-hw-failsafe-boot-support.patch \
+                                            "
+
+SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'hw-failsafe-boot', SRC_URI_NON_PFR_HW_FAILSAFE_BOOT,'', d)}"
 SRC_URI:append = " ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
 
 SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', ' file://flash-layout-update.cfg  ', d)}"

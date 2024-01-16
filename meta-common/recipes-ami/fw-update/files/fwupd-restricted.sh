@@ -284,12 +284,22 @@ bmc_full_flash() {
             update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_START
             local requestedactivationstate=$(get_requestedactivation_status bmc_bkup)
             if [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
+                regval=$(devmem 0x1e620064 )
+                bootmode=$(( ($regval >> 6) & 1 ))
                 if [ "$BOOT_SOURCE" -eq 0 ]; then
                     log "BMC Full Flash - Starting the SPI write on bkup CS1 spi. It will take ~8 minutes...."
-                    local mtdPart=$(cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"alt-bmc\"" {print $1}')
+		    if [ "$bootmode" -eq 1 ]; then
+                        local mtdPart=$( cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"bmc\"" {print $1}')
+                        flashoffset=$(stat -c "%s" $LOCAL_PATH)
+                        flashoffset=$(printf "%x\n" $flashoffset)
+                    else
+                        local mtdPart=$(cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"alt-bmc\"" {print $1}')
+                        flashoffset=0
+                    fi
                 else
                     log "BMC Full Flash - Starting the SPI write on bkup CS1 spi. It will take ~8 minutes...."
                     local mtdPart=$(cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"bmc\"" {print $1}')
+                    flashoffset=0
                     # stop nv sync
                     systemctl stop nv-sync.service
                     # unmount rwfs
@@ -304,7 +314,7 @@ bmc_full_flash() {
                     update_percentage $UPDATE_PERCENT_FAIL
                     return 1
                 fi
-                local rc=$(mtd-util -d /dev/$mtdPart c $LOCAL_PATH 0)
+                local rc=$(mtd-util -d /dev/$mtdPart c $LOCAL_PATH 0x$flashoffset)
                 # Log Event: Update percentage and log event
                 if [[ "$rc" -ne 0 ]]; then
                     log "BMC Full Flash - Image update failed"

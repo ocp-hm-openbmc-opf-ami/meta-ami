@@ -35,6 +35,11 @@ SRC_URI_NON_PFR_DUAL:append = "file://0024-add-fmc-ce0-ce1-acccess-support.patch
 SRC_URI_NON_PFR_DUAL:append:evb-ast2600  = "file://0025-add-dual-image-dts-support-for-evb.patch "
 SRC_URI:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'dual-image', SRC_URI_NON_PFR_DUAL,'', d)}"
 
+SRC_URI_NON_PFR_SINGLE_SPI_ABR:append = "file://0026-add-hw-failsafe-boot-single-spi-abr-support.patch \
+                                        "
+
+SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'single-spi-abr', SRC_URI_NON_PFR_SINGLE_SPI_ABR,'', d)}"
+
 SRC_CPLD_JTAG = "file://jtag-fragment.cfg"
 
 SRC_ASD_JTAG = "file://jtag-asd-fragment.cfg"
