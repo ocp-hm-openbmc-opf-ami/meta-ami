@@ -21,6 +21,7 @@ SRC_URI += "file://nfs.cfg \
             file://CVE-2023-5717.patch \
             file://CVE-2023-31085.patch \
             file://CVE-2023-42754.patch \
+            file://CVE-2023-42752.patch \
             file://iptables.cfg \
            "
 
