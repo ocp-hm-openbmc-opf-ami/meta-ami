@@ -1,0 +1,161 @@
+From 3b5b7ee2713ef725268c29daa3089123aed6f414 Mon Sep 17 00:00:00 2001
+From: pandiarajt <pandiarajt@ami.com>
+Date: Tue, 2 Jan 2024 15:14:33 +0530
+Subject: [PATCH 1170/1170] Fix for getting BMC Boot Flag Valid Bit Clearing
+ value
+
+---
+ chassishandler.cpp | 84 ++++++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 78 insertions(+), 6 deletions(-)
+
+diff --git a/chassishandler.cpp b/chassishandler.cpp
+index f59309d..b8d4e6d 100644
+--- a/chassishandler.cpp
++++ b/chassishandler.cpp
+@@ -1843,6 +1843,7 @@ static uint8_t transferStatus = setComplete;
+ static uint8_t bootFlagValidBitClr = 0;
+ static uint5_t bootInitiatorAckData = 0x0;
+ static bool cmosClear = false;
++uint8_t                   ParameterValid[16];
+ 
+ /** @brief implements the Get Chassis system boot option
+  *  @param ctx - context pointer
+@@ -1878,13 +1879,28 @@ ipmi::RspType<ipmi::message::Payload>
+     ipmi::message::Payload response;
+     response.pack(version, uint4_t{});
+     using namespace boot_options;
++    bool flagvalid ;
+ 
++    uint8_t parameter = static_cast<uint8_t>(bootOptionParameter);
++    uint8_t ParamByte =  parameter / 8;  // Calculate the index in ParameterValid array
++    uint8_t ParamBit = parameter % 8;   // Calculate the bit position in the index
++
++    if (ParameterValid[ParamByte] & (1 << ParamBit))
++    {
++        // The bit is set, meaning flagvalid is true
++        flagvalid = true;
++    }
++    else
++    {
++        // The bit is not set, meaning flagvalid is false
++        flagvalid = false;
++    }
+     IpmiValue bootOption = ipmiDefault;
+ 
+     if (types::enum_cast<BootOptionParameter>(bootOptionParameter) ==
+         BootOptionParameter::setInProgress)
+     {
+-        response.pack(bootOptionParameter, reserved1, transferStatus);
++        response.pack(bootOptionParameter, flagvalid, transferStatus);
+         return ipmi::responseSuccess(std::move(response));
+     }
+ 
+@@ -1892,7 +1908,7 @@ ipmi::RspType<ipmi::message::Payload>
+         BootOptionParameter::bootInfo)
+     {
+         constexpr uint8_t writeMask = 0;
+-        response.pack(bootOptionParameter, reserved1, writeMask,
++        response.pack(bootOptionParameter, flagvalid, writeMask,
+                       bootInitiatorAckData);
+         return ipmi::responseSuccess(std::move(response));
+     }
+@@ -1900,7 +1916,7 @@ ipmi::RspType<ipmi::message::Payload>
+     if (types::enum_cast<BootOptionParameter>(bootOptionParameter) ==
+         BootOptionParameter::bootFlagValidClr)
+     {
+-        response.pack(bootOptionParameter, reserved1,
++        response.pack(bootOptionParameter, flagvalid,
+                       uint5_t{bootFlagValidBitClr}, uint3_t{});
+         return ipmi::responseSuccess(std::move(response));
+     }
+@@ -1969,7 +1985,7 @@ ipmi::RspType<ipmi::message::Payload>
+ 
+             uint1_t validFlag = valid ? 1 : 0;
+ 
+-            response.pack(bootOptionParameter, reserved1, uint5_t{},
++            response.pack(bootOptionParameter, flagvalid, uint5_t{},
+                           uint1_t{biosBootType}, uint1_t{permanent},
+                           uint1_t{validFlag}, uint2_t{}, uint4_t{bootOption},
+                           uint1_t{}, cmosClear, uint8_t{}, uint8_t{},
+@@ -1991,7 +2007,7 @@ ipmi::RspType<ipmi::message::Payload>
+             if (types::enum_cast<BootOptionParameter>(bootOptionParameter) ==
+                 BootOptionParameter::opalNetworkSettings)
+             {
+-                response.pack(bootOptionParameter, reserved1);
++                response.pack(bootOptionParameter, flagvalid);
+                 int ret = getHostNetworkData(response);
+                 if (ret < 0)
+                 {
+@@ -2026,12 +2042,68 @@ ipmi::RspType<ipmi::message::Payload>
+ }
+ 
+ ipmi::RspType<> ipmiChassisSetSysBootOptions(ipmi::Context::ptr ctx,
+-                                             uint7_t parameterSelector, bool,
++                                             uint7_t parameterSelector, bool flagvalid,
+                                              ipmi::message::Payload& data)
+ {
+     using namespace boot_options;
+     ipmi::Cc rc;
++    uint8_t Parameter = 0, ParamByte = 0, ParamBit = 0;
++
++    Parameter = static_cast<uint8_t>(parameterSelector & 0x7F);
++
++    ParamByte = Parameter/8; //to choose the index where the parameter valid bit is present
++    ParamBit = Parameter%8;  //to choose the parameter valid bit in the index
++
++    if(data.fullyUnpacked())
++    {
++
++        if (ParameterValid[ParamByte] & (1 << ParamBit) )
++        {
++            /*if not req to unlock */
++            if (0 != (flagvalid))
++            {
++                ipmi::responseInvalidFieldRequest();
++            }
++        }
++        /*Change the valid bit*/
++        /*Check for valid bit settings */
++        if (0 != (flagvalid))
++        {
++            /* The valid bit for parameters 0 - 7  are SET/RESET to
++             *  corresponding bits 0-7 in ParameterValid field
++             */
++            ParameterValid[ParamByte] |= (1<<(ParamBit));
++        }
++        else
++        {
++            ParameterValid[ParamByte] &= ~(1<<(ParamBit));
++        }
++        return ipmi::responseSuccess();
++
++    }
+ 
++    if (ParameterValid[ParamByte] & (1 << ParamBit) )
++    {
++        /*if not req to unlock */
++        if (0 != (flagvalid))
++        {
++            ipmi::responseInvalidFieldRequest();
++        }
++    }
++    /*Change the valid bit*/
++    /*Check for valid bit settings */
++    if (0 != (flagvalid))
++    {
++        /* The valid bit for parameters 0 - 7  are SET/RESET to
++         *  corresponding bits 0-7 in ParameterValid field
++         */
++        ParameterValid[ParamByte] |= (1<<(ParamBit));
++    }
++    else
++    {
++        ParameterValid[ParamByte] &= ~(1<<(ParamBit));
++    }
++     
+     if (types::enum_cast<BootOptionParameter>(parameterSelector) ==
+         BootOptionParameter::setInProgress)
+     {
+-- 
+2.25.1
+
