@@ -28,12 +28,13 @@ SRC_URI += "\
        file://0034-Fix-for-GetSMTP-ConfigParam5.patch \
        file://0034-SDR-Info-Free-space-support.patch \
        file://0035-fix-for-get-sdr-count.patch \
-       file://0036-Add-Support-for-Battery-Discrete-Sensor.patch \
        file://0038-Create-ipmi-OEM-command-for-enable-and-disable-KCS-state.patch \
+       file://0036-Add-Support-for-Battery-Discrete-Sensor.patch \
        file://0039-Add-CancelTask-IPMI-OEM-Commands-Support.patch \
        file://0039-Setting-a-sensor-upper-critical-value-affecting-othe.patch \
        file://0041-Enabled-flag-for-disable-the-get-chassis-power-statu.patch \
        file://0036-Add-IPMI-OEM-Commands-for-Setting-Getting-Firewall-Configuration.patch \
+       file://0042-Add-ipmi-command-for-pwr-save-mode.patch \
     "
 
 SRC_URI_CORE:append = "file://0032-Add-Support-for-OS-Critical-Discrete-Sensor.patch"

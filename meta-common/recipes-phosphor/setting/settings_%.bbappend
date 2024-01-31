@@ -6,6 +6,7 @@ SRC_URI += " \
            file://system-guid.sh \
            file://system-guid.service \
            file://0003-Enable-the-SOL-by-default.patch \
+           file://0004-USB-Register-USB-DBus-Methods.patch \
 "
 
 SRC_URI_NON_PFR = "file://0002-moving-cpld-inventory-for-non-pfr-to-software-manage.patch "
