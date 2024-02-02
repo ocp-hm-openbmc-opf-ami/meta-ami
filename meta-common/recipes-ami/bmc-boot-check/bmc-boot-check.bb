@@ -34,3 +34,4 @@ SYSTEMD_SERVICE:${PN} = "xyz.openbmc_project.bmcbootcheck.service"
 SYSTEMD_SERVICE:${PN}:append:intel-ast2600 = " ${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'hw-failsafe-boot', \
                                                'xyz.openbmc_project.alternatebootcheck.service', \
                                                '', d)}"
+

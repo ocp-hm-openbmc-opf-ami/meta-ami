@@ -15,3 +15,4 @@ while read -r l; do
     echo rsync -a -R  "${l}" "${DEST_DIR}"
     rsync -a -R  "${l}" "${DEST_DIR}"
 done < ${SYNCLIST}
+

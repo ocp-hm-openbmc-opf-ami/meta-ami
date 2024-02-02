@@ -1,151 +1,222 @@
-From 0f1f1e5cd52bc4983c29031b2216104083e2b9b6 Mon Sep 17 00:00:00 2001
+From 9e8c0a7e0bc0c9a7ddb4bc97c2c13a779dd9fc33 Mon Sep 17 00:00:00 2001
 From: vipinc <vipinc@ami.com>
-Date: Tue, 14 Nov 2023 11:59:35 +0530
-Subject: [PATCH 1/1] Add linear and circular SEL policy support
+Date: Fri, 19 Jan 2024 10:47:51 +0530
+Subject: [PATCH 4/4] Add D-Bus SEL Logging and SEL Policy support
 
-By default phosphor-logging support logging SEL event in
-circular approach, Once the error/info capacity is reached
-the oldest entry will get removed and will create space for
-new entry.
-This patch add support to log event based on the policy
-configuration.Whenever and event is logged, the capacity
-will be verified and if already full the event will be
-ignored when policy configuration is Linear.but for the
-same scenario the oldest event will be cleared when the
-policy configuration is Circular.Default SEL policy will
-remain as circular policy.
+This patch add support for Logging SEL Events to D-Bus instead of
+file based logging. Existing OneTree support stores the SEL Logs in
+file's and the IPMI/Redfish interface will read the corresponding files
+based on the Request. This patch Add support to Add/Read SEL logs from the
+D-Bus objects.
 
-Tested in Ast2600evb and Intel Archercity Platform:
+All the logs will be updated to D-Bus using "Create" D-Bus method
+from phosphor-logging package. All the events loged for Threshold
+and Discrete sensor will be updated to D-Bus objected and Redfish
+messages is framed properly for Event Logs. Moved the PEF to
+common part so when a SEL event is logged PEF action can be
+performed.This patch add support for properly logging the discrete
+sensor event, so it will be logged properly into Redfish & IPMI.
 
-For testing configured error cap : 10 and info cap : 12
+This patch also add support log SEL Event based on SEL policy
 
-1) Set the policy to Linear policy:
+Tested in AST2600evb & Intel Archercity Platform:
 
-root@intel-obmc:~# ipmitool raw 0x32 0x7e
- 01		// Circular Policy
-root@intel-obmc:~# ipmitool raw 0x32 0x7f 0x00
-		//success
-root@intel-obmc:~# ipmitool raw 0x32 0x7e
- 00		// Linear Policy
+1)Add SEL Entry Command:
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel list
+SEL has no entries
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 raw 0x0a 0x44 0x00 0x00 0x02 0x00 0x00 0x00 0x00 0x41 0x0
+0x04 0x20 0x0 0x6f 0x01 0xff 0xff
+01 00 //Response
+msgubuntu@Dell-server-3:~$
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel list
+1 | 11/05/2023 | 16:17:02 | OS Critical Stop | Run-time critical stop | Asserted
+msgubuntu@Dell-server-3:~$
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 raw 0x0a 0x44 0x00 0x00 0x02 0x00 0x00 0x00 0x00 0x41 0x0 0x04 0x12 0x0 0x6f 0x05 0xff 0xff
+02 00 //Response
+msgubuntu@Dell-server-3:~$
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel list
+1 | 11/05/2023 | 16:17:02 | OS Critical Stop | Run-time critical stop | Asserted
+2 | 11/05/2023 | 16:17:24 | System Event | Timestamp Clock Sync | Asserted
+
+2) Get SEL Entry command:
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel list
+1 | 11/05/2023 | 16:17:02 | OS Critical Stop | Run-time critical stop | Asserted
+2 | 11/05/2023 | 16:17:24 | System Event | Timestamp Clock Sync | Asserted
+
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel get 0x01
+SEL Record ID : 0001
+Record Type : 02
+Timestamp : 11/05/2023 16:17:02
+Generator ID : 0041
+EvM Revision : 04
+Sensor Type : OS Critical Stop
+Sensor Number : 00
+Event Type : Sensor-specific Discrete
+Event Direction : Assertion Event
+Event Data : 01ffff
+Description : Run-time critical stop
+
+msgubuntu@Dell-server-3:~$
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel get 0x02
+SEL Record ID : 0002
+Record Type : 02
+Timestamp : 11/05/2023 16:17:24
+Generator ID : 0041
+EvM Revision : 04
+Sensor Type : System Event
+Sensor Number : 00
+Event Type : Sensor-specific Discrete
+Event Direction : Assertion Event
+Event Data : 05ffff
+Description : Timestamp Clock Sync
+
+3)Delete SEL Entry :
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel list
+1 | 11/05/2023 | 16:17:02 | OS Critical Stop | Run-time critical stop | Asserted
+2 | 11/05/2023 | 16:17:24 | System Event | Timestamp Clock Sync | Asserted
+msgubuntu@Dell-server-3:~$
+
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel delete 0x01
+Deleted entry 1 //Response
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel list
+2 | 11/05/2023 | 16:17:24 | System Event | Timestamp Clock Sync | Asserted
+msgubuntu@Dell-server-3:~$
+
+4)Clear SEL Entry:
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel list
+2 | 11/05/2023 | 16:17:24 | System Event | Timestamp Clock Sync | Asserted
+msgubuntu@Dell-server-3:~$
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel clear
+Clearing SEL. Please allow a few seconds to erase.
+msgubuntu@Dell-server-3:~$
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel list
+SEL has no entries //Response
+msgubuntu@Dell-server-3:~$
+
+- Configure SMTP Mail alert and trigger SEL events to verify PEF.
+
+1) Threshold temperature sensor:
+root@intel-obmc:~# ipmitool sensor | grep -i BMC
+BMC Temp | 32.000 | degrees C | ok | na | 0.000 | 5.000 | 110.000 | 115.000 | na
 root@intel-obmc:~#
-
-2) Now log the SEL Event such that the limit is reached, in the
-case 12.
-
-root@intel-obmc:~# ipmitool sel info
-SEL Information
-Version          : 1.5 (v1.5, v2 compliant)
-Entries          : 12
-Free Space       : 65535 bytes or more
-Percent Used     : unknown
-Last Add Time    : 11/09/23 16:52:56 UTC
-Last Del Time    : 11/09/23 16:28:38 UTC
-Overflow         : false
-Supported Cmds   : 'Delete' 'Reserve'
+root@intel-obmc:~# ipmitool sensor thresh "BMC Temp" lnc 40
+Locating sensor record 'BMC Temp'...
+Setting sensor "BMC Temp" Lower Non-Critical threshold to 40.000
+root@intel-obmc:~#
 root@intel-obmc:~# ipmitool sel list
-   1 | 11/09/23 | 16:50:57 UTC | OS Critical Stop | Run-time critical stop | Asserted
-   2 | 11/09/23 | 16:51:08 UTC | Temperature | Lower Non-critical going high | Asserted
-   3 | 11/09/23 | 16:51:18 UTC | Processor |  | Asserted
-   4 | 11/09/23 | 16:51:23 UTC | Power Supply |  | Asserted
-   5 | 11/09/23 | 16:51:31 UTC | Fan | Lower Non-critical going high | Asserted
-   6 | 11/09/23 | 16:51:40 UTC | System Event |  | Asserted
-   7 | 11/09/23 | 16:51:56 UTC | System Event |  | Asserted
-   8 | 11/09/23 | 16:52:07 UTC | System Event #0x05 |  | Asserted
-   9 | 11/09/23 | 16:52:20 UTC | OS Critical Stop | Run-time critical stop | Asserted
-   a | 11/09/23 | 16:52:25 UTC | System Event | OEM System boot event | Asserted
-   b | 11/09/23 | 16:52:34 UTC | OS Boot | C: boot completed | Asserted
-   c | 11/09/23 | 16:52:56 UTC | Watchdog2 | Hard reset | Asserted
+1 | 11/05/23 | 17:00:42 UTC | Temperature #0x01 | Lower Non-critical going low | Asserted
 root@intel-obmc:~#
 
-3) As the limit is reached try to add few more logs and to confirm
-Linear SEL policy is working.
+//Received Mail alert at configured destination:
 
-root@intel-obmc:~# ipmitool raw 0x0a 0x44 0x00 0x00 0x02 0x00 0x00 0x00 0x00 0x41 0x0 0x04 0x23 0x0 0x6f 0x01 0xff 0xff
- 0d 00
-root@intel-obmc:~# ipmitool raw 0x0a 0x44 0x00 0x00 0x02 0x00 0x00 0x00 0x00 0x41 0x0 0x04 0x23 0x0 0x6f 0x01 0xff 0xff
- 0d 00
-root@intel-obmc:~# ipmitool sel info
-SEL Information
-Version          : 1.5 (v1.5, v2 compliant)
-Entries          : 12
-Free Space       : 65535 bytes or more
-Percent Used     : unknown
-Last Add Time    : 11/09/23 16:52:56 UTC
-Last Del Time    : 11/09/23 16:28:38 UTC
-Overflow         : false
-Supported Cmds   : 'Delete' 'Reserve'
-root@intel-obmc:~# ipmitool sel list
-   1 | 11/09/23 | 16:50:57 UTC | OS Critical Stop | Run-time critical stop | Asserted
-   2 | 11/09/23 | 16:51:08 UTC | Temperature | Lower Non-critical going high | Asserted
-   3 | 11/09/23 | 16:51:18 UTC | Processor |  | Asserted
-   4 | 11/09/23 | 16:51:23 UTC | Power Supply |  | Asserted
-   5 | 11/09/23 | 16:51:31 UTC | Fan | Lower Non-critical going high | Asserted
-   6 | 11/09/23 | 16:51:40 UTC | System Event |  | Asserted
-   7 | 11/09/23 | 16:51:56 UTC | System Event |  | Asserted
-   8 | 11/09/23 | 16:52:07 UTC | System Event #0x05 |  | Asserted
-   9 | 11/09/23 | 16:52:20 UTC | OS Critical Stop | Run-time critical stop | Asserted
-   a | 11/09/23 | 16:52:25 UTC | System Event | OEM System boot event | Asserted
-   b | 11/09/23 | 16:52:34 UTC | OS Boot | C: boot completed | Asserted
-   c | 11/09/23 | 16:52:56 UTC | Watchdog2 | Hard reset | Asserted
-root@intel-obmc:~#
+msgubuntu@smtp:~/Maildir/new$ cat 1699203695.V802I1fc0304M76023.smtp
+Return-Path: <dbusSELtest@ami.com>
+X-Original-To: msgubuntu@coreqa.com
+Delivered-To: msgubuntu@coreqa.com
+Received: from intel-obmc (unknown [10.0.136.250])
+by smtp.coreqa.com (Postfix) with ESMTP id 084392640A9A
+for <msgubuntu@coreqa.com>; Sun, 5 Nov 2023 22:31:35 +0530 (IST)
+Date: Sun, 05 Nov 2023 17:00:42 +0000
+From: dbusSELtest@ami.com
+Message-Id: <1699203642.244440.315@intel-obmc>
+To: msgubuntu@coreqa.com
+Subject: Alert from intel-obmc
 
-4) Now set the policy to circular SEL
+Sensor Name : BMC_Temp
+Sensor Type : temperature
+Severity : Warning
+Description : BMC_Temp warning low threshold assert. Reading=32.000000 Threshold=40.000000.
+msgubuntu@smtp:~/Maildir/new$
 
-root@intel-obmc:~# ipmitool raw 0x32 0x7e
- 00			// Linear Policy
-root@intel-obmc:~# ipmitool raw 0x32 0x7f 0x01
-			// success
-root@intel-obmc:~# ipmitool raw 0x32 0x7e
- 01			// Circular Policy
-root@intel-obmc:~#
+//Redfish Event log
 
-5)Now log few more entries and confirm its added by
-clearing the oldest entry
-//Added processor sensor event clear OS Critical event
+RF URL: https://10.0.136.250/redfish/v1/Systems/system/LogServices/EventLog/Entries/1
+{
+"@odata.id": "/redfish/v1/Systems/system/LogServices/EventLog/Entries/1",
+"@odata.type": "#LogEntry.v1_9_0.LogEntry",
+"AdditionalDataURI": "/redfish/v1/Systems/system/LogServices/EventLog/Entries/1/attachment",
+"Created": "2023-11-05T17:00:42.146+00:00",
+"EntryType": "Event",
+"Id": "1",
+"Message": "BMC_Temp warning low threshold assert. Reading=32.000000 Threshold=40.000000.",
+"Modified": "2023-11-05T17:00:42.146+00:00",
+"Name": "System Event Log Entry",
+"Resolved": false,
+"Severity": "OK"
+}
+
+2) Discrete Sensor Event:
 
 root@intel-obmc:~# ipmitool sel list
-   1 | 11/09/23 | 16:50:57 UTC | OS Critical Stop | Run-time critical stop | Asserted
-   2 | 11/09/23 | 16:51:08 UTC | Temperature | Lower Non-critical going high | Asserted
-   3 | 11/09/23 | 16:51:18 UTC | Processor |  | Asserted
-   4 | 11/09/23 | 16:51:23 UTC | Power Supply |  | Asserted
-   5 | 11/09/23 | 16:51:31 UTC | Fan | Lower Non-critical going high | Asserted
-   6 | 11/09/23 | 16:51:40 UTC | System Event |  | Asserted
-   7 | 11/09/23 | 16:51:56 UTC | System Event |  | Asserted
-   8 | 11/09/23 | 16:52:07 UTC | System Event #0x05 |  | Asserted
-   9 | 11/09/23 | 16:52:20 UTC | OS Critical Stop | Run-time critical stop | Asserted
-   a | 11/09/23 | 16:52:25 UTC | System Event | OEM System boot event | Asserted
-   b | 11/09/23 | 16:52:34 UTC | OS Boot | C: boot completed | Asserted
-   c | 11/09/23 | 16:52:56 UTC | Watchdog2 | Hard reset | Asserted
-root@intel-obmc:~# ipmitool raw 0x0a 0x44 0x00 0x00 0x02 0x00 0x00 0x00 0x00 0x41 0x0 0x04 0x07 0x0 0x6f 0x01 0xff 0xff
- 0d 00
-root@intel-obmc:~# ipmitool sel list
-   2 | 11/09/23 | 16:51:08 UTC | Temperature | Lower Non-critical going high | Asserted
-   3 | 11/09/23 | 16:51:18 UTC | Processor |  | Asserted
-   4 | 11/09/23 | 16:51:23 UTC | Power Supply |  | Asserted
-   5 | 11/09/23 | 16:51:31 UTC | Fan | Lower Non-critical going high | Asserted
-   6 | 11/09/23 | 16:51:40 UTC | System Event |  | Asserted
-   7 | 11/09/23 | 16:51:56 UTC | System Event |  | Asserted
-   8 | 11/09/23 | 16:52:07 UTC | System Event #0x05 |  | Asserted
-   9 | 11/09/23 | 16:52:20 UTC | OS Critical Stop | Run-time critical stop | Asserted
-   a | 11/09/23 | 16:52:25 UTC | System Event | OEM System boot event | Asserted
-   b | 11/09/23 | 16:52:34 UTC | OS Boot | C: boot completed | Asserted
-   c | 11/09/23 | 16:52:56 UTC | Watchdog2 | Hard reset | Asserted
-   d | 11/09/23 | 16:59:25 UTC | Processor | Thermal Trip | Asserted
+1 | 11/05/23 | 17:00:42 UTC | Temperature #0x01 | Lower Non-critical going low | Asserted
+2 | 11/05/23 | 17:03:30 UTC | Watchdog2 #0x08 | Power cycle | Asserted
 root@intel-obmc:~#
+
+//Received Mail alert at configured destination:
+
+return-Path: <dbusSELtest@ami.com>
+X-Original-To: msgubuntu@coreqa.com
+Delivered-To: msgubuntu@coreqa.com
+Received: from intel-obmc (unknown [10.0.136.250])
+by smtp.coreqa.com (Postfix) with ESMTP id A268E2640216
+for <msgubuntu@coreqa.com>; Sun, 5 Nov 2023 22:34:23 +0530 (IST)
+Date: Sun, 05 Nov 2023 17:03:30 +0000
+From: dbusSELtest@ami.com
+Message-Id: <1699203810.873940.315@intel-obmc>
+To: msgubuntu@coreqa.com
+Subject: Alert from intel-obmc
+
+Sensor Name : Watchdog2
+Sensor Type : watchdog
+Severity : Information
+Description : Watchdog2 sensor PowerCycleevent assert detected
+msgubuntu@smtp:~/Maildir/new$
+
+//Redfish Event log
+
+RF URL: https://10.0.136.250/redfish/v1/Systems/system/LogServices/EventLog/Entries/2
+
+{
+"@odata.id": "/redfish/v1/Systems/system/LogServices/EventLog/Entries/2",
+"@odata.type": "#LogEntry.v1_9_0.LogEntry",
+"AdditionalDataURI": "/redfish/v1/Systems/system/LogServices/EventLog/Entries/2/attachment",
+"Created": "2023-11-05T17:03:30.779+00:00",
+"EntryType": "Event",
+"Id": "2",
+"Message": "Watchdog2 sensor PowerCycleevent assert detected",
+"Modified": "2023-11-05T17:03:30.779+00:00",
+"Name": "System Event Log Entry",
+"Resolved": false,
+"Severity": "OK"
+}
 
 Signed-off-by: vipinc <vipinc@ami.com>
 ---
- include/sel_logger.hpp              |  60 +++++++++++++
- include/threshold_event_monitor.hpp |  10 +++
+ include/sel_logger.hpp              |  61 ++++++++++++
+ include/threshold_event_monitor.hpp |  10 ++
  include/watchdog_event_monitor.hpp  |  14 +++
- src/sel_logger.cpp                  | 133 ++++++++++++++++------------
- 4 files changed, 160 insertions(+), 57 deletions(-)
+ src/sel_logger.cpp                  | 141 ++++++++++++++--------------
+ 4 files changed, 155 insertions(+), 71 deletions(-)
 
 diff --git a/include/sel_logger.hpp b/include/sel_logger.hpp
-index 31fbc6a..529ccdc 100644
+index 5d49ba4..4dc5988 100644
 --- a/include/sel_logger.hpp
 +++ b/include/sel_logger.hpp
-@@ -60,9 +60,69 @@ static constexpr uint8_t selEvtDataUnspecified = 0xFF;
+@@ -58,9 +58,70 @@ static constexpr uint8_t selEvtDataUnspecified = 0xFF;
  static const std::filesystem::path selLogDir = "/var/log";
  static const std::string selLogFilename = "ipmi_sel";
  
@@ -199,6 +270,7 @@ index 31fbc6a..529ccdc 100644
 +        std::cerr << "Failed to call doPefTask\n";
 +    }
 +}
++
 +#ifdef SEL_LOGGER_SEND_TO_LOGGING_SERVICE
 +using AdditionalData = std::map<std::string, std::string>;
 +static void
@@ -279,10 +351,10 @@ index 777ac16..1a81ffb 100644
  }
  
 diff --git a/src/sel_logger.cpp b/src/sel_logger.cpp
-index 04eff44..f1565e1 100644
+index d7ec6f8..c3c0510 100644
 --- a/src/sel_logger.cpp
 +++ b/src/sel_logger.cpp
-@@ -253,72 +253,80 @@ static unsigned int getNewRecordId(void)
+@@ -255,29 +255,28 @@ static uint16_t getEntryCount()
  }
  #endif
  
@@ -322,8 +394,7 @@ index 04eff44..f1565e1 100644
      std::string selDataStr;
      toHexStr(selData, selDataStr);
  
- #ifdef SEL_LOGGER_SEND_TO_LOGGING_SERVICE
-+
+@@ -285,45 +284,63 @@ static void selAddSystemRecord(
      sdbusplus::message_t AddToLog = conn->new_method_call(
          "xyz.openbmc_project.Logging", "/xyz/openbmc_project/logging",
          "xyz.openbmc_project.Logging.Create", "Create");
@@ -369,8 +440,7 @@ index 04eff44..f1565e1 100644
 -                           ", EventDir=" + std::to_string(assert) +
 -                           ", EventData=" + selDataStr);
 -
-+    //    std::map<std::string, std::string> response = initialize();
-+    // TODO: based on the event only the the severigy hsould be defined
++    // TODO: based on the event only the the severity should be defined
      AddToLog.append(journalMsg,
                      "xyz.openbmc_project.Logging.Entry.Level.Informational",
 -                    std::map<std::string, std::string>(
@@ -387,7 +457,9 @@ index 04eff44..f1565e1 100644
 -    uint8_t senNum = getSensorNumberFromPath(path);
 -    uint8_t evtype = getSensorEventTypeFromPath(path);
 -    if (sentype == osCriticalStop && evtype == sensorSpecificEvent)
--    {
++    recordId = getNewRecordId();
++    if (recordId != 0)
+     {
 -        auto bus = sdbusplus::bus::new_default();
 -        ipmi::Value event = static_cast<uint16_t>(1 << selData[0]);
 -        auto method = bus.new_method_call(
@@ -398,24 +470,43 @@ index 04eff44..f1565e1 100644
 -        {
 -            std::cerr << "Failed to update OS Critical Stop sensor";
 -        }
--    }
--
--    unsigned int recordId = getNewRecordId();
-+    recordId = getNewRecordId();
-     if (recordId != 0)
-     {
-         sd_journal_send(
-@@ -328,27 +336,27 @@ static void selAddSystemRecord(
-             "IPMI_SEL_GENERATOR_ID=%x", genId, "IPMI_SEL_SENSOR_PATH=%s",
-             path.c_str(), "IPMI_SEL_EVENT_DIR=%x", assert, "IPMI_SEL_DATA=%s",
-             selDataStr.c_str(), std::forward<T>(metadata)..., NULL);
-+    }
- 
--        // Do PEF Action
--        evtype |= assert ? 0x00 : 0x80;
++        sd_journal_send(
++            "MESSAGE=%s", message.c_str(), "PRIORITY=%i", selPriority,
++            "MESSAGE_ID=%s", selMessageId, "IPMI_SEL_RECORD_ID=%d", recordId,
++            "IPMI_SEL_RECORD_TYPE=%x", selSystemType,
++            "IPMI_SEL_GENERATOR_ID=%x", genId, "IPMI_SEL_SENSOR_PATH=%s",
++            path.c_str(), "IPMI_SEL_EVENT_DIR=%x", assert, "IPMI_SEL_DATA=%s",
++            selDataStr.c_str(), std::forward<T>(metadata)..., NULL);
+     }
 +#endif
+     // check for OS Critical Sensor Event
+-    uint8_t sentype = getSensorTypeFromPath(path);
+-    uint8_t senNum = getSensorNumberFromPath(path);
+     uint8_t evtype = getSensorEventTypeFromPath(path);
+-    if (sentype == osCriticalStop && evtype == sensorSpecificEvent)
++    if (sensorType == osCriticalStop && evtype == sensorSpecificEvent)
+     {
+         auto bus = sdbusplus::bus::new_default();
+         ipmi::Value event = static_cast<uint16_t>(1 << selData[0]);
+@@ -337,36 +354,7 @@ static void selAddSystemRecord(
+         }
+     }
  
+-    unsigned int recordId = getNewRecordId();
+-    if (recordId != 0)
+-    {
+-        sd_journal_send(
+-            "MESSAGE=%s", message.c_str(), "PRIORITY=%i", selPriority,
+-            "MESSAGE_ID=%s", selMessageId, "IPMI_SEL_RECORD_ID=%d", recordId,
+-            "IPMI_SEL_RECORD_TYPE=%x", selSystemType,
+-            "IPMI_SEL_GENERATOR_ID=%x", genId, "IPMI_SEL_SENSOR_PATH=%s",
+-            path.c_str(), "IPMI_SEL_EVENT_DIR=%x", assert, "IPMI_SEL_DATA=%s",
+-            selDataStr.c_str(), std::forward<T>(metadata)..., NULL);
+-
+-        evtype |= assert ? 0x00 : 0x80;
 -        std::chrono::microseconds timeout = DBUS_TIMEOUT;
+-
+-        // Do PEF Action
 -        auto startPefTask = conn->new_method_call(pefService, pefObjPath,
 -                                                  pefIface, pefTaskMethod);
 -        startPefTask.append(static_cast<uint16_t>(recordId), sentype, senNum,
@@ -426,29 +517,16 @@ index 04eff44..f1565e1 100644
 -            conn->call(startPefTask, timeout.count());
 -        }
 -        catch (sdbusplus::exception_t&)
-+    // check for OS Critical Sensor Event
-+    uint8_t evtype = getSensorEventTypeFromPath(path);
-+    if (sensorType == osCriticalStop && evtype == sensorSpecificEvent)
-+    {
-+        auto bus = sdbusplus::bus::new_default();
-+        ipmi::Value event = static_cast<uint16_t>(1 << selData[0]);
-+        auto method = bus.new_method_call(
-+            osService, path.c_str(), "org.freedesktop.DBus.Properties", "Set");
-+        method.append(DiscreteIntf, "State", event);
-+        auto reply = bus.call(method);
-+        if (reply.is_method_error())
-         {
+-        {
 -            std::cerr << "Failed to call doPefTask\n";
-+            std::cerr << "Failed to update OS Critical Stop sensor";
-         }
-     }
- 
+-        }
+-    }
 -#endif
 +    doPefTask(conn, path, assert, recordId, selData, message, sensorType);
  }
  
  static void selAddOemRecord(
-@@ -407,6 +415,16 @@ int main(int, char*[])
+@@ -425,6 +413,16 @@ int main(int, char*[])
          server.add_interface(ipmiSelPath, ipmiSelAddInterface);
  
      // Add a new SEL entry
@@ -465,10 +543,10 @@ index 04eff44..f1565e1 100644
      ifaceAddSel->register_method(
          "IpmiSelAdd",
          [conn](const std::string& message, const std::string& path,
-@@ -414,6 +432,7 @@ int main(int, char*[])
+@@ -432,6 +430,7 @@ int main(int, char*[])
                 const uint16_t& genId) {
          return selAddSystemRecord(conn, message, path, selData, assert, genId);
-         });
+     });
 +#endif
      // Add a new OEM SEL entry
      ifaceAddSel->register_method("IpmiSelAddOem",

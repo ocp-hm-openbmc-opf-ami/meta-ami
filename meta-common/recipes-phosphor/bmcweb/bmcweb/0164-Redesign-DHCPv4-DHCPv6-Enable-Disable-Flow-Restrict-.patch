@@ -1,0 +1,354 @@
+From 69cc47586e5406776380615b6dd1c9223a896275 Mon Sep 17 00:00:00 2001
+From: Ginu George <ginugeorge@ami.com>
+Date: Thu, 25 Jan 2024 14:46:03 +0530
+Subject: [PATCH 164/164] Redesign DHCPv4,DHCPv6 Enable/Disable Flow, Restrict
+ IPv4 PATCH from DHCP to Static and vice versa & Update DHCPEnabled based on
+ the values of DHCPv4, DHCPv6 and IPv6AcceptRA & Support HostName FQDN
+ Validation
+
+---
+ redfish-core/lib/ethernet.hpp | 208 +++++++++++++++++++++++++++-------
+ 1 file changed, 170 insertions(+), 38 deletions(-)
+
+diff --git a/redfish-core/lib/ethernet.hpp b/redfish-core/lib/ethernet.hpp
+index f00b1e3a..2cd42f01 100644
+--- a/redfish-core/lib/ethernet.hpp
++++ b/redfish-core/lib/ethernet.hpp
+@@ -159,7 +159,9 @@ inline bool translateDhcpEnabledToBool(const std::string& inputDHCP,
+             (inputDHCP ==
+              "xyz.openbmc_project.Network.EthernetInterface.DHCPConf.v4") ||
+             (inputDHCP ==
+-             "xyz.openbmc_project.Network.EthernetInterface.DHCPConf.both"));
++             "xyz.openbmc_project.Network.EthernetInterface.DHCPConf.both") ||
++             (inputDHCP ==
++             "xyz.openbmc_project.Network.EthernetInterface.DHCPConf.v4v6stateless"));
+     }
+     return ((inputDHCP ==
+              "xyz.openbmc_project.Network.EthernetInterface.DHCPConf.v6") ||
+@@ -167,21 +169,36 @@ inline bool translateDhcpEnabledToBool(const std::string& inputDHCP,
+              "xyz.openbmc_project.Network.EthernetInterface.DHCPConf.both"));
+ }
+ 
+-inline std::string getDhcpEnabledEnumeration(bool isIPv4, bool isIPv6)
++inline std::string getDhcpEnabledEnumeration(bool isIPv4, bool isIPv6, bool ipv6AcceptRA = false)
+ {
+-    if (isIPv4 && isIPv6)
++    if (isIPv4 && isIPv6) // When both IPv4 and IPv6 is in DHCP Mode
+     {
+         return "xyz.openbmc_project.Network.EthernetInterface.DHCPConf.both";
+     }
+-    if (isIPv4)
++    if (isIPv4) // When IPv4 is in DHCP Mode, IPv6 is in Static Mode
+     {
+-        return "xyz.openbmc_project.Network.EthernetInterface.DHCPConf.v4";
++        if(ipv6AcceptRA) // When AcceptRA is true
++        {
++            return "xyz.openbmc_project.Network.EthernetInterface.DHCPConf.v4v6stateless";
++        }
++        else // When AcceptRA is false
++        {
++            return "xyz.openbmc_project.Network.EthernetInterface.DHCPConf.v4";
++        }
+     }
+-    if (isIPv6)
++    if (isIPv6) // When IPv4 is in Static Mode, IPv6 is in DHCP Mode
+     {
+         return "xyz.openbmc_project.Network.EthernetInterface.DHCPConf.v6";
+     }
+-    return "xyz.openbmc_project.Network.EthernetInterface.DHCPConf.none";
++    // When both IPv4 and IPv6 is in Static Mode
++    if(ipv6AcceptRA) // When AcceptRA is true
++    {
++        return "xyz.openbmc_project.Network.EthernetInterface.DHCPConf.v6stateless";
++    }
++    else // When AcceptRA is false
++    {
++        return "xyz.openbmc_project.Network.EthernetInterface.DHCPConf.none";
++    }
+ }
+ 
+ inline std::string
+@@ -1019,6 +1036,28 @@ inline void
+     });
+ }
+ 
++inline bool validateFqdnHostName(const std::string& hostname, const std::string& fqdn,
++                            const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    size_t pos = fqdn.find('.');
++    if (pos == std::string::npos)
++    {
++        messages::propertyValueFormatError(asyncResp->res, fqdn, "FQDN");
++        return false;
++    }
++
++    std::string fqdnhostname;
++    fqdnhostname = (fqdn).substr(0, pos);
++
++    if(fqdnhostname != hostname)
++    {
++        messages::propertyValueConflict(asyncResp->res, "FQDN","HostName");
++        return false;
++    }
++
++    return true;
++}
++
+ inline void handleFqdnPatch(const std::string& ifaceId, const std::string& fqdn,
+                             const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
+ {
+@@ -1087,10 +1126,10 @@ inline void
+ 
+ inline void setDHCPEnabled(const std::string& ifaceId,
+                            const std::string& propertyName, const bool v4Value,
+-                           const bool v6Value,
++                           const bool v6Value, bool ipv6AcceptRA,
+                            const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
+ {
+-    const std::string dhcp = getDhcpEnabledEnumeration(v4Value, v6Value);
++    const std::string dhcp = getDhcpEnabledEnumeration(v4Value, v6Value, ipv6AcceptRA);
+     sdbusplus::asio::setProperty(
+         *crow::connections::systemBus, "xyz.openbmc_project.Network",
+         "/xyz/openbmc_project/network/" + ifaceId,
+@@ -1163,10 +1202,48 @@ inline void handleSLAACAutoConfigPatch(
+     });
+ }
+ 
++inline void triggerDHCPDisable(
++    const std::string& ifaceId, const EthernetInterfaceData& ethData,
++    const DHCPParameters& v4dhcpParms, const DHCPParameters& v6dhcpParms, bool ipv6AcceptRA,
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp, const bool flag)
++{
++    bool ipv4Active = translateDhcpEnabledToBool(ethData.dhcpEnabled, true);
++    bool ipv6Active = translateDhcpEnabledToBool(ethData.dhcpEnabled, false);
++
++    bool nextv4DHCPState{};
++    if (flag)
++    {
++        nextv4DHCPState = false;
++    }
++    else if (v4dhcpParms.dhcpv4Enabled)
++    {
++        nextv4DHCPState = *v4dhcpParms.dhcpv4Enabled;
++    }
++    else
++    {
++        nextv4DHCPState = ipv4Active;
++    }
++    bool nextv6DHCPState{};
++    if (!flag)
++    {
++        nextv6DHCPState = false;
++    }
++    else if (v6dhcpParms.dhcpv6OperatingMode)
++    {
++        nextv6DHCPState = (*v6dhcpParms.dhcpv6OperatingMode == "Enabled");
++    }
++    else
++    {
++        nextv6DHCPState = ipv6Active;
++    }
++    setDHCPEnabled(ifaceId, "DHCPEnabled", nextv4DHCPState, nextv6DHCPState, ipv6AcceptRA,
++                   asyncResp);
++}
++
+ inline void handleDHCPPatch(const std::string& ifaceId,
+                             const EthernetInterfaceData& ethData,
+                             const DHCPParameters& v4dhcpParms,
+-                            const DHCPParameters& v6dhcpParms,
++                            const DHCPParameters& v6dhcpParms, bool ipv6AcceptRA,
+                             const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
+ {
+     bool ipv4Active = translateDhcpEnabledToBool(ethData.dhcpEnabled, true);
+@@ -1266,7 +1343,7 @@ inline void handleDHCPPatch(const std::string& ifaceId,
+     }
+ 
+     BMCWEB_LOG_DEBUG("set DHCPEnabled...");
+-    setDHCPEnabled(ifaceId, "DHCPEnabled", nextv4DHCPState, nextv6DHCPState,
++    setDHCPEnabled(ifaceId, "DHCPEnabled", nextv4DHCPState, nextv6DHCPState, ipv6AcceptRA,
+                    asyncResp);
+     BMCWEB_LOG_DEBUG("set DNSEnabled...");
+     setDHCPv4Config("DNSEnabled", nextDNS, asyncResp);
+@@ -1450,6 +1527,8 @@ inline void
+     handleIPv4StaticPatch(const std::string& ifaceId,
+                           nlohmann::json::array_t& input,
+                           const std::vector<IPv4AddressData>& ipv4Data,
++                          const EthernetInterfaceData& ethData, const DHCPParameters& v4dhcpParms,
++                          const DHCPParameters& v6dhcpParms, bool ipv6AcceptRA,
+                           const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
+ {
+     if (input.empty())
+@@ -1609,6 +1688,12 @@ inline void
+             entryIdx++;
+         }
+     }
++    if (!v4dhcpParms.dhcpv4Enabled) // Invoke triggerDHCPDisable when DHCPv4 ->
++                                    // DHCPEnabled not present
++    {
++        triggerDHCPDisable(ifaceId, ethData, v4dhcpParms, v6dhcpParms, ipv6AcceptRA,
++                           asyncResp, true);
++    }
+ }
+ 
+ inline void handleStaticNameServersPatch(
+@@ -1759,6 +1844,8 @@ inline void handleIPv6StaticDefaultGatewaysPatch(
+ inline void handleIPv6StaticAddressesPatch(
+     const std::string& ifaceId, const nlohmann::json::array_t& input,
+     const std::vector<IPv6AddressData>& ipv6Data,
++    const EthernetInterfaceData& ethData, const DHCPParameters& v4dhcpParms,
++    const DHCPParameters& v6dhcpParms, bool ipv6AcceptRA,
+     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
+ {
+     if (input.empty())
+@@ -1875,6 +1962,12 @@ inline void handleIPv6StaticAddressesPatch(
+             entryIdx++;
+         }
+     }
++    if (!v6dhcpParms.dhcpv6OperatingMode) // Invoke triggerDHCPDisable when
++                                          // DHCPv6 -> OperatingMode not present
++    {
++        triggerDHCPDisable(ifaceId, ethData, v4dhcpParms, v6dhcpParms,
++                           ipv6AcceptRA, asyncResp, false);
++    }
+ }
+ 
+ inline std::string extractParentInterfaceName(const std::string& ifaceId)
+@@ -2322,6 +2415,16 @@ inline void handleEthernetInterfaceInstancePatch(
+             }
+         }
+ 
++        bool ipv6AcceptRA;
++        if (ipv6AutoConfigEnabled.has_value())
++        {
++            ipv6AcceptRA = ipv6AutoConfigEnabled.value();
++        }
++        else
++        {
++            ipv6AcceptRA = ethData.ipv6AcceptRa;
++        }
++
+         if (dhcpv4 || dhcpv6)
+         {
+             if(dhcpv4)
+@@ -2346,17 +2449,59 @@ inline void handleEthernetInterfaceInstancePatch(
+ 
+                 }
+             }
++
++            if(dhcpv6)
++            {
++                if (v6dhcpParms.dhcpv6OperatingMode) // DHCPv6 -> OperatingMode is present
++                {
++                    if ((*v6dhcpParms.dhcpv6OperatingMode == "Enabled") && ipv6StaticAddresses)
++                    {
++                        messages::propertyValueConflict(asyncResp->res, "DHCPv6.OperatingMode","IPv6StaticAddresses");
++                        return;
++                    }
++                    else if (*v6dhcpParms.dhcpv6OperatingMode == "Disabled")
++                    {
++                        if (!ipv6StaticAddresses) // and IPv6StaticAddresses attribute is not present
++                        {
++                            messages::propertyMissing(asyncResp->res, "IPv6StaticAddresses");
++                            return;
++                        }
++                    }
++                }
++            }
++
+             if(ipv6AddressValid && ipv4AddressValid)
+             {
+-                handleDHCPPatch(ifaceId, ethData, v4dhcpParms, v6dhcpParms,
++                handleDHCPPatch(ifaceId, ethData, v4dhcpParms, v6dhcpParms, ipv6AcceptRA,
+                             asyncResp);
+             }
+ 
+         }
+ 
+-        if (hostname)
++        bool FqdnHostnameValidate = true;
++        if (hostname && fqdn)
+         {
+-            handleHostnamePatch(*hostname, asyncResp);
++            FqdnHostnameValidate = validateFqdnHostName(*hostname, *fqdn, asyncResp);
++            if(!FqdnHostnameValidate)
++            {
++                return;
++            }
++            else
++            {
++                handleFqdnPatch(ifaceId, *fqdn, asyncResp);
++            }
++        }
++        else
++        {
++            if (hostname)
++            {
++                handleHostnamePatch(*hostname, asyncResp);
++            }
++
++            if (fqdn)
++            {
++                handleFqdnPatch(ifaceId, *fqdn, asyncResp);
++            }
+         }
+ 
+         if (ipv6AutoConfigEnabled)
+@@ -2365,11 +2510,6 @@ inline void handleEthernetInterfaceInstancePatch(
+                                         asyncResp);
+         }
+ 
+-        if (fqdn)
+-        {
+-            handleFqdnPatch(ifaceId, *fqdn, asyncResp);
+-        }
+-
+         if (macAddress)
+         {
+             handleMACAddressPatch(ifaceId, *macAddress, asyncResp);
+@@ -2377,23 +2517,15 @@ inline void handleEthernetInterfaceInstancePatch(
+ 
+         if (ipv4StaticAddresses && ipv4AddressValid)
+         {
+-            if(!v4dhcpParms.dhcpv4Enabled)
+-            {
+-                messages::propertyMissing(asyncResp->res, "DHCPv4.DHCPEnabled");
+-                return;
+-            }
+-            else
+-            {
+-                // TODO(ed) for some reason the capture of
+-                // ipv4Addresses above is returning a const value,
+-                // not a non-const value. This doesn't really work
+-                // for us, as we need to be able to efficiently move
+-                // out the intermedia nlohmann::json objects. This
+-                // makes a copy of the structure, and operates on
+-                // that, but could be done more efficiently
+-                nlohmann::json::array_t ipv4Static = *ipv4StaticAddresses;
+-                handleIPv4StaticPatch(ifaceId, ipv4Static, ipv4Data, asyncResp);
+-            }
++            // TODO(ed) for some reason the capture of
++            // ipv4Addresses above is returning a const value,
++            // not a non-const value. This doesn't really work
++            // for us, as we need to be able to efficiently move
++            // out the intermedia nlohmann::json objects. This
++            // makes a copy of the structure, and operates on
++            // that, but could be done more efficiently
++            nlohmann::json::array_t ipv4Static = *ipv4StaticAddresses;
++            handleIPv4StaticPatch(ifaceId, ipv4Static, ipv4Data, ethData, v4dhcpParms, v6dhcpParms, ipv6AcceptRA, asyncResp);
+         }
+ 
+         if (ipv6StaticDefaultGateways)
+@@ -2417,8 +2549,8 @@ inline void handleEthernetInterfaceInstancePatch(
+ 
+         if (ipv6StaticAddresses && ipv6AddressValid)
+         {
+-            handleIPv6StaticAddressesPatch(ifaceId, *ipv6StaticAddresses,
+-                                            ipv6Data, asyncResp);
++            handleIPv6StaticAddressesPatch(ifaceId, *ipv6StaticAddresses, ipv6Data, ethData, v4dhcpParms, v6dhcpParms, ipv6AcceptRA,
++                                            asyncResp);
+         }
+ 
+         if (interfaceEnabled)
+-- 
+2.39.2
+

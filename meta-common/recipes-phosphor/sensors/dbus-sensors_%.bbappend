@@ -1,25 +1,21 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI:append = " \
-            file://0001-converted-index-to-0-based-and-made-pwm-starts-from-.patch\
-            file://0006-disable-unsupported-sensors.patch\
-            file://0008-Fix-For-CPU-Sensor-dbus-entry-is-not-creating.patch \
-            file://0009-Fix-for-Fan-Redundancy.patch \
-            file://0010-Add-Processor-presence-support.patch \
-            file://0011-Add-watchdog2-support.patch \
-            file://0013-Adding-ast2600-compatible-string-for-FanTypes-of-asp.patch \
-            file://0014-Add-power-unit-dicrete-sensor.patch \
-            file://0015-ACPI-System-discrete-sensor.patch \
-            file://0016-Add-Power-Supply-Sensor-Support.patch \
-            file://0017-Update-Discrete-Processor-and-Watchdog2-sensors.patch \
-            file://0018-Add-OS-Critical-Stop-DS-Support.patch \
-            file://0019-Fix-for-Nm-Sensor-Threshold.patch \
-            file://0020-Add-D-Bus-logging-support-for-Discrete-Sensor.patch \
-            file://0020-CMOS-Battery-Discrete-Sensor.patch \
-            file://0019-ACPIDevice-discrete-sensor.patch \
-            file://0021-Add-event-generation-support-for-powerunit-sensor.patch \
-            file://0021-Digital-discrete-sensor-support.patch \
+SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/dbus-sensors.git;branch=master;protocol=https;name=override;"
+SRCREV_FORMAT = "override"
+SRCREV_override = "51c9007fdbfb9f4a8a2fffb9fd5956560e447aa9"
+
+SRC_URI_ast2600:append =  " \
+            file://0001-ADCSensor-Fix-for-P3V3-sensor.patch \
             "
+SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'ast2600', SRC_URI_ast2600, '', d)}"
+
+SRC_URI:append = "\
+    file://intrusionsensor-depend-on-networkd.conf \
+    "
+SRC_URI_EGS:append =  " \
+            file://0001-converted-index-to-0-based-and-made-pwm-starts-from-.patch \
+            "
+SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'egs', SRC_URI_EGS, '', d)}"
 
 PACKAGECONFIG[processorstatus] = "-Dprocstatus=enabled, -Dprocstatus=disabled"
 PACKAGECONFIG[systemsensor] = "-Dsystem=enabled, -Dsystem=enabled"
@@ -77,3 +73,6 @@ SYSTEMD_SERVICE:${PN} += "${@bb.utils.contains('PACKAGECONFIG', 'acpidevicestatu
 SYSTEMD_SERVICE:${PN}:append = " ${@bb.utils.contains('PACKAGECONFIG', 'digital', \
                                                'xyz.openbmc_project.digitaldiscrete.service', \
                                                '', d)}"
+
+
+

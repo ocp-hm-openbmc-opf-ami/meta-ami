@@ -1,7 +1,7 @@
-From 1be97be505c28ee4c1f0c66f4b9b131ced2e4c8c Mon Sep 17 00:00:00 2001
+From 049b849c03e7d71281e3d44666330758ecce50b5 Mon Sep 17 00:00:00 2001
 From: Pranoy Goru <gorumanip@ami.com>
-Date: Thu, 28 Dec 2023 20:59:17 +0530
-Subject: [PATCH 17/17] Integrated NVME Interface
+Date: Wed, 24 Jan 2024 23:32:14 +0530
+Subject: [PATCH] Integrated NVME Interface
 
 Description
 Added NVME interface in redfish with backend
@@ -413,20 +413,19 @@ Signed-off-by: Pranoy Goru <gorumanip@ami.com>
 ---
  config/bmcweb_config.h.in                     |    2 +
  config/meson.build                            |    1 +
- meson.build                                   |    2 +-
  meson_options.txt                             |    7 +
  redfish-core/include/redfish.hpp              |    7 +
- redfish-core/include/utils/collection.hpp     |   15 +-
- redfish-core/lib/storage.hpp                  |   20 +-
+ redfish-core/include/utils/collection.hpp     |   26 +-
+ redfish-core/lib/storage.hpp                  |   21 +-
  redfish-core/lib/storage_nvme.hpp             | 1630 +++++++++++++++++
  static/redfish/v1/$metadata/index.xml         |   10 +
  .../v1/JsonSchemas/AMINVMeMIPort/index.json   |  145 ++
- .../v1/JsonSchemas/OemDrive/index.json        |   69 +
+ .../v1/JsonSchemas/OemDrive/index.json        |   78 +
  .../redfish/v1/JsonSchemas/OemNvme/index.json |  684 +++++++
  static/redfish/v1/schema/AMINVMeMIPort_v1.xml |   87 +
  static/redfish/v1/schema/OemDrive_v1.xml      |   57 +
  static/redfish/v1/schema/OemNvme_v1.xml       |  433 +++++
- 15 files changed, 3183 insertions(+), 8 deletions(-)
+ 14 files changed, 3179 insertions(+), 14 deletions(-)
  create mode 100644 redfish-core/lib/storage_nvme.hpp
  create mode 100644 static/redfish/v1/JsonSchemas/AMINVMeMIPort/index.json
  create mode 100644 static/redfish/v1/JsonSchemas/OemDrive/index.json
@@ -436,46 +435,33 @@ Signed-off-by: Pranoy Goru <gorumanip@ami.com>
  create mode 100644 static/redfish/v1/schema/OemNvme_v1.xml
 
 diff --git a/config/bmcweb_config.h.in b/config/bmcweb_config.h.in
-index 1b9d0398..65a1f918 100644
+index aab1bf15..c3f3985d 100644
 --- a/config/bmcweb_config.h.in
 +++ b/config/bmcweb_config.h.in
-@@ -26,4 +26,6 @@ constexpr const bool bmcwebEnableMultiHost = @BMCWEB_ENABLE_MULTI_HOST@ == 1;
- constexpr const bool bmcwebEnableHTTP2 = @BMCWEB_ENABLE_HTTP2@ == 1;
- 
+@@ -30,4 +30,6 @@ constexpr const bool bmcwebMTLSCommonNameParsingMeta = @BMCWEB_ENABLE_MTLS_COMMO
  constexpr const char* imageUploadDir = "@IMAGE_UPLOAD_DIR@";
+ 
+ constexpr const size_t imagePayloadLimitMb = @IMAGE_PAYLOAD_LIMIT_MB@;
 +
 +constexpr const char* nvmeObjPath = "@NVME_OBJ_PATH@";
  // clang-format on
 diff --git a/config/meson.build b/config/meson.build
-index 9d545481..41583602 100644
+index 85cc062d..8dce41e7 100644
 --- a/config/meson.build
 +++ b/config/meson.build
-@@ -3,6 +3,7 @@
- conf_data = configuration_data()
- conf_data.set('BMCWEB_HTTP_REQ_BODY_LIMIT_MB', get_option('http-body-limit'))
- conf_data.set('IMAGE_UPLOAD_DIR', get_option('image-upload-dir'))
+@@ -23,6 +23,7 @@ conf_data.set10('BMCWEB_ENABLE_MULTI_HOST', enable_multi_host.allowed())
+ enable_http2 = get_option('experimental-http2')
+ conf_data.set10('BMCWEB_ENABLE_HTTP2', enable_http2.allowed())
+ conf_data.set10('BMCWEB_ENABLE_MTLS_COMMON_NAME_PARSING_META', get_option('mutual-tls-common-name-parsing') == 'meta')
 +conf_data.set('NVME_OBJ_PATH', get_option('nvme-enable-path'))
- xss_enabled = get_option('insecure-disable-xss')
- conf_data.set10('BMCWEB_INSECURE_DISABLE_XSS_PREVENTION', xss_enabled.enabled())
- enable_redfish_query = get_option('insecure-enable-redfish-query')
-diff --git a/meson.build b/meson.build
-index c5e27724..5411c1b6 100644
---- a/meson.build
-+++ b/meson.build
-@@ -178,7 +178,7 @@ if (cxx.get_id() == 'gcc' and cxx.version().version_compare('>8.0'))
-      '-Wnull-dereference',
-      '-Wunused-parameter',
-      '-Wdouble-promotion',
--     '-Wshadow',
-+     '-Wno-shadow',
-      '-Wno-psabi',
-      ]),
-     language:'cpp')
+ 
+ 
+ # Logging level
 diff --git a/meson_options.txt b/meson_options.txt
-index baeff269..69c4d987 100644
+index 8fbca901..86d9b77a 100644
 --- a/meson_options.txt
 +++ b/meson_options.txt
-@@ -380,3 +380,10 @@ option(
+@@ -403,3 +403,10 @@ option(
                      enable on production systems at this time.  Other query
                      parameters such as only are not controlled by this option.'''
  )
@@ -487,7 +473,7 @@ index baeff269..69c4d987 100644
 +    description: 'nvme object path.'
 +)
 diff --git a/redfish-core/include/redfish.hpp b/redfish-core/include/redfish.hpp
-index c80d2d31..b025ef6f 100644
+index 2446e37f..be7f406d 100644
 --- a/redfish-core/include/redfish.hpp
 +++ b/redfish-core/include/redfish.hpp
 @@ -139,6 +139,13 @@ class RedfishService
@@ -505,7 +491,7 @@ index c80d2d31..b025ef6f 100644
          requestRoutesCableCollection(app);
  #ifdef BMCWEB_INSECURE_ENABLE_REDFISH_FW_TFTP_UPDATE
 diff --git a/redfish-core/include/utils/collection.hpp b/redfish-core/include/utils/collection.hpp
-index 862be90e..374a275b 100644
+index 2e5563b4..027714d3 100644
 --- a/redfish-core/include/utils/collection.hpp
 +++ b/redfish-core/include/utils/collection.hpp
 @@ -5,6 +5,7 @@
@@ -516,40 +502,66 @@ index 862be90e..374a275b 100644
  
  #include <boost/url/url.hpp>
  #include <nlohmann/json.hpp>
-@@ -35,12 +36,13 @@ inline void
-     getCollectionMembers(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
-                          const boost::urls::url& collectionPath,
-                          std::span<const std::string_view> interfaces,
--                         const char* subtree = "/xyz/openbmc_project/inventory")
-+                         const char* subtree = "/xyz/openbmc_project/inventory",
-+                         bool check = false)
+@@ -23,7 +24,7 @@ namespace collection_util
+ inline void handleCollectionMembers(
+     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+     const boost::urls::url& collectionPath,
+-    const nlohmann::json::json_pointer& jsonKeyName,
++    const nlohmann::json::json_pointer& jsonKeyName, bool check,
+     const boost::system::error_code& ec,
+     const dbus::utility::MapperGetSubTreePathsResponse& objects)
+ {
+@@ -70,6 +71,12 @@ inline void handleCollectionMembers(
+         members.emplace_back(std::move(member));
+     }
+     asyncResp->res.jsonValue[jsonCountKeyName] = members.size();
++    if (check)
++    {
++        nlohmann::json& count = asyncResp->res.jsonValue[jsonCountKeyName];
++        nlohmann::json& storageControllerArray = members;
++        getNvmeDevices(asyncResp, count, storageControllerArray);
++    }
+ }
+ 
+ /**
+@@ -86,27 +93,26 @@ inline void handleCollectionMembers(
+  *
+  * @return void
+  */
+-inline void
+-    getCollectionToKey(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+-                       const boost::urls::url& collectionPath,
+-                       std::span<const std::string_view> interfaces,
+-                       const std::string& subtree,
+-                       const nlohmann::json::json_pointer& jsonKeyName)
++inline void getCollectionToKey(
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++    const boost::urls::url& collectionPath,
++    std::span<const std::string_view> interfaces, const std::string& subtree,
++    const nlohmann::json::json_pointer& jsonKeyName, bool check = false)
  {
      BMCWEB_LOG_DEBUG("Get collection members for: {}", collectionPath.buffer());
-     dbus::utility::getSubTreePaths(
-         subtree, 0, interfaces,
--        [collectionPath, asyncResp{std::move(asyncResp)}](
-+        [collectionPath, check, asyncResp{std::move(asyncResp)}](
-             const boost::system::error_code& ec,
-             const dbus::utility::MapperGetSubTreePathsResponse& objects) {
-         if (ec == boost::system::errc::io_error)
-@@ -82,7 +84,14 @@ inline void
-             members.emplace_back(std::move(member));
-         }
-         asyncResp->res.jsonValue["Members@odata.count"] = members.size();
--        });
-+        if (check)
-+        {
-+            nlohmann::json& count =
-+                asyncResp->res.jsonValue["Members@odata.count"];
-+            nlohmann::json& storageControllerArray = members;
-+            getNvmeDevices(asyncResp, count, storageControllerArray);
-+        }
-+    });
+     dbus::utility::getSubTreePaths(subtree, 0, interfaces,
+                                    std::bind_front(handleCollectionMembers,
+                                                    asyncResp, collectionPath,
+-                                                   jsonKeyName));
++                                                   jsonKeyName, check));
+ }
+ inline void
+     getCollectionMembers(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+                          const boost::urls::url& collectionPath,
+                          std::span<const std::string_view> interfaces,
+-                         const std::string& subtree)
++                         const std::string& subtree, bool check = false)
+ {
+     getCollectionToKey(asyncResp, collectionPath, interfaces, subtree,
+-                       nlohmann::json::json_pointer("/Members"));
++                       nlohmann::json::json_pointer("/Members"), check);
  }
  
  } // namespace collection_util
 diff --git a/redfish-core/lib/storage.hpp b/redfish-core/lib/storage.hpp
-index 42a2a03e..9cdc9596 100644
+index 9f3512f4..37a29a47 100644
 --- a/redfish-core/lib/storage.hpp
 +++ b/redfish-core/lib/storage.hpp
 @@ -27,6 +27,7 @@
@@ -560,16 +572,17 @@ index 42a2a03e..9cdc9596 100644
  #include "utils/collection.hpp"
  #include "utils/dbus_utils.hpp"
  
-@@ -67,7 +68,7 @@ inline void handleSystemsStorageCollectionGet(
+@@ -68,7 +69,8 @@ inline void handleSystemsStorageCollectionGet(
          "xyz.openbmc_project.Inventory.Item.Storage"};
      collection_util::getCollectionMembers(
          asyncResp, boost::urls::format("/redfish/v1/Systems/system/Storage"),
--        interface);
-+        interface, "", true); // added "true" paramater for ami storage devices
+-        interface, "/xyz/openbmc_project/inventory");
++        interface, "/xyz/openbmc_project/inventory",
++        true); // added "true" paramater for ami storage devices
  }
  
  inline void handleStorageCollectionGet(
-@@ -173,9 +174,16 @@ inline void afterSystemsStorageGetSubtree(
+@@ -175,9 +177,16 @@ inline void afterSystemsStorageGetSubtree(
      });
      if (storage == subtree.end())
      {
@@ -589,7 +602,7 @@ index 42a2a03e..9cdc9596 100644
      }
  
      asyncResp->res.jsonValue["@odata.type"] = "#Storage.v1_13_0.Storage";
-@@ -206,6 +214,10 @@ inline void
+@@ -208,6 +217,10 @@ inline void
      {
          return;
      }
@@ -2237,12 +2250,12 @@ index 00000000..dfaea9b3
 +}
 +} // namespace redfish
 diff --git a/static/redfish/v1/$metadata/index.xml b/static/redfish/v1/$metadata/index.xml
-index acba3039..a26425b0 100644
+index 2e2c77a3..156b5f04 100644
 --- a/static/redfish/v1/$metadata/index.xml
 +++ b/static/redfish/v1/$metadata/index.xml
-@@ -3455,4 +3455,14 @@
-         <edmx:Include Namespace="AMIWebSession"/>
-         <edmx:Include Namespace="AMIWebSession.v1_0_0"/>
+@@ -3625,5 +3625,15 @@
+         <edmx:Include Namespace="AMIChassisFRU"/>
+         <edmx:Include Namespace="AMIChassisFRU.v1_0_0"/>
      </edmx:Reference>
 +    <edmx:Reference Uri="/redfish/v1/schema/OemNvme_v1.xml">
 +        <edmx:Include Namespace="OemAMINVMeMIController"/>
@@ -2254,6 +2267,7 @@ index acba3039..a26425b0 100644
 +        <edmx:Include Namespace="OemDrive"/>
 +        <edmx:Include Namespace="OemDrive.v1_0_0"/>
 +    </edmx:Reference>
+ 
  </edmx:Edmx>
 diff --git a/static/redfish/v1/JsonSchemas/AMINVMeMIPort/index.json b/static/redfish/v1/JsonSchemas/AMINVMeMIPort/index.json
 new file mode 100644
@@ -2445,12 +2459,12 @@ index 00000000..be754a9f
 +                        "null"
 +                    ]
 +                },
-+		"SlotNumber": {
++		"Slot": {
 +                    "description": "The slot number the drive connected.",
 +                    "longDescription": "The slot number the drive connected.",
 +                    "readonly": true,
 +                    "type": [
-+                        "number",
++                        "string",
 +                        "null"
 +                    ]
 +                },
@@ -3310,12 +3324,12 @@ index 00000000..1341da06
 +          <Annotation Term="OData.Description" String="Indicates Frimware version."/>
 +          <Annotation Term="OData.LongDescription" String="Indicates Frimware version."/>
 +        </Property>
-+         <Property Name="ProductID" Type="Edm.String">
++         <Property Name="ProductId" Type="Edm.String">
 +          <Annotation Term="OData.Permissions" EnumMember="OData.Permission/Read"/>
 +          <Annotation Term="OData.Description" String="The model name of the drive."/>
 +          <Annotation Term="OData.LongDescription" String="The model name of the drive."/>
 +        </Property>
-+         <Property Name="SlotNumber" Type="Edm.Decimal">
++         <Property Name="Slot" Type="Edm.String">
 +          <Annotation Term="OData.Permissions" EnumMember="OData.Permission/Read"/>
 +          <Annotation Term="OData.Description" String="The slot number the drive connected."/>
 +          <Annotation Term="OData.LongDescription" String="The slot number the drive connected.."/>

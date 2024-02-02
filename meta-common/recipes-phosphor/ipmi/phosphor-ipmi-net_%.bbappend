@@ -1,7 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-#removing old SRCREV , latest SRCREV mentioned in openbmc-meta-intel 
-
+SRCREV = "7b534095425121afd42d669655a902aaaea5716b"
 
 SRC_URI += " \
            file://0015-Add-to-warm-reset.patch \

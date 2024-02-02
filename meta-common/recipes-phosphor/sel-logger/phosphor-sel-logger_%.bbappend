@@ -1,7 +1,7 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 PROJECT_SRC_DIR := "${THISDIR}/${PN}"
 
-
+SRCREV="c68ea0522ac6630dbe50829845a11f335cf87800"
 SRC_URI += "\
         file://0001-Add-PEF-support-for-SEL-Events.patch \
         file://0002-Add-Linear-SEL-Support.patch \

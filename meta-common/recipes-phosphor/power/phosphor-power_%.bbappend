@@ -5,7 +5,7 @@ inherit systemd
 SRC_URI += " \
            file://psu.json \
 	   file://phos-psu-monitor.service \
-           file://0001-phosphor-power-psu-monitor.patch \  
+           file://0001-phosphor-power-psu-monitor.patch \
            "
 
 PACKAGECONFIG:append = " monitor"

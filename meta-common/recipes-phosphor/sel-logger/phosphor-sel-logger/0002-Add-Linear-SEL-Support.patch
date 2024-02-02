@@ -1,15 +1,16 @@
-From 0abf33a7352b94e59e334578082023d1c62efe4a Mon Sep 17 00:00:00 2001
+From f178c5b1ff222d2edec6a4886a776f212b56ea06 Mon Sep 17 00:00:00 2001
 From: vipinc <vipinc@ami.com>
-Date: Sun, 15 Oct 2023 15:57:01 +0530
-Subject: [PATCH 2/2] Add Linear SEL Support
+Date: Thu, 18 Jan 2024 12:35:00 +0530
+Subject: [PATCH 2/4] Add Linear SEL Support
 
 This patch add Support for Linear SEL implementation.
 
+Signed-off-by: Shamim Ali <shamima@ami.com>
 Signed-off-by: vipinc <vipinc@ami.com>
 ---
  include/sel_logger.hpp |  11 ++++
- src/sel_logger.cpp     | 139 +++++++++++++++++++++++++++++++++--------
- 2 files changed, 124 insertions(+), 26 deletions(-)
+ src/sel_logger.cpp     | 135 ++++++++++++++++++++++++++++++++---------
+ 2 files changed, 119 insertions(+), 27 deletions(-)
 
 diff --git a/include/sel_logger.hpp b/include/sel_logger.hpp
 index 2d23f29..85e8078 100644
@@ -34,10 +35,26 @@ index 2d23f29..85e8078 100644
  // SEL entries.  Helps with filtering SEL entries in the journal.
  static constexpr const char* selMessageId = "b370836ccf2f4850ac5bee185b77893a";
 diff --git a/src/sel_logger.cpp b/src/sel_logger.cpp
-index e98451d..a79e475 100644
+index 7effd66..9dce8f1 100644
 --- a/src/sel_logger.cpp
 +++ b/src/sel_logger.cpp
-@@ -148,6 +148,76 @@ void clearSelLogFiles()
+@@ -168,6 +168,15 @@ void clearSelLogFiles()
+ 
+ static unsigned int getNewRecordId(void)
+ {
++    static unsigned int recordId = initializeRecordId();
++
++    // If the log has been cleared, also clear the current ID
++    std::vector<std::filesystem::path> selLogFiles;
++    if (!getSELLogFiles(selLogFiles))
++    {
++        recordId = selInvalidRecID;
++    }
++
+     if (++recordId >= selInvalidRecID)
+     {
+         recordId = 1;
+@@ -176,6 +185,76 @@ static unsigned int getNewRecordId(void)
  }
  #endif
  
@@ -111,31 +128,10 @@ index e98451d..a79e475 100644
 +}
 +#endif
 +
- static unsigned int getNewRecordId(void)
+ static void toHexStr(const std::vector<uint8_t>& data, std::string& hexStr)
  {
- #ifndef SEL_LOGGER_CLEARS_SEL
-@@ -161,6 +231,20 @@ static unsigned int getNewRecordId(void)
-     }
- #endif
- 
-+#ifndef SEL_LOGGER_SEND_TO_LOGGING_SERVICE
-+    // Validate for Linear Policy and  Max SEL Entries
-+    if (recordId != selInvalidRecID && isLinearSELPolicy() &&
-+        getEntryCount() >= maxSELEntries)
-+    {
-+        phosphor::logging::log<phosphor::logging::level::INFO>(
-+            "Skip SEL event write on reaching max SEL entries in linear "
-+            "config");
-+
-+        maxSELEntriesReached = true;
-+        return 0;
-+    }
-+#endif
-+
-     if (++recordId >= selInvalidRecID)
-     {
-         recordId = 1;
-@@ -217,33 +301,36 @@ static void selAddSystemRecord(
+     std::stringstream stream;
+@@ -224,35 +303,37 @@ static void selAddSystemRecord(
      conn->call(AddToLog);
  #else
      unsigned int recordId = getNewRecordId();
@@ -160,12 +156,12 @@ index e98451d..a79e475 100644
 -                        evtype, selData[0], selData[1], selData[2],
 -                        static_cast<uint16_t>(genId), message.c_str());
 -    try
-+    if (recordId != 0)
-     {
+-    {
 -        conn->call(startPefTask, timeout.count());
 -    }
 -    catch (sdbusplus::exception_t&)
--    {
++    if (recordId != 0)
+     {
 -        std::cerr << "Failed to call doPefTask\n";
 +        sd_journal_send(
 +            "MESSAGE=%s", message.c_str(), "PRIORITY=%i", selPriority,
@@ -196,8 +192,10 @@ index e98451d..a79e475 100644
 +            std::cerr << "Failed to call doPefTask\n";
 +        }
      }
- 
+-
  #endif
+ }
+ 
 -- 
 2.25.1
 

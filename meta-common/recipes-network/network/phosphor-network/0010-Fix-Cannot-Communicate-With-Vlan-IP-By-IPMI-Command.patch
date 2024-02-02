@@ -5,98 +5,11 @@ Subject: [PATCH 04/13]
  0010-Fix-Cannot-Communicate-With-Vlan-IP-By-IPMI-Command.patch
 
 ---
- ...unicate-With-Vlan-IP-By-IPMI-Command.patch | 79 +++++++++++++++++++
  src/ethernet_interface.cpp                    | 12 +++
  src/network_manager.cpp                       | 13 +--
  3 files changed, 98 insertions(+), 6 deletions(-)
  create mode 100644 0010-Fix-Cannot-Communicate-With-Vlan-IP-By-IPMI-Command.patch
 
-diff --git a/0010-Fix-Cannot-Communicate-With-Vlan-IP-By-IPMI-Command.patch b/0010-Fix-Cannot-Communicate-With-Vlan-IP-By-IPMI-Command.patch
-new file mode 100644
-index 0000000..276867e
---- /dev/null
-+++ b/0010-Fix-Cannot-Communicate-With-Vlan-IP-By-IPMI-Command.patch
-@@ -0,0 +1,79 @@
-+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
-+index ab8b815..bef485a 100644
-+--- a/src/ethernet_interface.cpp
-++++ b/src/ethernet_interface.cpp
-+@@ -622,6 +622,11 @@ ObjectPath EthernetInterface::createVLAN(uint16_t id)
-+     config.writeFile(
-+         config::pathForIntfDev(manager.get().getConfDir(), intfName));
-+ 
-++    manager.get().addReloadPostHook(
-++            [ifname = interfaceName()]() {
-++                execute("/bin/systemctl", "systemctl", "restart", fmt::format("phosphor-ipmi-net@{}.service", ifname).c_str());
-++            }
-++    );
-+     writeConfigurationFile();
-+     manager.get().reloadConfigs();
-+ 
-+@@ -936,6 +941,7 @@ EthernetInterface::VlanProperties::VlanProperties(
-+ void EthernetInterface::VlanProperties::delete_()
-+ {
-+     auto intf = eth.get().interfaceName();
-++    std::string parentIfName;
-+ 
-+     // Remove all configs for the current interface
-+     const auto& confDir = eth.get().manager.get().getConfDir();
-+@@ -956,6 +962,7 @@ void EthernetInterface::VlanProperties::delete_()
-+     {
-+         if (intf->ifIdx == parentIdx)
-+         {
-++            parentIfName = intf->interfaceName();
-+             intf->writeConfigurationFile();
-+         }
-+     }
-+@@ -966,6 +973,11 @@ void EthernetInterface::VlanProperties::delete_()
-+         eth.get().manager.get().addReloadPostHook(
-+             [idx = eth.get().ifIdx]() { system::deleteIntf(idx); });
-+ 
-++        eth.get().manager.get().addReloadPostHook(
-++                    [parentIfName]() {
-++                        execute("/bin/systemctl", "systemctl", "restart", fmt::format("phosphor-ipmi-net@{}.service", parentIfName).c_str());
-++                    }
-++        );
-+         // Ignore the interface so the reload doesn't re-query it
-+         eth.get().manager.get().ignoredIntf.emplace(eth.get().ifIdx);
-+     }
-+diff --git a/src/network_manager.cpp b/src/network_manager.cpp
-+index 880b621..2932f33 100644
-+--- a/src/network_manager.cpp
-++++ b/src/network_manager.cpp
-+@@ -396,8 +396,8 @@ void Manager::addAddress(const AddressInfo& info)
-+     if (auto it = intfInfo.find(info.ifidx); it != intfInfo.end())
-+     {
-+         it->second.addrs.insert_or_assign(info.ifaddr, info);
-+-        if (auto it = interfacesByIdx.find(info.ifidx);
-+-            it != interfacesByIdx.end())
-++        auto name = it->second.intf.name;
-++        if (auto it = interfaces.find(name.value()); it != interfaces.end())
-+         {
-+             it->second->addAddr(info);
-+         }
-+@@ -411,12 +411,13 @@ void Manager::addAddress(const AddressInfo& info)
-+ 
-+ void Manager::removeAddress(const AddressInfo& info)
-+ {
-+-    if (auto it = interfacesByIdx.find(info.ifidx); it != interfacesByIdx.end())
-++    if (auto it = intfInfo.find(info.ifidx); it != intfInfo.end())
-+     {
-+-        it->second->addrs.erase(info.ifaddr);
-+-        if (auto it = intfInfo.find(info.ifidx); it != intfInfo.end())
-++        it->second.addrs.erase(info.ifaddr);
-++        auto name = it->second.intf.name;
-++        if (auto it = interfaces.find(name.value()); it != interfaces.end())
-+         {
-+-            it->second.addrs.erase(info.ifaddr);
-++            it->second->addrs.erase(info.ifaddr);
-+         }
-+     }
-+ }
-+-- 
-+2.25.1
-\ No newline at end of file
 diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
 index 2510cf3..d0a4ad4 100644
 --- a/src/ethernet_interface.cpp

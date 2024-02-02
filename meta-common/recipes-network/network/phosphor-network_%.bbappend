@@ -29,19 +29,18 @@ SRC_URI:append = " \
              file://ipv6-advanced-route.sh \
              file://0022-Re-Design-the-RA-part-in-DHCPEnabled.patch \
              file://0024-Check-if-IPv4-and-Default-Gateway-are-in-the-Same-Series.patch \
-             ${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)} \
              file://0026-Catch-More-Exceptions-to-Avoid-Invalid-MACAddress-while-Decoding.patch \
              file://0024-Add-Index-of-IPAddress-and-its-Related-Function.patch \
              file://0028-Write-VLAN-Interface-Configuration-File-when-VLAN-Interface-Created.patch \
              file://0027-Add-Interface-Count-in-SystemConfiguration.patch \
              file://0028-Flush-IP-Index-List-when-changing-to-DHCP.patch \
-             file://0029-Write-Configuration-File-after-Setting-Default-Gateway.patch \
              file://0029-Synchronize-Default-Hostname-after-Boot-Ready-Signal.patch \
-             file://0030-Change-the-Behavior-of-Name-Server.patch \
              file://0029-Add-DBus-Control-for-Firewall-Configuration.patch \
+             file://0030-Change-the-Behavior-of-Name-Server.patch \
              file://0030-Add-A-Delay-to-Avoid-Block_Exception-when-Create-Del-VLAN.patch \
           "
 
+SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
 
 do_install:append() {
     install -d ${D}${bindir}

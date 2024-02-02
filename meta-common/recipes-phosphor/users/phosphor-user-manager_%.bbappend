@@ -8,9 +8,10 @@ EXTRA_OECONF += "${@bb.utils.contains_any("IMAGE_FEATURES", [ 'debug-tweaks', 'a
 PACKAGECONFIG:append ="${@bb.utils.contains('FEATURE_OEM_PRIV', '1', ' oem-privilege', ' ', d)}"
 PACKAGECONFIG[oem-privilege] = "-Doem-privilege=enabled,-Doem-privilege=disabled"
 
+SRCREV = "40419f91ea6d57fe618516231e56cda7db98725b"
 SRC_URI += " \
              file://0003-Add-Host-Interface-User-Support.patch \
-	     file://0012-passwordpolicy.patch \
+             file://0012-passwordpolicy.patch \
 	     file://0015-passwordchangerequired.patch \
              file://0017-SSH-Active-User-Delete-Fix.patch \
              file://0018-Added-group-user-for-host-interface.patch \

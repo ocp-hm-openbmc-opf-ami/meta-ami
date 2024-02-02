@@ -1,7 +1,7 @@
-From a1544da3ac11ed28fd29b86963b8489aaa054dbd Mon Sep 17 00:00:00 2001
+From 6b5e979b5738c249ef1c9af7b58b48885ba78118 Mon Sep 17 00:00:00 2001
 From: Pranoy Goru <gorumanip@ami.com>
-Date: Thu, 28 Dec 2023 21:28:51 +0530
-Subject: [PATCH 31/31] Integrated RAID Interface in Redfish
+Date: Thu, 25 Jan 2024 00:01:27 +0530
+Subject: [PATCH] Integrated RAID Interface in Redfish
 
 Description
 Added RAID, HBA and MSCC Interface in Redfish
@@ -904,20 +904,20 @@ Response
 
 Signed-off-by: Pranoy Goru <gorumanip@ami.com>
 ---
- redfish-core/include/redfish.hpp              |    9 +
+ redfish-core/include/redfish.hpp              |    8 +
  redfish-core/include/utils/collection.hpp     |    5 +
  redfish-core/lib/raid.hpp                     |   37 +
  redfish-core/lib/storage.hpp                  |   15 +-
  redfish-core/lib/storage_mscc.hpp             |  169 +++
- redfish-core/lib/storage_raid.hpp             | 1271 +++++++++++++++++
+ redfish-core/lib/storage_raid.hpp             | 1272 +++++++++++++++++
  static/redfish/v1/$metadata/index.xml         |    8 +
- .../v1/JsonSchemas/OemDrive/index.json        |   13 +-
+ .../v1/JsonSchemas/OemDrive/index.json        |    9 +
  .../v1/JsonSchemas/OemStorage/index.json      |   56 +
  .../v1/JsonSchemas/OemVolume/index.json       |   62 +
- static/redfish/v1/schema/OemDrive_v1.xml      |    9 +-
+ static/redfish/v1/schema/OemDrive_v1.xml      |    5 +
  static/redfish/v1/schema/OemStorage_v1.xml    |   61 +
  static/redfish/v1/schema/OemVolume_v1.xml     |   60 +
- 13 files changed, 1770 insertions(+), 5 deletions(-)
+ 13 files changed, 1766 insertions(+), 1 deletion(-)
  create mode 100644 redfish-core/lib/raid.hpp
  create mode 100644 redfish-core/lib/storage_mscc.hpp
  create mode 100644 redfish-core/lib/storage_raid.hpp
@@ -927,7 +927,7 @@ Signed-off-by: Pranoy Goru <gorumanip@ami.com>
  create mode 100644 static/redfish/v1/schema/OemVolume_v1.xml
 
 diff --git a/redfish-core/include/redfish.hpp b/redfish-core/include/redfish.hpp
-index b025ef6f..408b2282 100644
+index be7f406d..580ce0e6 100644
 --- a/redfish-core/include/redfish.hpp
 +++ b/redfish-core/include/redfish.hpp
 @@ -61,6 +61,7 @@
@@ -938,10 +938,10 @@ index b025ef6f..408b2282 100644
  #include "systems.hpp"
  #include "task.hpp"
  #include "telemetry_service.hpp"
-@@ -146,6 +147,14 @@ class RedfishService
+@@ -145,6 +146,13 @@ class RedfishService
+         requestRoutesNvmeControllersInstance(app);
          requestRoutesNvmePorts(app);
          requestRoutesNvmePortsInstance(app);
- 
 +        requestRoutesRaidLogical(app);
 +        requestRoutesRaidLogicalDrive(app);
 +        requestRoutesPhysicalDrive(app);
@@ -949,12 +949,11 @@ index b025ef6f..408b2282 100644
 +        requestRoutesDeleteLogicalDriveAction(app);
 +        requestRoutesMSCCCreateLogicalDriveAction(app);
 +        requestRoutesMSCCDeleteLogicalDriveAction(app);
-+
+ 
          requestRoutesCable(app);
          requestRoutesCableCollection(app);
- #ifdef BMCWEB_INSECURE_ENABLE_REDFISH_FW_TFTP_UPDATE
 diff --git a/redfish-core/include/utils/collection.hpp b/redfish-core/include/utils/collection.hpp
-index 374a275b..abff3242 100644
+index 027714d3..38b9c64e 100644
 --- a/redfish-core/include/utils/collection.hpp
 +++ b/redfish-core/include/utils/collection.hpp
 @@ -5,6 +5,8 @@
@@ -966,16 +965,16 @@ index 374a275b..abff3242 100644
  #include "storage_nvme.hpp"
  
  #include <boost/url/url.hpp>
-@@ -90,6 +92,9 @@ inline void
-                 asyncResp->res.jsonValue["Members@odata.count"];
-             nlohmann::json& storageControllerArray = members;
-             getNvmeDevices(asyncResp, count, storageControllerArray);
-+            getRaidDevices(asyncResp, count, storageControllerArray);
-+            getHBADevices(asyncResp, count, storageControllerArray);
-+            getMSCCDevices(asyncResp, count, storageControllerArray);
-         }
-     });
+@@ -76,6 +78,9 @@ inline void handleCollectionMembers(
+         nlohmann::json& count = asyncResp->res.jsonValue[jsonCountKeyName];
+         nlohmann::json& storageControllerArray = members;
+         getNvmeDevices(asyncResp, count, storageControllerArray);
++        getRaidDevices(asyncResp, count, storageControllerArray);
++        getHBADevices(asyncResp, count, storageControllerArray);
++        getMSCCDevices(asyncResp, count, storageControllerArray);
+     }
  }
+ 
 diff --git a/redfish-core/lib/raid.hpp b/redfish-core/lib/raid.hpp
 new file mode 100644
 index 00000000..bb1bbfe8
@@ -1020,7 +1019,7 @@ index 00000000..bb1bbfe8
 +
 +} // namespace redfish
 diff --git a/redfish-core/lib/storage.hpp b/redfish-core/lib/storage.hpp
-index 9cdc9596..e3798410 100644
+index 0a7a653e..3cb04be0 100644
 --- a/redfish-core/lib/storage.hpp
 +++ b/redfish-core/lib/storage.hpp
 @@ -25,6 +25,7 @@
@@ -1031,7 +1030,7 @@ index 9cdc9596..e3798410 100644
  #include "redfish_util.hpp"
  #include "registries/privilege_registry.hpp"
  #include "storage_nvme.hpp"
-@@ -174,7 +175,11 @@ inline void afterSystemsStorageGetSubtree(
+@@ -177,7 +178,11 @@ inline void afterSystemsStorageGetSubtree(
      });
      if (storage == subtree.end())
      {
@@ -1044,7 +1043,7 @@ index 9cdc9596..e3798410 100644
          {
              return;
          }
-@@ -218,6 +223,14 @@ inline void
+@@ -221,6 +226,14 @@ inline void
      {
          getStorageNvmeInstance(asyncResp);
      }
@@ -1236,10 +1235,10 @@ index 00000000..071f5c3d
 +} // namespace redfish
 diff --git a/redfish-core/lib/storage_raid.hpp b/redfish-core/lib/storage_raid.hpp
 new file mode 100644
-index 00000000..55c61c82
+index 00000000..4449d686
 --- /dev/null
 +++ b/redfish-core/lib/storage_raid.hpp
-@@ -0,0 +1,1271 @@
+@@ -0,0 +1,1272 @@
 +/*
 +// Copyright (c) 2021 AMI Corporation
 +//
@@ -2212,7 +2211,8 @@ index 00000000..55c61c82
 +                                 std::vector<std::string>>>>& propertiesList) {
 +            if (ec2)
 +            {
-+                // messages::internalError(asyncResp->res);
++                messages::resourceNotFound(asyncResp->res,
++                                           "#Storage.v1_13_0.Storage", name);
 +                return;
 +            }
 +
@@ -2512,10 +2512,10 @@ index 00000000..55c61c82
 +
 +} // namespace redfish
 diff --git a/static/redfish/v1/$metadata/index.xml b/static/redfish/v1/$metadata/index.xml
-index 8f9c515e..a26425b0 100644
+index 156b5f04..887e6da3 100644
 --- a/static/redfish/v1/$metadata/index.xml
 +++ b/static/redfish/v1/$metadata/index.xml
-@@ -3468,4 +3468,12 @@
+@@ -3635,5 +3635,13 @@
          <edmx:Include Namespace="OemDrive"/>
          <edmx:Include Namespace="OemDrive.v1_0_0"/>
      </edmx:Reference>
@@ -2527,26 +2527,12 @@ index 8f9c515e..a26425b0 100644
 +        <edmx:Include Namespace="OemStorage"/>
 +        <edmx:Include Namespace="OemStorage.v1_0_0"/>
 +    </edmx:Reference>
+ 
  </edmx:Edmx>
 diff --git a/static/redfish/v1/JsonSchemas/OemDrive/index.json b/static/redfish/v1/JsonSchemas/OemDrive/index.json
-index a1762d3d..be754a9f 100644
+index 9c3a6f08..be754a9f 100644
 --- a/static/redfish/v1/JsonSchemas/OemDrive/index.json
 +++ b/static/redfish/v1/JsonSchemas/OemDrive/index.json
-@@ -31,12 +31,12 @@
-                         "null"
-                     ]
-                 },
--		"SlotNumber": {
-+		"Slot": {
-                     "description": "The slot number the drive connected.",
-                     "longDescription": "The slot number the drive connected.",
-                     "readonly": true,
-                     "type": [
--                        "number",
-+                        "string",
-                         "null"
-                     ]
-                 },
 @@ -59,6 +59,15 @@
                      ]
                  }
@@ -2694,22 +2680,10 @@ index 00000000..26232fb8
 +    "title": "#OemVolume.v1_0_0"
 +}
 diff --git a/static/redfish/v1/schema/OemDrive_v1.xml b/static/redfish/v1/schema/OemDrive_v1.xml
-index d1789515..1341da06 100644
+index 8ab7ec18..1341da06 100644
 --- a/static/redfish/v1/schema/OemDrive_v1.xml
 +++ b/static/redfish/v1/schema/OemDrive_v1.xml
-@@ -38,16 +38,21 @@
-           <Annotation Term="OData.Description" String="Indicates Frimware version."/>
-           <Annotation Term="OData.LongDescription" String="Indicates Frimware version."/>
-         </Property>
--         <Property Name="ProductID" Type="Edm.String">
-+         <Property Name="ProductId" Type="Edm.String">
-           <Annotation Term="OData.Permissions" EnumMember="OData.Permission/Read"/>
-           <Annotation Term="OData.Description" String="The model name of the drive."/>
-           <Annotation Term="OData.LongDescription" String="The model name of the drive."/>
-         </Property>
--         <Property Name="SlotNumber" Type="Edm.Decimal">
-+         <Property Name="Slot" Type="Edm.String">
-           <Annotation Term="OData.Permissions" EnumMember="OData.Permission/Read"/>
+@@ -48,6 +48,11 @@
            <Annotation Term="OData.Description" String="The slot number the drive connected."/>
            <Annotation Term="OData.LongDescription" String="The slot number the drive connected.."/>
          </Property>

@@ -1,48 +1,22 @@
-From a52da4607368c4944143783424bd1824fb612782 Mon Sep 17 00:00:00 2001
+From fb8a2789f5c852eb69e268416846c75c5837ea69 Mon Sep 17 00:00:00 2001
 From: gokulp <gokulp@ami.com>
-Date: Tue, 17 Oct 2023 12:11:01 +0530
-Subject: [PATCH 21/21] Integrated NIC Interface in Redfish
+Date: Thu, 25 Jan 2024 12:34:16 +0530
+Subject: [PATCH] Integrated NIC Interface in Redfish
 
+Signed-off-by: gokulp <gokulp@ami.com>
 ---
- redfish-core/include/redfish.hpp |   8 +
- redfish-core/lib/chassis.hpp     | 751 +++++++++++++++++++++++++++++++
- redfish-core/lib/systems.hpp     | 100 +++-
- 3 files changed, 857 insertions(+), 2 deletions(-)
+ redfish-core/lib/chassis.hpp | 753 +++++++++++++++++++++++++++++++++++
+ redfish-core/lib/systems.hpp |  97 +++++
+ 2 files changed, 850 insertions(+)
 
-diff --git a/redfish-core/include/redfish.hpp b/redfish-core/include/redfish.hpp
-index 540b0818..b41a8cd7 100644
---- a/redfish-core/include/redfish.hpp
-+++ b/redfish-core/include/redfish.hpp
-@@ -156,6 +156,11 @@ class RedfishService
- #ifdef BMCWEB_INSECURE_ENABLE_REDFISH_FW_TFTP_UPDATE
-         requestRoutesUpdateServiceActionsSimpleUpdate(app);
- #endif
-+        requestRoutesChassisNetworkCollection(app);
-+        requestRoutesChassisNetwork(app);
-+
-+        requestRoutesChassisNetworkPorts(app);
-+        requestRoutesChassisNetworkPortsCollection(app);
- 
-         requestRoutesFru(app);
-         requestRoutesFruCollection(app);
-@@ -218,6 +223,9 @@ class RedfishService
-         requestRoutesAcpiEntry(app);
-         requestRoutesAcpiFile(app);
- 
-+        requestRoutesSystemNetworkCollection(app);
-+        requestRoutesSystemNetwork(app);
-+
-         requestRoutesProcessorCollection(app);
-         requestRoutesProcessor(app);
-         requestRoutesOperatingConfigCollection(app);
 diff --git a/redfish-core/lib/chassis.hpp b/redfish-core/lib/chassis.hpp
-index 06004d7a..90023b3e 100644
+index b7fe060e..c84fc641 100644
 --- a/redfish-core/lib/chassis.hpp
 +++ b/redfish-core/lib/chassis.hpp
-@@ -47,6 +47,18 @@ namespace redfish
- {
+@@ -50,6 +50,19 @@ namespace redfish
  
  constexpr const char* dbusPropertyInterface = "org.freedesktop.DBus.Properties";
+ 
 +constexpr const char* smbiosObjPath =
 +    "/xyz/openbmc_project/inventory/system/chassis/motherboard/";
 +constexpr const char* smbiosInfPath =
@@ -55,24 +29,25 @@ index 06004d7a..90023b3e 100644
 +
 +using PropertiesType =
 +    boost::container::flat_map<std::string, dbus::utility::DbusVariantType>;
- 
++
  using PropertyValue = std::variant<uint8_t, uint16_t, std::string,
                                     std::vector<std::string>, bool>;
-@@ -618,6 +630,10 @@ inline void
-                 asyncResp->res.jsonValue["Oem"]["AMI"]["@odata.id"] =
-                     boost::urls::format("/redfish/v1/Chassis/{}#/Oem/AMI",
-                                         chassisId);
-+                // Network Adapters
+ 
+@@ -442,6 +455,10 @@ inline void handleDecoratorAssetProperties(
+         "OemAMIChassis.v1_0_0.OemAMIChassis";
+     asyncResp->res.jsonValue["Oem"]["AMI"]["@odata.id"] =
+         boost::urls::format("/redfish/v1/Chassis/{}#/Oem/AMI", chassisId);
++    // Network Adapters
 +                asyncResp->res.jsonValue["NetworkAdapters"] = {
 +                    {"@odata.id",
 +                     "/redfish/v1/Chassis/" + chassisId + "/NetworkAdapters"}};
  
-                 // SensorCollection
-                 asyncResp->res.jsonValue["Sensors"]["@odata.id"] =
-@@ -1436,5 +1452,740 @@ inline void requestRoutesChassisResetActionInfo(App& app)
-         .methods(boost::beast::http::verb::get)(
+     // SensorCollection
+     asyncResp->res.jsonValue["Sensors"]["@odata.id"] =
+@@ -1431,4 +1448,740 @@ inline void requestRoutesChassisResetActionInfo(App& app)
              std::bind_front(handleChassisResetActionInfoGet, std::ref(app)));
  }
+ 
 +/*
 +inline void getSmbiosNicDevices(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
 +                                nlohmann::json& count,
@@ -807,23 +782,14 @@ index 06004d7a..90023b3e 100644
 +                "org.freedesktop.DBus.Properties", "GetAll", infPath);
 +        }
 +    });
-+}
- 
++ }
++
  } // namespace redfish
 diff --git a/redfish-core/lib/systems.hpp b/redfish-core/lib/systems.hpp
-index c9e3bd43..a6ffc2d2 100644
+index 4a68eff1..aada83ef 100644
 --- a/redfish-core/lib/systems.hpp
 +++ b/redfish-core/lib/systems.hpp
-@@ -3973,8 +3973,6 @@ inline void handleComputerSystemResetActionPost(
-     }
- }
- 
--
--
- inline void handleComputerSystemHead(
-     App& app, const crow::Request& req,
-     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-@@ -4104,6 +4102,8 @@ inline void
+@@ -4089,6 +4089,8 @@ inline void
      asyncResp->res.jsonValue["Links"]["ManagedBy"] = std::move(managedBy);
      asyncResp->res.jsonValue["Status"]["Health"] = "OK";
      asyncResp->res.jsonValue["Status"]["State"] = "Enabled";
@@ -832,11 +798,10 @@ index c9e3bd43..a6ffc2d2 100644
  
      // Fill in SerialConsole info
      asyncResp->res.jsonValue["SerialConsole"]["MaxConcurrentSessions"] = 15;
-@@ -4522,4 +4522,100 @@ inline void requestRoutesSystems(App& app)
+@@ -4501,4 +4503,99 @@ inline void requestRoutesSystems(App& app)
          .methods(boost::beast::http::verb::get)(std::bind_front(
              handleSystemCollectionResetActionGet, std::ref(app)));
  }
-+
 +inline void requestRoutesSystemNetworkCollection(App& app)
 +{
 +    BMCWEB_ROUTE(app, "/redfish/v1/Systems/system/NetworkInterfaces/")

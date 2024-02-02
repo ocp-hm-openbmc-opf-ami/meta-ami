@@ -8,9 +8,6 @@ SRC_URI += " \
            file://0003-Enable-the-SOL-by-default.patch \
 "
 
-SRC_URI_NON_PFR = "file://0002-moving-cpld-inventory-for-non-pfr-to-software-manage.patch "
-SRC_URI:append = " ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
-
 RDEPENDS:${PN} = "bash"
 inherit systemd
 SYSTEMD_SERVICE:${PN} += "system-guid.service"

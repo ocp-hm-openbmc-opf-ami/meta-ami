@@ -1,0 +1,219 @@
+From a5696790fb9c14101129eac81522d1fca5f411ec Mon Sep 17 00:00:00 2001
+From: Sandeep <sandeepap@ami.com>
+Date: Wed, 31 Jan 2024 20:10:55 +0530
+Subject: [PATCH] Fixed Redfish-Service-Validator failures
+
+Description: Fixed service validator failure by adding schema
+and fixing error.
+
+Tested: Tested by running Redfish Service validator
+
+Signed-off-by: vamsikrishnak <vamsikrishnak@ami.com>
+---
+ redfish-core/include/redfish.hpp              |  2 +
+ .../registries/openbmc_message_registry.hpp   |  2 +-
+ redfish-core/lib/cups_service.hpp             |  9 ++-
+ redfish-core/lib/fips_manager.hpp             |  4 ++
+ redfish-core/lib/managers.hpp                 |  2 +-
+ redfish-core/lib/sensors.hpp                  | 10 +--
+ static/redfish/v1/$metadata/index.xml         |  5 +-
+ .../v1/schema/OemSecurityPolicy_v1.xml        | 64 +++++++++++++++++++
+ 8 files changed, 85 insertions(+), 13 deletions(-)
+ create mode 100644 static/redfish/v1/schema/OemSecurityPolicy_v1.xml
+
+diff --git a/redfish-core/include/redfish.hpp b/redfish-core/include/redfish.hpp
+index 25a19703..85d21cd3 100644
+--- a/redfish-core/include/redfish.hpp
++++ b/redfish-core/include/redfish.hpp
+@@ -107,6 +107,8 @@ class RedfishService
+         requestRoutesNetworkProtocol(app);
+         requestRoutesSession(app);
+         requestEthernetInterfacesRoutes(app);
++        requestRoutesSystemNetworkCollection(app);
++        requestRoutesChassisNetworkCollection(app);
+ #ifdef BMCWEB_ALLOW_DEPRECATED_POWER_THERMAL
+         requestRoutesThermal(app);
+ #endif
+diff --git a/redfish-core/include/registries/openbmc_message_registry.hpp b/redfish-core/include/registries/openbmc_message_registry.hpp
+index 5dfb57ef..940a6a71 100644
+--- a/redfish-core/include/registries/openbmc_message_registry.hpp
++++ b/redfish-core/include/registries/openbmc_message_registry.hpp
+@@ -2557,7 +2557,7 @@ constexpr std::array registry =
+         {
+             "Update or save streaming destination error.",
+             "PMT kafka streaming destination error: %1",
+-            "Error",
++            "Critical",
+             1,
+             {
+                 "string",
+diff --git a/redfish-core/lib/cups_service.hpp b/redfish-core/lib/cups_service.hpp
+index a8597ad0..088b10a8 100644
+--- a/redfish-core/lib/cups_service.hpp
++++ b/redfish-core/lib/cups_service.hpp
+@@ -497,18 +497,17 @@ inline std::string getSensorId(std::string type, std::string name)
+ 
+ inline void getCupsSensors(const std::shared_ptr<bmcweb::AsyncResp> asyncResp)
+ {
++    nlohmann::json& members = asyncResp->res.jsonValue["Members"];
++    members = nlohmann::json::array();
+     crow::connections::systemBus->async_method_call(
+-        [asyncResp](const boost::system::error_code ec,
+-                    const dbus::utility::ManagedObjectType& objects) {
++        [asyncResp, &members](const boost::system::error_code ec,
++                              const dbus::utility::ManagedObjectType& objects) {
+         if (ec)
+         {
+             BMCWEB_LOG_ERROR("DBus error: {}", ec.message());
+             return;
+         }
+ 
+-        nlohmann::json& members = asyncResp->res.jsonValue["Members"];
+-        members = nlohmann::json::array();
+-
+         for (const auto& [path, ifaces] : objects)
+         {
+             if (!isSensor(ifaces))
+diff --git a/redfish-core/lib/fips_manager.hpp b/redfish-core/lib/fips_manager.hpp
+index f33b5934..04ec2b0c 100644
+--- a/redfish-core/lib/fips_manager.hpp
++++ b/redfish-core/lib/fips_manager.hpp
+@@ -138,6 +138,10 @@ inline void
+     asyncResp->res.jsonValue["Id"] = "SecurityPolicy";
+     asyncResp->res.jsonValue["Name"] = "Security Policy";
+     asyncResp->res.jsonValue["Description"] = "Security Policy";
++    asyncResp->res.jsonValue["Oem"]["Intel"]["@odata.id"] =
++        "/redfish/v1/Managers/bmc/SecurityPolicy#/Oem/Intel";
++    asyncResp->res.jsonValue["Oem"]["Intel"]["@odata.type"] =
++        "#OemSecurityPolicy.v1_0_0.OemSecurityPolicy";
+     getFipsStatus(asyncResp);
+     getFipsVersion(asyncResp);
+     getAvailableProviders(asyncResp);
+diff --git a/redfish-core/lib/managers.hpp b/redfish-core/lib/managers.hpp
+index 54782a16..0a727953 100644
+--- a/redfish-core/lib/managers.hpp
++++ b/redfish-core/lib/managers.hpp
+@@ -2224,7 +2224,7 @@ inline void handleManagersInstanceGet(
+         return;
+     }
+     asyncResp->res.jsonValue["@odata.id"] = "/redfish/v1/Managers/bmc";
+-    asyncResp->res.jsonValue["@odata.type"] = "#Manager.v1_14_0.Manager";
++    asyncResp->res.jsonValue["@odata.type"] = "#Manager.v1_16_0.Manager";
+     asyncResp->res.jsonValue["Id"] = "bmc";
+     asyncResp->res.jsonValue["Name"] = "OpenBmc Manager";
+     asyncResp->res.jsonValue["Description"] = "Baseboard Management Controller";
+diff --git a/redfish-core/lib/sensors.hpp b/redfish-core/lib/sensors.hpp
+index d206c97a..a87849ef 100644
+--- a/redfish-core/lib/sensors.hpp
++++ b/redfish-core/lib/sensors.hpp
+@@ -2840,11 +2840,11 @@ inline void
+         BMCWEB_LOG_DEBUG("getChassisCb exit");
+     };
+     // SensorCollection doesn't contain the Redundancy property
+-    if (sensorsAsyncResp->chassisSubNode != sensors::node::sensors)
+-    {
+-        sensorsAsyncResp->asyncResp->res.jsonValue["Redundancy"] =
+-            nlohmann::json::array();
+-    }
++    // if (sensorsAsyncResp->chassisSubNode != sensors::node::sensors)
++    // {
++    //     sensorsAsyncResp->asyncResp->res.jsonValue["Redundancy"] =
++    //         nlohmann::json::array();
++    // }
+     // Get set of sensors in chassis
+     getChassis(sensorsAsyncResp->asyncResp, sensorsAsyncResp->chassisId,
+                sensorsAsyncResp->chassisSubNode, sensorsAsyncResp->types,
+diff --git a/static/redfish/v1/$metadata/index.xml b/static/redfish/v1/$metadata/index.xml
+index 589e38e0..b25d6904 100644
+--- a/static/redfish/v1/$metadata/index.xml
++++ b/static/redfish/v1/$metadata/index.xml
+@@ -3619,7 +3619,6 @@
+     </edmx:Reference>
+     <edmx:Reference Uri="/redfish/v1/schema/AMIChassisFRUCollection_v1.xml">
+         <edmx:Include Namespace="AMIChassisFRUCollection"/>
+-        <edmx:Include Namespace="AMIChassisFRUCollection.v1_0_0"/>
+     </edmx:Reference>
+     <edmx:Reference Uri="/redfish/v1/schema/AMIChassisFRU_v1.xml">
+         <edmx:Include Namespace="AMIChassisFRU"/>
+@@ -3665,4 +3664,8 @@
+         <edmx:Include Namespace="AMIManager"/>
+         <edmx:Include Namespace="AMIManager.v1_0_0"/>
+     </edmx:Reference>
++    <edmx:Reference Uri="/redfish/v1/schema/OemSecurityPolicy_v1.xml">
++        <edmx:Include Namespace="OemSecurityPolicy"/>
++        <edmx:Include Namespace="OemSecurityPolicy.v1_0_0"/>
++    </edmx:Reference>
+ </edmx:Edmx>
+diff --git a/static/redfish/v1/schema/OemSecurityPolicy_v1.xml b/static/redfish/v1/schema/OemSecurityPolicy_v1.xml
+new file mode 100644
+index 00000000..ab5e9b4f
+--- /dev/null
++++ b/static/redfish/v1/schema/OemSecurityPolicy_v1.xml
+@@ -0,0 +1,64 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" Version="4.0">
++  <edmx:Reference
++    Uri="http://docs.oasis-open.org/odata/odata/v4.0/errata03/csd01/complete/vocabularies/Org.OData.Core.V1.xml">
++    <edmx:Include Namespace="Org.OData.Core.V1" Alias="OData" />
++  </edmx:Reference>
++  <edmx:Reference Uri="http://redfish.dmtf.org/schemas/v1/RedfishExtensions_v1.xml">
++    <edmx:Include Namespace="Validation.v1_0_0" Alias="Validation" />
++    <edmx:Include Namespace="RedfishExtensions.v1_0_0" Alias="Redfish" />
++  </edmx:Reference>
++  <edmx:Reference Uri="http://redfish.dmtf.org/schemas/v1/SecurityPolicy_v1.xml">
++    <edmx:Include Namespace="SecurityPolicy" />
++  </edmx:Reference>
++  <edmx:Reference Uri="http://redfish.dmtf.org/schemas/v1/Resource_v1.xml">
++    <edmx:Include Namespace="Resource.v1_0_0" />
++  </edmx:Reference>
++  <edmx:DataServices>
++
++    <Schema xmlns="http://docs.oasis-open.org/odata/ns/edm" Namespace="OemSecurityPolicy">
++      <Annotation Term="Redfish.OwningEntity" String="Intel" />
++
++      <EntityType Name="OemSecurityPolicy" BaseType="OemManager.Oem" Abstract="true">
++        <Annotation Term="OData.Description" String="The OemSecurityPolicy Attributes implemented by Intel." />
++        <Annotation Term="OData.LongDescription" String="The OemSecurityPolicy Attributes implemented by Intel." />
++      </EntityType>
++    </Schema>
++
++    <Schema xmlns="http://docs.oasis-open.org/odata/ns/edm" Namespace="OemSecurityPolicy.v1_0_0">
++      <Annotation Term="Redfish.OwningEntity" String="Intel" />
++      <Annotation Term="Redfish.Release" String="1.0" />
++
++      <EntityType Name="OemSecurityPolicy" BaseType="OemSecurityPolicy.OemSecurityPolicy">
++        <Property Name="FIPSStatus" Type="OemSecurityPolicy.v1_0_0.FIPSStatus" Nullable="false">
++          <Annotation Term="OData.Permissions" EnumMember="OData.Permission/ReadWrite" />
++	  <Annotation Term="OData.Description" String="This property indicates the status of FIPSStatus." />
++          <Annotation Term="OData.LongDescription" String="This property indicates the status of FIPSStatus." />
++        </Property>
++      </EntityType>	
++
++      <ComplexType Name="FIPSStatus">
++        <Annotation Term="OData.AdditionalProperties" Bool="false" />
++        <Annotation Term="OData.Description" String="This property indicates the status of FIPSStatus." />
++        <Annotation Term="OData.LongDescription" String="This property indicates the status of FIPSStatus." />
++        <Property Name="AvailableProviders" Type="Collection(Edm.String)">
++          <Annotation Term="OData.Permissions" EnumMember="OData.Permission/ReadWrite" />
++          <Annotation Term="OData.Description" String="This property indicates the AvailableProviders." />
++          <Annotation Term="OData.LongDescription" String="This property indicates the AvailableProviders." />
++        </Property>
++        <Property Name="Enabled" Type="Edm.Boolean">
++          <Annotation Term="OData.Permissions" EnumMember="OData.Permission/ReadWrite" />
++          <Annotation Term="OData.Description" String="This property indicates the Enabled or Disable." />
++          <Annotation Term="OData.LongDescription" String="This property indicates the Enabled or Disable." />
++        </Property>
++        <Property Name="Version" Type="Edm.String">
++          <Annotation Term="OData.Permissions" EnumMember="OData.Permission/ReadWrite" />
++          <Annotation Term="OData.Description" String="This property indicates the Version." />
++          <Annotation Term="OData.LongDescription" String="This property indicates the Version." />
++        </Property>
++      </ComplexType>
++
++    </Schema>
++  </edmx:DataServices>
++</edmx:Edmx>
++
+-- 
+2.25.1
+

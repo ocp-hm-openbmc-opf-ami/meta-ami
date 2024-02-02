@@ -1,44 +1,52 @@
-From 41cace9752b76f02a3161fb2ee9dd1a11b61e2b8 Mon Sep 17 00:00:00 2001
-From: nibinc <nibinc@ami.com>
-Date: Mon, 16 Oct 2023 12:43:36 -0400
+From e2a039a972e492d34c8fcef0dc11c57e73ba47c3 Mon Sep 17 00:00:00 2001
+From: Nibin Chacko <nibinc@ami.com>
+Date: Wed, 24 Jan 2024 11:46:35 -0500
 Subject: [PATCH 10/10] Time zone configuration support
 
 ---
- http/utility.hpp              | 144 +++++++++++++++++++++++++++++++++-
- redfish-core/lib/managers.hpp |  36 +++++++--
- 2 files changed, 173 insertions(+), 7 deletions(-)
+ http/utility.hpp              | 146 ++++++++++++++++++++++++++++++++++
+ redfish-core/lib/managers.hpp | 110 +++++++++++++++----------
+ 2 files changed, 216 insertions(+), 40 deletions(-)
 
 diff --git a/http/utility.hpp b/http/utility.hpp
-index b35811a9..17a9faa5 100644
+index dc7ea7f1..f9cb3535 100644
 --- a/http/utility.hpp
 +++ b/http/utility.hpp
-@@ -25,6 +25,11 @@
- #include <type_traits>
- #include <utility>
- #include <variant>
-+#include "nlohmann/json.hpp"
-+#include <cstring>
-+#include <fstream>
-+#include <regex>
-+#include <boost/date_time/posix_time/posix_time.hpp>
+@@ -2,9 +2,12 @@
  
- namespace crow
- {
-@@ -101,7 +106,6 @@ constexpr inline uint64_t getParameterTag(std::string_view url)
-     }
-     return tagValue;
- }
--
- constexpr size_t numArgsFromTag(int tag)
- {
-     size_t ret = 0;
-@@ -277,6 +281,134 @@ inline bool base64Decode(std::string_view input, std::string& output)
+ #include "bmcweb_config.h"
+ 
++#include "nlohmann/json.hpp"
++
+ #include <openssl/crypto.h>
+ 
+ #include <boost/callable_traits.hpp>
++#include <boost/date_time/posix_time/posix_time.hpp>
+ #include <boost/url/parse.hpp>
+ #include <boost/url/url.hpp>
+ #include <boost/url/url_view.hpp>
+@@ -14,10 +17,13 @@
+ #include <chrono>
+ #include <cstddef>
+ #include <cstdint>
++#include <cstring>
+ #include <ctime>
++#include <fstream>
+ #include <functional>
+ #include <iomanip>
+ #include <limits>
++#include <regex>
+ #include <stdexcept>
+ #include <string>
+ #include <string_view>
+@@ -277,6 +283,136 @@ inline bool base64Decode(std::string_view input, std::string& output)
      return true;
  }
  
 +inline float tzFormatConvert(std::string timeZone)
 +{
-+    try {
++    try
++    {
 +        auto i = timeZone.find(':');
 +        timeZone = timeZone.replace(i, 1, ".");
 +        std::string minute = timeZone.substr(i + 1);
@@ -50,9 +58,10 @@ index b35811a9..17a9faa5 100644
 +        timeZone = timeZone.replace(i + 1, 2, minute);
 +
 +        float res = std::stof(timeZone.c_str());
-+        return res ;
++        return res;
 +    }
-+    catch (std::exception &ex) {
++    catch (std::exception& ex)
++    {
 +        BMCWEB_LOG_ERROR("Invalid parameter type {}", ex.what());
 +        return 0;
 +    }
@@ -62,8 +71,8 @@ index b35811a9..17a9faa5 100644
 +
 +namespace details
 +{
-+    //constexpr uint64_t maxMilliSeconds = 253402300799999;
-+    //constexpr uint64_t maxSeconds = 253402300799;
++// constexpr uint64_t maxMilliSeconds = 253402300799999;
++// constexpr uint64_t maxSeconds = 253402300799;
 +inline std::string getDateTime(boost::posix_time::milliseconds timeSinceEpoch)
 +{
 +    boost::posix_time::ptime epoch(boost::gregorian::date(1970, 1, 1));
@@ -71,7 +80,7 @@ index b35811a9..17a9faa5 100644
 +    // append zero offset to the end according to the Redfish spec for Date-Time
 +    return boost::posix_time::to_iso_extended_string(time) + "+00:00";
 +}
-+}// namespace details
++} // namespace details
 +
 +inline std::string getTimeZone(std::string filePath)
 +{
@@ -90,10 +99,10 @@ index b35811a9..17a9faa5 100644
 +{
 +    std::fstream out(filePath, std::ios::out);
 +    if (!out.is_open())
-+            return;
++        return;
 +    out << timeZone;
 +    out.close();
-+    return;  
++    return;
 +}
 +
 +inline std::string getDateTime(const std::time_t& time)
@@ -123,7 +132,7 @@ index b35811a9..17a9faa5 100644
 +
 +inline std::string getDateTimeUint(uint64_t secondsSinceEpoch)
 +{
-+   // secondsSinceEpoch = std::min(secondsSinceEpoch, details::maxSeconds);
++    // secondsSinceEpoch = std::min(secondsSinceEpoch, details::maxSeconds);
 +    boost::posix_time::seconds boostSeconds(secondsSinceEpoch);
 +    return details::getDateTime(
 +        boost::posix_time::milliseconds(boostSeconds.total_milliseconds()));
@@ -131,8 +140,8 @@ index b35811a9..17a9faa5 100644
 +
 +inline std::string getDateTimeUintMs(uint64_t milliSecondsSinceEpoch)
 +{
-+    //milliSecondsSinceEpoch =
-+     //   std::min(details::maxMilliSeconds, milliSecondsSinceEpoch);
++    // milliSecondsSinceEpoch =
++    //    std::min(details::maxMilliSeconds, milliSecondsSinceEpoch);
 +    return details::getDateTime(
 +        boost::posix_time::milliseconds(milliSecondsSinceEpoch));
 +}
@@ -147,7 +156,7 @@ index b35811a9..17a9faa5 100644
 +inline std::pair<std::string, std::string> getDateTimeOffsetNow()
 +{
 +    std::time_t time = std::time(nullptr);
-+    //std::string dateTime = getDateTimeStdtime(time);
++    // std::string dateTime = getDateTimeStdtime(time);
 +    std::string dateTime = getDateTime(time);
 +
 +    /* extract the local Time Offset value from the
@@ -167,7 +176,7 @@ index b35811a9..17a9faa5 100644
  inline bool constantTimeStringCompare(std::string_view a, std::string_view b)
  {
      // Important note, this function is ONLY constant time if the two input
-@@ -296,6 +428,16 @@ struct ConstantTimeCompare
+@@ -296,6 +432,16 @@ struct ConstantTimeCompare
      }
  };
  
@@ -185,10 +194,19 @@ index b35811a9..17a9faa5 100644
  {
  inline boost::urls::url
 diff --git a/redfish-core/lib/managers.hpp b/redfish-core/lib/managers.hpp
-index 3c5972a2..f4862738 100644
+index 8ea35908..e96b9467 100644
 --- a/redfish-core/lib/managers.hpp
 +++ b/redfish-core/lib/managers.hpp
-@@ -1879,6 +1879,22 @@ inline void
+@@ -249,7 +249,7 @@ inline void requestRoutesManagerResetToDefaultsAction(App& app)
+             // Factory Reset doesn't actually happen until a reboot
+             // Can't erase what the BMC is running on
+             doBMCGracefulRestart(asyncResp);
+-	    messages::success(asyncResp->res);
++            messages::success(asyncResp->res);
+         },
+             "xyz.openbmc_project.Software.BMC.Updater",
+             "/xyz/openbmc_project/software",
+@@ -1878,6 +1878,22 @@ inline void
      });
  }
  
@@ -211,7 +229,7 @@ index 3c5972a2..f4862738 100644
  inline void setDateTime(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
                          std::string datetime)
  {
-@@ -1903,7 +1919,10 @@ inline void setDateTime(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
+@@ -1902,7 +1918,10 @@ inline void setDateTime(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
              BMCWEB_LOG_DEBUG("Failed to set elapsed time. "
                               "DBUS response error {}",
                               ec);
@@ -223,7 +241,7 @@ index 3c5972a2..f4862738 100644
              return;
          }
          asyncResp->res.jsonValue["DateTime"] = datetime;
-@@ -2011,7 +2030,7 @@ inline void requestRoutesManager(App& app)
+@@ -2012,7 +2031,7 @@ inline void requestRoutesManager(App& app)
              "ResetAll", "ResetToDefaultButKeepReservedSettings"};
  
          std::pair<std::string, std::string> redfishDateTimeOffset =
@@ -232,36 +250,125 @@ index 3c5972a2..f4862738 100644
  
          asyncResp->res.jsonValue["DateTime"] = redfishDateTimeOffset.first;
          asyncResp->res.jsonValue["DateTimeLocalOffset"] =
-@@ -2231,13 +2250,14 @@ inline void requestRoutesManager(App& app)
+@@ -2057,17 +2076,17 @@ inline void requestRoutesManager(App& app)
+                                              "FirmwareVersion", true);
+ 
+         managerGetLastResetTime(asyncResp);
+-	getSystemLocationIndicatorActive(asyncResp);
++        getSystemLocationIndicatorActive(asyncResp);
+         // ManagerDiagnosticData is added for all BMCs.
+         nlohmann::json& managerDiagnosticData =
+             asyncResp->res.jsonValue["ManagerDiagnosticData"];
+         managerDiagnosticData["@odata.id"] =
+             "/redfish/v1/Managers/bmc/ManagerDiagnosticData";
+ 
+-//#ifdef BMCWEB_ENABLE_REDFISH_OEM_MANAGER_FAN_DATA
+-//        auto pids = std::make_shared<GetPIDValues>(asyncResp);
+-//        pids->run();
+-//#endif
++        // #ifdef BMCWEB_ENABLE_REDFISH_OEM_MANAGER_FAN_DATA
++        //         auto pids = std::make_shared<GetPIDValues>(asyncResp);
++        //         pids->run();
++        // #endif
+ 
+         getMainChassisId(asyncResp,
+                          [](const std::string& chassisId,
+@@ -2231,41 +2250,47 @@ inline void requestRoutesManager(App& app)
          std::optional<nlohmann::json> oem;
          std::optional<nlohmann::json> links;
          std::optional<std::string> datetime;
+-	std::optional<bool> locationIndicatorActive;
++        std::optional<bool> locationIndicatorActive;
 +        std::optional<std::string> timeZone;
-         std::optional<bool> locationIndicatorActive;
-         std::optional<std::string> vId;
  
 -        if (!json_util::readJsonPatch(req, asyncResp->res, "Oem", oem,
--                                      "DateTime", datetime, "Links", links,
--                                      "LocationIndicatorActive",
--                                      locationIndicatorActive, "Id", vId))
+-                                      "DateTime", datetime, "Links", links, "LocationIndicatorActive", locationIndicatorActive))
 +        if (!json_util::readJsonPatch(
 +                req, asyncResp->res, "Oem", oem, "DateTime", datetime, "Links",
-+                links, "LocationIndicatorActive", locationIndicatorActive, "Id",
-+                vId, "DateTimeLocalOffset", timeZone))
++                links, "LocationIndicatorActive", locationIndicatorActive,
++                "DateTimeLocalOffset", timeZone))
          {
              return;
          }
-@@ -2305,6 +2325,10 @@ inline void requestRoutesManager(App& app)
+         asyncResp->res.result(boost::beast::http::status::no_content);
+         if (oem)
+         {
+-//#ifdef BMCWEB_ENABLE_REDFISH_OEM_MANAGER_FAN_DATA
+-//            std::optional<nlohmann::json> openbmc;
+-//            if (!redfish::json_util::readJson(*oem, asyncResp->res, "OpenBmc",
+-//                                              openbmc))
+-//            {
+-//                return;
+-//            }
+-//            if (openbmc)
+-//            {
+-//                std::optional<nlohmann::json> fan;
+-//                if (!redfish::json_util::readJson(*openbmc, asyncResp->res,
+-//                                                  "Fan", fan))
+-//                {
+-//                    return;
+-//                }
+-//                if (fan)
+-//                {
+-//                    auto pid = std::make_shared<SetPIDValues>(asyncResp, *fan);
+-//                    pid->run();
+-//                }
+-//            }
+-//#else
+-//            messages::propertyUnknown(asyncResp->res, "Oem");
+-//            return;
+-//#endif
++            // #ifdef BMCWEB_ENABLE_REDFISH_OEM_MANAGER_FAN_DATA
++            //             std::optional<nlohmann::json> openbmc;
++            //             if (!redfish::json_util::readJson(*oem,
++            //             asyncResp->res, "OpenBmc",
++            //                                               openbmc))
++            //             {
++            //                 return;
++            //             }
++            //             if (openbmc)
++            //             {
++            //                 std::optional<nlohmann::json> fan;
++            //                 if (!redfish::json_util::readJson(*openbmc,
++            //                 asyncResp->res,
++            //                                                   "Fan", fan))
++            //                 {
++            //                     return;
++            //                 }
++            //                 if (fan)
++            //                 {
++            //                     auto pid =
++            //                     std::make_shared<SetPIDValues>(asyncResp,
++            //                     *fan); pid->run();
++            //                 }
++            //             }
++            // #else
++            //             messages::propertyUnknown(asyncResp->res, "Oem");
++            //             return;
++            // #endif
+         }
+         if (links)
+         {
+@@ -2295,10 +2320,15 @@ inline void requestRoutesManager(App& app)
          {
              setDateTime(asyncResp, std::move(*datetime));
          }
+-	if (locationIndicatorActive)
+- 	{
+-     	    setSystemLocationIndicatorActive(asyncResp, *locationIndicatorActive);
+- 	}
++        if (locationIndicatorActive)
++        {
++            setSystemLocationIndicatorActive(asyncResp,
++                                             *locationIndicatorActive);
++        }
 +        if (timeZone)
 +        {
 +            setTimeZone(asyncResp, std::move(*timeZone));
 +        }
-         if (locationIndicatorActive)
-         {
-             setLocationIndicatorActive(asyncResp, *locationIndicatorActive);
+     });
+ }
+ 
 -- 
 2.34.1
 

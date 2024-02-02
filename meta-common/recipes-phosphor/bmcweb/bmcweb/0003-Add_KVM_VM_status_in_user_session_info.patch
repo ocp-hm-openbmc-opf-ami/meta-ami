@@ -1,6 +1,6 @@
-From 8fade23e06f0e752e15529e1e3ee1f2495136656 Mon Sep 17 00:00:00 2001
+From 92d48b656ed42e0940990ef957ebbb0968be6796 Mon Sep 17 00:00:00 2001
 From: Pranoy Goru <gorumanip@ami.com>
-Date: Sat, 14 Oct 2023 01:40:19 +0530
+Date: Wed, 24 Jan 2024 18:05:28 +0530
 Subject: [PATCH 3/3] Add KVM VM status in user session info
 
 Test:
@@ -23,52 +23,75 @@ https://x.x.x/kvm/kvmActiveStatus
 
 Signed-off-by: Pranoy Goru <gorumanip@ami.com>
 ---
- http/websocket.hpp                            |  7 +-
- include/kvm_websocket.hpp                     | 73 ++++++++++++-------
- include/nbd_proxy.hpp                         | 21 +++++-
- include/sessions.hpp                          |  5 ++
- redfish-core/lib/redfish_sessions.hpp         | 12 +++
- static/redfish/v1/$metadata/index.xml         |  4 +
- .../v1/JsonSchemas/AMIWebSession/index.json   | 44 +++++++++++
- static/redfish/v1/schema/AMIWebSession_v1.xml | 44 +++++++++++
- 8 files changed, 176 insertions(+), 34 deletions(-)
+ http/websocket.hpp                            |  2 +
+ include/kvm_websocket.hpp                     | 28 ++++++++++--
+ include/nbd_proxy.hpp                         | 13 +++++-
+ include/sessions.hpp                          |  7 ++-
+ redfish-core/lib/redfish_sessions.hpp         | 12 +++++
+ static/redfish/v1/$metadata/index.xml         |  4 ++
+ .../v1/JsonSchemas/AMIWebSession/index.json   | 44 +++++++++++++++++++
+ static/redfish/v1/schema/AMIWebSession_v1.xml | 44 +++++++++++++++++++
+ 8 files changed, 149 insertions(+), 5 deletions(-)
  create mode 100644 static/redfish/v1/JsonSchemas/AMIWebSession/index.json
  create mode 100644 static/redfish/v1/schema/AMIWebSession_v1.xml
-
 diff --git a/http/websocket.hpp b/http/websocket.hpp
-index 216c4131..c7d825f5 100644
+index 4f5b3c18..b5ab46db 100644
 --- a/http/websocket.hpp
 +++ b/http/websocket.hpp
-@@ -27,7 +27,9 @@ enum class MessageType
+@@ -27,8 +27,10 @@ enum class MessageType
  struct Connection : std::enable_shared_from_this<Connection>
  {
    public:
--    explicit Connection(const crow::Request& reqIn) : req(reqIn.req) {}
-+    explicit Connection(const crow::Request& reqIn) :
-+        req(reqIn.req), session(reqIn.session)
+-    Connection() = default;
+-
++    explicit Connection(
++        const std::shared_ptr<persistent_data::UserSession>& sessionIn) :
++        session(sessionIn)
 +    {}
- 
      Connection(const Connection&) = delete;
      Connection(Connection&&) = delete;
-@@ -47,6 +49,7 @@ struct Connection : std::enable_shared_from_this<Connection>
+     Connection& operator=(const Connection&) = delete;
+@@ -46,6 +48,7 @@ struct Connection : std::enable_shared_from_this<Connection>
+     virtual boost::asio::io_context& getIoContext() = 0;
      virtual ~Connection() = default;
      virtual boost::urls::url_view url() = 0;
-     boost::beast::http::request<boost::beast::http::string_body> req;
 +    std::shared_ptr<persistent_data::UserSession> session;
  };
- 
+
  template <typename Adaptor>
-@@ -213,7 +216,7 @@ class ConnectionImpl : public Connection
-                 BMCWEB_LOG_ERROR("Error closing websocket {}", ec);
-                 return;
-             }
--            });
-+        });
-     }
- 
-     boost::urls::url_view url() override
+@@ -66,8 +69,8 @@ class ConnectionImpl : public Connection
+             messageExHandlerIn,
+         std::function<void(Connection&, const std::string&)> closeHandlerIn,
+         std::function<void(Connection&)> errorHandlerIn) :
+-        uri(urlViewIn),
+-        ws(std::move(adaptorIn)), inBuffer(inString, 131088),
++        Connection(sessionIn),
++        uri(urlViewIn), ws(std::move(adaptorIn)), inBuffer(inString, 131088),
+         openHandler(std::move(openHandlerIn)),
+         messageHandler(std::move(messageHandlerIn)),
+         messageExHandler(std::move(messageExHandlerIn)),
+#diff --git a/http/websocket.hpp b/http/websocket.hpp
+#index 4f5b3c18..edbafbc3 100644
+#--- a/http/websocket.hpp
+#+++ b/http/websocket.hpp
+#@@ -28,6 +28,7 @@ struct Connection : std::enable_shared_from_this<Connection>
+# {
+#   public:
+#     Connection() = default;
+#+    explicit Connection(const crow::Request& reqIn) : session(reqIn.session) {}
+# 
+#     Connection(const Connection&) = delete;
+#     Connection(Connection&&) = delete;
+#@@ -46,6 +47,7 @@ struct Connection : std::enable_shared_from_this<Connection>
+#     virtual boost::asio::io_context& getIoContext() = 0;
+#     virtual ~Connection() = default;
+#     virtual boost::urls::url_view url() = 0;
+#+    std::shared_ptr<persistent_data::UserSession> session;
+# };
+# 
+# template <typename Adaptor>
 diff --git a/include/kvm_websocket.hpp b/include/kvm_websocket.hpp
-index 6459c311..7f673596 100644
+index f761773d..452b691c 100644
 --- a/include/kvm_websocket.hpp
 +++ b/include/kvm_websocket.hpp
 @@ -13,7 +13,8 @@ namespace crow
@@ -79,92 +102,49 @@ index 6459c311..7f673596 100644
 +static constexpr const uint maxSessions = 1;
 +int kvmActiveStatus = 0;
  
- class KvmSession
+ class KvmSession : public std::enable_shared_from_this<KvmSession>
  {
-@@ -25,20 +26,20 @@ class KvmSession
-             boost::asio::ip::make_address("127.0.0.1"), 5900);
-         hostSocket.async_connect(
-             endpoint, [this, &connIn](const boost::system::error_code& ec) {
--                if (ec)
-+            if (ec)
-+            {
-+                BMCWEB_LOG_ERROR(
-+                    "conn:{}, Couldn't connect to KVM socket port: {}",
-+                    logPtr(&conn), ec);
-+                if (ec != boost::asio::error::operation_aborted)
-                 {
--                    BMCWEB_LOG_ERROR(
--                        "conn:{}, Couldn't connect to KVM socket port: {}",
--                        logPtr(&conn), ec);
--                    if (ec != boost::asio::error::operation_aborted)
--                    {
--                        connIn.close("Error in connecting to KVM port");
--                    }
--                    return;
-+                    connIn.close("Error in connecting to KVM port");
-                 }
-+                return;
-+            }
- 
--                doRead();
--            });
-+            doRead();
-+        });
+@@ -66,7 +67,8 @@ class KvmSession : public std::enable_shared_from_this<KvmSession>
+         BMCWEB_LOG_DEBUG("conn:{}, inputbuffer size {}", logPtr(&conn),
+                          inputBuffer.size());
+         doWrite();
+-        lastActivityTime = persistent_data::SessionStore::getInstance().getTimeSinceLastTimeoutInSeconds();
++        lastActivityTime = persistent_data::SessionStore::getInstance()
++                               .getTimeSinceLastTimeoutInSeconds();
      }
  
-     void onMessage(const std::string& data)
-@@ -97,7 +98,7 @@ class KvmSession
-             outputBuffer.consume(bytesRead);
+     ~KvmSession()
+@@ -171,7 +173,11 @@ class KvmSession : public std::enable_shared_from_this<KvmSession>
+         if (!timerRunning) // Check if the timer is not already running
+         {
+             timerRunning = true;
+-            lastActivityTime = persistent_data::SessionStore::getInstance().getTimeSinceLastTimeoutInSeconds(); // Get the current time and store it in lastActivityTime
++            lastActivityTime =
++                persistent_data::SessionStore::getInstance()
++                    .getTimeSinceLastTimeoutInSeconds(); // Get the current time
++                                                         // and store it in
++                                                         // lastActivityTime
  
-             doRead();
--            });
-+        });
-     }
+             // Start a new thread (timeoutTimer) to handle the timeout logic
+             timeoutTimer = std::thread([this]() {
+@@ -263,9 +269,13 @@ inline void requestRoutes(App& app)
+         }
  
-     void doWrite()
-@@ -164,26 +165,42 @@ inline void requestRoutes(App& app)
-         .websocket()
-         .privileges(redfish::privileges::privilegeSetConfigureManager)
-         .onopen([](crow::websocket::Connection& conn) {
--            BMCWEB_LOG_DEBUG("Connection {} opened", logPtr(&conn));
-+        BMCWEB_LOG_DEBUG("Connection {} opened", logPtr(&conn));
- 
--            if (sessions.size() == maxSessions)
--            {
--                conn.close("Max sessions are already connected");
--                return;
--            }
-+        if (sessions.size() == maxSessions)
-+        {
-+            conn.close("Max sessions are already connected");
-+            return;
-+        }
- 
--            sessions[&conn] = std::make_unique<KvmSession>(conn);
--        })
-+        sessions[&conn] = std::make_unique<KvmSession>(conn);
+         sessions[&conn] = std::make_shared<KvmSession>(conn);
 +        conn.session->kvmConnections++;
 +        kvmActiveStatus = 1;
-+    })
+     })
          .onclose([](crow::websocket::Connection& conn, const std::string&) {
--            sessions.erase(&conn);
--        })
-+        sessions.erase(&conn);
+         sessions.erase(&conn);
 +        conn.session->kvmConnections--;
 +        kvmActiveStatus = 0;
-+    })
+     })
          .onmessage([](crow::websocket::Connection& conn,
                        const std::string& data, bool) {
--            if (sessions[&conn])
--            {
--                sessions[&conn]->onMessage(data);
--            }
--        });
-+        if (sessions[&conn])
-+        {
-+            sessions[&conn]->onMessage(data);
-+        }
-+    });
+@@ -274,6 +284,18 @@ inline void requestRoutes(App& app)
+             sessions[&conn]->onMessage(data);
+         }
+     });
 +    BMCWEB_ROUTE(app, "/kvm/kvmActiveStatus")
 +        .privileges({{"ConfigureComponents", "ConfigureManager"}})
 +        .methods(boost::beast::http::verb::get)(
@@ -181,7 +161,7 @@ index 6459c311..7f673596 100644
  
  } // namespace obmc_kvm
 diff --git a/include/nbd_proxy.hpp b/include/nbd_proxy.hpp
-index 85485554..4ea18611 100644
+index 53feafbf..40f23641 100644
 --- a/include/nbd_proxy.hpp
 +++ b/include/nbd_proxy.hpp
 @@ -48,7 +48,10 @@ struct NbdProxyServer : std::enable_shared_from_this<NbdProxyServer>
@@ -208,36 +188,15 @@ index 85485554..4ea18611 100644
      void run()
      {
          acceptor.async_accept(
-@@ -164,8 +172,8 @@ struct NbdProxyServer : std::enable_shared_from_this<NbdProxyServer>
-                     self2->ux2wsBuf.consume(self2->ux2wsBuf.size());
-                     self2->doRead();
-                 }
--                });
-             });
-+        });
-     }
- 
-     void doWrite(std::function<void()>&& onDone)
-@@ -211,7 +219,7 @@ struct NbdProxyServer : std::enable_shared_from_this<NbdProxyServer>
-                 return;
-             }
-             onDone();
--            });
-+        });
-     }
- 
-     // Keeps UNIX socket endpoint file path
-@@ -219,6 +227,9 @@ struct NbdProxyServer : std::enable_shared_from_this<NbdProxyServer>
+@@ -218,6 +226,7 @@ struct NbdProxyServer : std::enable_shared_from_this<NbdProxyServer>
+     const std::string socketId;
      const std::string endpointId;
      const std::string path;
++    unsigned endpointIndex; // endpoint id represented in unsigned int
  
-+    // endpoint id represented in unsigned int
-+    unsigned endpointIndex;
-+
      bool uxWriteInProgress = false;
  
-     // UNIX => WebSocket buffer
-@@ -331,6 +342,7 @@ inline void
+@@ -331,6 +340,7 @@ inline void
          conn, *socketValue, *endpointValue, *endpointObjectPath);
  
      sessions[&conn]->run();
@@ -245,16 +204,7 @@ index 85485554..4ea18611 100644
  };
  inline void onOpen(crow::websocket::Connection& conn)
  {
-@@ -342,7 +354,7 @@ inline void onOpen(crow::websocket::Connection& conn)
-         [&conn](const boost::system::error_code& ec,
-                 const dbus::utility::ManagedObjectType& objects) {
-         afterGetManagedObjects(conn, ec, objects);
--        });
-+    });
- 
-     // We need to wait for dbus and the websockets to hook up before data is
-     // sent/received.  Tell the core to hold off messages until the sockets are
-@@ -360,6 +372,7 @@ inline void onClose(crow::websocket::Connection& conn,
+@@ -360,6 +370,7 @@ inline void onClose(crow::websocket::Connection& conn,
          BMCWEB_LOG_DEBUG("No session to close");
          return;
      }
@@ -263,23 +213,32 @@ index 85485554..4ea18611 100644
      sessions.erase(session);
  }
 diff --git a/include/sessions.hpp b/include/sessions.hpp
-index 69249a27..ed338c24 100644
+index 29eca463..f76874a1 100644
 --- a/include/sessions.hpp
 +++ b/include/sessions.hpp
-@@ -45,6 +45,11 @@ struct UserSession
+@@ -44,6 +44,10 @@ struct UserSession
+     bool isConfigureSelfOnly = false;
      std::string userRole{};
      std::vector<std::string> userGroups{};
- 
 +    // Use counter since one user can have multiple kvm connections
 +    int kvmConnections = 0;
 +    // currently there is only 2 nbd slots
 +    std::array<bool, 2> vmNbdActive = {false, false};
-+
+ 
      // There are two sources of truth for isConfigureSelfOnly:
      //  1. When pamAuthenticateUser() returns PAM_NEW_AUTHTOK_REQD.
-     //  2. D-Bus User.Manager.GetUserInfo property UserPasswordExpired.
+@@ -365,7 +369,8 @@ class SessionStore
+     {
+         return std::chrono::seconds(timeoutInSeconds).count();
+     }
+-    std::chrono::time_point<std::chrono::steady_clock> getTimeSinceLastTimeoutInSeconds() const
++    std::chrono::time_point<std::chrono::steady_clock>
++        getTimeSinceLastTimeoutInSeconds() const
+     {
+         return lastTimeoutUpdate;
+     }
 diff --git a/redfish-core/lib/redfish_sessions.hpp b/redfish-core/lib/redfish_sessions.hpp
-index 356d1fd0..3b6c3bf5 100644
+index d3faedd4..eb65b3bc 100644
 --- a/redfish-core/lib/redfish_sessions.hpp
 +++ b/redfish-core/lib/redfish_sessions.hpp
 @@ -40,6 +40,17 @@ inline void fillSessionObject(crow::Response& res,
@@ -309,17 +268,18 @@ index 356d1fd0..3b6c3bf5 100644
              catch (const sdbusplus::exception::UnpackPropertyError& error)
              {
 diff --git a/static/redfish/v1/$metadata/index.xml b/static/redfish/v1/$metadata/index.xml
-index 9d32da68..112de0c3 100644
+index 3705c740..9d80afcd 100644
 --- a/static/redfish/v1/$metadata/index.xml
 +++ b/static/redfish/v1/$metadata/index.xml
-@@ -3440,4 +3440,8 @@
-         <edmx:Include Namespace="PefService"/>
-         <edmx:Include Namespace="PefService.v1_0_0"/>
-     </edmx:Reference>
+@@ -3609,5 +3609,9 @@
+             <EntityContainer Name="Service" Extends="ServiceRoot.v1_0_0.ServiceContainer"/>
+         </Schema>
+     </edmx:DataServices>
 +    <edmx:Reference Uri="/redfish/v1/schema/AMIWebSession_v1.xml">
 +        <edmx:Include Namespace="AMIWebSession"/>
 +        <edmx:Include Namespace="AMIWebSession.v1_0_0"/>
 +    </edmx:Reference>
+ 
  </edmx:Edmx>
 diff --git a/static/redfish/v1/JsonSchemas/AMIWebSession/index.json b/static/redfish/v1/JsonSchemas/AMIWebSession/index.json
 new file mode 100644
@@ -423,4 +383,3 @@ index 00000000..4803c5e8
 +</edmx:Edmx>
 -- 
 2.34.1
-

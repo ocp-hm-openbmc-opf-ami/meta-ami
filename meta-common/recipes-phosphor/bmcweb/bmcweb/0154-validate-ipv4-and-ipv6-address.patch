@@ -1,0 +1,509 @@
+From ecc2251b91325232a8a6d8e1f2c364c072e2a35a Mon Sep 17 00:00:00 2001
+From: Nibin Chacko <nibinc@ami.com>
+Date: Wed, 24 Jan 2024 06:19:54 -0500
+Subject: [PATCH 154/154] validate ipv4 and ipv6 address
+
+---
+ redfish-core/include/error_messages.hpp       |  11 +
+ .../registries/base_message_registry.hpp      |  14 +
+ redfish-core/include/utils/ip_utils.hpp       |  80 ++++++
+ redfish-core/lib/ethernet.hpp                 | 254 ++++++++++++++++--
+ redfish-core/src/error_messages.cpp           |  13 +
+ 5 files changed, 356 insertions(+), 16 deletions(-)
+
+diff --git a/redfish-core/include/error_messages.hpp b/redfish-core/include/error_messages.hpp
+index a3bfeb8e..4a775683 100644
+--- a/redfish-core/include/error_messages.hpp
++++ b/redfish-core/include/error_messages.hpp
+@@ -1095,6 +1095,17 @@ void invalidQueryFilter(crow::Response& res);
+ nlohmann::json invalidip(std::string_view arg1, std::string_view arg2);
+ void invalidip(crow::Response& res, std::string_view arg1,
+                std::string_view arg2);
++
++/**
++ * @brief Formats differentIpSeries message into JSON
++ * Message body: "The values of <arg1> and <arg2> are in different series."
++ *
++ * @returns Message differentIpSeries formatted to JSON*/
++
++nlohmann::json differentIpSeries(std::string_view arg1, std::string_view arg2);
++void differentIpSeries(crow::Response& res, std::string_view arg1,
++                       std::string_view arg2);
++
+ } // namespace messages
+ 
+ } // namespace redfish
+diff --git a/redfish-core/include/registries/base_message_registry.hpp b/redfish-core/include/registries/base_message_registry.hpp
+index 5c96042d..f95fc2d5 100644
+--- a/redfish-core/include/registries/base_message_registry.hpp
++++ b/redfish-core/include/registries/base_message_registry.hpp
+@@ -1321,6 +1321,19 @@ constexpr std::array registry =
+ 		},
+ 		"Provide Valid IP address",
+ 	}},
++    MessageEntry{
++	    "differentIpSeries",
++	    {
++		"Indicates that the IP addresses are not in the same series",
++		"The values of %1 and %2 are in different series.",
++		"Warning",
++		2,
++		{
++			"string",
++			"string",
++		},
++		"Provide IP in the same series",
++	}},
+ 
+ };
+ 
+@@ -1437,5 +1450,6 @@ enum class Index
+     undeterminedFault = 108,
+     unrecognizedRequestBody = 109,
+     invalidip=110,
++    differentIpSeries=112,
+ };
+ } // namespace redfish::registries::base
+diff --git a/redfish-core/include/utils/ip_utils.hpp b/redfish-core/include/utils/ip_utils.hpp
+index 9b18fccc..0c9137a3 100644
+--- a/redfish-core/include/utils/ip_utils.hpp
++++ b/redfish-core/include/utils/ip_utils.hpp
+@@ -112,5 +112,85 @@ inline bool ipv4VerifyIpAndGetBitcount(const std::string& ip,
+     return true;
+ }
+ 
++enum class Type
++{
++    GATEWAY4_ADDRESS,
++    GATEWAY6_ADDRESS,
++    IP4_ADDRESS,
++    IP6_ADDRESS
++};
++
++inline bool in6AddrIetfProtocolAssignment(in6_addr* addr)
++{
++    return (ntohl(addr->__in6_u.__u6_addr32[0]) >= 0x20010000 &&
++            ntohl(addr->__in6_u.__u6_addr32[0]) <= 0x200101ff);
++}
++inline bool in6AddrDoc(in6_addr* addr)
++{
++    return ntohl(addr->__in6_u.__u6_addr32[0]) == 0x20010db8;
++}
++
++static void isValidIPv6Addr(in6_addr* addr, Type type)
++{
++    std::string strType{"Gateway"};
++    if (type == Type::IP6_ADDRESS)
++    {
++        strType = "IPv6";
++        if (in6AddrIetfProtocolAssignment(addr))
++        {
++            throw std::invalid_argument(
++                strType + " address is IETF Protocol Assignments.");
++        }
++        else if (in6AddrDoc(addr))
++        {
++            throw std::invalid_argument(strType + " address is Documentation.");
++        }
++        else if (IN6_IS_ADDR_LINKLOCAL(addr))
++        {
++            throw std::invalid_argument(strType + " address is Link-local.");
++        }
++    }
++
++    if (IN6_IS_ADDR_LOOPBACK(addr))
++    {
++        throw std::invalid_argument(strType + " is Loopback.");
++    }
++    else if (IN6_IS_ADDR_MULTICAST(addr))
++    {
++        throw std::invalid_argument(strType + " is Multicast.");
++    }
++    else if (IN6_IS_ADDR_SITELOCAL(addr))
++    {
++        throw std::invalid_argument(strType + " is Sitelocal.");
++    }
++    else if (IN6_IS_ADDR_V4MAPPED(addr))
++    {
++        throw std::invalid_argument(strType + " is V4Mapped.");
++    }
++    else if (IN6_IS_ADDR_UNSPECIFIED(addr))
++    {
++        throw std::invalid_argument(strType + " is Unspecified.");
++    }
++}
++
++inline bool validateIPv6address(const std::string& ipAddress)
++{
++    try
++    {
++        in6_addr addr;
++        if (inet_pton(AF_INET6, ipAddress.c_str(), &addr) != 1)
++        {
++            throw std::invalid_argument("Invalid IPv6 address format");
++        }
++        isValidIPv6Addr(&addr, Type::IP6_ADDRESS);
++    }
++    catch (const std::invalid_argument& e)
++    {
++        // Invalid IPv6 address.
++        return false;
++    }
++    return true;
++}
++
+ } // namespace ip_util
+ } // namespace redfish
+diff --git a/redfish-core/lib/ethernet.hpp b/redfish-core/lib/ethernet.hpp
+index 9029b8d6..e0b658ca 100644
+--- a/redfish-core/lib/ethernet.hpp
++++ b/redfish-core/lib/ethernet.hpp
+@@ -51,6 +51,14 @@ enum class LinkType
+     Global
+ };
+ 
++enum class Type
++{
++    GATEWAY4_ADDRESS,
++    GATEWAY6_ADDRESS,
++    IP4_ADDRESS,
++    IP6_ADDRESS
++};
++
+ /**
+  * Structure for keeping IPv4 data required by Redfish
+  */
+@@ -1276,6 +1284,158 @@ inline std::vector<IPv6AddressData>::const_iterator getNextStaticIpEntry(
+     });
+ }
+ 
++inline bool isSameSeries(std::string ipStr, std::string gwStr,
++                         uint8_t prefixLength)
++{
++    uint32_t ip = 0;
++    if (inet_pton(AF_INET, ipStr.c_str(), &ip) !=
++        1) // converting to numerical representation
++    {
++        return false;
++    }
++    uint32_t gw = 0;
++    if (inet_pton(AF_INET, gwStr.c_str(), &gw) !=
++        1) // converting to numerical representation
++    {
++        return false;
++    }
++    // Calculate netmask
++    uint32_t netmask = htonl(~UINT32_C(0) << (32 - prefixLength));
++
++    if ((ip & netmask) != (gw & netmask))
++    {
++        return false;
++    }
++
++    return true;
++}
++
++inline bool isValidIPv4Addr(const std::string& addr, Type type)
++{
++    uint8_t ip[4];
++    uint32_t tmp =
++        ntohl(inet_addr(addr.c_str())); // Convert std::string to const char*
++    for (int i = 0; i < 4; i++)         // Extracting Octets
++    {
++        ip[i] = (tmp >> (8 * (3 - i))) & 0xFF; // spliting into 4 octects.
++    }
++
++    if (type == Type::GATEWAY4_ADDRESS)
++    {
++        if (ip[0] == 0) // checks first octet is zero
++        {
++            return false;
++        }
++    }
++    else if (type == Type::IP4_ADDRESS)
++    {
++        if (ip[0] == 0 && ip[1] == 0 && ip[2] == 0 &&
++            ip[3] == 0) // checks if all four octets are zero
++        {
++            return false;
++        }
++    }
++    return true;
++}
++
++inline bool
++    validateIPv4Json(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                     const nlohmann::json::array_t& input)
++{
++    if (input.empty())
++    {
++        messages::propertyValueTypeError(asyncResp->res, input,
++                                         "IPv4StaticAddresses");
++        return false;
++    }
++    if (input.size() > 1) // checking the array size of ipv4 address
++    {
++        messages::arraySizeTooLong(asyncResp->res, "IPv4StaticAddresses", 1);
++        asyncResp->res.result(boost::beast::http::status::bad_request);
++        return false;
++    }
++    unsigned entryIdx = 1;
++    for (const nlohmann::json& thisJson : input)
++    {
++        std::string pathString = "IPv4StaticAddresses/" +
++                                 std::to_string(entryIdx);
++        if (!thisJson.is_null() && !thisJson.empty())
++        {
++            std::optional<std::string> address;
++            std::optional<std::string> gateway;
++            std::optional<std::string> subnetMask;
++            nlohmann::json thisJsonCopy = thisJson;
++            if (!json_util::readJson(thisJsonCopy, asyncResp->res, "Address",
++                                     address, "SubnetMask", subnetMask,
++                                     "Gateway", gateway))
++            {
++                messages::propertyValueFormatError(asyncResp->res, thisJson,
++                                                   pathString);
++                return false;
++            }
++            if (address && gateway && subnetMask)
++            {
++                const std::string& ipAddress = *address;
++                const std::string& ipGateway = *gateway;
++
++                std::bitset<32> maskBinary(0);
++                if (subnetMask.has_value())
++                {
++                    size_t pos = 0;
++                    for (size_t i = 0; i < 4;
++                         ++i) // converting subnetMask to binary
++                    {
++                        pos = subnetMask->find('.', pos);
++                        if (pos == std::string::npos)
++                        {
++                            break;
++                        }
++                        maskBinary <<= 8;
++                        maskBinary |= std::stoul(subnetMask->substr(pos - 3, 3),
++                                                 nullptr, 0);
++                        ++pos;
++                    }
++                }
++                uint8_t prefixLength = maskBinary.size();
++                for (uint8_t i = 0; i < maskBinary.size();
++                     ++i) // Determine the Prefix Length
++                {
++                    if (maskBinary[i] == 0)
++                    {
++                        prefixLength = i;
++                        break;
++                    }
++                }
++                if (!isSameSeries(
++                        ipAddress, ipGateway,
++                        prefixLength)) // function call for cheching the IPs are
++                                       // in the same series
++                {
++                    messages::differentIpSeries(asyncResp->res, "Address",
++                                                "Gateway");
++                    return false;
++                }
++                if (!isValidIPv4Addr(
++                        ipAddress,
++                        Type::IP4_ADDRESS)) // checking the IPv4 Address
++                {
++                    messages::invalidip(asyncResp->res, "Address", ipAddress);
++                    return false;
++                }
++                if (!isValidIPv4Addr(
++                        ipGateway, Type::GATEWAY4_ADDRESS)) // checking the IPv4
++                                                            // gateway Address
++                {
++                    messages::invalidip(asyncResp->res, "Gateway", ipGateway);
++                    return false;
++                }
++            }
++        }
++        entryIdx++;
++    }
++    return true;
++}
++
+ inline void
+     handleIPv4StaticPatch(const std::string& ifaceId,
+                           nlohmann::json::array_t& input,
+@@ -1904,6 +2064,57 @@ inline void afterDelete(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+     messages::internalError(asyncResp->res);
+ }
+ 
++inline bool
++    validateipv6AddressJson(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                            const nlohmann::json::array_t& input)
++{
++    if (input.empty())
++    {
++        messages::propertyValueTypeError(asyncResp->res, input,
++                                         "IPv6StaticAddresses");
++        return false;
++    }
++    if (input.size() > 16)
++    {
++        messages::arraySizeTooLong(asyncResp->res, "IPv6StaticAddresses", 16);
++        asyncResp->res.result(boost::beast::http::status::bad_request);
++        return false;
++    }
++
++    for (const nlohmann::json& thisJson : input)
++    {
++        if (thisJson.is_null() || thisJson.empty())
++        {
++            continue; // Skip null or empty JSON entries
++        }
++
++        std::optional<std::string> address;
++        std::optional<uint8_t> prefixLength;
++
++        nlohmann::json thisJsonCopy = thisJson;
++
++        if (!json_util::readJson(thisJsonCopy, asyncResp->res, "Address",
++                                 address, "PrefixLength", prefixLength))
++        {
++            return false;
++        }
++
++        if (address)
++        {
++            const std::string& ipAddress = *address;
++            if (!(ip_util::validateIPv6address(ipAddress)))
++            {
++                messages::invalidip(asyncResp->res, "Address", ipAddress);
++                return false;
++            }
++        }
++
++        [[maybe_unused]] uint8_t prefix = prefixLength.value_or(0);
++    }
++
++    return true;
++}
++
+ inline void afterVlanCreate(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+                             const std::string& parentInterfaceUri,
+                             const std::string& vlanInterface,
+@@ -2208,7 +2419,6 @@ inline void requestEthernetInterfacesRoutes(App& app)
+                 return;
+             }
+         }
+-
+         // Get single eth interface data, and call the below callback
+         // for JSON preparation
+         getEthernetIfaceData(
+@@ -2236,10 +2446,28 @@ inline void requestEthernetInterfacesRoutes(App& app)
+                                            ifaceId);
+                 return;
+             }
++            bool ipv4AddressValid = true;
++            if(ipv4StaticAddresses)  // IPv4StaticAddresses attribute is present
++            {
++                if(!validateIPv4Json(asyncResp,*ipv4StaticAddresses))
++                {
++                    //Invalid IPv4 address provided
++                    ipv4AddressValid =  false;
++                }
++            }
++            bool ipv6AddressValid = true;
++            if(ipv6StaticAddresses) // IPv6StaticAddresses attribute is present
++            {
++                if(!(validateipv6AddressJson(asyncResp, *ipv6StaticAddresses)))
++                {
++                    //Invalid IPv6 address provided
++                    ipv6AddressValid = false;
++                }
++            }
+ 
+             if (dhcpv4 || dhcpv6)
+             {
+-		 if(dhcpv4)
++		        if(dhcpv4)
+                 {
+                     if(v4dhcpParms.dhcpv4Enabled)
+                     {
+@@ -2252,27 +2480,21 @@ inline void requestEthernetInterfacesRoutes(App& app)
+                                 messages::propertyMissing(asyncResp->res, "IPv4StaticAddresses");
+                                 return;  
+                             }
+-                            else if (ipv4StaticAddresses) // and IPv4StaticAddresses attribute is present
+-                            {
+-                                nlohmann::json IPv4Static = *ipv4StaticAddresses;
+-                                if(IPv4Static.size() > 1)
+-                                {
+-                                    messages::invalidIndex(asyncResp->res, 1);
+-                                    return;
+-                                }
+-                            }
+                         }
+                         else if(v4Value && ipv4StaticAddresses) // DHCPv4.DHCPEnabled attribute is true and IPv4StaticAddresses attribute is present
+                         {
+                             messages::propertyValueConflict(asyncResp->res, "DHCPv4.DHCPEnabled","IPv4StaticAddresses");
+                             return;
+                         }
++
+                     }
+                 }    
+-
+-
+-                handleDHCPPatch(ifaceId, ethData, v4dhcpParms, v6dhcpParms,
++                if(ipv6AddressValid && ipv4AddressValid)
++                {
++                    handleDHCPPatch(ifaceId, ethData, v4dhcpParms, v6dhcpParms,
+                                 asyncResp);
++                }
++
+             }
+ 
+             if (hostname)
+@@ -2296,7 +2518,7 @@ inline void requestEthernetInterfacesRoutes(App& app)
+                 handleMACAddressPatch(ifaceId, *macAddress, asyncResp);
+             }
+ 
+-            if (ipv4StaticAddresses)
++            if (ipv4StaticAddresses && ipv4AddressValid)
+             {
+ 		if(!v4dhcpParms.dhcpv4Enabled)
+ 		{
+@@ -2336,7 +2558,7 @@ inline void requestEthernetInterfacesRoutes(App& app)
+                                               "IPv6DefaultGateway");
+             }
+ 
+-            if (ipv6StaticAddresses)
++            if (ipv6StaticAddresses && ipv6AddressValid)
+             {
+                 handleIPv6StaticAddressesPatch(ifaceId, *ipv6StaticAddresses,
+                                                ipv6Data, asyncResp);
+diff --git a/redfish-core/src/error_messages.cpp b/redfish-core/src/error_messages.cpp
+index 737e5de3..a0d27906 100644
+--- a/redfish-core/src/error_messages.cpp
++++ b/redfish-core/src/error_messages.cpp
+@@ -1894,6 +1894,19 @@ void invalidip(crow::Response& res, std::string_view arg1,
+     addMessageToErrorJson(res.jsonValue, invalidip(arg1, arg2));
+ }
+ 
++nlohmann::json differentIpSeries(std::string_view arg1, std::string_view arg2)
++{
++    return getLog(redfish::registries::base::Index::differentIpSeries,
++                  std::to_array({arg1, arg2}));
++}
++
++void differentIpSeries(crow::Response& res, std::string_view arg1,
++                       std::string_view arg2)
++{
++    res.result(boost::beast::http::status::bad_request);
++    addMessageToErrorJson(res.jsonValue, differentIpSeries(arg1, arg2));
++}
++
+ } // namespace messages
+ 
+ } // namespace redfish
+-- 
+2.34.1
+

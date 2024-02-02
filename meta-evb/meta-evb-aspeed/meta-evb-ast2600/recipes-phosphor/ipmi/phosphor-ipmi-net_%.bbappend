@@ -1,14 +1,13 @@
 FILESEXTRAPATHS:append := "${THISDIR}/${PN}:"
 
 SRC_URI += " \
-           file://0001-Changes-are-added-to-support-multisol.patch \
-           file://0002-Added-fix-to-launch-SOL-session-in-Multi-SOL-support.patch \
+           file://0001-Added-change-to-launch-Multisol-session-via-IPMI.patch \
            "
 
-ALT_RMCPP_IFACE = "eth1"
+ALT_RMCPP_IFACE_ETH1 = "eth1"
 SYSTEMD_SERVICE:${PN} += " \
-     ${PN}@${ALT_RMCPP_IFACE}.service \
-     ${PN}@${ALT_RMCPP_IFACE}.socket \
+     ${PN}@${ALT_RMCPP_IFACE_ETH1}.service \
+     ${PN}@${ALT_RMCPP_IFACE_ETH1}.socket \
      "
 
 PACKAGECONFIG:append ="${@bb.utils.contains('MULTI_SOL_ENABLED', '1', ' multi_sol', ' ', d)}"

@@ -1,7 +1,7 @@
-From 7e1606a5e452fc974b9623ce5fb9616fb70161aa Mon Sep 17 00:00:00 2001
+From 3bff283080585630fc159d8610794342dc781e14 Mon Sep 17 00:00:00 2001
 From: Pranoy Goru <gorumanip@ami.com>
-Date: Mon, 11 Dec 2023 16:18:37 +0530
-Subject: [PATCH 157/157] Added Redfish Support for BRCM PCIE Switch
+Date: Thu, 25 Jan 2024 01:23:17 +0530
+Subject: [PATCH] Added Redfish Support for BRCM PCIE Switch
 
 Description:
 
@@ -190,8 +190,8 @@ Signed-off-by: Pranoy Goru <gorumanip@ami.com>
  .../schema/AMIPcieSwitchPortCollection_v1.xml |  67 ++++
  .../v1/schema/AMIPcieSwitchPort_v1.xml        | 163 +++++++++
  static/redfish/v1/schema/AMIPcieSwitch_v1.xml | 222 ++++++++++++
- .../redfish/v1/schema/OemServiceRoot_v1.xml   |  21 +-
- 14 files changed, 1585 insertions(+), 1 deletion(-)
+ .../redfish/v1/schema/OemServiceRoot_v1.xml   |  19 +
+ 14 files changed, 1584 insertions(+)
  create mode 100644 redfish-core/lib/oem_pcie_switch.hpp
  create mode 100644 static/redfish/v1/JsonSchemas/AMIPcieSwitch/AMIPcieSwitch.json
  create mode 100644 static/redfish/v1/JsonSchemas/AMIPcieSwitchCollection/AMIPcieSwitchCollection.json
@@ -204,10 +204,10 @@ Signed-off-by: Pranoy Goru <gorumanip@ami.com>
  create mode 100644 static/redfish/v1/schema/AMIPcieSwitch_v1.xml
 
 diff --git a/redfish-core/include/redfish.hpp b/redfish-core/include/redfish.hpp
-index 85af1bb3..4fc77a67 100644
+index 580ce0e6..f0c8e7df 100644
 --- a/redfish-core/include/redfish.hpp
 +++ b/redfish-core/include/redfish.hpp
-@@ -47,6 +47,7 @@
+@@ -48,6 +48,7 @@
  #include "node-manager/power.hpp"
  #include "node-manager/throttling_status.hpp"
  #include "node-manager/triggers.hpp"
@@ -215,11 +215,11 @@ index 85af1bb3..4fc77a67 100644
  #include "pcie.hpp"
  #include "pcie_slots.hpp"
  #include "pef_service.hpp"
-@@ -308,6 +309,11 @@ class RedfishService
-         requestRoutesMeterStateData(app);
+@@ -305,6 +306,11 @@ class RedfishService
+         requestFipsManagerRoutes(app);
  
          requestRoutesPefService(app);
-+
++        //PcieSwitch
 +        requestRoutesPcieSwitchCollection(app);
 +        requestRoutesPcieSwitchInstanceCollection(app);
 +        requestRoutesPcieSwitchPortsCollection(app);
@@ -577,7 +577,7 @@ index 00000000..e3ab0b4e
 +
 +} // namespace redfish
 diff --git a/redfish-core/lib/service_root.hpp b/redfish-core/lib/service_root.hpp
-index 33339969..97403597 100644
+index 1b7f639f..46ed4069 100644
 --- a/redfish-core/lib/service_root.hpp
 +++ b/redfish-core/lib/service_root.hpp
 @@ -99,6 +99,12 @@ inline void handleServiceRootGetImpl(
@@ -594,12 +594,12 @@ index 33339969..97403597 100644
      asyncResp->res.jsonValue["Links"]["ManagerProvidingService"]["@odata.id"] =
          "/redfish/v1/Managers/bmc";
 diff --git a/static/redfish/v1/$metadata/index.xml b/static/redfish/v1/$metadata/index.xml
-index 72397ad7..930f33f3 100644
+index 887e6da3..c514f60b 100644
 --- a/static/redfish/v1/$metadata/index.xml
 +++ b/static/redfish/v1/$metadata/index.xml
-@@ -3468,4 +3468,18 @@
-         <edmx:Include Namespace="OemDrive"/>
-         <edmx:Include Namespace="OemDrive.v1_0_0"/>
+@@ -3643,5 +3643,19 @@
+         <edmx:Include Namespace="OemStorage"/>
+         <edmx:Include Namespace="OemStorage.v1_0_0"/>
      </edmx:Reference>
 +    <edmx:Reference Uri="/redfish/v1/schema/AMIPcieSwitchCollection_v1.xml">
 +        <edmx:Include Namespace="AMIPcieSwitchCollection"/>
@@ -615,6 +615,7 @@ index 72397ad7..930f33f3 100644
 +        <edmx:Include Namespace="AMIPcieSwitchPort"/>
 +        <edmx:Include Namespace="AMIPcieSwitchPort.v1_0_0"/>
 +    </edmx:Reference>
+ 
  </edmx:Edmx>
 diff --git a/static/redfish/v1/JsonSchemas/AMIPcieSwitch/AMIPcieSwitch.json b/static/redfish/v1/JsonSchemas/AMIPcieSwitch/AMIPcieSwitch.json
 new file mode 100644
@@ -1867,7 +1868,7 @@ index 00000000..878c21d5
 +~
 +
 diff --git a/static/redfish/v1/schema/OemServiceRoot_v1.xml b/static/redfish/v1/schema/OemServiceRoot_v1.xml
-index 490efe2f..47cf7625 100644
+index 490efe2f..db03b1ac 100644
 --- a/static/redfish/v1/schema/OemServiceRoot_v1.xml
 +++ b/static/redfish/v1/schema/OemServiceRoot_v1.xml
 @@ -19,6 +19,11 @@
@@ -1882,13 +1883,11 @@ index 490efe2f..47cf7625 100644
    <edmx:DataServices>
  
      <Schema xmlns="http://docs.oasis-open.org/odata/ns/edm" Namespace="OemServiceRoot">
-@@ -33,7 +38,8 @@
-           <Annotation Term="OData.AdditionalProperties" Bool="true"/>
+@@ -34,6 +39,7 @@
            <Annotation Term="OData.Description" String="OemServiceRoot Oem properties."/>
            <Annotation Term="OData.AutoExpand"/>
--          <Property Name="Intel" Type="OemServiceRoot.v1_0_0.Intel"/>
-+	  <Property Name="Intel" Type="OemServiceRoot.v1_0_0.Intel"/>
-+	  <property Name="AMI" Type="OemServiceRoot.v1_0_0.AMI"/>
+           <Property Name="Intel" Type="OemServiceRoot.v1_0_0.Intel"/>
++          <property Name="AMI" Type="OemServiceRoot.v1_0_0.AMI"/>
          </ComplexType>
  
          <ComplexType Name="Intel" BaseType="Resource.OemObject">
