@@ -38,13 +38,20 @@ SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr
 
 SRC_URI_NON_PFR_DUAL:append:intel-ast2600 = "file://0013-Added-dts-configuration-for-dual-image-support.patch "
 SRC_URI_NON_PFR_DUAL:append = "file://0024-add-fmc-ce0-ce1-acccess-support.patch "
-SRC_URI_NON_PFR_DUAL:append:evb-ast2600  = "file://0025-add-dual-image-dts-support-for-evb.patch "
+SRC_URI_NON_PFR_DUAL:append:evb-ast2600  = "file://0025-add-dual-image-dts-support-for-evb.patch \
+                                            file://0028-fix-dual-image-dts-for-evb.patch \
+                                            "
 SRC_URI:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'dual-image', SRC_URI_NON_PFR_DUAL,'', d)}"
 
 SRC_URI_NON_PFR_SINGLE_SPI_ABR:append = "file://0026-add-hw-failsafe-boot-single-spi-abr-support.patch \
                                         "
 
 SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'single-spi-abr', SRC_URI_NON_PFR_SINGLE_SPI_ABR,'', d)}"
+
+SRC_URI_NON_PFR_SINGLE_SPI_ABR_EVB:append = "file://0027-add-hw-failsafe-boot-single-spi-abr-support-for-evb.patch \
+                                            "
+
+SRC_URI:append:evb-ast2600 = " ${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'single-spi-abr', SRC_URI_NON_PFR_SINGLE_SPI_ABR_EVB,'', d)}"
 
 SRC_CPLD_JTAG = "file://jtag-fragment.cfg"
 

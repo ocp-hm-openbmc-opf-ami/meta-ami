@@ -249,8 +249,14 @@ bmc_full_flash() {
             check_preserv_config
             local requestedactivationstate=$(get_requestedactivation_status bmc_bkup)
             if [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
+                regval=$(devmem 0x1e620064 )
+                bootmode=$(( ($regval >> 6) & 1 ))
                 if [ "$BOOT_SOURCE" -eq 0 ]; then
-                    cp $LOCAL_PATH /run/initramfs/image-alt-bmc
+                    if [ "$bootmode" -eq 1 ]; then
+                        cp $LOCAL_PATH /run/initramfs/image-alt-singleabr
+                    else
+                        cp $LOCAL_PATH /run/initramfs/image-alt-bmc
+                    fi
                 else
                     cp $LOCAL_PATH /run/initramfs/
                 fi

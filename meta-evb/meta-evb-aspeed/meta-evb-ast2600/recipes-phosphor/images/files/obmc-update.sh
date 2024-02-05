@@ -220,7 +220,12 @@ fi
 
 for f in $imglist
 do
-	m=$(findmtd "${f#"$image"}")
+	if test "${f#"$image"}" = "alt-singleabr"
+	then
+		m=$(findmtd "bmc")
+	else
+		m=$(findmtd "${f#"$image"}")
+	fi
 	if test -z "$m"
 	then
 		echoerr "Unable to find mtd partition for ${f##*/}."
@@ -251,9 +256,17 @@ then
 			rm "$f"
 			continue
 		fi
-		m=$(findmtd "${f#"$image"}")
-		echo "Updating ${f#"$image"}..."
-		flashcp -v "$f" "/dev/$m" && rm "$f"
+		if test "${f#"$image"}" = "alt-singleabr"
+		then
+			echo "Updating ${f#"$image"}..."
+			imgsize=$(stat -c "%s" $f)
+			flash_erase /dev/mtd0 $imgsize $(($imgsize/65536))
+			dd if=$f of=/dev/mtd0 seek=$(($imgsize/512)) count=$(($imgsize/512)) && rm "$f"
+		else
+			m=$(findmtd "${f#"$image"}")
+			echo "Updating ${f#"$image"}..."
+			flashcp -v "$f" "/dev/$m" && rm "$f"
+		fi
 	done
 fi
 
