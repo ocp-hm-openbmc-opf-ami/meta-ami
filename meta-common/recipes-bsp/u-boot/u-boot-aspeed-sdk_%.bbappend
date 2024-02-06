@@ -33,6 +33,8 @@ SRC_URI_NON_PFR_DUAL:append = " file://0002-adding-support-for-non-pfr-dual-imag
                                 "
 SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'dual-image', SRC_URI_NON_PFR_DUAL,'', d)}"
 
+SRC_URI_NON_PFR_HW_FAILSAFE_BOOT:append = ""
+
 SRC_URI_NON_PFR_HW_FAILSAFE_BOOT:append:intel-ast2600 = " file://0003-add-hw-failsafe-boot-support.patch \
                                             "
 
