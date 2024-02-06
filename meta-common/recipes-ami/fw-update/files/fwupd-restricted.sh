@@ -251,8 +251,19 @@ bmc_full_flash() {
             BOOT_SOURCE=$(cat "$SLOT_FILE")
             check_preserv_config
             local requestedactivationstate=$(get_requestedactivation_status bmc_bkup)
-            if [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
+            local bmc_active_requestedactivationstate=$(get_requestedactivation_status bmc_active)
+            if [[ "$bmc_active_requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" && "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
                 regval=$(devmem 0x1e620064 )
+                bootmode=$(( ($regval >> 6) & 1 ))
+                cp $LOCAL_PATH /run/initramfs/
+                if [ "$bootmode" -eq 1 ]; then
+                    cp $LOCAL_PATH /run/initramfs/image-alt-singleabr
+                else
+                    cp $LOCAL_PATH /run/initramfs/image-alt-bmc
+                    /usr/bin/reset-cs0-aspeed
+                fi
+            elif [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
+		        regval=$(devmem 0x1e620064 )
                 bootmode=$(( ($regval >> 6) & 1 ))
                 if [ "$BOOT_SOURCE" -eq 0 ]; then
                     if [ "$bootmode" -eq 1 ]; then
@@ -292,7 +303,72 @@ bmc_full_flash() {
             log "BMC Full Flash - Booted from CS$BOOT_SOURCE"
             update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_START
             local requestedactivationstate=$(get_requestedactivation_status bmc_bkup)
-            if [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
+            local bmc_active_requestedactivationstate=$(get_requestedactivation_status bmc_active)
+            if [[ "$bmc_active_requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" && "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
+                # First Update Image on CS0 SPI (BMC Active image)
+                log "Start Update Both BMC Active and Backup  images. It will take ~20 minutes...."
+                log "BMC Full Flash - Starting the SPI write on active CS0 spi. It will take ~8 minutes...."
+                local mtdPart=$(cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"bmc\"" {print $1}')
+                # stop nv sync
+                systemctl stop nv-sync.service
+                # unmount rwfs
+                umount /tmp/.rwfs
+
+                local rc=$(mtd-util -d /dev/$mtdPart c $LOCAL_PATH 0)
+
+                # Log Event: Update percentage and log event
+                update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
+                if [[ "$rc" -ne 0 ]]; then
+                    log "BMC Full Flash - Image update failed"
+                    redfish_log_abort " BMC Full Flash - Image update failed"
+                    set_activation_status Failed
+                    update_percentage $UPDATE_PERCENT_FAIL
+                    return 1
+                fi
+                log "BMC Full Flash - Image update successful on active CS0 spi"
+                sleep 5
+                # After First Update Image update successfully update Backup image
+                log "BMC Full Flash - Starting the SPI write on bkup CS1 spi. It will take ~8 minutes...."
+                regval=$(devmem 0x1e620064 )
+                bootmode=$(( ($regval >> 6) & 1 ))
+
+                if [ "$bootmode" -eq 1 ]; then
+                    local mtdPart=$( cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"bmc\"" {print $1}')
+                    flashoffset=$(stat -c "%s" $LOCAL_PATH)
+                    flashoffset=$(printf "%x\n" $flashoffset)
+                else
+                    local mtdPart=$(cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"alt-bmc\"" {print $1}')
+                    flashoffset=0
+                fi
+
+                echo "mtdPart=$mtdPart"
+                if [ -z "$mtdPart" ]; then
+                    log "BMC Full Flash - mtd $mtdPart partition not found"
+                    redfish_log_abort " BMC Full Flash - Image update failed"
+                    set_activation_status Failed
+                    set_requestedactivation_status None
+                    update_percentage $UPDATE_PERCENT_FAIL
+                    return 1
+                fi
+                local rc=$(mtd-util -d /dev/$mtdPart c $LOCAL_PATH 0x$flashoffset)
+                # Log Event: Update percentage and log event
+                if [[ "$rc" -ne 0 ]]; then
+                    log "BMC Full Flash - Image update failed on backup spi"
+                    redfish_log_abort " BMC Full Flash - Image update failed spi"
+                    set_activation_status Failed
+                    set_requestedactivation_status None
+                    update_percentage $UPDATE_PERCENT_FAIL
+                    return 1
+                fi
+                update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
+                check_preserv_config
+                log "BMC Full Flash - Image updated successful on bkup spi"
+                redfish_log_fw_evt success
+                update_percentage $UPDATE_PERCENT_SUCCESS
+                set_activation_status Active
+                sleep 5
+                reboot -f
+            elif [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
                 regval=$(devmem 0x1e620064 )
                 bootmode=$(( ($regval >> 6) & 1 ))
                 if [ "$BOOT_SOURCE" -eq 0 ]; then

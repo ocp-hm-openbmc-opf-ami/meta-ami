@@ -1,0 +1,167 @@
+From 0a8c761ee9516f3a9f3f6ac67d7c5da1ddc29ebb Mon Sep 17 00:00:00 2001
+From: kirubagharanas <kirubagharanas@ami.com>
+Date: Fri, 2 Feb 2024 12:27:03 +0530
+Subject: [PATCH] Add support to update both BMC active and Backup image
+
+---
+ redfish-core/lib/update_service.hpp | 126 ++++++++++++++--------------
+ 1 file changed, 64 insertions(+), 62 deletions(-)
+
+diff --git a/redfish-core/lib/update_service.hpp b/redfish-core/lib/update_service.hpp
+index 15d06134..d26f2b27 100644
+--- a/redfish-core/lib/update_service.hpp
++++ b/redfish-core/lib/update_service.hpp
+@@ -85,81 +85,83 @@ inline static void activateImage(const std::string& objPath,
+         // code support one activation per object. It will be enhanced
+         // to multiple targets for single image in future. For now,
+         // consider first target alone.
+-        crow::connections::systemBus->async_method_call(
+-            [objPath, service, imgTarget{imgUriTargets[0]}](
+-                const boost::system::error_code ec,
+-                const dbus::utility::MapperGetSubTreeResponse& subtree) {
+-            if (ec || !subtree.size())
+-            {
+-                return;
+-            }
+-
+-            for (const auto& [invObjPath, invDict] : subtree)
+-            {
+-                std::size_t idPos = invObjPath.rfind("/");
+-                if ((idPos == std::string::npos) ||
+-                    ((idPos + 1) >= invObjPath.size()))
++        for (const auto& imgUri : imgUriTargets) {
++            crow::connections::systemBus->async_method_call(
++                [objPath, service, imgTarget{imgUri}](
++                    const boost::system::error_code ec,
++                    const dbus::utility::MapperGetSubTreeResponse& subtree) {
++                if (ec || !subtree.size())
+                 {
+-                    BMCWEB_LOG_DEBUG("Can't parse firmware ID!!");
+                     return;
+                 }
+-                std::string swId = invObjPath.substr(idPos + 1);
+ 
+-                if (swId != imgTarget)
++                for (const auto& [invObjPath, invDict] : subtree)
+                 {
+-                    continue;
+-                }
+-
+-                if (invDict.size() < 1)
+-                {
+-                    continue;
+-                }
+-                BMCWEB_LOG_DEBUG("Image target matched with object {}",
+-                                 invObjPath);
+-                crow::connections::systemBus->async_method_call(
+-                    [invObjPath,
+-                     service](const boost::system::error_code ec2,
+-                              const std::variant<std::string> value) {
+-                    if (ec2)
++                    std::size_t idPos = invObjPath.rfind("/");
++                    if ((idPos == std::string::npos) ||
++                        ((idPos + 1) >= invObjPath.size()))
+                     {
+-                        BMCWEB_LOG_DEBUG("Error in querying activation value");
+-                        // not all fwtypes are updateable,
+-                        // this is ok
++                        BMCWEB_LOG_DEBUG("Can't parse firmware ID!!");
+                         return;
+                     }
+-                    std::string activationValue = std::get<std::string>(value);
+-                    BMCWEB_LOG_DEBUG("Activation Value: {}", activationValue);
+-                    std::string reqActivation = reqActivationsActive;
+-                    if (activationValue == activationsStandBySpare)
++                    std::string swId = invObjPath.substr(idPos + 1);
++
++                    if (swId != imgTarget)
+                     {
+-                        reqActivation = reqActivationsStandBySpare;
++                        continue;
+                     }
+-                    BMCWEB_LOG_DEBUG(
+-                        "Setting RequestedActivation value as {} for {} {}",
+-                        reqActivation, service, invObjPath);
++
++                    if (invDict.size() < 1)
++                    {
++                        continue;
++                    }
++                    BMCWEB_LOG_DEBUG("Image target matched with object {}",
++                                     invObjPath);
+                     crow::connections::systemBus->async_method_call(
+-                        [](const boost::system::error_code ec3) {
+-                        if (ec3)
++                        [invObjPath,
++                         service](const boost::system::error_code ec2,
++                                  const std::variant<std::string> value) {
++                        if (ec2)
+                         {
+-                            BMCWEB_LOG_DEBUG(
+-                                "RequestedActivation failed: ec = {}", ec3);
++                            BMCWEB_LOG_DEBUG("Error in querying activation value");
++                            // not all fwtypes are updateable,
++                            // this is ok
++                            return;
+                         }
+-                        return;
++                        std::string activationValue = std::get<std::string>(value);
++                        BMCWEB_LOG_DEBUG("Activation Value: {}", activationValue);
++                        std::string reqActivation = reqActivationsActive;
++                        if (activationValue == activationsStandBySpare)
++                        {
++                            reqActivation = reqActivationsStandBySpare;
++                        }
++                        BMCWEB_LOG_DEBUG(
++                            "Setting RequestedActivation value as {} for {} {}",
++                            reqActivation, service, invObjPath);
++                        crow::connections::systemBus->async_method_call(
++                            [](const boost::system::error_code ec3) {
++                            if (ec3)
++                            {
++                                BMCWEB_LOG_DEBUG(
++                                    "RequestedActivation failed: ec = {}", ec3);
++                            }
++                            return;
++                        },
++                            service, invObjPath, "org.freedesktop.DBus.Properties",
++                            "Set", activationIntf, reqActivationPropName,
++                            std::variant<std::string>(reqActivation));
+                     },
+-                        service, invObjPath, "org.freedesktop.DBus.Properties",
+-                        "Set", activationIntf, reqActivationPropName,
+-                        std::variant<std::string>(reqActivation));
+-                },
+-                    invDict[0].first,
+-                    "/xyz/openbmc_project/software/" + imgTarget,
+-                    "org.freedesktop.DBus.Properties", "Get", activationIntf,
+-                    "Activation");
+-            }
+-        },
+-            "xyz.openbmc_project.ObjectMapper",
+-            "/xyz/openbmc_project/object_mapper",
+-            "xyz.openbmc_project.ObjectMapper", "GetSubTree", "/",
+-            static_cast<int32_t>(0), std::array<const char*, 1>{versionIntf});
++                        invDict[0].first,
++                        "/xyz/openbmc_project/software/" + imgTarget,
++                        "org.freedesktop.DBus.Properties", "Get", activationIntf,
++                        "Activation");
++                }
++            },
++                "xyz.openbmc_project.ObjectMapper",
++                "/xyz/openbmc_project/object_mapper",
++                "xyz.openbmc_project.ObjectMapper", "GetSubTree", "/",
++                static_cast<int32_t>(0), std::array<const char*, 1>{versionIntf});
++        }
+     }
+     crow::connections::systemBus->async_method_call(
+         [](const boost::system::error_code errorCode) {
+@@ -1076,7 +1078,7 @@ inline void requestRoutesUpdateService(App& app)
+                     // object. It will be enhanced to multiple targets for
+                     // single image in future. For now, consider first
+                     // target alone.
+-                    if ((*imgTargets).size() != 1)
++                    if ((*imgTargets).size() > 3)
+                     {
+                         messages::invalidObject(
+                             asyncResp->res,
