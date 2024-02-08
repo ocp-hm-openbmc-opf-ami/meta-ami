@@ -10,7 +10,6 @@ SRC_URI += "file://0036-EnhancedPasswordPolicy.patch \
             file://0010-Added-TimeOut-for-managers.patch \
             file://0012-Certificate-dbus-renew-rekey.patch \
             file://0012-passwordChangeRequired.patch \
-            file://0018-snmp-agent.patch \
         "
 
 EXTRA_OEMESON += "-Ddata_com_ami=true"
