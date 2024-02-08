@@ -24,6 +24,7 @@ SRC_URI_NON_PFR_DUAL:append = "file://intel-flash-bmc \
                                 file://detect-slot-aspeed \
                                 file://reset-cs0-aspeed  \
                                 "
+SRC_URI_NON_PFR_DUAL:append = "${@bb.utils.contains('PACKAGECONFIG', 'verify_signature','file://0005-Patch-to-remove-the-image-when-verification-fails-nonpfr.patch', '', d)}"                              
 SRC_URI_NON_PFR_DUAL:append:intel-ast2600 = " file://sync-once.sh \
                                              file://synclist "
 

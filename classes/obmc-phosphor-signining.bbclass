@@ -28,10 +28,9 @@ do_generate_full_image_tar() {
     present_directory="${B}/imgfull"
     # add symlinks for the contents
     ln -sf "${DEPLOY_DIR_IMAGE}/image-mtd" "image-bmc"
-    ln -sf "${B}/publickey" .
     ln -sf ${B}/MANIFEST .
     # make_signatures image-bmc MANIFEST publickey
-    tar -h -cvf "${DEPLOY_DIR_IMAGE}/${PN}-image-update-full-${MACHINE}-${DATETIME}.tar" image-bmc MANIFEST ${signature_files}
+    tar -h -czvf "${DEPLOY_DIR_IMAGE}/${PN}-image-update-full-${MACHINE}-${DATETIME}.tar" image-bmc MANIFEST 
     # make a symlink
     ln -sf "${PN}-image-update-full-${MACHINE}-${DATETIME}.tar" "${DEPLOY_DIR_IMAGE}/image-update-full-${MACHINE}"
     ln -sf "${PN}-image-update-full-${MACHINE}-${DATETIME}.tar" "${DEPLOY_DIR_IMAGE}/OBMC-full-${@ do_get_version(d)}-oob.bin"
@@ -50,9 +49,8 @@ do_generate_full_image_tar[depends] += " \
 
 do_image_signed_fitimage_rootfs() {
     cd "${B}/img"
-    ln -sf "${B}/publickey" . 
     # make_signatures image-kernel image-rofs image-rwfs image-u-boot MANIFEST publickey
-    tar -h -cvf "${DEPLOY_DIR_IMAGE}/${PN}-image-update-${MACHINE}-${DATETIME}.tar" MANIFEST image-u-boot image-runtime image-kernel image-rofs image-rwfs ${signature_files}
+    tar -h -czvf "${DEPLOY_DIR_IMAGE}/${PN}-image-update-${MACHINE}-${DATETIME}.tar" MANIFEST image-u-boot image-runtime image-kernel image-rofs image-rwfs 
     ln -sf "${PN}-image-update-${MACHINE}-${DATETIME}.tar" "${DEPLOY_DIR_IMAGE}/image-update-${MACHINE}"
     ln -sf "${PN}-image-update-${MACHINE}-${DATETIME}.tar" "${DEPLOY_DIR_IMAGE}/OBMC-${@ do_get_version(d)}-oob.bin"
     ln -sf "image-update-${MACHINE}" "${DEPLOY_DIR_IMAGE}/image-update"

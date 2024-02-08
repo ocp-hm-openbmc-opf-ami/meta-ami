@@ -157,6 +157,9 @@ exit_fail() {
     set_activation_status Failed
     update_percentage $UPDATE_PERCENT_FAIL
     log "${FWTYPE}:${FWVER} - UPDATE_FAILED"
+    DIR_PATH=$(dirname "$LOCAL_PATH")
+    log "UPDATE_FAILED cleaning the $DIR_PATH path"
+    rm -rf $DIR_PATH
     exit 1
 }
 
