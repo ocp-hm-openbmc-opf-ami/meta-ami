@@ -11,6 +11,7 @@ DEPENDS += "bmc-boot-check"
 SRC_URI_EGS:append = " \
                       file://0004-Add-Task-interface-and-property.patch \
                       file://0003-egs-Not-able-to-do-power-cycle-if-one-task-is-in-running.patch \
+                      file://0005-Power-operation-for-future-time.patch \
                      "
 
 SRC_URI_BHS:append = "file://0003-bhs-Not-able-to-do-power-cycle-if-one-task-is-in-running.patch"

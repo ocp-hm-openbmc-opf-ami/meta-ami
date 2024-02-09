@@ -120,6 +120,7 @@ SRC_URI:append = "   \
             file://0207-Set-Sensor-Reading-fractional-value-as-4-digits.patch \
             file://0187-Receiving-SubmitTestEvent-in-SSE.patch \
             file://0209-Thrown-proper-error-message-for-POST-certificate.patch \
+            file://0201-Triggering-power-operation-on-MaintenanceWindow-time.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
