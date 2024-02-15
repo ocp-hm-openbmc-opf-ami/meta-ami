@@ -13,6 +13,7 @@ SRC_URI += "file://nfs.cfg \
             file://0002-i3c-mctp-workaround-for-wrong-DCR-value.patch \
             file://0017-Add-write-public-key-in-image-support.patch \
             file://0018-Nm-sensor-Threshold-Support.patch \
+            file://0018-USB-Support-Power-Save-Mode.patch \
             file://CVE-2023-31248.patch \
             file://CVE-2023-4147.patch \
             file://CVE-2023-35001.patch \
