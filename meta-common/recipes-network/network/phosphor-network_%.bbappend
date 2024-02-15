@@ -39,6 +39,7 @@ SRC_URI:append = " \
              file://0030-Change-the-Behavior-of-Name-Server.patch \
              file://0030-Add-A-Delay-to-Avoid-Block_Exception-when-Create-Del-VLAN.patch \
              file://0030-Add-a-minimum-limitation-of-MTU.patch \
+             file://0031-Do-not-allow-invalid-DNS-Server-IP-Address.patch \
           "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
