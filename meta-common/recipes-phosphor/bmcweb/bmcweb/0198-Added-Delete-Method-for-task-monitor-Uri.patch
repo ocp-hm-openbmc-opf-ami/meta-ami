@@ -1,0 +1,133 @@
+From c7136b8613590fc4366039a54d712df47575a3ce Mon Sep 17 00:00:00 2001
+From: vamsikrishnak <vamsikrishnak@ami.com>
+Date: Wed, 7 Feb 2024 00:03:57 +0530
+Subject: [PATCH] Added Delete Method for task monitor Uri
+
+Description: Cannot perform DELETE on the task monitor URI
+
+Root cause: Delete Method is not allowed for task monitor
+
+This commit fixes the issue by adding delete method to task
+Monitor Uri
+
+Tested: Tested, Able to perform delete operation on task Monitor Uri
+
+Signed-off-by: vamsikrishnak <vamsikrishnak@ami.com>
+---
+ redfish-core/lib/task.hpp | 71 +++++++++++++++++++++++----------------
+ 1 file changed, 42 insertions(+), 29 deletions(-)
+
+diff --git a/redfish-core/lib/task.hpp b/redfish-core/lib/task.hpp
+index b5851336..318213bd 100644
+--- a/redfish-core/lib/task.hpp
++++ b/redfish-core/lib/task.hpp
+@@ -166,7 +166,40 @@ struct TaskData : std::enable_shared_from_this<TaskData>
+             taskCompleted = true;
+         }
+     }
++    
++    inline void setLastTask()
++    {
++    for (const std::shared_ptr<task::TaskData>& task : task::tasks)
++     {
++        // Setting lastTask index after deleting task
++        task::lastTask = task->index + 1;
++     }
++    return;
++    } 
+ 
++    void deleteTasks(const std::string& strParam)
++    {
++     int pos = 0;
++      for (const std::shared_ptr<task::TaskData>& task : task::tasks)
++    {
++        if (std::to_string(task->index) == strParam)
++        {
++            auto taskToDelete = task::tasks.begin();
++            advance(taskToDelete, pos);
++            if (*taskToDelete != nullptr)
++            {
++                BMCWEB_LOG_ERROR("Deleting Task", strParam);
++                task->timer.cancel();
++                task->match.reset();
++                task::tasks.erase(taskToDelete);
++                setLastTask();
++                return;
++            }
++        }
++        pos++;
++     }
++    }
++    
+     void finishTask()
+     {
+         endTime = std::chrono::system_clock::to_time_t(
+@@ -326,16 +359,6 @@ struct TaskData : std::enable_shared_from_this<TaskData>
+ 
+ } // namespace task
+ 
+-inline void setLastTask()
+-{
+-    for (const std::shared_ptr<task::TaskData>& task : task::tasks)
+-    {
+-        // Setting lastTask index after deleting task
+-        task::lastTask = task->index + 1;
+-    }
+-    return;
+-}
+-
+ inline void
+     handleTaskDelete(App& app, const crow::Request& req,
+                      const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+@@ -345,7 +368,6 @@ inline void
+     {
+         return;
+     }
+-    int pos = 0;
+     auto find =
+         std::find_if(task::tasks.begin(), task::tasks.end(),
+                      [&strParam](const std::shared_ptr<task::TaskData>& task) {
+@@ -364,24 +386,10 @@ inline void
+         messages::resourceNotFound(asyncResp->res, "Task", strParam);
+         return;
+     }
+-
+-    for (const std::shared_ptr<task::TaskData>& task : task::tasks)
+-    {
+-        if (std::to_string(task->index) == strParam)
+-        {
+-            auto taskToDelete = task::tasks.begin();
+-            advance(taskToDelete, pos);
+-            if (*taskToDelete != nullptr)
+-            {
+-                BMCWEB_LOG_ERROR("Deleting Task", strParam);
+-                task::tasks.erase(taskToDelete);
+-                setLastTask();
+-                asyncResp->res.result(boost::beast::http::status::no_content);
+-                return;
+-            }
+-        }
+-        pos++;
+-    }
++    
++    std::shared_ptr<task::TaskData>& ptr = *find;
++    ptr->deleteTasks(strParam);
++    asyncResp->res.result(boost::beast::http::status::no_content);
+ }
+ 
+ inline void requestRoutesTaskMonitor(App& app)
+@@ -573,6 +581,11 @@ inline void requestRoutesTaskDelete(App& app)
+         .privileges(redfish::privileges::deleteTask)
+         .methods(boost::beast::http::verb::delete_)(
+             std::bind_front(handleTaskDelete, std::ref(app)));
++
++    BMCWEB_ROUTE(app, "/redfish/v1/TaskService/Tasks/<str>/Monitor")
++        .privileges(redfish::privileges::deleteTask)
++        .methods(boost::beast::http::verb::delete_)(
++            std::bind_front(handleTaskDelete, std::ref(app)));
+ }
+ 
+ } // namespace redfish
+-- 
+2.43.0
+

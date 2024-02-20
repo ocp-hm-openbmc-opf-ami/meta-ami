@@ -112,6 +112,7 @@ SRC_URI:append = "   \
             file://0190-Fixed-sync-Redfish-Service-Validator-failures.patch \
             file://0191-Fix-Parse-Error-The-Server-returned-a-malformed-resp.patch \
             file://0196-Fix-for-nfs-bad-dbus-request-error.patch \
+            file://0198-Added-Delete-Method-for-task-monitor-Uri.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
