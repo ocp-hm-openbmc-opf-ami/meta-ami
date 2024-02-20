@@ -134,6 +134,7 @@ SRC_URI:append = "   \
             file://0211-Fixed-ErrorCode-in-eventServiceSSE.patch \
             file://0223-Added-Error-message-for-patching-Empty-Objects.patch \
             file://0224-Fix-for-missing-protocol-while-get-snmp-subscription-created-by-dbus.patch \
+	    file://0206-Added-post-call-for-BRCM-PCIE-switch.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
