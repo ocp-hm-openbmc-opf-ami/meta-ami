@@ -1,0 +1,339 @@
+From ae38e25860dd9a594ef0eafd7fe4196051cae592 Mon Sep 17 00:00:00 2001
+From: Ginu George <ginugeorge@ami.com>
+Date: Sat, 3 Feb 2024 15:52:32 +0530
+Subject: [PATCH 192/192] Firewall Feature Support in Redfish
+
+---
+ redfish-core/include/error_messages.hpp | 11 ++++
+ redfish-core/include/schemas.hpp        |  1 +
+ redfish-core/include/utils/ip_utils.hpp | 80 +++++++++++++++++++------
+ redfish-core/lib/ethernet.hpp           | 60 +++----------------
+ redfish-core/src/error_messages.cpp     | 20 +++++++
+ scripts/update_schemas.py               |  6 ++
+ static/redfish/v1/$metadata/index.xml   |  4 ++
+ 7 files changed, 112 insertions(+), 70 deletions(-)
+
+diff --git a/redfish-core/include/error_messages.hpp b/redfish-core/include/error_messages.hpp
+index 223b5411..6d20b331 100644
+--- a/redfish-core/include/error_messages.hpp
++++ b/redfish-core/include/error_messages.hpp
+@@ -583,6 +583,17 @@ nlohmann::json propertyValueTypeError(const nlohmann::json& arg1,
+ void propertyValueTypeError(crow::Response& res, const nlohmann::json& arg1,
+                             std::string_view arg2);
+ 
++/**
++ * @brief Formats PropertyValueError message into JSON
++ * Message body: "The value provided for the property <arg1> is not valid."
++ *
++ * @param[in] arg1 Parameter of message that will replace %1 in its body.
++ *
++ * @returns Message PropertyValueTypeError formatted to JSON */
++nlohmann::json propertyValueTypeError(std::string_view arg1);
++
++void propertyValueError(crow::Response& res, std::string_view arg1);
++
+ /**
+  * @brief Formats ResourceNotFound message into JSON
+  * Message body: "The requested resource of type <arg1> named <arg2> was not
+diff --git a/redfish-core/include/schemas.hpp b/redfish-core/include/schemas.hpp
+index fed47bf2..e974fb49 100644
+--- a/redfish-core/include/schemas.hpp
++++ b/redfish-core/include/schemas.hpp
+@@ -16,6 +16,7 @@ namespace redfish
+ {
+     constexpr std::array schemas {
+         "AmiNetworkConfiguration",
++        "AmiFirewallConfiguration",
+         "AccountService",
+         "ActionInfo",
+         "AggregationService",
+diff --git a/redfish-core/include/utils/ip_utils.hpp b/redfish-core/include/utils/ip_utils.hpp
+index 0c9137a3..272c1c32 100644
+--- a/redfish-core/include/utils/ip_utils.hpp
++++ b/redfish-core/include/utils/ip_utils.hpp
+@@ -3,14 +3,28 @@
+ #include <boost/asio/ip/address.hpp>
+ #include <boost/asio/ip/address_v4.hpp>
+ #include <boost/asio/ip/address_v6.hpp>
+-
++#include "syslog.h"
+ #include <string>
+ 
++#include <stdplus/net/addr/ip.hpp>
++#include <stdplus/numeric/endian.hpp>
++#include <stdplus/numeric/str.hpp>
++#include <stdplus/str/conv.hpp>
++
+ namespace redfish
+ {
+ namespace ip_util
+ {
+ 
++enum class Type
++{
++    GATEWAY4_ADDRESS,
++    GATEWAY6_ADDRESS,
++    IP4_ADDRESS,
++    IP6_ADDRESS,
++    SUBNETMASK
++};
++
+ /**
+  * @brief Converts boost::asio::ip::address to string
+  * Will automatically convert IPv4-mapped IPv6 address back to IPv4.
+@@ -112,14 +126,6 @@ inline bool ipv4VerifyIpAndGetBitcount(const std::string& ip,
+     return true;
+ }
+ 
+-enum class Type
+-{
+-    GATEWAY4_ADDRESS,
+-    GATEWAY6_ADDRESS,
+-    IP4_ADDRESS,
+-    IP6_ADDRESS
+-};
+-
+ inline bool in6AddrIetfProtocolAssignment(in6_addr* addr)
+ {
+     return (ntohl(addr->__in6_u.__u6_addr32[0]) >= 0x20010000 &&
+@@ -173,24 +179,64 @@ static void isValidIPv6Addr(in6_addr* addr, Type type)
+     }
+ }
+ 
+-inline bool validateIPv6address(const std::string& ipAddress)
++inline bool validateIPv6address(std::string addr, Type type)
+ {
+     try
+     {
+-        in6_addr addr;
+-        if (inet_pton(AF_INET6, ipAddress.c_str(), &addr) != 1)
++        std::optional<stdplus::InAnyAddr> Addrs;
++        Addrs.emplace(stdplus::fromStr<stdplus::In6Addr>(addr));
++        isValidIPv6Addr(reinterpret_cast<in6_addr*>(&Addrs.value()), type);
++        return true;
++    }
++    catch (const std::exception& e)
++    {
++        syslog(LOG_WARNING, "validateIPv6address IP : %s is Invalid & Error Returned is : %s !!! \n", addr.c_str(), e.what());
++        return false;
++    }
++}
++
++inline bool isValidIPv4Address(in_addr* addr, Type type)
++{
++    uint8_t ip[4];
++    in_addr_t tmp = stdplus::ntoh(addr->s_addr);
++    for (int i = 0; i < 4; i++)
++    {
++        ip[i] = ( tmp >> (8 * (3 - i)) ) & 0xFF;
++    }
++    if (type == Type::GATEWAY4_ADDRESS)
++    {
++        if (ip[0] == 0)
+         {
+-            throw std::invalid_argument("Invalid IPv6 address format");
++            // Gateway starts with 0
++            return false;
+         }
+-        isValidIPv6Addr(&addr, Type::IP6_ADDRESS);
+     }
+-    catch (const std::invalid_argument& e)
++    else if (type == Type::IP4_ADDRESS || type == Type::SUBNETMASK)
+     {
+-        // Invalid IPv6 address.
+-        return false;
++        if (ip[0] == 0 && ip[1] == 0 && ip[2] == 0 && ip[3] == 0)
++        {
++            // IPv4 address is 0.0.0.0
++            return false;
++        }
+     }
+     return true;
+ }
+ 
++inline bool isValidIPv4Addr(std::string addr, Type type)
++{
++    try
++    {
++        std::optional<stdplus::InAnyAddr> Addrs;
++        Addrs.emplace(stdplus::fromStr<stdplus::In4Addr>(addr));
++        bool ValidIPv4Addrflag = isValidIPv4Address(reinterpret_cast<in_addr*> ((&Addrs.value())), type);
++        return ValidIPv4Addrflag;
++    }
++    catch (const std::exception& e)
++    {
++        syslog(LOG_WARNING, "isValidIPv4Addr IP : %s is Invalid & Error Returned is : %s !!! \n", addr.c_str(), e.what());
++        return false;
++    }
++}
++
+ } // namespace ip_util
+ } // namespace redfish
+diff --git a/redfish-core/lib/ethernet.hpp b/redfish-core/lib/ethernet.hpp
+index a02c509f..b8089ea3 100644
+--- a/redfish-core/lib/ethernet.hpp
++++ b/redfish-core/lib/ethernet.hpp
+@@ -51,15 +51,6 @@ enum class LinkType
+     Global
+ };
+ 
+-enum class Type
+-{
+-    GATEWAY4_ADDRESS,
+-    GATEWAY6_ADDRESS,
+-    IP4_ADDRESS,
+-    IP6_ADDRESS,
+-    SUBNETMASK
+-};
+-
+ /**
+  * Structure for keeping IPv4 data required by Redfish
+  */
+@@ -1397,43 +1388,6 @@ inline bool isSameSeries(std::string ipStr, std::string gwStr,
+     return true;
+ }
+ 
+-inline bool isValidIPv4Addr(const std::string& addr, Type type)
+-{
+-    uint8_t ip[4];
+-    uint32_t tmp =
+-        ntohl(inet_addr(addr.c_str())); // Convert std::string to const char*
+-    for (int i = 0; i < 4; i++)         // Extracting Octets
+-    {
+-        ip[i] = (tmp >> (8 * (3 - i))) & 0xFF; // spliting into 4 octects.
+-    }
+-
+-    if (type == Type::GATEWAY4_ADDRESS)
+-    {
+-        if (ip[0] == 0) // checks first octet is zero
+-        {
+-            return false;
+-        }
+-    }
+-    else if (type == Type::IP4_ADDRESS)
+-    {
+-        if (ip[0] == 0 && ip[1] == 0 && ip[2] == 0 &&
+-            ip[3] == 0) // checks if all four octets are zero
+-        {
+-            return false;
+-        }
+-    }
+-    else if (type == Type::SUBNETMASK)
+-    {
+-        if (ip[0] == 0 && ip[1] == 0 && ip[2] == 0 &&
+-            ip[3] == 0) // checks if all four octets are zero
+-        {
+-            return false;
+-        }
+-    }
+-
+-    return true;
+-}
+-
+ inline bool
+     validateIPv4Json(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+                      const nlohmann::json::array_t& input)
+@@ -1512,22 +1466,22 @@ inline bool
+                                                 "Gateway");
+                     return false;
+                 }
+-                if (!isValidIPv4Addr(
++                if (!ip_util::isValidIPv4Addr(
+                         ipAddress,
+-                        Type::IP4_ADDRESS)) // checking the IPv4 Address
++                        ip_util::Type::IP4_ADDRESS)) // checking the IPv4 Address
+                 {
+                     messages::invalidip(asyncResp->res, "Address", ipAddress);
+                     return false;
+                 }
+-                if (!isValidIPv4Addr(
+-                        ipGateway, Type::GATEWAY4_ADDRESS)) // checking the IPv4
++                if (!ip_util::isValidIPv4Addr(
++                        ipGateway, ip_util::Type::GATEWAY4_ADDRESS)) // checking the IPv4
+                                                             // gateway Address
+                 {
+                     messages::invalidip(asyncResp->res, "Gateway", ipGateway);
+                     return false;
+                 }
+-		if (!isValidIPv4Addr(
+-                        ipSubnetMask, Type::SUBNETMASK)) // checking the IPv4
++                if (!ip_util::isValidIPv4Addr(
++                        ipSubnetMask, ip_util::Type::SUBNETMASK)) // checking the IPv4
+                                                             // subnetmask Address
+                 {
+                     messages::invalidip(asyncResp->res, "subnetmask", ipSubnetMask);
+@@ -2222,7 +2176,7 @@ inline bool
+         if (address)
+         {
+             const std::string& ipAddress = *address;
+-            if (!(ip_util::validateIPv6address(ipAddress)))
++            if (!(ip_util::validateIPv6address(ipAddress, ip_util::Type::IP6_ADDRESS)))
+             {
+                 messages::invalidip(asyncResp->res, "Address", ipAddress);
+                 return false;
+diff --git a/redfish-core/src/error_messages.cpp b/redfish-core/src/error_messages.cpp
+index f3f94ef9..c803c708 100644
+--- a/redfish-core/src/error_messages.cpp
++++ b/redfish-core/src/error_messages.cpp
+@@ -1009,6 +1009,26 @@ void propertyValueTypeError(crow::Response& res, const nlohmann::json& arg1,
+     addMessageToJson(res.jsonValue, propertyValueTypeError(arg1, arg2), arg2);
+ }
+ 
++/**
++ * @internal
++ * @brief Formats PropertyValueError message into JSON for the specified
++ * property
++ *
++ * See header file for more information
++ * @endinternal
++ */
++nlohmann::json propertyValueError(std::string_view arg1)
++{
++    return getLog(redfish::registries::base::Index::propertyValueError,
++                  std::to_array<std::string_view>({arg1}));
++}
++
++void propertyValueError(crow::Response& res, std::string_view arg1)
++{
++    res.result(boost::beast::http::status::bad_request);
++    addMessageToJson(res.jsonValue, propertyValueError(arg1), arg1);
++}
++
+ /**
+  * @internal
+  * @brief Formats ResourceNotFound message into JSONd
+diff --git a/scripts/update_schemas.py b/scripts/update_schemas.py
+index 27c5e30c..1ab4ec1e 100755
+--- a/scripts/update_schemas.py
++++ b/scripts/update_schemas.py
+@@ -391,6 +391,12 @@ with open(metadata_index_path, "w") as metadata_index:
+     metadata_index.write("        <edmx:Include Namespace=\"AmiNetworkConfiguration.v1_0_0\"/>\n")
+     metadata_index.write("    </edmx:Reference>\n")
+ 
++    metadata_index.write(
++        "    <edmx:Reference Uri=\"/redfish/v1/schema/AmiFirewallConfiguration_v1.xml\">\n")
++    metadata_index.write("        <edmx:Include Namespace=\"AmiFirewallConfiguration\"/>\n")
++    metadata_index.write("        <edmx:Include Namespace=\"AmiFirewallConfiguration.v1_0_0\"/>\n")
++    metadata_index.write("    </edmx:Reference>\n")
++
+     metadata_index.write("</edmx:Edmx>\n")
+ 
+ 
+diff --git a/static/redfish/v1/$metadata/index.xml b/static/redfish/v1/$metadata/index.xml
+index b25d6904..831e84a9 100644
+--- a/static/redfish/v1/$metadata/index.xml
++++ b/static/redfish/v1/$metadata/index.xml
+@@ -3646,6 +3646,10 @@
+         <edmx:Include Namespace="AmiNetworkConfiguration"/>
+         <edmx:Include Namespace="AmiNetworkConfiguration.v1_0_0"/>
+     </edmx:Reference>
++    <edmx:Reference Uri="/redfish/v1/schema/AmiFirewallConfiguration_v1.xml">
++        <edmx:Include Namespace="AmiFirewallConfiguration"/>
++        <edmx:Include Namespace="AmiFirewallConfiguration.v1_0_0"/>
++    </edmx:Reference>
+     <edmx:Reference Uri="/redfish/v1/schema/AMIPcieSwitchCollection_v1.xml">
+         <edmx:Include Namespace="AMIPcieSwitchCollection"/>
+     </edmx:Reference>
+-- 
+2.39.2
+
