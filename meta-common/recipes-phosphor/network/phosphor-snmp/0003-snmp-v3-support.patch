@@ -1,0 +1,360 @@
+--- a/snmp_client.hpp	2024-02-07 22:13:37.014326524 -0500
++++ b/snmp_client.hpp	2023-10-20 12:18:48.000000000 -0400
+@@ -59,7 +59,7 @@
+      *  @param[in] port - network port.
+      */
+     Client(sdbusplus::bus_t& bus, const char* objPath, ConfManager& parent,
+-           const std::string& address, uint16_t port, const std::string version);
++           const std::string& address, uint16_t port, const std::string version, const std::string user);
+ 
+     /** @brief Constructor to put object onto bus at a dbus path.
+      *  @param[in] bus - Bus to attach to.
+@@ -95,11 +95,21 @@
+      */
+     std::string version(std::string value) override;
+ 
++    /** @brief Update the SNMP v3 user of the object.
++     *
++     *  @param[in] value - SNMP v3 username
++     *
++     *  @return On success the updated SNMP version
++     */
++    std::string user(std::string value) override;
++  
+     using sdbusplus::xyz::openbmc_project::Network::server::Client::address;
+ 
+     using sdbusplus::xyz::openbmc_project::Network::server::Client::port;
+ 
+     using sdbusplus::xyz::openbmc_project::Network::server::Client::version;
++
++    using sdbusplus::xyz::openbmc_project::Network::server::Client::user;
+   
+     /** @brief Delete this d-bus object.
+      */
+--- a/snmp_client.cpp	2024-02-07 22:13:37.018326542 -0500
++++ b/snmp_client.cpp	2024-02-07 19:55:12.000000000 -0500
+@@ -2,6 +2,9 @@
+ 
+ #include "snmp_conf_manager.hpp"
+ #include "snmp_serialize.hpp"
++#include "snmp_util.hpp"
++
++#include <grp.h>
+ 
+ namespace phosphor
+ {
+@@ -11,7 +14,7 @@
+ {
+ 
+ Client::Client(sdbusplus::bus_t& bus, const char* objPath, ConfManager& parent,
+-               const std::string& address, uint16_t port, const std::string version) :
++               const std::string& address, uint16_t port, const std::string version, const std::string user) :
+     Ifaces(bus, objPath, Ifaces::action::defer_emit),
+     id(std::stol(std::filesystem::path(objPath).filename())), parent(parent)
+ {
+@@ -20,6 +23,7 @@
+     this->transportProtocol(sdbusplus::server::xyz::openbmc_project::network::
+                                 Client::TransportProtocol::UDP);
+     this->version(version);
++    this->user(user);
+     // Emit deferred signal.
+     emit_object_added();
+ }
+@@ -60,7 +64,7 @@
+         return value;
+     }
+ 
+-    if(value != "v2c" && value != "v1")
++    if((value != "v2c") && (value != "v1") && (value != "v3"))
+       {
+          lg2::error("Version Type not supported");
+ 	     elog<InvalidArgument>(Argument::ARGUMENT_NAME("version"),
+@@ -70,6 +74,51 @@
+       serialize(id, *this, parent.dbusPersistentLocation);
+       return version;
+ }
++
++std::string Client::user(std::string value)
++{
++  if (value == Ifaces::user())
++    {
++        return value;
++    }
++
++  struct group* gr = getgrent();
++  bool foundUser = false;
++
++  if(version() == "v3")
++    {
++      while(gr != nullptr)
++	{
++	  if(strcmp(gr->gr_name,"snmp") == 0)
++	    {
++	      int i=0;
++	      while(gr->gr_mem[i] != nullptr)
++		{
++		  if(strcmp(value.c_str(),gr->gr_mem[i]) == 0)
++		    {
++		      foundUser = true;
++		      break;
++		    }
++		  i++;
++		}
++	      
++	    }
++	  gr = getgrent();
++	  
++	}
++      endgrent();
++
++      if(foundUser == false)
++	{
++	  lg2::error("User not found in snmp group");
++	  elog<InvalidArgument>(Argument::ARGUMENT_NAME("user"),
++				Argument::ARGUMENT_VALUE(value.c_str()));
++	}
++    }
++  auto username = Ifaces::user(value);
++  serialize(id, *this, parent.dbusPersistentLocation);
++  return username;
++}
+   
+ void Client::delete_()
+ {
+--- a/snmp_conf_manager.hpp	2023-10-20 12:18:48.000000000 -0400
++++ b/snmp_conf_manager.hpp	2023-10-20 12:18:48.000000000 -0400
+@@ -50,7 +50,7 @@
+      *  @param[in] port - network port.
+      *  @returns D-Bus object path
+      */
+-    std::string client(std::string address, uint16_t port, std::string version) override;
++  std::string client(std::string address, uint16_t port, std::string version, std::string user) override;
+ 
+     /* @brief delete the D-Bus object of the given ID.
+      * @param[in] id - client identifier.
+--- a/snmp_conf_manager.cpp	2023-10-20 12:18:48.000000000 -0400
++++ b/snmp_conf_manager.cpp	2024-02-07 19:40:00.000000000 -0500
+@@ -31,7 +31,7 @@
+     objectPath(objPath)
+ {}
+ 
+-std::string ConfManager::client(std::string address, uint16_t port, std::string version)
++std::string ConfManager::client(std::string address, uint16_t port, std::string version, std::string user)
+ {
+     // will throw exception if it is already configured.
+     checkClientConfigured(address, port);
+@@ -55,7 +55,7 @@
+     objPath /= std::to_string(lastClientId);
+ 
+     auto client = std::make_unique<phosphor::network::snmp::Client>(
+-        bus, objPath.string().c_str(), *this, address, port, version);
++        bus, objPath.string().c_str(), *this, address, port, version, user);
+ 
+     // save the D-Bus object
+     serialize(lastClientId, *client, dbusPersistentLocation);
+--- a/snmp_notification.hpp	2024-02-07 22:13:36.514324300 -0500
++++ b/snmp_notification.hpp	2023-10-20 12:18:48.000000000 -0400
+@@ -35,6 +35,7 @@
+ 
+ #include <sstream>
+ #include <string>
++#include <tuple>
+ #include <vector>
+ 
+ namespace phosphor
+@@ -53,13 +54,7 @@
+ oid SNMPTrapOID[] = {1, 3, 6, 1, 6, 3, 1, 1, 4, 1, 0};
+ oid sysuptimeOID[] = {1, 3, 6, 1, 2, 1, 1, 3, 0};
+ 
+-struct Object
+-{
+-    OID oid;
+-    OID_LEN oid_len;
+-    Type type;
+-    Value value;
+-};
++using Object = std::tuple<OID, OID_LEN, Type, Value>;
+ 
+ /** @brief Get the ASN object type from the given templatized type.
+  *         Specialize this template for handling a specific type.
+--- a/snmp_notification.cpp	2024-02-07 22:13:37.018326542 -0500
++++ b/snmp_notification.cpp	2024-02-07 19:56:45.000000000 -0500
+@@ -72,28 +72,67 @@
+     for (auto& mgr : mgrs)
+       {
+ 
+-         if(mgr.version == "v2c")
+-	     {
+-            session.version = SNMP_VERSION_2c;
+-	        session.community = (u_char*)comm;
+-	        session.community_len = strlen(comm);
+-	        session.callback = nullptr;
+-	        session.callback_magic = nullptr;
+-	     }
+-	     else if(mgr.version == "v1")
++         if(mgr.version == "v1")
+ 	     {
+             session.version = SNMP_VERSION_1;
+             session.community = (u_char*)comm;
+             session.community_len = strlen(comm);
+             session.callback = nullptr;
+             session.callback_magic = nullptr;
+-	     }
+-	     else
+-	     {	
+-	        lg2::error("Failed with unsupported SNMP Version");
+-	        elog<InternalFailure>();
+-	     }
+-	     session.peername = const_cast<char*>(mgr.ipaddress.c_str());
++	  }
++         else if(mgr.version == "v2c")
++	  {
++            session.version = SNMP_VERSION_2c;
++            session.community = (u_char*)comm;
++            session.community_len = strlen(comm);
++            session.callback = nullptr;
++            session.callback_magic = nullptr;
++	  }
++         else if (mgr.version == "v3")
++	  {
++            session.version = SNMP_VERSION_3;
++            /* set the SNMPv3 user name */
++            session.securityName = mgr.user.data();
++            session.securityNameLen = mgr.user.size();
++
++	    u_char engineId[SNMP_MAXBUF] = {0};
++	    size_t engineIdLen=0;
++	    engineIdLen = snmpv3_get_engineID(engineId,SNMP_MAXBUF);
++	    session.securityEngineID = engineId;
++	    session.securityEngineIDLen = engineIdLen;
++	    
++	    /* set the security level to authenticated, encrypted */
++	    //session.securityLevel = SNMP_SEC_LEVEL_NOAUTH;
++	    //session.securityLevel = SNMP_SEC_LEVEL_AUTHNOPRIV;
++	    session.securityLevel = SNMP_SEC_LEVEL_AUTHPRIV;
++	    
++	    /* set the authentication method to MD5 
++	    session.securityAuthProto = usmHMACMD5AuthProtocol;
++	    session.securityAuthProtoLen = sizeof(usmHMACMD5AuthProtocol)/sizeof(oid);
++	    session.securityAuthKeyLen = USM_AUTH_KU_LEN;
++	    */
++	    /* set the authentication method to SHA1
++	    session.securityAuthProto = usmHMACSHA1AuthProtocol;
++	    session.securityAuthProtoLen = sizeof(usmHMACSHA1AuthProtocol)/sizeof(oid);
++	    session.securityAuthKeyLen = USM_AUTH_KU_LEN;
++	    */
++
++	    /* Default authentication  */
++	    session.securityAuthProto = SNMP_DEFAULT_AUTH_PROTO;
++	    session.securityAuthProtoLen = SNMP_DEFAULT_AUTH_PROTOLEN;
++	    session.securityAuthKeyLen = USM_AUTH_KU_LEN;
++
++	    /* Defualt Encryption */
++	    session.securityPrivProto = SNMP_DEFAULT_PRIV_PROTO;
++	    session.securityPrivProtoLen = SNMP_DEFAULT_PRIV_PROTOLEN;
++	    session.securityPrivKeyLen = USM_PRIV_KU_LEN;
++	  }
++         else
++	  {	
++	    lg2::error("Failed with unsupported SNMP Version");
++	    elog<InternalFailure>();
++	  }
++	session.peername = const_cast<char*>(mgr.ipaddress.c_str());
+ 	
+         // create the sessions
+         auto ss = snmp_add(
+@@ -112,16 +151,18 @@
+         netsnmp_pdu* pdu;
+ 	
+         ss = nullptr;
+-	    if(mgr.version == "v2c")
+-	    {
+-	        pdu = snmp_pdu_create(SNMP_MSG_TRAP2);
+-	    }
+-	    else if (mgr.version == "v1")
+-	    {
+-	        pdu = snmp_pdu_create(SNMP_MSG_TRAP);
+-	    }
+ 	
+-	    if (!pdu)
++        // Create PDU for snmp v1 or v2c/v3
++        if (mgr.version == "v1")
++          {
++            pdu = snmp_pdu_create(SNMP_MSG_TRAP);
++          }
++        if((mgr.version == "v2c") || (mgr.version == "v3"))
++          {
++            pdu = snmp_pdu_create(SNMP_MSG_TRAP2);
++          }
++        
++        if (!pdu)
+         {
+             lg2::error("Failed to create notification PDU");
+             elog<InternalFailure>();
+@@ -160,8 +201,9 @@
+ 
+         for (const auto& object : objectList)
+         {
+-            if (!addPDUVar(*pdu, object.oid, object.oid_len, object.type,
+-                           object.value))
++
++            if (!addPDUVar(*pdu, std::get<0>(object), std::get<1>(object),
++                           std::get<2>(object), std::get<3>(object)))
+             {
+                 lg2::error("Failed to add the SNMP var");
+                 snmp_free_pdu(pdu);
+--- a/snmp_serialize.cpp	2023-10-20 12:18:48.000000000 -0400
++++ b/snmp_serialize.cpp	2023-10-20 12:18:48.000000000 -0400
+@@ -34,7 +34,7 @@
+ void save(Archive& archive, const Client& manager,
+           const std::uint32_t /*version*/)
+ {
+-    archive(manager.address(), manager.port(), manager.version());
++  archive(manager.address(), manager.port(), manager.version(),manager.user());
+ }
+ 
+ /** @brief Function required by Cereal to perform deserialization.
+@@ -50,12 +50,14 @@
+     std::string ipaddress{};
+     uint16_t port{};
+     std::string version{};
++    std::string user{};
+ 
+-    archive(ipaddress, port, version);
++    archive(ipaddress, port, version, user);
+ 
+     manager.address(ipaddress);
+     manager.port(port);
+     manager.version(version);
++    manager.user(user);
+ }
+ 
+ fs::path serialize(Id id, const Client& manager, const fs::path& dir)
+--- a/snmp_util.hpp	2024-02-07 22:45:51.130051271 -0500
++++ b/snmp_util.hpp	2024-02-07 22:54:02.844181320 -0500
+@@ -66,6 +66,7 @@
+ {
+   std::string ipaddress;
+   std::string version;
++  std::string user;
+ };
+   
+ /** @brief Gets all the snmp manager info.
+--- a/snmp_util.cpp	2024-02-07 22:45:51.130051271 -0500
++++ b/snmp_util.cpp	2024-02-07 22:53:34.156055474 -0500
+@@ -160,6 +160,7 @@
+                 std::get<std::string>(snmpClientProps.at("Address"));
+             auto& port = std::get<uint16_t>(snmpClientProps.at("Port"));
+             auto& version = std::get<std::string>(snmpClientProps.at("Version"));
++            auto& user = std::get<std::string>(snmpClientProps.at("User"));
+             auto ipaddress = phosphor::network::resolveAddress(address);
+             std::string mgr = std::move(ipaddress);
+             if (port > 0)
+@@ -167,6 +168,7 @@
+                 mgr += ":";
+                 mgr += std::to_string(port);
+             }
++	    mgrProps.user = user;
+             mgrProps.version = version;
+             mgrProps.ipaddress = mgr;
+             managers.push_back(mgrProps);

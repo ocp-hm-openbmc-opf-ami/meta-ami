@@ -1,0 +1,347 @@
+--- a/snmp_client.hpp	2023-07-13 14:19:48.000000000 -0400
++++ b/snmp_client.hpp	2024-01-08 17:39:35.000000000 -0500
+@@ -5,6 +5,12 @@
+ #include <sdbusplus/bus.hpp>
+ #include <sdbusplus/server/object.hpp>
+ 
++#include <phosphor-logging/elog-errors.hpp>
++#include <phosphor-logging/elog.hpp>
++#include <phosphor-logging/lg2.hpp>
++#include <xyz/openbmc_project/Common/error.hpp>
++#include <xyz/openbmc_project/User/Common/error.hpp>
++
+ #include <filesystem>
+ #include <string>
+ 
+@@ -21,6 +27,13 @@
+     sdbusplus::xyz::openbmc_project::Network::server::Client,
+     sdbusplus::xyz::openbmc_project::Object::server::Delete>;
+ 
++using namespace phosphor::logging;
++using InternalFailure =
++    sdbusplus::xyz::openbmc_project::Common::Error::InternalFailure;
++using InvalidArgument =
++    sdbusplus::xyz::openbmc_project::Common::Error::InvalidArgument;
++using Argument = xyz::openbmc_project::Common::InvalidArgument;
++
+ using Id = size_t;
+ 
+ /** @class Client
+@@ -46,7 +59,7 @@
+      *  @param[in] port - network port.
+      */
+     Client(sdbusplus::bus_t& bus, const char* objPath, ConfManager& parent,
+-           const std::string& address, uint16_t port);
++           const std::string& address, uint16_t port, const std::string version);
+ 
+     /** @brief Constructor to put object onto bus at a dbus path.
+      *  @param[in] bus - Bus to attach to.
+@@ -74,10 +87,20 @@
+      */
+     uint16_t port(uint16_t value) override;
+ 
++    /** @brief Update the SNMP version of the object.
++     *
++     *  @param[in] value - SNMP version
++     *
++     *  @return On success the updated SNMP version
++     */
++    std::string version(std::string value) override;
++
+     using sdbusplus::xyz::openbmc_project::Network::server::Client::address;
+ 
+     using sdbusplus::xyz::openbmc_project::Network::server::Client::port;
+ 
++    using sdbusplus::xyz::openbmc_project::Network::server::Client::version;
++  
+     /** @brief Delete this d-bus object.
+      */
+     void delete_() override;
+--- a/snmp_client.cpp	2023-07-13 14:19:48.000000000 -0400
++++ b/snmp_client.cpp	2024-01-08 17:38:21.000000000 -0500
+@@ -11,7 +11,7 @@
+ {
+ 
+ Client::Client(sdbusplus::bus_t& bus, const char* objPath, ConfManager& parent,
+-               const std::string& address, uint16_t port) :
++               const std::string& address, uint16_t port, const std::string version) :
+     Ifaces(bus, objPath, Ifaces::action::defer_emit),
+     id(std::stol(std::filesystem::path(objPath).filename())), parent(parent)
+ {
+@@ -19,7 +19,7 @@
+     this->port(port);
+     this->transportProtocol(sdbusplus::server::xyz::openbmc_project::network::
+                                 Client::TransportProtocol::UDP);
+-
++    this->version(version);
+     // Emit deferred signal.
+     emit_object_added();
+ }
+@@ -52,6 +53,25 @@
+     return port;
+ }
+ 
++std::string Client::version(std::string value)
++{
++    
++    if (value == Ifaces::version())
++    {
++        return value;
++    }
++
++    if(value != "v2c" && value != "v1")
++      {
++         lg2::error("Version Type not supported");
++	     elog<InvalidArgument>(Argument::ARGUMENT_NAME("version"),
++                               Argument::ARGUMENT_VALUE(value.c_str()));
++      }
++      auto version = Ifaces::version(value);
++      serialize(id, *this, parent.dbusPersistentLocation);
++      return version;
++}
++  
+ void Client::delete_()
+ {
+     parent.deleteSNMPClient(id);
+--- a/snmp_conf_manager.hpp	2023-07-13 14:19:48.000000000 -0400
++++ b/snmp_conf_manager.hpp	2024-01-08 17:20:22.000000000 -0500
+@@ -50,7 +50,7 @@
+      *  @param[in] port - network port.
+      *  @returns D-Bus object path
+      */
+-    std::string client(std::string address, uint16_t port) override;
++    std::string client(std::string address, uint16_t port, std::string version) override;
+ 
+     /* @brief delete the D-Bus object of the given ID.
+      * @param[in] id - client identifier.
+--- a/snmp_conf_manager.cpp	2023-07-13 14:19:48.000000000 -0400
++++ b/snmp_conf_manager.cpp	2024-01-08 17:41:03.000000000 -0500
+@@ -31,7 +31,7 @@
+     objectPath(objPath)
+ {}
+ 
+-std::string ConfManager::client(std::string address, uint16_t port)
++std::string ConfManager::client(std::string address, uint16_t port, std::string version)
+ {
+     // will throw exception if it is already configured.
+     checkClientConfigured(address, port);
+@@ -55,7 +55,7 @@
+     objPath /= std::to_string(lastClientId);
+ 
+     auto client = std::make_unique<phosphor::network::snmp::Client>(
+-        bus, objPath.string().c_str(), *this, address, port);
++        bus, objPath.string().c_str(), *this, address, port, version);
+ 
+     // save the D-Bus object
+     serialize(lastClientId, *client, dbusPersistentLocation);
+--- a/snmp_notification.cpp	2023-07-13 14:19:48.000000000 -0400
++++ b/snmp_notification.cpp	2024-01-08 18:27:09.561449699 -0500
+@@ -66,18 +66,36 @@
+     init_snmp("snmpapp");
+ 
+     // TODO: https://github.com/openbmc/openbmc/issues/3145
+-    session.version = SNMP_VERSION_2c;
+-    session.community = (u_char*)comm;
+-    session.community_len = strlen(comm);
+-    session.callback = nullptr;
+-    session.callback_magic = nullptr;
+-
++    auto version = getVersion();    
+     auto mgrs = getManagers();
+ 
+     for (auto& mgr : mgrs)
+-    {
+-        session.peername = const_cast<char*>(mgr.c_str());
+-        // create the session
++      {
++
++         if(mgr.version == "v2c")
++	     {
++            session.version = SNMP_VERSION_2c;
++	        session.community = (u_char*)comm;
++	        session.community_len = strlen(comm);
++	        session.callback = nullptr;
++	        session.callback_magic = nullptr;
++	     }
++	     else if(mgr.version == "v1")
++	     {
++            session.version = SNMP_VERSION_1;
++            session.community = (u_char*)comm;
++            session.community_len = strlen(comm);
++            session.callback = nullptr;
++            session.callback_magic = nullptr;
++	     }
++	     else
++	     {	
++	        lg2::error("Failed with unsupported SNMP Version");
++	        elog<InternalFailure>();
++	     }
++	     session.peername = const_cast<char*>(mgr.ipaddress.c_str());
++	
++        // create the sessions
+         auto ss = snmp_add(
+             &session,
+             netsnmp_transport_open_client("snmptrap", session.peername),
+@@ -85,17 +103,25 @@
+         if (!ss)
+         {
+             lg2::error("Unable to get the snmp session: {SNMPMANAGER}",
+-                       "SNMPMANAGER", mgr);
++                       "SNMPMANAGER", mgr.ipaddress);
+             elog<InternalFailure>();
+         }
+ 
+         // Wrap the raw pointer in RAII
+         snmpSessionPtr sessionPtr(ss, &::snmp_close);
+-
++        netsnmp_pdu* pdu;
++	
+         ss = nullptr;
+-
+-        auto pdu = snmp_pdu_create(SNMP_MSG_TRAP2);
+-        if (!pdu)
++	    if(mgr.version == "v2c")
++	    {
++	        pdu = snmp_pdu_create(SNMP_MSG_TRAP2);
++	    }
++	    else if (mgr.version == "v1")
++	    {
++	        pdu = snmp_pdu_create(SNMP_MSG_TRAP);
++	    }
++	
++	    if (!pdu)
+         {
+             lg2::error("Failed to create notification PDU");
+             elog<InternalFailure>();
+@@ -143,13 +169,13 @@
+             }
+         }
+         // pdu is freed by snmp_send
+-        if (!snmp_send(sessionPtr.get(), pdu))
+-        {
++	auto retval = snmp_send(sessionPtr.get(), pdu);
++	if(!retval)
++	  {
+             lg2::error("Failed to send the snmp trap.");
+             elog<InternalFailure>();
+-        }
+-
+-        lg2::debug("Sent SNMP Trap: {MGR}", "MGR", mgr);
++	  }
++        lg2::debug("Sent SNMP Trap: {MGR}", "MGR", mgr.ipaddress);
+     }
+ }
+ 
+--- a/snmp_serialize.cpp	2023-07-13 14:19:48.000000000 -0400
++++ b/snmp_serialize.cpp	2024-01-08 17:20:22.000000000 -0500
+@@ -34,7 +34,7 @@
+ void save(Archive& archive, const Client& manager,
+           const std::uint32_t /*version*/)
+ {
+-    archive(manager.address(), manager.port());
++    archive(manager.address(), manager.port(), manager.version());
+ }
+ 
+ /** @brief Function required by Cereal to perform deserialization.
+@@ -49,11 +49,13 @@
+ {
+     std::string ipaddress{};
+     uint16_t port{};
++    std::string version{};
+ 
+-    archive(ipaddress, port);
++    archive(ipaddress, port, version);
+ 
+     manager.address(ipaddress);
+     manager.port(port);
++    manager.version(version);
+ }
+ 
+ fs::path serialize(Id id, const Client& manager, const fs::path& dir)
+--- a/snmp_util.hpp	2023-07-13 14:19:48.000000000 -0400
++++ b/snmp_util.hpp	2024-01-08 17:54:32.000000000 -0500
+@@ -62,11 +62,18 @@
+ namespace snmp
+ {
+ 
++struct mgrProperty
++{
++  std::string ipaddress;
++  std::string version;
++};
++  
+ /** @brief Gets all the snmp manager info.
+  *  @return the list of manager info in the format
+  *          of ipaddress:port
+  */
+-std::vector<std::string> getManagers();
++std::vector<mgrProperty> getManagers();
++std::vector<std::string> getVersion();
+ 
+ } // namespace snmp
+ } // namespace network
+--- a/snmp_util.cpp	2023-07-13 14:19:48.000000000 -0400
++++ b/snmp_util.cpp	2024-01-08 17:54:13.000000000 -0500
+@@ -116,11 +157,40 @@
+     return bus;
+ }
+ 
+-std::vector<std::string> getManagers()
++/** @brief Gets the Version
++ *  @return the Version String.
++ */
++std::vector<std::string> getVersion()
++{
++
++    auto& bus = getBus();
++    auto objTree = phosphor::getManagedObjects(bus, busName, root);
++    std::vector<std::string> version;
++  
++    for (const auto& objIter : objTree)
++    {
++        try
++        {
++            auto& intfMap = objIter.second;
++            auto& snmpClientProps = intfMap.at(clientIntf);
++		    version.push_back(std::get<std::string>(snmpClientProps.at("Version")));
++        }
++        catch (const std::exception& e)
++        {
++            lg2::error("Invalid version: {ERROR}", "ERROR", e);
++        }
++    }
++  
++  return version;
++}
++  
++std::vector<struct mgrProperty> getManagers()
+ {
+-    std::vector<std::string> managers;
++    std::vector<struct mgrProperty> managers;
+     auto& bus = getBus();
+     auto objTree = phosphor::getManagedObjects(bus, busName, root);
++    struct mgrProperty mgrProps;
++    
+     for (const auto& objIter : objTree)
+     {
+         try
+@@ -130,14 +201,17 @@
+             auto& address =
+                 std::get<std::string>(snmpClientProps.at("Address"));
+             auto& port = std::get<uint16_t>(snmpClientProps.at("Port"));
++            auto& version = std::get<std::string>(snmpClientProps.at("Version"));
+             auto ipaddress = phosphor::network::resolveAddress(address);
+-            auto mgr = std::move(ipaddress);
++            std::string mgr = std::move(ipaddress);
+             if (port > 0)
+             {
+                 mgr += ":";
+                 mgr += std::to_string(port);
+             }
+-            managers.push_back(mgr);
++            mgrProps.version = version;
++            mgrProps.ipaddress = mgr;
++            managers.push_back(mgrProps);
+         }
+         catch (const std::exception& e)
+         {

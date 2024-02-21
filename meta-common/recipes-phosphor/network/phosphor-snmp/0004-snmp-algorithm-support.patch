@@ -1,0 +1,186 @@
+--- a/snmp_client.hpp	2024-02-12 18:23:52.092953661 -0500
++++ b/snmp_client.hpp	2024-02-09 21:55:32.946661442 -0500
+@@ -102,6 +102,22 @@
+      *  @return On success the updated SNMP version
+      */
+     std::string user(std::string value) override;
++
++    /** @brief Update the algorithm of the object.
++     *
++     *  @param[in] value - v3 algorithm
++     *
++     *  @return On success the updated V3 Algorithm
++     */
++    std::string algorithm(std::string value) override;
++
++    /** @brief Update the encryption of the object.
++     *
++     *  @param[in] value - encryption
++     *
++     *  @return On success the updated encryption
++     */
++    std::string encryption(std::string value) override;
+   
+     using sdbusplus::xyz::openbmc_project::Network::server::Client::address;
+ 
+--- a/snmp_client.cpp	2024-02-12 18:23:52.092953661 -0500
++++ b/snmp_client.cpp	2024-02-12 18:29:08.434459376 -0500
+@@ -119,7 +119,46 @@
+   serialize(id, *this, parent.dbusPersistentLocation);
+   return username;
+ }
++
++std::string Client::algorithm(std::string value)
++{
++
++  if (value == Ifaces::algorithm())
++    {
++      return value;
++    }
++  
++  if((value != "SHA256") && (value != "SHA384") && (value != "SHA512"))
++    {
++      lg2::error("Algorithm Type not supported");
++      elog<InvalidArgument>(Argument::ARGUMENT_NAME("algorithm"),
++			    Argument::ARGUMENT_VALUE(value.c_str()));
++    }
++  auto algorithm = Ifaces::algorithm(value);
++  serialize(id, *this, parent.dbusPersistentLocation);
++  return algorithm;
++}
+   
++std::string Client::encryption(std::string value)
++{
++
++  if (value == Ifaces::encryption())
++    {
++      return value;
++    }
++  
++    if(value != "AES128")
++      {
++	lg2::error("Encryption Type not supported");
++	elog<InvalidArgument>(Argument::ARGUMENT_NAME("encryption"),
++			      Argument::ARGUMENT_VALUE(value.c_str()));
++      }
++    auto encryption = Ifaces::encryption(value);
++    serialize(id, *this, parent.dbusPersistentLocation);
++    return encryption;
++}
++
++
+ void Client::delete_()
+ {
+     parent.deleteSNMPClient(id);
+--- a/snmp_notification.cpp	2024-02-12 18:23:52.092953661 -0500
++++ b/snmp_notification.cpp	2024-02-12 18:22:50.268660477 -0500
+@@ -105,32 +105,43 @@
+ 	    //session.securityLevel = SNMP_SEC_LEVEL_NOAUTH;
+ 	    //session.securityLevel = SNMP_SEC_LEVEL_AUTHNOPRIV;
+ 	    session.securityLevel = SNMP_SEC_LEVEL_AUTHPRIV;
+-	    
+-	    /* set the authentication method to MD5 
+-	    session.securityAuthProto = usmHMACMD5AuthProtocol;
+-	    session.securityAuthProtoLen = sizeof(usmHMACMD5AuthProtocol)/sizeof(oid);
+-	    session.securityAuthKeyLen = USM_AUTH_KU_LEN;
+-	    */
+-	    /* set the authentication method to SHA1
+-	    session.securityAuthProto = usmHMACSHA1AuthProtocol;
+-	    session.securityAuthProtoLen = sizeof(usmHMACSHA1AuthProtocol)/sizeof(oid);
+-	    session.securityAuthKeyLen = USM_AUTH_KU_LEN;
+-	    */
+-
+-	    /* Default authentication  */
+-	    session.securityAuthProto = SNMP_DEFAULT_AUTH_PROTO;
+-	    session.securityAuthProtoLen = SNMP_DEFAULT_AUTH_PROTOLEN;
+-	    session.securityAuthKeyLen = USM_AUTH_KU_LEN;
+-
+-	    /* Defualt Encryption */
+-	    session.securityPrivProto = SNMP_DEFAULT_PRIV_PROTO;
+-	    session.securityPrivProtoLen = SNMP_DEFAULT_PRIV_PROTOLEN;
+-	    session.securityPrivKeyLen = USM_PRIV_KU_LEN;
++	    /* Authentication */
++	    if(mgr.algorithm == "SHA512")
++	      {
++		session.securityAuthProto = usmHMAC384SHA512AuthProtocol;
++		session.securityAuthProtoLen = USM_AUTH_PROTO_SHA_LEN;
++		session.securityAuthKeyLen = USM_AUTH_KU_LEN;
++	      }
++	    else if(mgr.algorithm == "SHA384")
++	      {
++		session.securityAuthProto = usmHMAC256SHA384AuthProtocol;
++		session.securityAuthProtoLen = USM_AUTH_PROTO_SHA_LEN;
++		session.securityAuthKeyLen = USM_AUTH_KU_LEN;
++	      }
++	    else //default is SHA256
++             {
++               session.securityAuthProto = usmHMAC192SHA256AuthProtocol;
++               session.securityAuthProtoLen = USM_AUTH_PROTO_SHA_LEN;
++               session.securityAuthKeyLen = USM_AUTH_KU_LEN;
++             }
++	    /* Encryption */
++	    if(mgr.encryption == "AES128") //currently default option is only option
++	      {
++		session.securityPrivProto = usmAES128PrivProtocol;
++		session.securityPrivProtoLen = USM_PRIV_PROTO_AES128_LEN;
++		session.securityPrivKeyLen = USM_PRIV_KU_LEN;
++	      }
++	    else //default is AES128
++	      {
++		session.securityPrivProto = usmAES128PrivProtocol;
++		session.securityPrivProtoLen = USM_PRIV_PROTO_AES128_LEN;
++		session.securityPrivKeyLen = USM_PRIV_KU_LEN;
++	      }
+ 	  }
+          else
+-	  {	
+-	    lg2::error("Failed with unsupported SNMP Version");
+-	    elog<InternalFailure>();
++	   {	
++	     lg2::error("Failed with unsupported SNMP Version");
++	     elog<InternalFailure>();
+ 	  }
+ 	session.peername = const_cast<char*>(mgr.ipaddress.c_str());
+ 	
+@@ -202,8 +213,9 @@
+         for (const auto& object : objectList)
+         {
+ 
++
+             if (!addPDUVar(*pdu, std::get<0>(object), std::get<1>(object),
+-                           std::get<2>(object), std::get<3>(object)))
++	                 std::get<2>(object), std::get<3>(object)))
+             {
+                 lg2::error("Failed to add the SNMP var");
+                 snmp_free_pdu(pdu);
+--- a/snmp_util.hpp	2024-02-12 18:23:52.092953661 -0500
++++ b/snmp_util.hpp	2024-02-12 18:22:50.268660477 -0500
+@@ -67,6 +67,8 @@
+   std::string ipaddress;
+   std::string version;
+   std::string user;
++  std::string algorithm;
++  std::string encryption;
+ };
+   
+ /** @brief Gets all the snmp manager info.
+--- a/snmp_util.cpp	2024-02-12 18:23:52.092953661 -0500
++++ b/snmp_util.cpp	2024-02-12 18:22:50.268660477 -0500
+@@ -161,6 +161,8 @@
+             auto& port = std::get<uint16_t>(snmpClientProps.at("Port"));
+             auto& version = std::get<std::string>(snmpClientProps.at("Version"));
+             auto& user = std::get<std::string>(snmpClientProps.at("User"));
++            auto& encryption = std::get<std::string>(snmpClientProps.at("Encryption"));
++            auto& algorithm = std::get<std::string>(snmpClientProps.at("Algorithm"));
+             auto ipaddress = phosphor::network::resolveAddress(address);
+             std::string mgr = std::move(ipaddress);
+             if (port > 0)
+@@ -170,6 +172,8 @@
+             }
+ 	    mgrProps.user = user;
+             mgrProps.version = version;
++            mgrProps.encryption = encryption;
++            mgrProps.algorithm = algorithm;
+             mgrProps.ipaddress = mgr;
+             managers.push_back(mgrProps);
+         }

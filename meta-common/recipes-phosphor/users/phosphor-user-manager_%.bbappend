@@ -17,12 +17,13 @@ SRC_URI += " \
              file://0018-Added-group-user-for-host-interface.patch \
              file://0019-manual-lockout-fix.patch \
              file://0020-add-media-group.patch \
+             file://0021-add-snmp-group.patch \
            "
 
 #OEM Privilege
 SRC_URI_OEM_PRIV:append = "file://upgrade_media_group.sh \
-             file://xyz.openbmc_project.User.Manager-ami.service \
-                              "
+                           file://xyz.openbmc_project.User.Manager-ami.service \
+                          "
 SRC_URI:append = "${@bb.utils.contains('FEATURE_OEM_PRIV', '1',SRC_URI_OEM_PRIV, ' ', d)}"
 
 FILES:${PN} += "${datadir}/dbus-1/system.d/phosphor-nslcd-cert-config.conf"
@@ -43,6 +44,8 @@ OEM_PRIV_EXTRA_USERS_PARAMS =" \
    groupadd media; \
    usermod --append --groups media root; \
    "
+
+GROUPADD_PARAM:${PN} = "${@bb.utils.contains('FEATURE_SNMP_TRAPV3', '1',"snmp" , ' ', d)}"
 
 EXTRA_USERS_PARAMS += "${@bb.utils.contains('FEATURE_OEM_PRIV', '1',OEM_PRIV_EXTRA_USERS_PARAMS, ' ', d)}"
 
