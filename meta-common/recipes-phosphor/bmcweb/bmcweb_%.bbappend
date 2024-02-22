@@ -107,7 +107,6 @@ SRC_URI:append = "   \
 	    file://0132-Added-OOB-BIOS-Configuration-Support-in-Redfish.patch \
             file://0185-Fixed-System-reset-action-giving-internal-error-at-MaintenanceWindow.patch \
 	    file://0188-Arranging-the-error-message.patch \
-            file://0187-Receive-SubmitTestEvent-in-SSE.patch \
 	    file://0189-Disabling-Power-URI-and-Adding-PropertyNotWritable-E.patch \
             file://0190-Fixed-sync-Redfish-Service-Validator-failures.patch \
             file://0191-Fix-Parse-Error-The-Server-returned-a-malformed-resp.patch \
@@ -119,6 +118,7 @@ SRC_URI:append = "   \
             file://0193-NodeManager.ChangeState-returns-204-response.patch \
             file://0195-Verify-Set-DateTime-With-Invalid-Data.patch \
             file://0207-Set-Sensor-Reading-fractional-value-as-4-digits.patch \
+            file://0187-Receiving-SubmitTestEvent-in-SSE.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
