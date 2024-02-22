@@ -117,6 +117,7 @@ SRC_URI:append = "   \
             file://0208-Fix-for-TaskStatus-should-not-be-set-until-the-task-Completed.patch \
             file://0192-Firewall-Feature-Support-in-Redfish.patch \
             file://0193-NodeManager.ChangeState-returns-204-response.patch \
+            file://0195-Verify-Set-DateTime-With-Invalid-Data.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
