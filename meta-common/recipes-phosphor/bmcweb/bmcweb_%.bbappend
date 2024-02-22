@@ -116,6 +116,7 @@ SRC_URI:append = "   \
 	    file://0204-updating-last-activity-time-when-kvm-data-transfer.patch \
             file://0208-Fix-for-TaskStatus-should-not-be-set-until-the-task-Completed.patch \
             file://0192-Firewall-Feature-Support-in-Redfish.patch \
+            file://0193-NodeManager.ChangeState-returns-204-response.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
