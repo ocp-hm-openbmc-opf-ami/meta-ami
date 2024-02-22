@@ -118,6 +118,7 @@ SRC_URI:append = "   \
             file://0192-Firewall-Feature-Support-in-Redfish.patch \
             file://0193-NodeManager.ChangeState-returns-204-response.patch \
             file://0195-Verify-Set-DateTime-With-Invalid-Data.patch \
+            file://0207-Set-Sensor-Reading-fractional-value-as-4-digits.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch "
