@@ -48,9 +48,9 @@ if [ -d "openbmc-meta-intel/meta-restricted" ]; then
 
 	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.bmc-assisted-fru-isolation.git;branch=main;protocol=ssh/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.bmc-assisted-fru-isolation.git;branch=main;protocol=https/g' openbmc-meta-intel/meta-restricted/recipes-intel/acd/bafi.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.spdmd.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.spdmd.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/fw-security/spdmd.bb
+	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.spdmd.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.spdmd.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/fw-security/spdmd.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.spdmapplib.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.libraries.spdmapplib.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/fw-security/spdmapplib.bb
+	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.spdmapplib.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.libraries.spdmapplib.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/fw-security/spdmapplib.bb
 
 	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.ras-manager.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.ras-manager.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/ras-offload/ras-manager_git.bb
 
@@ -90,15 +90,15 @@ if [ -d "openbmc-meta-intel/meta-intel" ]; then
 
 	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.intel-pfr-signing-utility.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.intel-pfr-signing-utility.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-intel/recipes-intel/intel-pfr/intel-pfr-signing-utility-native.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.secure-control-module-i2c-memory-map.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.secure-control-module-i2c-memory-map.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-intel/recipes-intel/scm-i2c-memory-map/scm-i2c-memory-map.bb
+	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.secure-control-module-i2c-memory-map.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.secure-control-module-i2c-memory-map.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-intel/recipes-intel/scm-i2c-memory-map/scm-i2c-memory-map.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.domain-mapperd.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.domain-mapperd.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-intel/recipes-intel/domain-mapperd/domain-mapperd.bb
+	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.domain-mapperd.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.domain-mapperd.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-intel/recipes-intel/domain-mapperd/domain-mapperd.bb
 
-	sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.dimm-devices-accessor.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.dimm-devices-accessor.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-intel/recipes-intel/dimm-devices-accessor/dimm-devices-accessor.bb
+	sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.dimm-devices-accessor.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.dimm-devices-accessor.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-intel/recipes-intel/dimm-devices-accessor/dimm-devices-accessor.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.libpmt.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.libraries.libpmt.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-intel/recipes-intel/pmt/libpmt_git.bb
+	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.libpmt.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.libraries.libpmt.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-intel/recipes-intel/pmt/libpmt_git.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.power-feature-discovery.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.power-feature-discovery.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-intel/recipes-intel/power-feature-discovery/power-feature-discovery_git.bb
+	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.power-feature-discovery.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.power-feature-discovery.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-intel/recipes-intel/power-feature-discovery/power-feature-discovery_git.bb
 
 else
 	echo "INFO : meta-intel does not exists."
