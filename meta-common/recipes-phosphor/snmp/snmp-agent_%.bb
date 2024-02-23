@@ -8,6 +8,7 @@ inherit meson pkgconfig
 inherit obmc-phosphor-dbus-service
 
 DEPENDS += "phosphor-logging"
+DEPENDS += "phosphor-snmp"
 DEPENDS += "systemd"
 DEPENDS += "boost"
 DEPENDS += "sdbusplus"
@@ -16,10 +17,10 @@ DEPENDS += "phosphor-dbus-interfaces"
 DEPENDS += "net-snmp"
 
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/snmp-agent.git;branch=main;protocol=https"
+SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/snmp-agent.git;branch=Add_dbus_for_snmp;protocol=https"
 SRC_URI += "file://xyz.openbmc_project.Snmp.SnmpAgent.service"
 
-SRCREV = "f97d80a96ae1dab9ff411c28c6a5a448697f4bd7"
+SRCREV = "c2f6f72e03b36cff9802464203704ee36caa4aaa"
 
 S = "${WORKDIR}/git"
 
