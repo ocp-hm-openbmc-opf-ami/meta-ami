@@ -121,6 +121,7 @@ SRC_URI:append = "   \
             file://0187-Receiving-SubmitTestEvent-in-SSE.patch \
             file://0209-Thrown-proper-error-message-for-POST-certificate.patch \
             file://0201-Triggering-power-operation-on-MaintenanceWindow-time.patch \
+            file://0181-Fix-for-Duplicate-Error-Message-in-BIOS_URI.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
