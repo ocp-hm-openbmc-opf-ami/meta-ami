@@ -122,6 +122,7 @@ SRC_URI:append = "   \
             file://0209-Thrown-proper-error-message-for-POST-certificate.patch \
             file://0201-Triggering-power-operation-on-MaintenanceWindow-time.patch \
             file://0181-Fix-for-Duplicate-Error-Message-in-BIOS_URI.patch \
+            file://0213-Delete-Deprecated-URI-and-properties-in-Redfish.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
