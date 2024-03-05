@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 RDEPENDS:${PN} += "bash"
 
 SINGLE_SOL_SRC_URI = "file://sol-configure.sh \
-		      file://server.ttyS2.conf \
+		      file://single_sol_conf.ttyS2.conf \
 		      file://001-stored-SOL-log-data-permanently.patch \
 		     "
 
@@ -12,5 +12,6 @@ do_install:append() {
 if [ "${MULTI_SOL_ENABLED}" != "1" ]; then
     install -d ${D}${bindir}
     install -m 0755 ${WORKDIR}/sol-configure.sh ${D}${bindir}
+    install -m 0644 ${WORKDIR}/single_sol_conf.ttyS2.conf ${D}/etc/obmc-console/server.ttyS2.conf
 fi
 }
