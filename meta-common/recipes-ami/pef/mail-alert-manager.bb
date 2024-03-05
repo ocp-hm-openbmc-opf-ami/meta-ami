@@ -1,9 +1,12 @@
 SUMMARY = "mail alert management application"
 
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/email-alert-manager.git;protocol=https;branch=main"
-SRCREV = "f518708bf16af216dc1e1c024b78744534fbcf0d"
+SRCREV = "5cf01cc6de4453b1bb20201806e20e2336c39dde"
 
-SRC_URI += "file://smtp-config.json"
+SRC_URI += " \
+	    file://primary_smtp_config.json \
+	    file://secondary_smtp_config.json \
+           "
 
 S = "${WORKDIR}/git"
 PV = "1.0+git${SRCPV}"
@@ -26,5 +29,6 @@ SYSTEMD_SERVICE:${PN} = "mail-alert-manager.service"
 
 do_install:append() {
     install -d ${D}/var/lib/alert
-    install -m 0644 ${WORKDIR}/smtp-config.json ${D}/var/lib/alert
+    install -m 0644 ${WORKDIR}/primary_smtp_config.json ${D}/var/lib/alert
+    install -m 0644 ${WORKDIR}/secondary_smtp_config.json ${D}/var/lib/alert
 }

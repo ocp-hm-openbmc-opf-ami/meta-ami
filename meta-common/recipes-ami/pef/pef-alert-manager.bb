@@ -18,6 +18,7 @@ DEPENDS += " \
     boost \
     nlohmann-json \
     phosphor-logging \
+    phosphor-snmp \
     "
 
 FILES:${PN} += "${systemd_system_unitdir}/pef-configuration.service \
