@@ -249,7 +249,7 @@ bmc_full_flash() {
         if test -x $SLOT_FILE; then
             SLOT_FILE="/run/media/slot"
             BOOT_SOURCE=$(cat "$SLOT_FILE")
-            check_preserv_config
+            check_preserv_config $NON_INTEL_PLATFORMS_MODE
             local requestedactivationstate=$(get_requestedactivation_status bmc_bkup)
             local bmc_active_requestedactivationstate=$(get_requestedactivation_status bmc_active)
             if [[ "$bmc_active_requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" && "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
@@ -288,7 +288,7 @@ bmc_full_flash() {
             reboot
             return 0
         else
-            check_preserv_config
+            check_preserv_config $NON_INTEL_PLATFORMS_MODE
             cp $LOCAL_PATH /run/initramfs/
             redfish_log_fw_evt success
             update_percentage $UPDATE_PERCENT_SUCCESS
@@ -313,6 +313,9 @@ bmc_full_flash() {
                 systemctl stop nv-sync.service
                 # unmount rwfs
                 umount /tmp/.rwfs
+
+                log "BMC Full Flash - Backup u-boot-env partition"
+                backup_uboot_env_data
 
                 local rc=$(mtd-util -d /dev/$mtdPart c $LOCAL_PATH 0)
 
@@ -389,6 +392,9 @@ bmc_full_flash() {
                     systemctl stop nv-sync.service
                     # unmount rwfs
                     umount /tmp/.rwfs
+
+                    log "BMC Full Flash - Backup u-boot-env partition"
+                    backup_uboot_env_data
                 fi
                 echo "mtdPart=$mtdPart"
                 if [ -z "$mtdPart" ]; then
@@ -427,6 +433,9 @@ bmc_full_flash() {
                     systemctl stop nv-sync.service
                     # unmount rwfs
                     umount /tmp/.rwfs
+
+                    log "BMC Full Flash - Backup u-boot-env partition"
+                    backup_uboot_env_data
                 else
                     log "BMC Full Flash - Starting the SPI write on active CS0 spi. It will take ~8 minutes...."
                     local mtdPart=$(cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"alt-bmc\"" {print $1}')
