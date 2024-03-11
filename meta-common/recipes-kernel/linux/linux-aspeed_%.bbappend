@@ -23,7 +23,8 @@ SRC_URI += "file://nfs.cfg \
             file://CVE-2023-42754.patch \
             file://CVE-2023-42752.patch \
             file://iptables.cfg \
-  	    file://0029-ip_address_update_ncsi_interface.patch \           
+  	    file://0029-ip_address_update_ncsi_interface.patch \
+	    file://0030-SSIF-Support.patch \           
 	    "
 
 NON_PFR_SRC_URI_AMI = "file://0012-Add-new-layout-as-per-AMI-requirements.patch \

@@ -1,0 +1,527 @@
+From b113846f18c842ca8a35ec498351f4ce8c8b4ea2 Mon Sep 17 00:00:00 2001
+From: balajirg <balajirg@ami.com>
+Date: Thu, 7 Mar 2024 07:38:01 +0530
+Subject: [PATCH] SSIF Support -> Add driver changes to support SSIF Sys
+ Interface for ARM  platforms. -> SSIF NACK support is added in ssif_bmc
+ driver. -> I2C aspeed interrupt handling is worked to handle SSIF packets
+ (byte mode).
+
+---
+ drivers/char/ipmi/ssif_bmc.c    |  52 +++++++-
+ drivers/i2c/busses/i2c-aspeed.c |  54 ++++++--
+ include/linux/i2c-aspeed.h      | 216 ++++++++++++++++++++++++++++++++
+ 3 files changed, 305 insertions(+), 17 deletions(-)
+ create mode 100644 include/linux/i2c-aspeed.h
+
+diff --git a/drivers/char/ipmi/ssif_bmc.c b/drivers/char/ipmi/ssif_bmc.c
+index caee848261e9..4d50b51e4438 100644
+--- a/drivers/char/ipmi/ssif_bmc.c
++++ b/drivers/char/ipmi/ssif_bmc.c
+@@ -18,6 +18,7 @@
+ #include <linux/timer.h>
+ #include <linux/jiffies.h>
+ #include <linux/ipmi_ssif_bmc.h>
++#include <linux/i2c-aspeed.h>
+ 
+ #define DEVICE_NAME                             "ipmi-ssif-host"
+ 
+@@ -102,8 +103,11 @@ struct ssif_bmc_ctx {
+ 	struct ssif_part_buffer part_buf;
+ 	struct ipmi_ssif_msg    response;
+ 	struct ipmi_ssif_msg    request;
++	int 			nackstatus;
+ };
+ 
++static void on_stop_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val);
++
+ static inline struct ssif_bmc_ctx *to_ssif_bmc(struct file *file)
+ {
+ 	return container_of(file->private_data, struct ssif_bmc_ctx, miscdev);
+@@ -220,6 +224,10 @@ static ssize_t ssif_bmc_write(struct file *file, const char __user *buf, size_t
+ 
+ 	/* Clean old request buffer */
+ 	memset(&ssif_bmc->request, 0, sizeof(struct ipmi_ssif_msg));
++
++	/* Response ready. Disable NAK */
++	ssif_bmc->nackstatus = 0;
++	dev_dbg(&ssif_bmc->client->dev, "respok, disable nak\n");
+ exit:
+ 	spin_unlock_irqrestore(&ssif_bmc->lock, flags);
+ 
+@@ -320,6 +328,9 @@ static void handle_request(struct ssif_bmc_ctx *ssif_bmc)
+ 	ssif_bmc->busy = true;
+ 	/* Request message is available to process */
+ 	ssif_bmc->request_available = true;
++	/* Enable NAK */
++	ssif_bmc->nackstatus = 1;
++	dev_dbg(&ssif_bmc->client->dev, "enable nack\n");
+ 	/* Clean old response buffer */
+ 	memset(&ssif_bmc->response, 0, sizeof(struct ipmi_ssif_msg));
+ 	/* This is the new READ request.*/
+@@ -576,11 +587,6 @@ static void process_request_part(struct ssif_bmc_ctx *ssif_bmc)
+ 
+ static void process_smbus_cmd(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
+ {
+-	/* SMBUS command can vary (single or multi-part) */
+-	ssif_bmc->part_buf.smbus_cmd = *val;
+-	ssif_bmc->msg_idx = 1;
+-	memset(&ssif_bmc->part_buf.payload[0], 0, MAX_PAYLOAD_PER_TRANSACTION);
+-
+ 	if (*val == SSIF_IPMI_SINGLEPART_WRITE || *val == SSIF_IPMI_MULTIPART_WRITE_START) {
+ 		/*
+ 		 * The response maybe not come in-time, causing host SSIF driver
+@@ -590,10 +596,19 @@ static void process_smbus_cmd(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
+ 		if (ssif_bmc->response_in_progress)
+ 			complete_response(ssif_bmc);
+ 
++		ssif_bmc->nackstatus = 0;
++		dev_dbg(&ssif_bmc->client->dev, "new req disable nak\n");
++
+ 		/* This is new request, flip aborting flag if set */
+ 		if (ssif_bmc->aborting)
+ 			ssif_bmc->aborting = false;
+ 	}
++	
++	/* complete_response() call may reset the value's of ssif_bmc->part_buf struct. So, set the value's here */
++	/* SMBUS command can vary (single or multi-part) */
++	ssif_bmc->part_buf.smbus_cmd = *val;
++	ssif_bmc->msg_idx = 1;
++	memset(&ssif_bmc->part_buf.payload[0], 0, MAX_PAYLOAD_PER_TRANSACTION);
+ }
+ 
+ static void on_read_requested_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
+@@ -665,9 +680,20 @@ static void on_read_processed_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
+ 
+ static void on_write_requested_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
+ {
++	struct aspeed_i2c_bus *bus = i2c_get_adapdata(ssif_bmc->client->adapter);
++
+ 	if (ssif_bmc->state == SSIF_READY || ssif_bmc->state == SSIF_SMBUS_CMD) {
+ 		ssif_bmc->state = SSIF_START;
+ 
++	} else if(ssif_bmc->state == SSIF_REQ_RECVING && !ssif_bmc->nackstatus) {
++		/* As per I2C spec, 
++		 * If a controller still wishes to
++		 * communicate on the bus, it can generate a repeated START condition (Sr) and address
++		 * another target without first generating a STOP condition */
++		on_stop_event(ssif_bmc, val);
++		if (ssif_bmc->state == SSIF_READY)
++			ssif_bmc->state = SSIF_START;
++
+ 	} else if (ssif_bmc->state == SSIF_START ||
+ 		   ssif_bmc->state == SSIF_REQ_RECVING ||
+ 		   ssif_bmc->state == SSIF_RES_SENDING) {
+@@ -680,6 +706,21 @@ static void on_write_requested_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
+ 
+ 	ssif_bmc->msg_idx = 0;
+ 	ssif_bmc->part_buf.address = *val;
++
++	if(ssif_bmc->nackstatus)
++	{
++		dev_dbg(&ssif_bmc->client->dev, "send nack\n");
++		writel((readl(bus->base + ASPEED_I2C_CMD_REG)|ASPEED_I2CD_M_S_RX_CMD_LAST), 
++						bus->base + ASPEED_I2C_CMD_REG);
++		readl(bus->base + ASPEED_I2C_CMD_REG);
++		ssif_bmc->nackstatus++;
++
++		/* We don't NACK exceed the maximum SSIF retry count */
++		if(ssif_bmc->nackstatus >= SSIF_RETRIES) {
++			ssif_bmc->nackstatus = 0;
++			dev_dbg(&ssif_bmc->client->dev, "disable nack retry exceed\n");
++		}
++	}
+ }
+ 
+ static void on_write_received_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
+@@ -813,6 +854,7 @@ static int ssif_bmc_probe(struct i2c_client *client)
+ 	ssif_bmc->response_in_progress = false;
+ 	ssif_bmc->busy = false;
+ 	ssif_bmc->response_timer_inited = false;
++	ssif_bmc->nackstatus = 0;
+ 
+ 	/* Register misc device interface */
+ 	ssif_bmc->miscdev.minor = MISC_DYNAMIC_MINOR;
+diff --git a/drivers/i2c/busses/i2c-aspeed.c b/drivers/i2c/busses/i2c-aspeed.c
+index 2c1f229aa775..8752450aca4e 100644
+--- a/drivers/i2c/busses/i2c-aspeed.c
++++ b/drivers/i2c/busses/i2c-aspeed.c
+@@ -233,6 +233,7 @@ struct aspeed_i2c_bus {
+ 	enum aspeed_i2c_slave_state	slave_state;
+ 	/* General call */
+ 	bool				general_call;
++	bool				disable_master;
+ #endif /* CONFIG_I2C_SLAVE */
+ };
+ 
+@@ -447,7 +448,7 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+ 	u32 command, irq_handled = 0;
+ 	struct i2c_client *slave = bus->slave;
+ 	u8 value;
+-	int ret;
++	int ret;		
+ 
+ 	if (!slave)
+ 		return 0;
+@@ -480,7 +481,7 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+ 
+ 	dev_dbg(bus->dev, "slave irq status 0x%08x, cmd 0x%08x\n",
+ 		irq_status, command);
+-
++	command = 0;
+ 	/*
+ 	 * If a peer master sends messages too quickly before it processes
+ 	 * previous slave DMA data handling, this indicator will be set. It's
+@@ -543,7 +544,9 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+ 		bus->slave_state = ASPEED_I2C_SLAVE_READ_PROCESSED;
+ 		i2c_slave_event(slave, I2C_SLAVE_READ_REQUESTED, &value);
+ 		writel(value, bus->base + ASPEED_I2C_BYTE_BUF_REG);
+-		writel(ASPEED_I2CD_S_TX_CMD, bus->base + ASPEED_I2C_CMD_REG);
++		//writel(ASPEED_I2CD_S_TX_CMD, bus->base + ASPEED_I2C_CMD_REG);
++		command |= ASPEED_I2CD_S_TX_CMD;
++		dev_dbg(bus->dev, "RRq: %x\n", value);
+ 		break;
+ 	case ASPEED_I2C_SLAVE_READ_PROCESSED:
+ 		if (unlikely(!(irq_status & ASPEED_I2CD_INTR_TX_ACK))) {
+@@ -554,7 +557,9 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+ 		irq_handled |= ASPEED_I2CD_INTR_TX_ACK;
+ 		i2c_slave_event(slave, I2C_SLAVE_READ_PROCESSED, &value);
+ 		writel(value, bus->base + ASPEED_I2C_BYTE_BUF_REG);
+-		writel(ASPEED_I2CD_S_TX_CMD, bus->base + ASPEED_I2C_CMD_REG);
++		//writel(ASPEED_I2CD_S_TX_CMD, bus->base + ASPEED_I2C_CMD_REG);
++		command |= ASPEED_I2CD_S_TX_CMD;
++		dev_dbg(bus->dev, "RPro: %x\n", value);
+ 		break;
+ 	case ASPEED_I2C_SLAVE_WRITE_REQUESTED:
+ 		bus->slave_state = ASPEED_I2C_SLAVE_WRITE_RECEIVED;
+@@ -563,13 +568,17 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+ 		 * Slave ACK's on this address phase already but as the backend driver
+ 		 * returns an errno, the bus driver should nack the next incoming byte.
+ 		 */
+-		if (ret < 0)
+-			writel(ASPEED_I2CD_M_S_RX_CMD_LAST, bus->base + ASPEED_I2C_CMD_REG);
++		if (ret < 0) {
++			//writel(ASPEED_I2CD_M_S_RX_CMD_LAST, bus->base + ASPEED_I2C_CMD_REG);
++			command |= ASPEED_I2CD_M_S_RX_CMD_LAST;
++		}
+ 		aspeed_i2c_slave_handle_write_requested(bus, &value);
++		dev_dbg(bus->dev, "WRq: %x\n", value);
+ 		break;
+ 	case ASPEED_I2C_SLAVE_WRITE_RECEIVED:
+ 		i2c_slave_event(slave, I2C_SLAVE_WRITE_RECEIVED, &value);
+ 		aspeed_i2c_slave_handle_write_received(bus, &value);
++		dev_dbg(bus->dev, "WREC: %x\n", value);
+ 		break;
+ 	case ASPEED_I2C_SLAVE_GCALL_REQUESTED:
+ 		bus->slave_state = ASPEED_I2C_SLAVE_WRITE_RECEIVED;
+@@ -578,6 +587,7 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+ 	case ASPEED_I2C_SLAVE_STOP:
+ 		i2c_slave_event(slave, I2C_SLAVE_STOP, &value);
+ 		bus->slave_state = ASPEED_I2C_SLAVE_INACTIVE;
++		dev_dbg(bus->dev, "STOP\n");
+ 		break;
+ 	case ASPEED_I2C_SLAVE_START:
+ 	case ASPEED_I2C_SLAVE_GCALL_START:
+@@ -589,6 +599,11 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+ 		bus->slave_state = ASPEED_I2C_SLAVE_INACTIVE;
+ 		break;
+ 	}
++	
++	writel(command, bus->base + ASPEED_I2C_CMD_REG); 
++	/* Ack all handled interrupts */
++	writel(irq_handled, bus->base + ASPEED_I2C_INTR_STS_REG);
++	readl(bus->base + ASPEED_I2C_INTR_STS_REG);
+ 
+ 	return irq_handled;
+ }
+@@ -690,7 +705,7 @@ static void aspeed_i2c_do_start(struct aspeed_i2c_bus *bus)
+ 	 * state to 'pending' then H/W will continue handling this master
+ 	 * command when the bus comes back to the idle state.
+ 	 */
+-	if (bus->slave_state != ASPEED_I2C_SLAVE_INACTIVE) {
++	if (bus->slave_state != ASPEED_I2C_SLAVE_INACTIVE) {	
+ 		bus->master_state = ASPEED_I2C_MASTER_PENDING;
+ 		return;
+ 	}
+@@ -886,6 +901,11 @@ static u32 aspeed_i2c_master_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+ 	u8 recv_byte;
+ 	int ret;
+ 
++	/* Ack all interrupts except for Rx done */
++	writel(irq_status & ~ASPEED_I2CD_INTR_RX_DONE,
++	       bus->base + ASPEED_I2C_INTR_STS_REG);
++	readl(bus->base + ASPEED_I2C_INTR_STS_REG);
++
+ 	if (irq_status & ASPEED_I2CD_INTR_BUS_RECOVER_DONE) {
+ 		bus->master_state = ASPEED_I2C_MASTER_INACTIVE;
+ 		irq_handled |= ASPEED_I2CD_INTR_BUS_RECOVER_DONE;
+@@ -949,7 +969,7 @@ static u32 aspeed_i2c_master_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+ 		if (unlikely(irq_status & ASPEED_I2CD_INTR_SLAVE_MATCH)) {
+ 			writel(readl(bus->base + ASPEED_I2C_CMD_REG) &
+ 				~ASPEED_I2CD_MASTER_CMDS_MASK,
+-			       bus->base + ASPEED_I2C_CMD_REG);
++			       bus->base + ASPEED_I2C_CMD_REG);	
+ 			bus->master_state = ASPEED_I2C_MASTER_PENDING;
+ 			dev_dbg(bus->dev,
+ 				"master goes pending due to a slave start\n");
+@@ -1094,9 +1114,9 @@ static irqreturn_t aspeed_i2c_bus_irq(int irq, void *dev_id)
+ 	spin_lock(&bus->lock);
+ 	irq_received = readl(bus->base + ASPEED_I2C_INTR_STS_REG);
+ 	/* Ack all interrupts except for Rx done */
+-	writel(irq_received & ~ASPEED_I2CD_INTR_RX_DONE,
+-	       bus->base + ASPEED_I2C_INTR_STS_REG);
+-	readl(bus->base + ASPEED_I2C_INTR_STS_REG);
++	//writel(irq_received & ~ASPEED_I2CD_INTR_RX_DONE,
++	//       bus->base + ASPEED_I2C_INTR_STS_REG);
++	//readl(bus->base + ASPEED_I2C_INTR_STS_REG);
+ 	irq_received &= ASPEED_I2CD_INTR_RECV_MASK;
+ 	irq_remaining = irq_received;
+ 
+@@ -1132,8 +1152,9 @@ static irqreturn_t aspeed_i2c_bus_irq(int irq, void *dev_id)
+ 	 * completed.
+ 	 */
+ 	if (bus->master_state == ASPEED_I2C_MASTER_PENDING &&
+-	    bus->slave_state == ASPEED_I2C_SLAVE_INACTIVE)
++	    bus->slave_state == ASPEED_I2C_SLAVE_INACTIVE && bus->disable_master != true)
+ 		aspeed_i2c_do_start(bus);
++
+ #else
+ 	irq_handled = aspeed_i2c_master_irq(bus, irq_remaining);
+ #endif /* CONFIG_I2C_SLAVE */
+@@ -1482,6 +1503,15 @@ static int aspeed_i2c_init(struct aspeed_i2c_bus *bus,
+ 	/* If slave has already been registered, re-enable it. */
+ 	if (bus->slave)
+ 		__aspeed_i2c_reg_slave(bus, bus->slave->addr);
++
++	if(of_property_read_bool(pdev->dev.of_node, "disable-master")) {
++		/* Disable Master Mode */
++		writel((readl(bus->base + ASPEED_I2C_FUN_CTRL_REG) & ~(ASPEED_I2CD_MASTER_EN)),
++				bus->base + ASPEED_I2C_FUN_CTRL_REG);
++		bus->disable_master = true;
++	} else {
++		bus->disable_master = false;
++	}
+ #endif /* CONFIG_I2C_SLAVE */
+ 
+ 	/* Set interrupt generation of I2C controller */
+diff --git a/include/linux/i2c-aspeed.h b/include/linux/i2c-aspeed.h
+new file mode 100644
+index 000000000000..57d47d2ea82c
+--- /dev/null
++++ b/include/linux/i2c-aspeed.h
+@@ -0,0 +1,216 @@
++#ifndef I2C_ASPEED_HDR
++#define I2C_ASPEED_HDR
++
++#include <linux/i2c.h>
++#include <linux/io.h>
++
++/* I2C Global Registers */
++/* 0x00 : I2CG Interrupt Status Register  */
++/* 0x08 : I2CG Interrupt Target Assignment  */
++/* 0x0c : I2CG Global Control Register (AST2500)  */
++#define ASPEED_I2CG_GLOBAL_CTRL_REG			0x0c
++#define  ASPEED_I2CG_SRAM_BUFFER_EN			BIT(0)
++
++/* I2C Bus Registers */
++#define ASPEED_I2C_FUN_CTRL_REG				0x00
++#define ASPEED_I2C_AC_TIMING_REG1			0x04
++#define ASPEED_I2C_AC_TIMING_REG2			0x08
++#define ASPEED_I2C_INTR_CTRL_REG			0x0c
++#define ASPEED_I2C_INTR_STS_REG				0x10
++#define ASPEED_I2C_CMD_REG				0x14
++#define ASPEED_I2C_DEV_ADDR_REG				0x18
++#define ASPEED_I2C_BUF_CTRL_REG				0x1c
++#define ASPEED_I2C_BYTE_BUF_REG				0x20
++#define ASPEED_I2C_DMA_ADDR_REG				0x24
++#define ASPEED_I2C_DMA_LEN_REG				0x28
++
++/* Device Register Definition */
++/* 0x00 : I2CD Function Control Register  */
++#define ASPEED_I2CD_BUFFER_PAGE_SEL_MASK		GENMASK(22, 20)
++#define ASPEED_I2CD_BUS_AUTO_RECOVERY_EN		BIT(17)
++#define ASPEED_I2CD_MULTI_MASTER_DIS			BIT(15)
++#define ASPEED_I2CD_SDA_DRIVE_1T_EN			BIT(8)
++#define ASPEED_I2CD_M_SDA_DRIVE_1T_EN			BIT(7)
++#define ASPEED_I2CD_M_HIGH_SPEED_EN			BIT(6)
++#define ASPEED_I2CD_GCALL_EN				BIT(2)
++#define ASPEED_I2CD_SLAVE_EN				BIT(1)
++#define ASPEED_I2CD_MASTER_EN				BIT(0)
++
++/* 0x04 : I2CD Clock and AC Timing Control Register #1 */
++#define ASPEED_I2CD_TIME_TBUF_MASK			GENMASK(31, 28)
++#define ASPEED_I2CD_TIME_THDSTA_MASK			GENMASK(27, 24)
++#define ASPEED_I2CD_TIME_TACST_MASK			GENMASK(23, 20)
++#define ASPEED_I2CD_TIME_SCL_HIGH_SHIFT			16
++#define ASPEED_I2CD_TIME_SCL_HIGH_MASK			GENMASK(19, 16)
++#define ASPEED_I2CD_TIME_SCL_LOW_SHIFT			12
++#define ASPEED_I2CD_TIME_SCL_LOW_MASK			GENMASK(15, 12)
++#define ASPEED_I2CD_TIME_TIMEOUT_BASE_DIVISOR_SHIFT	8
++#define ASPEED_I2CD_TIME_TIMEOUT_BASE_DIVISOR_MASK	GENMASK(9, 8)
++#define ASPEED_I2CD_TIME_BASE_DIVISOR_MASK		GENMASK(3, 0)
++#define ASPEED_I2CD_TIME_SCL_REG_MAX			GENMASK(3, 0)
++
++/* 0x08 : I2CD Clock and AC Timing Control Register #2 */
++#define ASPEED_I2CD_TIMEOUT_CYCLES_SHIFT		0
++#define ASPEED_I2CD_TIMEOUT_CYCLES_MASK			GENMASK(4, 0)
++
++/* 0x0c : I2CD Interrupt Control Register &
++ * 0x10 : I2CD Interrupt Status Register
++ *
++ * These share bit definitions, so use the same values for the enable &
++ * status bits.
++ */
++#define ASPEED_I2CD_INTR_RECV_MASK			0xf000ffff
++#if defined(CONFIG_MACH_ASPEED_G6)
++#define ASPEED_I2CD_INTR_SLAVE_ADDR_RECEIVED_PENDING	BIT(29)
++#else
++#define ASPEED_I2CD_INTR_SLAVE_ADDR_RECEIVED_PENDING	BIT(30)
++#endif
++#define ASPEED_I2CD_INTR_SLAVE_INACTIVE_TIMEOUT		BIT(15)
++#define ASPEED_I2CD_INTR_SDA_DL_TIMEOUT			BIT(14)
++#define ASPEED_I2CD_INTR_BUS_RECOVER_DONE		BIT(13)
++#define ASPEED_I2CD_INTR_GCALL_ADDR			BIT(8)
++#define ASPEED_I2CD_INTR_SLAVE_MATCH			BIT(7)
++#define ASPEED_I2CD_INTR_SCL_TIMEOUT			BIT(6)
++#define ASPEED_I2CD_INTR_ABNORMAL			BIT(5)
++#define ASPEED_I2CD_INTR_NORMAL_STOP			BIT(4)
++#define ASPEED_I2CD_INTR_ARBIT_LOSS			BIT(3)
++#define ASPEED_I2CD_INTR_RX_DONE			BIT(2)
++#define ASPEED_I2CD_INTR_TX_NAK				BIT(1)
++#define ASPEED_I2CD_INTR_TX_ACK				BIT(0)
++#define ASPEED_I2CD_INTR_MASTER_ERRORS					       \
++		(ASPEED_I2CD_INTR_SDA_DL_TIMEOUT |			       \
++		 ASPEED_I2CD_INTR_SCL_TIMEOUT |				       \
++		 ASPEED_I2CD_INTR_ABNORMAL |				       \
++		 ASPEED_I2CD_INTR_ARBIT_LOSS)
++#define ASPEED_I2CD_INTR_SLAVE_ERRORS					       \
++		ASPEED_I2CD_INTR_SLAVE_INACTIVE_TIMEOUT
++#define ASPEED_I2CD_INTR_ALL						       \
++		(ASPEED_I2CD_INTR_SLAVE_INACTIVE_TIMEOUT |		       \
++		 ASPEED_I2CD_INTR_SDA_DL_TIMEOUT |			       \
++		 ASPEED_I2CD_INTR_BUS_RECOVER_DONE |			       \
++		 ASPEED_I2CD_INTR_SCL_TIMEOUT |				       \
++		 ASPEED_I2CD_INTR_ABNORMAL |				       \
++		 ASPEED_I2CD_INTR_NORMAL_STOP |				       \
++		 ASPEED_I2CD_INTR_ARBIT_LOSS |				       \
++		 ASPEED_I2CD_INTR_RX_DONE |				       \
++		 ASPEED_I2CD_INTR_TX_NAK |				       \
++		 ASPEED_I2CD_INTR_TX_ACK)
++#define ASPEED_I2CD_INTR_STATUS_MASK					       \
++		(ASPEED_I2CD_INTR_SLAVE_ADDR_RECEIVED_PENDING |		       \
++		 ASPEED_I2CD_INTR_GCALL_ADDR |				       \
++		 ASPEED_I2CD_INTR_SLAVE_MATCH |				       \
++		 ASPEED_I2CD_INTR_ALL)
++
++/* 0x14 : I2CD Command/Status Register   */
++#define ASPEED_I2CD_SCL_LINE_STS			BIT(18)
++#define ASPEED_I2CD_SDA_LINE_STS			BIT(17)
++#define ASPEED_I2CD_BUS_BUSY_STS			BIT(16)
++#define ASPEED_I2CD_BUS_RECOVER_CMD			BIT(11)
++
++/* Command Bit */
++#define ASPEED_I2CD_RX_DMA_ENABLE			BIT(9)
++#define ASPEED_I2CD_TX_DMA_ENABLE			BIT(8)
++#define ASPEED_I2CD_RX_BUFF_ENABLE			BIT(7)
++#define ASPEED_I2CD_TX_BUFF_ENABLE			BIT(6)
++#define ASPEED_I2CD_M_STOP_CMD				BIT(5)
++#define ASPEED_I2CD_M_S_RX_CMD_LAST			BIT(4)
++#define ASPEED_I2CD_M_RX_CMD				BIT(3)
++#define ASPEED_I2CD_S_TX_CMD				BIT(2)
++#define ASPEED_I2CD_M_TX_CMD				BIT(1)
++#define ASPEED_I2CD_M_START_CMD				BIT(0)
++#define ASPEED_I2CD_MASTER_CMDS_MASK					       \
++		(ASPEED_I2CD_M_STOP_CMD |				       \
++		 ASPEED_I2CD_M_S_RX_CMD_LAST |				       \
++		 ASPEED_I2CD_M_RX_CMD |					       \
++		 ASPEED_I2CD_M_TX_CMD |					       \
++		 ASPEED_I2CD_M_START_CMD)
++
++/* 0x18 : I2CD Slave Device Address Register   */
++#define ASPEED_I2CD_DEV_ADDR_MASK			GENMASK(6, 0)
++
++/* 0x1c : I2CD Buffer Control Register */
++/* Use 8-bits or 6-bits wide bit fileds to support both AST2400 and AST2500 */
++#define ASPEED_I2CD_BUF_RX_COUNT_MASK			GENMASK(31, 24)
++#define ASPEED_I2CD_BUF_RX_SIZE_MASK			GENMASK(23, 16)
++#define ASPEED_I2CD_BUF_TX_COUNT_MASK			GENMASK(15, 8)
++#define ASPEED_I2CD_BUF_OFFSET_MASK			GENMASK(5, 0)
++
++/* 0x24 : I2CD DMA Mode Buffer Address Register */
++#define ASPEED_I2CD_DMA_ADDR_MASK			GENMASK(31, 2)
++#define ASPEED_I2CD_DMA_ALIGN				4
++
++/* 0x28 : I2CD DMA Transfer Length Register */
++#define ASPEED_I2CD_DMA_LEN_SHIFT			0
++#define ASPEED_I2CD_DMA_LEN_MASK			GENMASK(11, 0)
++
++enum aspeed_i2c_master_state {
++	ASPEED_I2C_MASTER_INACTIVE,
++	ASPEED_I2C_MASTER_PENDING,
++	ASPEED_I2C_MASTER_START,
++	ASPEED_I2C_MASTER_TX_FIRST,
++	ASPEED_I2C_MASTER_TX,
++	ASPEED_I2C_MASTER_RX_FIRST,
++	ASPEED_I2C_MASTER_RX,
++	ASPEED_I2C_MASTER_STOP,
++};
++
++enum aspeed_i2c_slave_state {
++	ASPEED_I2C_SLAVE_INACTIVE,
++	ASPEED_I2C_SLAVE_START,
++	ASPEED_I2C_SLAVE_READ_REQUESTED,
++	ASPEED_I2C_SLAVE_READ_PROCESSED,
++	ASPEED_I2C_SLAVE_WRITE_REQUESTED,
++	ASPEED_I2C_SLAVE_WRITE_RECEIVED,
++	ASPEED_I2C_SLAVE_GCALL_START,
++	ASPEED_I2C_SLAVE_GCALL_REQUESTED,
++	ASPEED_I2C_SLAVE_STOP,
++};
++
++struct aspeed_i2c_bus {
++	struct i2c_adapter		adap;
++	struct device			*dev;
++	void __iomem			*base;
++	struct reset_control		*rst;
++	/* Synchronizes I/O mem access to base. */
++	spinlock_t			lock;
++	struct completion		cmd_complete;
++	u32				(*get_clk_reg_val)(struct device *dev,
++							   u32 divisor);
++	unsigned long			parent_clk_frequency;
++	u32				bus_frequency;
++	u32				hw_timeout_ms;
++	/* Transaction state. */
++	enum aspeed_i2c_master_state	master_state;
++	struct i2c_msg			*msgs;
++	size_t				buf_index;
++	size_t				msgs_index;
++	size_t				msgs_count;
++	bool				send_stop;
++	int				cmd_err;
++	/* Protected only by i2c_lock_bus */
++	int				master_xfer_result;
++	/* Multi-master */
++	bool				multi_master;
++	/* Buffer mode */
++	void __iomem			*buf_base;
++	u8				buf_offset;
++	u8				buf_page;
++	/* DMA mode */
++	struct dma_pool			*dma_pool;
++	dma_addr_t			dma_handle;
++	u8				*dma_buf;
++	size_t				dma_len;
++	/* Buffer/DMA mode */
++	size_t				buf_size;
++#if IS_ENABLED(CONFIG_I2C_SLAVE)
++	struct i2c_client		*slave;
++	enum aspeed_i2c_slave_state	slave_state;
++	/* General call */
++	bool				general_call;
++#endif /* CONFIG_I2C_SLAVE */
++};
++
++/* Per ipmi_ssif driver, maximum retry count for a message is 250 */
++#define SSIF_RETRIES            250
++
++#endif
