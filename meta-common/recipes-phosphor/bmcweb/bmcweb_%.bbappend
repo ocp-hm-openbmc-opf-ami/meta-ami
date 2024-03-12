@@ -124,6 +124,7 @@ SRC_URI:append = "   \
             file://0181-Fix-for-Duplicate-Error-Message-in-BIOS_URI.patch \
             file://0213-Delete-Deprecated-URI-and-properties-in-Redfish.patch \
             file://0212-Added-the-Error-message-when-both-Ipv4StaticAddress-and-Gateway-are-equal.patch \
+            file://0214-Added-SNMPTrap-in-Redfish-Event-Service.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
