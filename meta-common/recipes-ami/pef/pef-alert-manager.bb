@@ -1,7 +1,7 @@
 SUMMARY = "PEF and alert management application"
 
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/platform-event-filter.git;protocol=https;branch=main"
-SRCREV = "b153fb19d5f2c3ae50427cd8fca7a6cdb3f1acbf"
+SRCREV = "9979be4152c026dd50089603e37fd4e78932c8cc"
 
 SRC_URI += "file://pef-alert-manager.json"
 
