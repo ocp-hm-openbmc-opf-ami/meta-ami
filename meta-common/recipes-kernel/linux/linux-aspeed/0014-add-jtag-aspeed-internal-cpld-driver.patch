@@ -1,6 +1,6 @@
-From dbe6e01d5919f342e7aee9739cc615668f0bed2d Mon Sep 17 00:00:00 2001
-From: TomHLTsai <tomhltsai@ami.com>
-Date: Wed, 2 Aug 2023 13:39:13 +0800
+From 9b2f56d14cbefe5fb38620a45048f39e77a6aaa5 Mon Sep 17 00:00:00 2001
+From: tomhltsai <tomhltsai@ami.com>
+Date: Tue, 27 Feb 2024 22:46:23 +0800
 Subject: [PATCH] add jtag aspeed internal(cpld) driver
 
 ---
@@ -8,13 +8,13 @@ Subject: [PATCH] add jtag aspeed internal(cpld) driver
  drivers/jtag/Kconfig                |   14 +
  drivers/jtag/Makefile               |    1 +
  drivers/jtag/jtag-aspeed-internal.c | 1174 +++++++++++++++++++++++++++
- include/linux/jtag.h                |    7 +-
- include/uapi/linux/jtag.h           |    4 +-
- 6 files changed, 1197 insertions(+), 5 deletions(-)
+ include/linux/jtag.h                |   15 +-
+ include/uapi/linux/jtag.h           |   31 +-
+ 6 files changed, 1209 insertions(+), 28 deletions(-)
  create mode 100644 drivers/jtag/jtag-aspeed-internal.c
 
 diff --git a/drivers/Makefile b/drivers/Makefile
-index 6e76b4a1e..7758d6ae1 100644
+index 6e76b4a1e8b5..23e4a4f7bf88 100644
 --- a/drivers/Makefile
 +++ b/drivers/Makefile
 @@ -190,4 +190,4 @@ obj-$(CONFIG_MOST)		+= most/
@@ -22,16 +22,15 @@ index 6e76b4a1e..7758d6ae1 100644
  obj-$(CONFIG_PECI)		+= peci/
  obj-$(CONFIG_HTE)		+= hte/
 -obj-$(CONFIG_JTAG_ASPEED)	+= jtag/
-+obj-$(CONFIG_JTAG)		+= jtag/
++obj-$(CONFIG_JTAG)	+= jtag/
 diff --git a/drivers/jtag/Kconfig b/drivers/jtag/Kconfig
-index 0cc163f9a..0c22c6a7e 100644
+index d66b60448da0..726329b051a2 100644
 --- a/drivers/jtag/Kconfig
 +++ b/drivers/jtag/Kconfig
-@@ -29,3 +29,17 @@ menuconfig JTAG_ASPEED
- 
+@@ -30,6 +30,20 @@ menuconfig JTAG_ASPEED
  	  To compile this driver as a module, choose M here: the module will
  	  be called jtag-aspeed.
-+
+ 
 +menuconfig JTAG_ASPEED_INTERNAL
 +	tristate "Aspeed SoC JTAG controller support internal"
 +	depends on JTAG && HAS_IOMEM
@@ -45,8 +44,12 @@ index 0cc163f9a..0c22c6a7e 100644
 +
 +	  To compile this driver as a module, choose M here: the module will
 +	  be called jtag-aspeed.
++
+ config USE_INTERRUPTS
+ 	bool "Use interrupts as event wait mechanism"
+ 	depends on JTAG_ASPEED
 diff --git a/drivers/jtag/Makefile b/drivers/jtag/Makefile
-index 04a855e2d..506886e7b 100644
+index 04a855e2df28..506886e7b7a8 100644
 --- a/drivers/jtag/Makefile
 +++ b/drivers/jtag/Makefile
 @@ -1,2 +1,3 @@
@@ -55,7 +58,7 @@ index 04a855e2d..506886e7b 100644
 +obj-$(CONFIG_JTAG_ASPEED_INTERNAL) += jtag-aspeed-internal.o
 diff --git a/drivers/jtag/jtag-aspeed-internal.c b/drivers/jtag/jtag-aspeed-internal.c
 new file mode 100644
-index 000000000..958adbbf9
+index 000000000000..958adbbf90ab
 --- /dev/null
 +++ b/drivers/jtag/jtag-aspeed-internal.c
 @@ -0,0 +1,1174 @@
@@ -1234,14 +1237,37 @@ index 000000000..958adbbf9
 +MODULE_DESCRIPTION("AST JTAG LIB Driver");
 +MODULE_LICENSE("GPL");
 diff --git a/include/linux/jtag.h b/include/linux/jtag.h
-index fab12dc4f..9ac4eb60e 100644
+index 87396ee21df9..9ac4eb60ed84 100644
 --- a/include/linux/jtag.h
 +++ b/include/linux/jtag.h
-@@ -31,11 +31,12 @@ struct jtag_ops {
+@@ -9,7 +9,7 @@
+ #include <linux/types.h>
+ #include <uapi/linux/jtag.h>
+ 
+-#define JTAG_MAX_XFER_DATA_LEN (0xFFFFFFFF)
++#define JTAG_MAX_XFER_DATA_LEN 65535
+ 
+ struct jtag;
+ /**
+@@ -21,10 +21,9 @@ struct jtag;
+  * @status_set: set JTAG TAPC state function. Mandatory, Filled by dev driver
+  * @xfer: send JTAG xfer function. Mandatory func. Filled by dev driver
+  * @mode_set: set specific work mode for JTAG. Filled by dev driver
+- * @trst_set: set TRST pin active(pull low) for JTAG. Filled by dev driver
+  * @bitbang: set low level bitbang operations. Filled by dev driver
+- * @enable: enables JTAG interface in controller mode. Filled by dev driver
+- * @disable: disables JTAG interface controller mode. Filled by dev driver
++ * @enable: enables JTAG interface in master mode. Filled by dev driver
++ * @disable: disables JTAG interface master mode. Filled by dev driver
+  */
+ struct jtag_ops {
+ 	int (*freq_get)(struct jtag *jtag, u32 *freq);
+@@ -32,12 +31,12 @@ struct jtag_ops {
  	int (*status_get)(struct jtag *jtag, u32 *state);
  	int (*status_set)(struct jtag *jtag, struct jtag_tap_state *endst);
  	int (*xfer)(struct jtag *jtag, struct jtag_xfer *xfer, u8 *xfer_data);
 -	int (*mode_set)(struct jtag *jtag, struct jtag_mode *jtag_mode);
+-	int (*trst_set)(struct jtag *jtag, u32 active);
 -	int (*bitbang)(struct jtag *jtag, struct bitbang_packet *bitbang,
 -		       struct tck_bitbang *bitbang_data);
 +    int (*mode_set)(struct jtag *jtag, struct jtag_mode *jtag_mode);
@@ -1254,14 +1280,74 @@ index fab12dc4f..9ac4eb60e 100644
  
  void *jtag_priv(struct jtag *jtag);
 diff --git a/include/uapi/linux/jtag.h b/include/uapi/linux/jtag.h
-index b500266cf..9ffbbf687 100644
+index 2f66da138590..9ffbbf687790 100644
 --- a/include/uapi/linux/jtag.h
 +++ b/include/uapi/linux/jtag.h
-@@ -233,7 +233,9 @@ struct jtag_mode {
+@@ -20,23 +20,16 @@
+  */
+ #define  JTAG_CONTROL_MODE 1
+ /*
+- * JTAG_TCK_CYCLE_DELAY_COUNT: JTAG delay counter for aspeed_jtag_tck_cycle. Used
+- * set the number of jtag_tck_cycle delays repetitions.
+- * This is bitmask for feature param in jtag_mode for ioctl JTAG_SIOCMODE
+- */
+-#define  JTAG_TCK_CYCLE_DELAY_COUNT 2
+-/*
+- * JTAG_CONTROLLER_OUTPUT_DISABLE: JTAG controller mode output disable, it is
+- * used to enable other devices to own the JTAG bus.
++ * JTAG_MASTER_OUTPUT_DISABLE: JTAG master mode output disable, it is used to
++ * enable other devices to own the JTAG bus.
+  * This is bitmask for mode param in jtag_mode for ioctl JTAG_SIOCMODE
+  */
+-#define  JTAG_CONTROLLER_OUTPUT_DISABLE 0
++#define  JTAG_MASTER_OUTPUT_DISABLE 0
+ /*
+- * JTAG_CONTROLLER_MODE: JTAG controller mode. Used to set JTAG controller in
+- * host mode.
++ * JTAG_MASTER_MODE: JTAG master mode. Used to set JTAG controller master mode
+  * This is bitmask for mode param in jtag_mode for ioctl JTAG_SIOCMODE
+  */
+-#define  JTAG_CONTROLLER_MODE 1
++#define  JTAG_MASTER_MODE 1
+ /*
+  * JTAG_XFER_HW_MODE: JTAG hardware mode. Used to set HW drived or bitbang
+  * mode. This is bitmask for mode param in jtag_mode for ioctl JTAG_SIOCMODE
+@@ -130,8 +123,7 @@ enum jtag_xfer_direction {
+  *
+  * @reset: 0 - run IDLE/PAUSE from current state
+  *         1 - go through TEST_LOGIC/RESET state before  IDLE/PAUSE
+- * @from: initital jtag state
+- * @endstate: jtag end state
++ * @end: completion flag
+  * @tck: clock counter
+  *
+  * Structure provide interface to JTAG device for JTAG set state execution.
+@@ -140,7 +132,7 @@ struct jtag_tap_state {
+ 	__u8	reset;
+ 	__u8	from;
+ 	__u8	endstate;
+-	__u32	tck;
++	__u8	tck;
+ };
+ 
+ /**
+@@ -219,8 +211,8 @@ struct tck_bitbang {
+  * struct jtag_mode - jtag mode:
+  *
+  * @feature: 0 - JTAG feature setting selector for JTAG controller HW/SW
+- *           1 - JTAG feature setting selector for controller bus mode
+- *               output (enable / disable).
++ *           1 - JTAG feature setting selector for controller bus master
++ *               mode output (enable / disable).
+  * @mode:    (0 - SW / 1 - HW) for JTAG_XFER_MODE feature(0)
+  *           (0 - output disable / 1 - output enable) for JTAG_CONTROL_MODE
+  *                                                    feature(1)
+@@ -241,8 +233,9 @@ struct jtag_mode {
  #define JTAG_IOCXFER	_IOWR(__JTAG_IOCTL_MAGIC, 3, struct jtag_xfer)
  #define JTAG_GIOCSTATUS _IOWR(__JTAG_IOCTL_MAGIC, 4, enum jtag_tapstate)
  #define JTAG_SIOCMODE	_IOW(__JTAG_IOCTL_MAGIC, 5, unsigned int)
 -#define JTAG_IOCBITBANG	_IOW(__JTAG_IOCTL_MAGIC, 6, unsigned int)
+-#define JTAG_SIOCTRST	_IOW(__JTAG_IOCTL_MAGIC, 7, unsigned int)
 +#define JTAG_IOCBITBANG _IOW(__JTAG_IOCTL_MAGIC, 6, unsigned int)
 +#define JTAG_RUNTEST    _IOW(__JTAG_IOCTL_MAGIC, 7, unsigned int)
 +#define JTAG_SIOCTRST   _IOW(__JTAG_IOCTL_MAGIC, 8, unsigned int)
@@ -1269,5 +1355,5 @@ index b500266cf..9ffbbf687 100644
  /**
   * struct tms_cycle - This structure represents a tms cycle state.
 -- 
-2.41.0
+2.44.0
 

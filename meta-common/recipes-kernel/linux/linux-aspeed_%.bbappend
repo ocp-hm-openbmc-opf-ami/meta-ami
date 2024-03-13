@@ -6,24 +6,19 @@ SRC_URI += "file://nfs.cfg \
             file://0002-Fixed-compilation-error-on-USB-gadget.patch \
             file://0011-Enable-Threshold-Attributes-for-Core-temperature-sen.patch \
             file://0001-Fix-virtual-USB-hub-not-working-for-evb-ast2600.patch \
-            file://0014-add-jtag-aspeed-internal-cpld-driver.patch \
 	    file://0003-Fix-incorrect-MAC-address-in-RNDIS-driver.patch \
             file://0016-legacy-driver-support-for-pwm-driver.patch \
             file://0002-i3c-mctp-workaround-for-wrong-DCR-value.patch \
             file://0017-Add-write-public-key-in-image-support.patch \
             file://0018-Nm-sensor-Threshold-Support.patch \
             file://0018-USB-Support-Power-Save-Mode.patch \
-            file://CVE-2023-31248.patch \
-            file://CVE-2023-4147.patch \
-            file://CVE-2023-35001.patch \
-            file://CVE-2023-3269.patch \
-            file://CVE-2023-4622.patch \
-            file://CVE-2023-5717.patch \
             file://CVE-2023-31085.patch \
-            file://CVE-2023-42754.patch \
-            file://CVE-2023-42752.patch \
             file://iptables.cfg \
-  	    file://0029-ip_address_update_ncsi_interface.patch \
+            file://CVE-2023-6531.patch \
+            file://CVE-2023-6606.patch \
+            file://CVE-2023-6817.patch \
+  	    file://0029-ip_address_update_ncsi_interface.patch \           
+            file://0030-Fix-USB-gadget-hid-driver-for-kernel-upgrade.patch \
 	    file://0030-SSIF-Support.patch \           
 	    "
 
@@ -89,5 +84,8 @@ SRC_URI:append:intel-ast2600  = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'c
 SRC_CPLD_EVB = "file://0023-Enable-spidev-for-spi2-for-cpld-upgrade-via-spi-evb-dts.patch "
 SRC_URI:append:evb-ast2600  = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'cpld-update', SRC_CPLD_EVB,'', d)}"
 
+SRC_CPLD_JTAG = "file://jtag-fragment.cfg"
 
+SRC_ASD_JTAG = "file://jtag-asd-fragment.cfg"
 
+SRC_URI += "${@bb.utils.contains('IMAGE_INSTALL', 'at-scale-debug', SRC_ASD_JTAG, SRC_CPLD_JTAG, d)}"
