@@ -1,0 +1,116 @@
+From f88110511eaf673efddfc9e99a913fc5ce053ac2 Mon Sep 17 00:00:00 2001
+From: Ginu George <ginugeorge@ami.com>
+Date: Tue, 12 Mar 2024 04:43:12 -0400
+Subject: [PATCH 215/215] Add Proper Logic for IP Same Series Check
+
+---
+ redfish-core/include/utils/ip_utils.hpp | 14 ++++++
+ redfish-core/lib/ethernet.hpp           | 57 ++++++++-----------------
+ 2 files changed, 32 insertions(+), 39 deletions(-)
+
+diff --git a/redfish-core/include/utils/ip_utils.hpp b/redfish-core/include/utils/ip_utils.hpp
+index 272c1c32..7dc8f9cc 100644
+--- a/redfish-core/include/utils/ip_utils.hpp
++++ b/redfish-core/include/utils/ip_utils.hpp
+@@ -136,6 +136,20 @@ inline bool in6AddrDoc(in6_addr* addr)
+     return ntohl(addr->__in6_u.__u6_addr32[0]) == 0x20010db8;
+ }
+ 
++inline bool isSameSeries(std::string ipStr, std::string gwStr, uint8_t prefixLength)
++{
++    auto ip = (stdplus::fromStr<stdplus::In4Addr>(ipStr)).a.s_addr;
++    auto gw = (stdplus::fromStr<stdplus::In4Addr>(gwStr)).a.s_addr;
++    auto netmask = htobe32(~UINT32_C(0) << (32 - prefixLength));
++
++    if ((ip & netmask) != (gw & netmask))
++    {
++        return false;
++    }
++
++    return true;
++}
++
+ static void isValidIPv6Addr(in6_addr* addr, Type type)
+ {
+     std::string strType{"Gateway"};
+diff --git a/redfish-core/lib/ethernet.hpp b/redfish-core/lib/ethernet.hpp
+index b9af7a49..f3c08589 100644
+--- a/redfish-core/lib/ethernet.hpp
++++ b/redfish-core/lib/ethernet.hpp
+@@ -1427,45 +1427,9 @@ inline bool
+             {
+                 const std::string& ipAddress = *address;
+                 const std::string& ipGateway = *gateway;
+-		const std::string& ipSubnetMask = *subnetMask;
++                const std::string& ipSubnetMask = *subnetMask;
++                uint8_t prefixLength = 0;
+ 
+-                std::bitset<32> maskBinary(0);
+-                if (subnetMask.has_value())
+-                {
+-                    size_t pos = 0;
+-                    for (size_t i = 0; i < 4;
+-                         ++i) // converting subnetMask to binary
+-                    {
+-                        pos = subnetMask->find('.', pos);
+-                        if (pos == std::string::npos)
+-                        {
+-                            break;
+-                        }
+-                        maskBinary <<= 8;
+-                        maskBinary |= std::stoul(subnetMask->substr(pos - 3, 3),
+-                                                 nullptr, 0);
+-                        ++pos;
+-                    }
+-                }
+-                uint8_t prefixLength = maskBinary.size();
+-                for (uint8_t i = 0; i < maskBinary.size();
+-                     ++i) // Determine the Prefix Length
+-                {
+-                    if (maskBinary[i] == 0)
+-                    {
+-                        prefixLength = i;
+-                        break;
+-                    }
+-                }
+-                if (!isSameSeries(
+-                        ipAddress, ipGateway,
+-                        prefixLength)) // function call for cheching the IPs are
+-                                       // in the same series
+-                {
+-                    messages::differentIpSeries(asyncResp->res, "Address",
+-                                                "Gateway");
+-                    return false;
+-                }
+                 if (!ip_util::isValidIPv4Addr(
+                         ipAddress,
+                         ip_util::Type::IP4_ADDRESS)) // checking the IPv4 Address
+@@ -1484,9 +1448,24 @@ inline bool
+                         ipSubnetMask, ip_util::Type::SUBNETMASK)) // checking the IPv4
+                                                             // subnetmask Address
+                 {
+-                    messages::invalidip(asyncResp->res, "subnetmask", ipSubnetMask);
++                    messages::invalidip(asyncResp->res, "SubnetMask", ipSubnetMask);
+                     return false;
+                 }
++                if (subnetMask.has_value())
++                {
++                    if (ip_util::ipv4VerifyIpAndGetBitcount(*subnetMask, &prefixLength))
++                    {
++                        if (!ip_util::isSameSeries(
++                        ipAddress, ipGateway,
++                        prefixLength)) // function call for checking if the IPs are
++                                       // in the same series
++                        {
++                            messages::differentIpSeries(asyncResp->res, "Address",
++                                                        "Gateway");
++                            return false;
++                        }
++                    }
++                }
+             }
+         }
+         entryIdx++;
+-- 
+2.34.1
+
