@@ -1,0 +1,75 @@
+From f500834b02d3b140d394523968a8e02ba15e12fa Mon Sep 17 00:00:00 2001
+From: nandakumarn <nandakumarn@ami.com>
+Date: Thu, 14 Mar 2024 11:06:54 +0530
+Subject: [PATCH 71/71] Fix for Unable to set valid SNMP port after setting
+ port 0 with create call
+
+---
+ snmp_client.cpp | 28 ++++++++++++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/snmp_client.cpp b/snmp_client.cpp
+index fe27f4a..4531b05 100644
+--- a/snmp_client.cpp
++++ b/snmp_client.cpp
+@@ -3,15 +3,25 @@
+ #include "snmp_conf_manager.hpp"
+ #include "snmp_serialize.hpp"
+ #include "snmp_util.hpp"
++#include "xyz/openbmc_project/Common/error.hpp"
+ 
+ #include <grp.h>
+ 
++#include <arpa/inet.h>
++#include <phosphor-logging/elog-errors.hpp>
++#include <phosphor-logging/lg2.hpp>
++
++#define DEFAULT_SNMPTRAP_PORT 162
++
+ namespace phosphor
+ {
+ namespace network
+ {
+ namespace snmp
+ {
++using namespace phosphor::logging;
++using namespace sdbusplus::xyz::openbmc_project::Common::Error;
++using Argument = xyz::openbmc_project::Common::InvalidArgument;
+ 
+ Client::Client(sdbusplus::bus_t& bus, const char* objPath, ConfManager& parent,
+                const std::string& address, uint16_t port, const std::string version, const std::string user) :
+@@ -35,6 +45,18 @@ std::string Client::address(std::string value)
+         return value;
+     }
+ 
++    try
++    {
++        // just to check whether given address is valid or not.
++        resolveAddress(value);
++    }
++    catch (const InternalFailure& e)
++    {
++        lg2::error("{ADDRESS} is not a valid address", "ADDRESS", value);
++        elog<InvalidArgument>(Argument::ARGUMENT_NAME("Address"),
++                              Argument::ARGUMENT_VALUE(value.c_str()));
++    }
++
+     parent.checkClientConfigured(value, port());
+ 
+     auto addr = Ifaces::address(value);
+@@ -44,6 +66,12 @@ std::string Client::address(std::string value)
+ 
+ uint16_t Client::port(uint16_t value)
+ {
++
++    if (value == 0)
++    {
++        value = DEFAULT_SNMPTRAP_PORT; /*Setting default SNMP port if the given port is 0*/
++    }
++
+     if (value == Ifaces::port())
+     {
+         return value;
+-- 
+2.34.1
+
