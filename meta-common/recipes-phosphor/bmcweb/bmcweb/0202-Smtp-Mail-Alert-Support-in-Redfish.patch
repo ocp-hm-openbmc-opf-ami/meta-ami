@@ -1,0 +1,1076 @@
+From 5333a49b9dced4fd191f966167936daa5f4d54d9 Mon Sep 17 00:00:00 2001
+From: prasannas <prasannas@ami.com>
+Date: Thu, 14 Mar 2024 23:42:36 +0530
+Subject: [PATCH 202/202] Smtp Mail Alert Support in Redfish
+
+---
+ redfish-core/include/error_messages.hpp       |  13 +
+ .../registries/base_message_registry.hpp      |  14 +
+ redfish-core/lib/event_service.hpp            | 744 ++++++++++++++++--
+ redfish-core/lib/pef_service.hpp              |  88 +--
+ redfish-core/src/error_messages.cpp           |  21 +
+ 5 files changed, 757 insertions(+), 123 deletions(-)
+
+diff --git a/redfish-core/include/error_messages.hpp b/redfish-core/include/error_messages.hpp
+index 4000c278..bcc8abf7 100644
+--- a/redfish-core/include/error_messages.hpp
++++ b/redfish-core/include/error_messages.hpp
+@@ -1127,6 +1127,19 @@ nlohmann::json passwordResetFailed();
+ 
+ void passwordResetFailed(crow::Response& res);
+ 
++/**
++ * @internal
++ * @brief Formats PropertyValueEmpty message into JSON
++ *
++ * See header file for more information
++ * @endinternal
++ */
++nlohmann::json propertyValueEmpty(std::string_view arg1, std::string_view arg2);
++void propertyValueEmpty(crow::Response& res, std::string_view arg1,
++                        std::string_view arg2);
++
++
++
+ } // namespace messages
+ 
+ } // namespace redfish
+diff --git a/redfish-core/include/registries/base_message_registry.hpp b/redfish-core/include/registries/base_message_registry.hpp
+index 9aaf1f45..bd4aa0d3 100644
+--- a/redfish-core/include/registries/base_message_registry.hpp
++++ b/redfish-core/include/registries/base_message_registry.hpp
+@@ -1344,6 +1344,19 @@ constexpr std::array registry =
+ 		},
+ 		"Provide IP in the same series",
+ 	}},
++    MessageEntry{
++        "PropertyValueEmpty",
++        {
++        "Indicates that a Property Value is empty",
++        "The value %1 for the property %2 should not be empty",
++        "Critical",
++        2,
++        {
++            "string",
++            "string",
++        },
++        "Please Make sure that correct value for the property is provided in the request body and resubmit the request"
++    }},
+ };
+ 
+ enum class Index
+@@ -1461,5 +1474,6 @@ enum class Index
+     invalidip=110,
+     passwordResetFailed=111,
+     differentIpSeries=112,
++    propertyValueEmpty=113,
+ };
+ } // namespace redfish::registries::base
+diff --git a/redfish-core/lib/event_service.hpp b/redfish-core/lib/event_service.hpp
+index 6371b982..b51d46e7 100644
+--- a/redfish-core/lib/event_service.hpp
++++ b/redfish-core/lib/event_service.hpp
+@@ -56,63 +56,305 @@ using mailStruct = std::tuple<bool, std::string, uint16_t, std::string>;
+  *
+  * @return None.
+  */
+-inline void getSmtpConfig(const std::shared_ptr<bmcweb::AsyncResp>& aResp)
++inline void getSmtpConfig(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                          std::string interfaces, std::string configuration)
+ {
+-    crow::connections::systemBus->async_method_call(
+-        [aResp](const boost::system::error_code ec, const mailStruct& resp) {
++    sdbusplus::asio::getAllProperties(
++        *crow::connections::systemBus, "xyz.openbmc_project.mail",
++        "/xyz/openbmc_project/mail/alert", interfaces,
++        [asyncResp, configuration](
++            const boost::system::error_code& ec,
++            const dbus::utility::DBusPropertiesMap& propertiesList) {
+         if (ec)
+         {
+             BMCWEB_LOG_ERROR("GetSMTPconfig: Can't get "
+                              "alertMailIface ");
++            messages::internalError(asyncResp->res);
++            return;
++        }
++
++        BMCWEB_LOG_DEBUG("Got {}properties for SmtpConfig",
++                         propertiesList.size());
++
++        bool authentication = true;
++        bool enable = true;
++        const std::string* host = nullptr;
++        const std::string* password = nullptr;
++        const uint16_t* port = nullptr;
++        const std::vector<std::string>* recipient = nullptr;
++        const std::string* sender = nullptr;
++        bool TLSEnable = true;
++        const std::string* username = nullptr;
++
++        const bool success = sdbusplus::unpackPropertiesNoThrow(
++            dbus_utils::UnpackErrorPrinter(), propertiesList, "Authentication",
++            authentication, "Enable", enable, "Host", host, "Password",
++            password, "Port", port, "Recipient", recipient, "Sender", sender,
++            "TLSEnable", TLSEnable, "UserName", username);
++
++        if (!success)
++        {
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        asyncResp->res.jsonValue["Oem"]["SMTP"][configuration]
++                                ["Authentication"] = authentication;
++
++        asyncResp->res.jsonValue["Oem"]["SMTP"][configuration]["Enable"] =
++            enable;
++
++        if (host != nullptr)
++        {
++            asyncResp->res.jsonValue["Oem"]["SMTP"][configuration]["Host"] =
++                *host;
++        }
++        if (username != nullptr)
++        {
++            asyncResp->res.jsonValue["Oem"]["SMTP"][configuration]["UserName"] =
++                *username;
++        }
++        if (password != nullptr)
++        {
++            asyncResp->res.jsonValue["Oem"]["SMTP"][configuration]["Password"] =
++                *password;
++        }
++
++        if (port != nullptr)
++        {
++            asyncResp->res.jsonValue["Oem"]["SMTP"][configuration]["Port"] =
++                *port;
++        }
++        if (recipient != nullptr)
++        {
++            asyncResp->res.jsonValue["Oem"]["SMTP"][configuration]
++                                    ["Recipient"] = *recipient;
++        }
++        if (sender != nullptr)
++        {
++            asyncResp->res.jsonValue["Oem"]["SMTP"][configuration]["Sender"] =
++                *sender;
++        }
++
++        asyncResp->res.jsonValue["Oem"]["SMTP"][configuration]["TLSEnable"] =
++            TLSEnable;
++    });
++}
++
++inline void setAuthentication(const std::shared_ptr<bmcweb::AsyncResp>& aResp,
++                              std::string interfaces, bool& property_value)
++{
++    sdbusplus::asio::setProperty(
++        *crow::connections::systemBus, "xyz.openbmc_project.mail",
++        "/xyz/openbmc_project/mail/alert", interfaces, "Authentication",
++        property_value, [aResp](const boost::system::error_code& ec) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("D-Bus responses error: {}", ec);
+             messages::internalError(aResp->res);
+             return;
+         }
+-        const bool serviceEnabled = std::get<0>(resp);
+-        const uint16_t port = std::get<2>(resp);
+-        const std::string serverAddr = std::get<1>(resp);
+-        const std::string fromAddr = std::get<3>(resp);
+-
+-        aResp->res.jsonValue["SMTP"] = {
+-            {"Authentication", "None"},    {"ConnectionProtocol", "None"},
+-            {"FromAddress", fromAddr},     {"Port", port},
+-            {"ServerAddress", serverAddr}, {"ServiceEnabled", serviceEnabled}};
+-    },
+-        "xyz.openbmc_project.mail", "/xyz/openbmc_project/mail/alert",
+-        "xyz.openbmc_project.mail.alert", "GetSmtpConfig");
++        BMCWEB_LOG_DEBUG("Patch Authentication Success");
++    });
+ }
+ 
+-/**
+- * @brief set SMTP configuration properties.
+- *
+- * @param[in] aResp          Shared pointer for generating response message.
+- * @param[in] smtpServiceEnabled The SMTP service enable/disable flag from
+- * incoming request.
+- * @param[in] port               The SMTP port number from incoming request.
+- * @param[in] serverAddr         The SMTP server address from incoming
+- * request.
+- * @param[in] fromAddr           The SMTP 'from' email address of the outgoing
+- * email from incoming request.
+- *
+- * @return Integer error code.
+- */
+-inline void setSmtpConfig(const std::shared_ptr<bmcweb::AsyncResp>& aResp,
+-                          bool& smtpServiceEnabled, uint16_t& port,
+-                          std::string& serverAddr, std::string& fromAddr)
++inline void setServiceEnable(const std::shared_ptr<bmcweb::AsyncResp>& aResp,
++                             std::string interfaces, bool& property_value)
+ {
+-    crow::connections::systemBus->async_method_call(
+-        [aResp, smtpServiceEnabled, port, serverAddr,
+-         fromAddr](const boost::system::error_code ec) {
++    sdbusplus::asio::setProperty(
++        *crow::connections::systemBus, "xyz.openbmc_project.mail",
++        "/xyz/openbmc_project/mail/alert", interfaces, "Enable", property_value,
++        [aResp](const boost::system::error_code& ec) {
+         if (ec)
+         {
+-            BMCWEB_LOG_ERROR("SetSMTPconfig: Can't get "
+-                             "alertMailIface ");
++            BMCWEB_LOG_ERROR("D-Bus responses error: {}", ec);
+             messages::internalError(aResp->res);
+             return;
+         }
+-    },
+-        "xyz.openbmc_project.mail", "/xyz/openbmc_project/mail/alert",
+-        "xyz.openbmc_project.mail.alert", "SetSmtpConfig", smtpServiceEnabled,
+-        serverAddr, port, fromAddr);
++        BMCWEB_LOG_DEBUG("Patch ServiceEnable Success");
++    });
++}
++
++inline void setTlsEnable(const std::shared_ptr<bmcweb::AsyncResp>& aResp,
++                         std::string interfaces, bool& property_value)
++{
++    sdbusplus::asio::setProperty(
++        *crow::connections::systemBus, "xyz.openbmc_project.mail",
++        "/xyz/openbmc_project/mail/alert", interfaces, "TLSEnable",
++        property_value, [aResp](const boost::system::error_code& ec) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("D-Bus responses error: {}", ec);
++            messages::internalError(aResp->res);
++            return;
++        }
++        BMCWEB_LOG_DEBUG("Patch TLSEnable Success");
++    });
++}
++
++inline void setUsername(const std::shared_ptr<bmcweb::AsyncResp>& aResp,
++                        std::string interfaces, std::string Property_value)
++{
++    sdbusplus::asio::setProperty(
++        *crow::connections::systemBus, "xyz.openbmc_project.mail",
++        "/xyz/openbmc_project/mail/alert", interfaces, "UserName",
++        Property_value, [aResp](const boost::system::error_code& ec) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("D-Bus responses error: {}", ec);
++            messages::internalError(aResp->res);
++            return;
++        }
++        BMCWEB_LOG_DEBUG("Patch UserName Success");
++    });
++}
++
++inline void setPassword(const std::shared_ptr<bmcweb::AsyncResp>& aResp,
++                        std::string interfaces, std::string Property_value)
++{
++    sdbusplus::asio::setProperty(
++        *crow::connections::systemBus, "xyz.openbmc_project.mail",
++        "/xyz/openbmc_project/mail/alert", interfaces, "Password",
++        Property_value, [aResp](const boost::system::error_code& ec) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("D-Bus responses error: {}", ec);
++            messages::internalError(aResp->res);
++            return;
++        }
++        BMCWEB_LOG_DEBUG("Patch Password Success");
++    });
++}
++
++inline void setSender(const std::shared_ptr<bmcweb::AsyncResp>& aResp,
++                      std::string interfaces, std::string Property_value)
++{
++    sdbusplus::asio::setProperty(
++        *crow::connections::systemBus, "xyz.openbmc_project.mail",
++        "/xyz/openbmc_project/mail/alert", interfaces, "Sender", Property_value,
++        [aResp](const boost::system::error_code& ec) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("D-Bus responses error: {}", ec);
++            messages::internalError(aResp->res);
++            return;
++        }
++        BMCWEB_LOG_DEBUG("Patch Sender Success");
++    });
++}
++
++inline void setHost(const std::shared_ptr<bmcweb::AsyncResp>& aResp,
++                    std::string interfaces, std::string Property_value)
++{
++    sdbusplus::asio::setProperty(
++        *crow::connections::systemBus, "xyz.openbmc_project.mail",
++        "/xyz/openbmc_project/mail/alert", interfaces, "Host", Property_value,
++        [aResp](const boost::system::error_code& ec) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("D-Bus responses error: {}", ec);
++            messages::internalError(aResp->res);
++            return;
++        }
++        BMCWEB_LOG_DEBUG("Patch Host Success");
++    });
++}
++
++inline void setport(const std::shared_ptr<bmcweb::AsyncResp>& aResp,
++                    std::string interfaces, std::uint16_t& Property_value)
++{
++    sdbusplus::asio::setProperty(
++        *crow::connections::systemBus, "xyz.openbmc_project.mail",
++        "/xyz/openbmc_project/mail/alert", interfaces, "Port", Property_value,
++        [aResp](const boost::system::error_code& ec) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("D-Bus responses error: {}", ec);
++            messages::internalError(aResp->res);
++            return;
++        }
++        BMCWEB_LOG_DEBUG("Patch port Success");
++    });
++}
++
++inline void setRecipient(const std::shared_ptr<bmcweb::AsyncResp>& aResp,
++                         std::string interfaces,
++                         const std::vector<std::string>& recipient)
++{
++    sdbusplus::asio::setProperty(
++        *crow::connections::systemBus, "xyz.openbmc_project.mail",
++        "/xyz/openbmc_project/mail/alert", interfaces, "Recipient", recipient,
++        [aResp, recipient](const boost::system::error_code& ec) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("D-Bus responses error: {}", ec);
++            messages::internalError(aResp->res);
++            return;
++        }
++        BMCWEB_LOG_DEBUG("Patch Recipient Success");
++    });
++}
++
++inline void
++    handleauthenticationpatch(const std::shared_ptr<bmcweb::AsyncResp> aResp,
++                              std::string interfaces, std::string property,
++                              bool& authentication)
++{
++    sdbusplus::asio::getProperty<std::string>(
++        *crow::connections::systemBus, "xyz.openbmc_project.mail",
++        "/xyz/openbmc_project/mail/alert", interfaces, "UserName",
++        [aResp, interfaces, property,
++         authentication](const boost::system::error_code error_code,
++                         const std::string& username) {
++        if (error_code)
++        {
++            messages::internalError(aResp->res);
++            return;
++        }
++        sdbusplus::asio::getProperty<std::string>(
++            *crow::connections::systemBus, "xyz.openbmc_project.mail",
++            "/xyz/openbmc_project/mail/alert", interfaces, "Password",
++            [aResp, interfaces, property, authentication,
++             username](const boost::system::error_code error_code,
++                       const std::string& password) {
++            if (error_code)
++            {
++                messages::internalError(aResp->res);
++                return;
++            }
++            if (username.empty() && password.empty())
++            {
++                messages::propertyValueEmpty(aResp->res, username,
++                                             "UserName and Password");
++                return;
++            }
++            else if (username.empty())
++            {
++                messages::propertyValueEmpty(aResp->res, username, "UserName");
++                return;
++            }
++            else if (password.empty())
++            {
++                messages::propertyValueEmpty(aResp->res, password, "Password");
++                return;
++            }
++            else
++            {
++                sdbusplus::asio::setProperty(
++                    *crow::connections::systemBus, "xyz.openbmc_project.mail",
++                    "/xyz/openbmc_project/mail/alert", interfaces, property,
++                    authentication,
++                    [aResp](const boost::system::error_code& ec) {
++                    if (ec)
++                    {
++                        BMCWEB_LOG_ERROR("D-Bus responses error: {}", ec);
++                        messages::internalError(aResp->res);
++                        return;
++                    }
++                    BMCWEB_LOG_DEBUG("Patch Authentication2 SUCESS");
++                });
++            }
++        });
++    });
+ }
+ 
+ inline void requestRoutesEventService(App& app)
+@@ -166,7 +408,10 @@ inline void requestRoutesEventService(App& app)
+ 
+         asyncResp->res.jsonValue["SSEFilterPropertiesSupported"] =
+             std::move(supportedSSEFilters);
+-        getSmtpConfig(asyncResp);
++        getSmtpConfig(asyncResp, "xyz.openbmc_project.mail.alert.primary",
++                      "PrimaryConfiguration");
++        getSmtpConfig(asyncResp, "xyz.openbmc_project.mail.alert.secondary",
++                      "SecondaryConfiguration");
+     });
+ 
+     BMCWEB_ROUTE(app, "/redfish/v1/EventService/")
+@@ -181,13 +426,12 @@ inline void requestRoutesEventService(App& app)
+         std::optional<bool> serviceEnabled;
+         std::optional<uint32_t> retryAttemps;
+         std::optional<uint32_t> retryInterval;
+-        std::optional<nlohmann::json> smtpProps;
++        std::optional<nlohmann::json> oem;
+ 
+-        if (!json_util::readJsonPatch(req, asyncResp->res, "ServiceEnabled",
+-                                      serviceEnabled, "DeliveryRetryAttempts",
+-                                      retryAttemps,
+-                                      "DeliveryRetryIntervalSeconds",
+-                                      retryInterval, "SMTP", smtpProps))
++        if (!json_util::readJsonPatch(
++                req, asyncResp->res, "ServiceEnabled", serviceEnabled,
++                "DeliveryRetryAttempts", retryAttemps,
++                "DeliveryRetryIntervalSeconds", retryInterval, "Oem", oem))
+         {
+             return;
+         }
+@@ -230,25 +474,377 @@ inline void requestRoutesEventService(App& app)
+                 eventServiceConfig.retryTimeoutInterval = *retryInterval;
+             }
+         }
+-
+-        if (smtpProps)
++        if (oem)
+         {
+-            std::optional<bool> smtpServiceEnabled;
+-            std::optional<uint16_t> port;
+-            std::optional<std::string> serverAddr;
+-            std::optional<std::string> fromAddr;
+-
+-            if (!json_util::readJson(*smtpProps, asyncResp->res,
+-                                     "ServiceEnabled", smtpServiceEnabled,
+-                                     "Port", port, "ServerAddress", serverAddr,
+-                                     "FromAddress", fromAddr))
++            std::optional<nlohmann::json> smtp;
++            if (!json_util::readJson(*oem, asyncResp->res, "SMTP", smtp))
+             {
+                 return;
+             }
+-            setSmtpConfig(asyncResp, *smtpServiceEnabled, *port, *serverAddr,
+-                          *fromAddr);
+-        }
++            if (smtp)
++            {
++                std::optional<nlohmann::json> PrimaryConfiguration;
++                std::optional<nlohmann::json> SecondaryConfiguration;
++                if (!json_util::readJson(
++                        *smtp, asyncResp->res, "PrimaryConfiguration",
++                        PrimaryConfiguration, "SecondaryConfiguration",
++                        SecondaryConfiguration))
++                {
++                    return;
++                }
++
++                if (PrimaryConfiguration)
++                {
++                    std::optional<bool> authentication;
++                    std::optional<bool> enable;
++                    std::optional<std::string> host;
++                    std::optional<std::string> password;
++                    std::optional<uint16_t> port;
++                    std::optional<std::vector<std::string>> recipient;
++                    std::optional<std::string> sender;
++                    std::optional<bool> tlsenable;
++                    std::optional<std::string> username;
++
++                    if (!json_util::readJson(
++                            *PrimaryConfiguration, asyncResp->res,
++                            "Authentication", authentication, "Enable", enable,
++                            "Host", host, "Password", password, "Port", port,
++                            "Recipient", recipient, "Sender", sender,
++                            "TLSEnable", tlsenable, "UserName", username))
++                    {
++                        return;
++                    }
++                    if (recipient)
++                    {
++                        std::size_t size = recipient.value().size();
++
++                        if (size > 4)
++                        {
++                            messages::arraySizeTooLong(asyncResp->res,
++                                                       "Recipient", size);
++                            return;
++                        }
++                        else
++                        {
++                            setRecipient(
++                                asyncResp,
++                                "xyz.openbmc_project.mail.alert.primary",
++                                *recipient);
++                        }
++                    }
++                    if (authentication)
++                    {
++                        if (*authentication)
++                        {
++                            if (username && password)
++                            {
++                                if (username == "" && password == "")
++                                {
++                                    messages::propertyValueEmpty(
++                                        asyncResp->res, *username,
++                                        "UserName and Password");
++                                    return;
++                                }
++                                else if (username == "")
++                                {
++                                    messages::propertyValueEmpty(
++                                        asyncResp->res, *username, "UserName");
++                                    return;
++                                }
++                                else if (password == "")
++                                {
++                                    messages::propertyValueEmpty(
++                                        asyncResp->res, *password, "password");
++                                    return;
++                                }
++                                else
++                                {
++                                    setAuthentication(
++                                        asyncResp,
++                                        "xyz.openbmc_project.mail.alert.primary",
++                                        *authentication);
++                                }
++                            }
++                            else
++                            {
++                                handleauthenticationpatch(
++                                    asyncResp,
++                                    "xyz.openbmc_project.mail.alert.primary",
++                                    "Authentication", *authentication);
++                            }
++                        }
++                        else
++                        {
++                            setAuthentication(
++                                asyncResp,
++                                "xyz.openbmc_project.mail.alert.primary",
++                                *authentication);
++                        }
++                    }
++
++                    if (username)
++                    {
++                        setUsername(asyncResp,
++                                    "xyz.openbmc_project.mail.alert.primary",
++                                    *username);
++                    }
++                    if (password)
++                    {
++                        setPassword(asyncResp,
++                                    "xyz.openbmc_project.mail.alert.primary",
++                                    *password);
++                    }
+ 
++                    if (tlsenable)
++                    {
++                        setTlsEnable(asyncResp,
++                                     "xyz.openbmc_project.mail.alert.primary",
++                                     *tlsenable);
++                    }
++                    if (enable)
++                    {
++                        if (*enable)
++                        {
++                            setServiceEnable(
++                                asyncResp,
++                                "xyz.openbmc_project.mail.alert.primary",
++                                *enable);
++                        }
++                        else
++                        {
++                            if (SecondaryConfiguration)
++                            {
++                                std::optional<bool> authentication;
++                                std::optional<bool> enable2;
++                                std::optional<std::string> host;
++                                std::optional<std::string> password;
++                                std::optional<uint16_t> port;
++                                std::optional<std::vector<std::string>>
++                                    recipient;
++                                std::optional<std::string> sender;
++                                std::optional<bool> tlsenable;
++                                std::optional<std::string> username;
++                                if (!json_util::readJson(
++                                        *SecondaryConfiguration, asyncResp->res,
++                                        "Authentication", authentication,
++                                        "Enable", enable, "Host", host,
++                                        "Password", password, "Port", port,
++                                        "Recipient", recipient, "Sender",
++                                        sender, "TLSEnable", tlsenable,
++                                        "UserName", username))
++                                {
++                                    return;
++                                }
++                                if (enable)
++                                {
++                                    if (*enable)
++                                    {
++                                        messages::propertyValueConflict(
++                                            asyncResp->res,
++                                            "PrimaryConfiguration.Enable",
++                                            "SecondaryConfiguration.Enable");
++                                        return;
++                                    }
++                                    else
++                                    {
++                                        setServiceEnable(
++                                            asyncResp,
++                                            "xyz.openbmc_project.mail.alert.primary",
++                                            *enable);
++                                    }
++                                }
++                            }
++                            else
++                            {
++                                sdbusplus::asio::getProperty<bool>(
++                                    *crow::connections::systemBus,
++                                    "xyz.openbmc_project.mail",
++                                    "/xyz/openbmc_project/mail/alert",
++                                    "xyz.openbmc_project.mail.alert.secondary",
++                                    "Enable",
++                                    [asyncResp, &enable](
++                                        const boost::system::error_code& ec,
++                                        bool ServiceEnabled) {
++                                    if (ec)
++                                    {
++                                        BMCWEB_LOG_ERROR(
++                                            "D-BUS response error on SnmpTrapStatus Get{}",
++                                            ec);
++                                        messages::internalError(asyncResp->res);
++                                        return;
++                                    }
++                                    if (ServiceEnabled)
++                                    {
++                                        messages::propertyValueConflict(
++                                            asyncResp->res,
++                                            "PrimaryConfiguration.Enable",
++                                            "SecondaryConfiguration.Enable");
++                                        return;
++                                    }
++                                    else
++                                    {
++                                        setServiceEnable(
++                                            asyncResp,
++                                            "xyz.openbmc_project.mail.alert.primary",
++                                            *enable);
++                                    }
++                                });
++                            }
++                        }
++                    }
++                    if (host)
++                    {
++                        setHost(asyncResp,
++                                "xyz.openbmc_project.mail.alert.primary",
++                                *host);
++                    }
++                    if (sender)
++                    {
++                        setSender(asyncResp,
++                                  "xyz.openbmc_project.mail.alert.primary",
++                                  *sender);
++                    }
++                    if (port)
++                    {
++                        setport(asyncResp,
++                                "xyz.openbmc_project.mail.alert.primary",
++                                *port);
++                    }
++                }
++                if (SecondaryConfiguration)
++                {
++                    std::optional<bool> authentication;
++                    std::optional<bool> enable;
++                    std::optional<std::string> host;
++                    std::optional<std::string> password;
++                    std::optional<uint16_t> port;
++                    std::optional<std::vector<std::string>> recipient;
++                    std::optional<std::string> sender;
++                    std::optional<bool> tlsenable;
++                    std::optional<std::string> username;
++
++                    if (!json_util::readJson(
++                            *SecondaryConfiguration, asyncResp->res,
++                            "Authentication", authentication, "Enable", enable,
++                            "Host", host, "Password", password, "Port", port,
++                            "Recipient", recipient, "Sender", sender,
++                            "TLSEnable", tlsenable, "UserName", username))
++                    {
++                        return;
++                    }
++                    if (recipient)
++                    {
++                        std::size_t size = recipient.value().size();
++
++                        if (size > 4)
++                        {
++                            messages::arraySizeTooLong(asyncResp->res,
++                                                       "Recipient", size);
++                            return;
++                        }
++                        else
++                        {
++                            setRecipient(
++                                asyncResp,
++                                "xyz.openbmc_project.mail.alert.secondary",
++                                *recipient);
++                        }
++                    }
++                    if (authentication)
++                    {
++                        if (*authentication)
++                        {
++                            if (username && password)
++                            {
++                                if (username == "" && password == "")
++                                {
++                                    messages::propertyValueEmpty(
++                                        asyncResp->res, *username,
++                                        "UserName and Password");
++                                    return;
++                                }
++                                else if (username == "")
++                                {
++                                    messages::propertyValueEmpty(
++                                        asyncResp->res, *username, "UserName");
++                                    return;
++                                }
++                                else if (password == "")
++                                {
++                                    messages::propertyValueEmpty(
++                                        asyncResp->res, *password, "password");
++                                    return;
++                                }
++                                else
++                                {
++                                    setAuthentication(
++                                        asyncResp,
++                                        "xyz.openbmc_project.mail.alert.secondary",
++                                        *authentication);
++                                }
++                            }
++                            else
++                            {
++                                handleauthenticationpatch(
++                                    asyncResp,
++                                    "xyz.openbmc_project.mail.alert.secondary",
++                                    "Authentication", *authentication);
++                            }
++                        }
++                        else
++                        {
++                            setAuthentication(
++                                asyncResp,
++                                "xyz.openbmc_project.mail.alert.secondary",
++                                *authentication);
++                        }
++                    }
++                    if (username)
++                    {
++                        setUsername(asyncResp,
++                                    "xyz.openbmc_project.mail.alert.secondary",
++                                    *username);
++                    }
++                    if (password)
++                    {
++                        setPassword(asyncResp,
++                                    "xyz.openbmc_project.mail.alert.secondary",
++                                    *password);
++                    }
++                    if (tlsenable)
++                    {
++                        setTlsEnable(asyncResp,
++                                     "xyz.openbmc_project.mail.alert.secondary",
++                                     *tlsenable);
++                    }
++                    if (enable)
++                    {
++                        setServiceEnable(
++                            asyncResp,
++                            "xyz.openbmc_project.mail.alert.secondary",
++                            *enable);
++                    }
++                    if (host)
++                    {
++                        setHost(asyncResp,
++                                "xyz.openbmc_project.mail.alert.secondary",
++                                *host);
++                    }
++                    if (sender)
++                    {
++                        setSender(asyncResp,
++                                  "xyz.openbmc_project.mail.alert.secondary",
++                                  *sender);
++                    }
++                    if (port)
++                    {
++                        setport(asyncResp,
++                                "xyz.openbmc_project.mail.alert.secondary",
++                                *port);
++                    }
++                }
++            }
++        }
+         EventServiceManager::getInstance().setEventServiceConfig(
+             eventServiceConfig);
+     });
+@@ -837,11 +1433,11 @@ bool isConfigureManagerOrSelf(const crow::Request& req,
+ 
+ inline bool validAuthProtocol(std::optional<std::string> authProtocol)
+ {
+-	if(authProtocol == "SHA256" || authProtocol =="SHA384" ||
+-     authProtocol =="SHA512") 
+-	    return true;
+-	else
+-	    return false;
++    if (authProtocol == "SHA256" || authProtocol == "SHA384" ||
++        authProtocol == "SHA512")
++        return true;
++    else
++        return false;
+ }
+ 
+ inline void requestRoutesEventDestination(App& app)
+@@ -1053,13 +1649,13 @@ inline void requestRoutesEventDestination(App& app)
+             setSnmpTrapClient(asyncResp, param, authenticationProtocol);
+             return;
+         }
+-	else
+-            {
+-              messages::propertyValueIncorrect(asyncResp->res,
+-                                                 "AuthenticationProtocol",
+-                                                 *authenticationProtocol);
+-              return;
+-	    }
++        else
++        {
++            messages::propertyValueIncorrect(asyncResp->res,
++                                             "AuthenticationProtocol",
++                                             *authenticationProtocol);
++            return;
++        }
+ 
+         EventServiceManager::getInstance().updateSubscription(param);
+     });
+diff --git a/redfish-core/lib/pef_service.hpp b/redfish-core/lib/pef_service.hpp
+index 6d94d16f..9c5f6b27 100644
+--- a/redfish-core/lib/pef_service.hpp
++++ b/redfish-core/lib/pef_service.hpp
+@@ -167,15 +167,6 @@ inline void getPefConfParam(const std::shared_ptr<bmcweb::AsyncResp>& aResp)
+                         aResp->res.jsonValue["PEFActionGblControl"] = *value;
+                     }
+                 }
+-                if (property.first == "Recipient")
+-                {
+-                    const std::vector<std::string>* value =
+-                        std::get_if<std::vector<std::string>>(&property.second);
+-                    if (value != nullptr)
+-                    {
+-                        aResp->res.jsonValue["Recipient"] = *value;
+-                    }
+-                }
+             }
+         },
+             owner, path, "org.freedesktop.DBus.Properties", "GetAll",
+@@ -188,13 +179,11 @@ inline void getPefConfParam(const std::shared_ptr<bmcweb::AsyncResp>& aResp)
+ }
+ 
+ inline void setPefConfParam(const std::shared_ptr<bmcweb::AsyncResp>& aResp,
+-                            const std::optional<uint8_t>& pefActionGblControl,
+-                            const std::vector<std::string>& recipient)
++                            const std::optional<uint8_t>& pefActionGblControl)
+ {
+     crow::connections::systemBus->async_method_call(
+-        [aResp, pefActionGblControl,
+-         recipient](const boost::system::error_code ec,
+-                    const GetSubTreeType& subtreeLocal) {
++        [aResp, pefActionGblControl](const boost::system::error_code ec,
++                                     const GetSubTreeType& subtreeLocal) {
+         if (ec || subtreeLocal.empty())
+         {
+             BMCWEB_LOG_ERROR("SetPefConfParam: Error");
+@@ -227,21 +216,6 @@ inline void setPefConfParam(const std::shared_ptr<bmcweb::AsyncResp>& aResp,
+                 pefConfIface, "PEFActionGblControl",
+                 dbus::utility::DbusVariantType(*pefActionGblControl));
+         }
+-        if (!recipient.empty())
+-        {
+-            crow::connections::systemBus->async_method_call(
+-                [aResp, recipient](const boost::system::error_code ec3) {
+-                if (ec3)
+-                {
+-                    BMCWEB_LOG_ERROR("SetPefConf: Set Error");
+-                    messages::internalError(aResp->res);
+-                    return;
+-                }
+-            },
+-                owner, path, "org.freedesktop.DBus.Properties", "Set",
+-                pefConfIface, "Recipient",
+-                dbus::utility::DbusVariantType{recipient});
+-        }
+     },
+         "xyz.openbmc_project.ObjectMapper",
+         "/xyz/openbmc_project/object_mapper",
+@@ -276,12 +250,10 @@ inline void requestRoutesPefService(App& app)
+                const std::shared_ptr<bmcweb::AsyncResp>& aResp) {
+         std::optional<std::vector<uint8_t>> filterEnable;
+         std::optional<uint8_t> pefActionGblControl;
+-        std::optional<std::vector<std::string>> recipient;
+ 
+         if (!json_util::readJsonPatch(req, aResp->res, "FilterEnable",
+                                       filterEnable, "PEFActionGblControl",
+-                                      pefActionGblControl, "Recipient",
+-                                      recipient))
++                                      pefActionGblControl))
+         {
+             return;
+         }
+@@ -289,9 +261,9 @@ inline void requestRoutesPefService(App& app)
+         {
+             setFilterEnable(aResp, *filterEnable);
+         }
+-        if (pefActionGblControl || recipient)
++        if (pefActionGblControl)
+         {
+-            setPefConfParam(aResp, pefActionGblControl, *recipient);
++            setPefConfParam(aResp, pefActionGblControl);
+         }
+     });
+ 
+@@ -301,14 +273,12 @@ inline void requestRoutesPefService(App& app)
+         .methods(boost::beast::http::verb::post)(
+             [](const crow::Request& req,
+                const std::shared_ptr<bmcweb::AsyncResp>& aResp) {
+-        std::string recipient;
+         std::string subject;
+         std::string mailBuf;
+         std::optional<std::string> vId;
+ 
+-        if (!json_util::readJsonPatch(req, aResp->res, "Recipient", recipient,
+-                                      "Subject", subject, "MailContent",
+-                                      mailBuf, "Id", vId))
++        if (!json_util::readJsonPatch(req, aResp->res, "Subject", subject,
++                                      "MailContent", mailBuf, "Id", vId))
+         {
+             return;
+         }
+@@ -318,16 +288,8 @@ inline void requestRoutesPefService(App& app)
+             aResp->res.result(boost::beast::http::status::bad_request);
+             return;
+         }
+-        if (recipient.empty())
+-        {
+-            BMCWEB_LOG_ERROR("SendMail: Empty recipent error");
+-            messages::internalError(aResp->res);
+-            return;
+-        }
+-
+         crow::connections::systemBus->async_method_call(
+-            [recipient, subject, mailBuf,
+-             aResp](const boost::system::error_code ec) {
++            [subject, mailBuf, aResp](const boost::system::error_code ec,const std::uint16_t& response) {
+             if (ec)
+             {
+                 BMCWEB_LOG_ERROR("SendMail: Can't get "
+@@ -335,10 +297,38 @@ inline void requestRoutesPefService(App& app)
+                 messages::internalError(aResp->res);
+                 return;
+             }
++            else
++            {
++                sdbusplus::asio::getProperty<bool>(
++                    *crow::connections::systemBus, "xyz.openbmc_project.mail",
++                    "/xyz/openbmc_project/mail/alert",
++                    "xyz.openbmc_project.mail.alert.primary", "Enable",
++                    [aResp, response](const boost::system::error_code& ec,
++                                      bool ServiceEnabled) {
++                    if (ec)
++                    {
++                        BMCWEB_LOG_ERROR(
++                            "D-BUS response error on SnmpTrapStatus Get{}", ec);
++                        messages::internalError(aResp->res);
++                        return;
++                    }
++                    else if (!ServiceEnabled)
++                    {
++                        messages::serviceDisabled(aResp->res,
++                                                  "Primary Configuration");
++                        return;
++                    }
++                    else if (response == 65535)
++                    {
++                        messages::internalError(aResp->res);
++                        return;
++                    }
++                    messages::success(aResp->res);
++                });
++            }
+         },
+             "xyz.openbmc_project.mail", "/xyz/openbmc_project/mail/alert",
+-            "xyz.openbmc_project.mail.alert", "SendMail", recipient, subject,
+-            mailBuf);
++            "xyz.openbmc_project.mail.alert", "SendMail", subject, mailBuf);
+     });
+ }
+ } // namespace redfish
+diff --git a/redfish-core/src/error_messages.cpp b/redfish-core/src/error_messages.cpp
+index 20baa040..8d9df6b8 100644
+--- a/redfish-core/src/error_messages.cpp
++++ b/redfish-core/src/error_messages.cpp
+@@ -1945,6 +1945,27 @@ void passwordResetFailed(crow::Response& res)
+     addMessageToErrorJson(res.jsonValue, passwordResetFailed());
+ }
+ 
++/**
++ * @internal
++ * @brief Formats propertyValueEmpty message into JSON
++ *
++ * See header file for more information
++ * @endinternal
++ */
++
++nlohmann::json propertyValueEmpty(std::string_view arg1, std::string_view arg2)
++{
++    return getLog(redfish::registries::base::Index::propertyValueEmpty,
++                  std::to_array({arg1, arg2}));
++}
++
++void propertyValueEmpty(crow::Response& res, std::string_view arg1,
++                        std::string_view arg2)
++{
++    res.result(boost::beast::http::status::bad_request);
++    addMessageToErrorJson(res.jsonValue, propertyValueEmpty(arg1, arg2));
++}
++
+ } // namespace messages
+ 
+ } // namespace redfish
+-- 
+2.43.2
+
