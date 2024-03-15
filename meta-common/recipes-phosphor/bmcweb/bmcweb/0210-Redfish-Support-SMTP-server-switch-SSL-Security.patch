@@ -1,0 +1,709 @@
+From 803c7025a9fac34740177d9f85fe792eb53e82bf Mon Sep 17 00:00:00 2001
+From: gokulp <gokulp@ami.com>
+Date: Fri, 15 Mar 2024 16:04:47 +0530
+Subject: [PATCH 210/210] Redfish Support SMTP server switch SSL Security
+
+---
+ redfish-core/include/redfish.hpp   |   1 +
+ redfish-core/lib/event_service.hpp | 631 ++++++++++++++++++++++++++++-
+ 2 files changed, 626 insertions(+), 6 deletions(-)
+
+diff --git a/redfish-core/include/redfish.hpp b/redfish-core/include/redfish.hpp
+index 85d21cd3..25f7246a 100644
+--- a/redfish-core/include/redfish.hpp
++++ b/redfish-core/include/redfish.hpp
+@@ -291,6 +291,7 @@ class RedfishService
+         requestRoutesFabricAdapters(app);
+         requestRoutesFabricAdapterCollection(app);
+         requestRoutesSubmitTestEvent(app);
++        requestRoutesSSLEvent(app);
+ 
+         requestRoutesHypervisorSystems(app);
+ 
+diff --git a/redfish-core/lib/event_service.hpp b/redfish-core/lib/event_service.hpp
+index b51d46e7..c5ba7153 100644
+--- a/redfish-core/lib/event_service.hpp
++++ b/redfish-core/lib/event_service.hpp
+@@ -22,6 +22,8 @@
+ #include "registries/privilege_registry.hpp"
+ #include "snmp_trap_event_clients.hpp"
+ 
++#include <stdlib.h>
++
+ #include <boost/beast/http/fields.hpp>
+ #include <boost/system/error_code.hpp>
+ #include <boost/url/parse.hpp>
+@@ -49,6 +51,41 @@ static constexpr const std::array<const char*, 1> supportedResourceTypes = {
+ 
+ using mailStruct = std::tuple<bool, std::string, uint16_t, std::string>;
+ 
++// SMTP TSL Support
++
++/* Primary SSL Support Keys */
++std::string primaryCacertFileName = "primary_cacert.pem";
++std::string primaryServerCRTFileName = "primary_server.crt";
++std::string primaryServerKeyFileName = "primary_server.key";
++
++fs::path certsPath = "/etc/ssl/certs/";
++fs::path privatePath = "/etc/ssl/private/";
++
++fs::path primaryCACERTFilePath = certsPath / primaryCacertFileName;
++fs::path primaryServerCRTFilePath = certsPath / primaryServerCRTFileName;
++fs::path primaryserverKeyFilePath = privatePath / primaryServerKeyFileName;
++
++std::string sslPrimaryCACERTFile(primaryCACERTFilePath);
++std::string sslPrimaryServerCRTFile(primaryServerCRTFilePath);
++std::string sslPrimaryServerKeyFile(primaryserverKeyFilePath);
++
++/* Secondary SSL Support Keys */
++
++std::string secondaryCacertFileName = "secondary_cacert.pem";
++std::string secondaryServerCRTFileName = "secondary_server.crt";
++std::string secondaryServerKeyFileName = "secondary_server.key";
++
++fs::path secodaryCACERTFilePath = certsPath / secondaryCacertFileName;
++fs::path secodaryServerCRTFilePath = certsPath / secondaryServerCRTFileName;
++fs::path secodaryServerKeyFilePath = privatePath / secondaryServerKeyFileName;
++
++std::string sslSecondaryCACERTFile(secodaryCACERTFilePath);
++std::string sslSecondaryServerCRTFile(secodaryServerCRTFilePath);
++std::string sslSecondaryServerKeyFile(secodaryServerKeyFilePath);
++
++std::string SSLFileName("");
++const char* commandLine("systemctl restart mail-alert-manager.service");
++
+ /**
+  * @brief Retrieves SMTP configuration params
+  *
+@@ -140,6 +177,405 @@ inline void getSmtpConfig(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+     });
+ }
+ 
++inline std::string modifiedDateTime(const std::string& filepath)
++{
++    /* Modified date and time */
++
++    std::filesystem::file_time_type ftime =
++        std::filesystem::last_write_time(filepath);
++    std::cout << std::format("File write time is {}\n", ftime);
++
++    std::time_t cftime = std::chrono::system_clock::to_time_t(
++        std::chrono::file_clock::to_sys(ftime));
++    std::string str = std::asctime(std::localtime(&cftime));
++    str.pop_back(); // rm the trailing '\n' put by `asctime`
++    std::cerr << "Checking file modified date " << str << "\n";
++    return str;
++}
++inline bool ensureOpensslKeyPresentAndValid(const std::string& filepath)
++{
++    bool certValid = false;
++
++    std::cerr << "Checking certs in file path " << filepath.c_str() << "\n";
++
++    FILE* file = fopen(filepath.c_str(), "r");
++    std::cerr << "Checking error logic"
++              << "\n";
++    if (file != nullptr)
++    {
++        certValid = true;
++    }
++    std::cerr << "Checking exits logic" << certValid << "\n";
++    return certValid;
++}
++
++inline void
++    getSmtpSSLCertificates(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    bool isPrimaryCACERT = true;
++    bool isPrimaryServerKey = true;
++    bool isPrimaryServerCRT = true;
++    bool isSecondrayCACERT = true;
++    bool isSecondrayServerKey = true;
++    bool isSecondrayServerCRT = true;
++
++    /* Primary SSL */
++
++    std::cerr << "SSL Primary CACERT Context file= "
++              << sslPrimaryCACERTFile.c_str() << "\n";
++    std::cerr << "SSL Primary CRT Context file= "
++              << sslPrimaryServerCRTFile.c_str() << "\n";
++    std::cerr << "SSL Primary Key Context file= "
++              << sslPrimaryServerKeyFile.c_str() << "\n";
++
++    isPrimaryCACERT = ensureOpensslKeyPresentAndValid(sslPrimaryCACERTFile);
++    asyncResp->res.jsonValue["Oem"]["SMTP"]["PrimaryConfiguration"]
++                            ["isCACERTExist"] = isPrimaryCACERT;
++    isPrimaryServerCRT =
++        ensureOpensslKeyPresentAndValid(sslPrimaryServerCRTFile);
++
++    asyncResp->res.jsonValue["Oem"]["SMTP"]["PrimaryConfiguration"]
++                            ["isServerCRTExist"] = isPrimaryServerCRT;
++    isPrimaryServerKey =
++        ensureOpensslKeyPresentAndValid(sslPrimaryServerKeyFile);
++
++    asyncResp->res.jsonValue["Oem"]["SMTP"]["PrimaryConfiguration"]
++                            ["isServerKeyExist"] = isPrimaryServerKey;
++
++    if (isPrimaryCACERT)
++    {
++        std::string primaryCACERTModifiedDate =
++            modifiedDateTime(sslPrimaryCACERTFile);
++
++        std::cerr << "Modified date and time for Primary CACERT "
++                  << primaryCACERTModifiedDate << "\n";
++
++        asyncResp->res.jsonValue["Oem"]["SMTP"]["PrimaryConfiguration"]
++                                ["primaryCACERTModifiedDate"] =
++            primaryCACERTModifiedDate;
++    }
++    if (isPrimaryServerCRT)
++    {
++        std::string primaryCACERTModifiedDate =
++            modifiedDateTime(sslPrimaryServerCRTFile);
++
++        std::cerr << "Modified date and time for Primary CACERT "
++                  << primaryCACERTModifiedDate << "\n";
++
++        asyncResp->res.jsonValue["Oem"]["SMTP"]["PrimaryConfiguration"]
++                                ["primaryserverCRTModifiedDate"] =
++            primaryCACERTModifiedDate;
++    }
++    if (isPrimaryServerKey)
++    {
++        std::string primaryCACERTModifiedDate =
++            modifiedDateTime(sslPrimaryServerKeyFile);
++
++        std::cerr << "Modified date and time for Primary CACERT "
++                  << primaryCACERTModifiedDate << "\n";
++
++        asyncResp->res.jsonValue["Oem"]["SMTP"]["PrimaryConfiguration"]
++                                ["primaryServerKeyModifiedDate"] =
++            primaryCACERTModifiedDate;
++    }
++
++    /* Secondary SSL */
++
++    std::cerr << "SSL Secondary CACERT Context file= "
++              << sslSecondaryCACERTFile.c_str() << "\n";
++    std::cerr << "SSL Secondary CRT Context file= "
++              << sslSecondaryServerCRTFile.c_str() << "\n";
++    std::cerr << "SSL Secondary Key Context file= "
++              << sslSecondaryServerKeyFile.c_str() << "\n";
++
++    isSecondrayCACERT = ensureOpensslKeyPresentAndValid(sslSecondaryCACERTFile);
++    asyncResp->res.jsonValue["Oem"]["SMTP"]["SecondaryConfiguration"]
++                            ["isCACERTExist"] = isSecondrayCACERT;
++    isSecondrayServerKey =
++        ensureOpensslKeyPresentAndValid(sslSecondaryServerKeyFile);
++
++    asyncResp->res.jsonValue["Oem"]["SMTP"]["SecondaryConfiguration"]
++                            ["isServerKeyExist"] = isSecondrayServerKey;
++    isSecondrayServerCRT =
++        ensureOpensslKeyPresentAndValid(sslSecondaryServerCRTFile);
++
++    asyncResp->res.jsonValue["Oem"]["SMTP"]["SecondaryConfiguration"]
++                            ["isServerCRTExist"] = isSecondrayServerCRT;
++
++    if (isSecondrayCACERT)
++    {
++        std::string modifiedDate = modifiedDateTime(sslSecondaryCACERTFile);
++
++        std::cerr << "Modified date and time for Primary CACERT "
++                  << modifiedDate << "\n";
++
++        asyncResp->res.jsonValue["Oem"]["SMTP"]["SecondaryConfiguration"]
++                                ["secondaryCACERTModifiedDate"] = modifiedDate;
++    }
++    if (isSecondrayServerCRT)
++    {
++        std::string modifiedDate = modifiedDateTime(sslSecondaryServerCRTFile);
++
++        std::cerr << "Modified date and time for Primary CACERT "
++                  << modifiedDate << "\n";
++
++        asyncResp->res.jsonValue["Oem"]["SMTP"]["SecondaryConfiguration"]
++                                ["secondaryserverCRTModifiedDate"] =
++            modifiedDate;
++    }
++    if (isSecondrayServerKey)
++    {
++        std::string modifiedDate = modifiedDateTime(sslSecondaryServerKeyFile);
++
++        std::cerr << "Modified date and time for Primary CACERT "
++                  << modifiedDate << "\n";
++
++        asyncResp->res.jsonValue["Oem"]["SMTP"]["SecondaryConfiguration"]
++                                ["secondaryServerKeyModifiedDate"] =
++            modifiedDate;
++    }
++}
++
++inline void uploadSSLFile(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                          std::string_view body, const std::string& fileName)
++{
++    if (fileName == primaryCacertFileName)
++    {
++        std::filesystem::path path = primaryCACERTFilePath;
++        std::ofstream out(path, std::ofstream::out | std::ofstream::binary |
++                                    std::ofstream::trunc);
++        out << body;
++        out.close();
++        std::cout << out.rdbuf();
++        std::cerr << "Read SSl files " << out.rdbuf() << "\n";
++        if (out.bad())
++        {
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        else
++        {
++            int systemRet = system(commandLine);
++            if (systemRet == -1)
++            {
++                std::cerr << "Failed to restart the service " << systemRet
++                          << "\n";
++            }
++            else
++                messages::success(asyncResp->res);
++        }
++    }
++    else if (fileName == primaryServerCRTFileName)
++    {
++        std::filesystem::path path = primaryServerCRTFilePath;
++        std::ofstream out(path, std::ofstream::out | std::ofstream::binary |
++                                    std::ofstream::trunc);
++        out << body;
++        out.close();
++        std::cout << out.rdbuf();
++        std::cerr << "Read SSl files " << out.rdbuf() << "\n";
++        if (out.bad())
++        {
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        else
++        {
++            int systemRet = system(commandLine);
++            if (systemRet == -1)
++            {
++                std::cerr << "Failed to restart the service " << systemRet
++                          << "\n";
++            }
++            else
++                messages::success(asyncResp->res);
++        }
++    }
++    else if (fileName == primaryServerKeyFileName)
++    {
++        std::filesystem::path path = primaryserverKeyFilePath;
++        std::ofstream out(path, std::ofstream::out | std::ofstream::binary |
++                                    std::ofstream::trunc);
++        out << body;
++        out.close();
++        std::cout << out.rdbuf();
++        std::cerr << "Read SSl files " << out.rdbuf() << "\n";
++        if (out.bad())
++        {
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        else
++        {
++            int systemRet = system(commandLine);
++            if (systemRet == -1)
++            {
++                std::cerr << "Failed to restart the service " << systemRet
++                          << "\n";
++            }
++            else
++                messages::success(asyncResp->res);
++        }
++    }
++    else if (fileName == secondaryCacertFileName)
++    {
++        std::filesystem::path path = secodaryCACERTFilePath;
++        std::ofstream out(path, std::ofstream::out | std::ofstream::binary |
++                                    std::ofstream::trunc);
++        out << body;
++        out.close();
++        std::cout << out.rdbuf();
++        std::cerr << "Read SSl files " << out.rdbuf() << "\n";
++        if (out.bad())
++        {
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        else
++        {
++            int systemRet = system(commandLine);
++            if (systemRet == -1)
++            {
++                std::cerr << "Failed to restart the service " << systemRet
++                          << "\n";
++            }
++            else
++                messages::success(asyncResp->res);
++        }
++    }
++    else if (fileName == secondaryServerCRTFileName)
++    {
++        std::filesystem::path path = secodaryServerCRTFilePath;
++        std::ofstream out(path, std::ofstream::out | std::ofstream::binary |
++                                    std::ofstream::trunc);
++        out << body;
++        out.close();
++        std::cout << out.rdbuf();
++        std::cerr << "Read SSl files " << out.rdbuf() << "\n";
++        if (out.bad())
++        {
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        else
++        {
++            int systemRet = system(commandLine);
++            if (systemRet == -1)
++            {
++                std::cerr << "Failed to restart the service " << systemRet
++                          << "\n";
++            }
++            else
++                messages::success(asyncResp->res);
++        }
++    }
++    else if (fileName == secondaryServerKeyFileName)
++    {
++        std::filesystem::path path = secodaryServerKeyFilePath;
++        std::ofstream out(path, std::ofstream::out | std::ofstream::binary |
++                                    std::ofstream::trunc);
++        out << body;
++        out.close();
++        std::cout << out.rdbuf();
++        std::cerr << "Read SSl files " << out.rdbuf() << "\n";
++        if (out.bad())
++        {
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        else
++        {
++            int systemRet = system(commandLine);
++            if (systemRet == -1)
++            {
++                std::cerr << "Failed to restart the service " << systemRet
++                          << "\n";
++            }
++            else
++                messages::success(asyncResp->res);
++        }
++    }
++    else
++    {
++        messages::propertyValueEmpty(asyncResp->res,
++                                     "SSL Key Certificate is not empty",
++                                     "/etc/ssl/certs/");
++    }
++}
++
++inline void readSSLContext(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                           const MultipartParser& parser)
++{
++    const std::string* uploadData = nullptr;
++    for (const FormPart& formpart : parser.mime_fields)
++    {
++        boost::beast::http::fields::const_iterator it =
++            formpart.fields.find("Content-Disposition");
++        if (it == formpart.fields.end())
++        {
++            BMCWEB_LOG_ERROR("Couldn't find Content-Disposition");
++            return;
++        }
++        BMCWEB_LOG_INFO("Parsing value", it->value());
++
++        // The construction parameters of param_list must start with `;`
++        size_t index = it->value().find(';');
++        BMCWEB_LOG_INFO("Parsing value", index);
++        if (index == std::string::npos)
++        {
++            continue;
++        }
++
++        for (const auto& param :
++             boost::beast::http::param_list{it->value().substr(index)})
++        {
++            if (param.second.empty())
++            {
++                continue;
++            }
++            else
++            {
++                SSLFileName = param.second;
++                std::cerr << "Read SSl files Name " << SSLFileName << "\n";
++                uploadData = &(formpart.content);
++            }
++        }
++    }
++
++    if (uploadData == nullptr)
++    {
++        messages::propertyMissing(asyncResp->res, "SSL Certificates Missing");
++        return;
++    }
++    uploadSSLFile(asyncResp, *uploadData, SSLFileName);
++}
++
++inline void handleSSLCertificateUploadAction(
++    App& app, const crow::Request& req,
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++    {
++        return;
++    }
++    std::string_view contentType = req.getHeaderValue("Content-Type");
++    BMCWEB_LOG_DEBUG("doPost: contentType= ", contentType);
++    if (contentType.starts_with("multipart/form-data"))
++    {
++        MultipartParser parser;
++        ParserError ec = parser.parse(req);
++        if (ec != ParserError::PARSER_SUCCESS)
++        {
++            // handle error
++            BMCWEB_LOG_ERROR("SSL Certificate parse failed, ec :",
++                             static_cast<int>(ec));
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        readSSLContext(asyncResp, parser);
++    }
++}
++
+ inline void setAuthentication(const std::shared_ptr<bmcweb::AsyncResp>& aResp,
+                               std::string interfaces, bool& property_value)
+ {
+@@ -412,6 +848,7 @@ inline void requestRoutesEventService(App& app)
+                       "PrimaryConfiguration");
+         getSmtpConfig(asyncResp, "xyz.openbmc_project.mail.alert.secondary",
+                       "SecondaryConfiguration");
++        getSmtpSSLCertificates(asyncResp);
+     });
+ 
+     BMCWEB_ROUTE(app, "/redfish/v1/EventService/")
+@@ -597,9 +1034,97 @@ inline void requestRoutesEventService(App& app)
+ 
+                     if (tlsenable)
+                     {
+-                        setTlsEnable(asyncResp,
+-                                     "xyz.openbmc_project.mail.alert.primary",
+-                                     *tlsenable);
++                        std::cerr << "Checking tlsenable value ==>  "
++                                  << *tlsenable << "\n";
++                        if (*tlsenable)
++                        {
++                            bool isPrimaryCACERT = true;
++                            bool isPrimaryServerKey = true;
++                            bool isPrimaryServerCRT = true;
++
++                            /* Primary SSL */
++
++                            std::cerr << "SSL Primary CACERT Context file= "
++                                      << sslPrimaryCACERTFile.c_str() << "\n";
++                            std::cerr << "SSL Primary CRT Context file= "
++                                      << sslPrimaryServerCRTFile.c_str()
++                                      << "\n";
++                            std::cerr << "SSL Primary Key Context file= "
++                                      << sslPrimaryServerKeyFile.c_str()
++                                      << "\n";
++
++                            isPrimaryCACERT = ensureOpensslKeyPresentAndValid(
++                                sslPrimaryCACERTFile);
++
++                            isPrimaryServerKey =
++                                ensureOpensslKeyPresentAndValid(
++                                    sslPrimaryServerKeyFile);
++
++                            isPrimaryServerCRT =
++                                ensureOpensslKeyPresentAndValid(
++                                    sslPrimaryServerCRTFile);
++
++                            if (!isPrimaryCACERT)
++                            {
++                                std::cerr
++                                    << "Checking certs in inside checkfile exits "
++                                    << isPrimaryCACERT << "\n";
++                                asyncResp->res
++                                    .jsonValue["Actions"]["#SMTP.certificate"]
++                                              ["target"] =
++                                    "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.SSLCertificateUpload";
++                                messages::propertyValueEmpty(
++                                    asyncResp->res,
++                                    primaryCacertFileName +
++                                        "Certificate is missing",
++                                    sslPrimaryCACERTFile);
++                                return;
++                            }
++                            else if (!isPrimaryServerKey)
++                            {
++                                std::cerr
++                                    << "Checking certs in inside checkfile exits "
++                                    << isPrimaryServerKey << "\n";
++                                asyncResp->res
++                                    .jsonValue["Actions"]["#SMTP.certificate"]
++                                              ["target"] =
++                                    "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.SSLCertificateUpload";
++                                messages::propertyValueEmpty(
++                                    asyncResp->res,
++                                    primaryServerKeyFileName +
++                                        "Certificate is missing",
++                                    sslPrimaryServerKeyFile);
++                            }
++                            else if (!isPrimaryServerCRT)
++                            {
++                                std::cerr
++                                    << "Checking certs in inside checkfile exits "
++                                    << isPrimaryServerCRT << "\n";
++                                asyncResp->res
++                                    .jsonValue["Actions"]["#SMTP.certificate"]
++                                              ["target"] =
++                                    "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.SSLCertificateUpload";
++                                messages::propertyValueEmpty(
++                                    asyncResp->res,
++                                    primaryServerCRTFileName +
++                                        "Certificate is missing",
++                                    sslPrimaryServerCRTFile);
++                            }
++                            else
++                            {
++                                setTlsEnable(
++                                    asyncResp,
++                                    "xyz.openbmc_project.mail.alert.primary",
++                                    *tlsenable);
++                            }
++                        }
++                        else
++                        {
++                            setTlsEnable(
++                                asyncResp,
++                                "xyz.openbmc_project.mail.alert.primary",
++                                *tlsenable);
++                        }
+                     }
+                     if (enable)
+                     {
+@@ -813,9 +1338,93 @@ inline void requestRoutesEventService(App& app)
+                     }
+                     if (tlsenable)
+                     {
+-                        setTlsEnable(asyncResp,
+-                                     "xyz.openbmc_project.mail.alert.secondary",
+-                                     *tlsenable);
++                        std::cerr << "Checking tlsenable value ==>  "
++                                  << *tlsenable << "\n";
++                        if (*tlsenable)
++                        {
++                            bool isSecondrayCACERT = true;
++                            bool isSecondrayServerKey = true;
++                            bool isSecondrayServerCRT = true;
++
++                            /* Secondary SSL */
++
++                            std::cerr << "SSL Secondary CACERT Context file= "
++                                      << sslSecondaryCACERTFile.c_str() << "\n";
++                            std::cerr << "SSL Secondary CRT Context file= "
++                                      << sslSecondaryServerCRTFile.c_str()
++                                      << "\n";
++                            std::cerr << "SSL Secondary Key Context file= "
++                                      << sslSecondaryServerKeyFile.c_str()
++                                      << "\n";
++
++                            isSecondrayCACERT = ensureOpensslKeyPresentAndValid(
++                                sslSecondaryCACERTFile);
++                            isSecondrayServerKey =
++                                ensureOpensslKeyPresentAndValid(
++                                    sslSecondaryServerKeyFile);
++
++                            isSecondrayServerCRT =
++                                ensureOpensslKeyPresentAndValid(
++                                    sslSecondaryServerCRTFile);
++
++                            if (!isSecondrayCACERT)
++                            {
++                                std::cerr
++                                    << "Checking certs in inside checkfile exits "
++                                    << isSecondrayCACERT << "\n";
++                                asyncResp->res
++                                    .jsonValue["Actions"]["#SMTP.certificate"]
++                                              ["target"] =
++                                    "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.SSLCertificateUpload";
++                                messages::propertyValueEmpty(
++                                    asyncResp->res,
++                                    "SSL cacert.pem Certificate is not exits",
++                                    sslSecondaryCACERTFile);
++                                return;
++                            }
++                            else if (!isSecondrayServerKey)
++                            {
++                                std::cerr
++                                    << "Checking certs in inside checkfile exits "
++                                    << isSecondrayServerKey << "\n";
++                                asyncResp->res
++                                    .jsonValue["Actions"]["#SMTP.certificate"]
++                                              ["target"] =
++                                    "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.SSLCertificateUpload";
++                                messages::propertyValueEmpty(
++                                    asyncResp->res,
++                                    "SSL Server.crt Certificate is not exits",
++                                    sslPrimaryServerKeyFile);
++                            }
++                            else if (!isSecondrayServerCRT)
++                            {
++                                std::cerr
++                                    << "Checking certs in inside checkfile exits "
++                                    << isSecondrayServerCRT << "\n";
++                                asyncResp->res
++                                    .jsonValue["Actions"]["#SMTP.certificate"]
++                                              ["target"] =
++                                    "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.SSLCertificateUpload";
++                                messages::propertyValueEmpty(
++                                    asyncResp->res,
++                                    "SSL Server.Key Certificate is not exits",
++                                    sslSecondaryServerCRTFile);
++                            }
++                            else
++                            {
++                                setTlsEnable(
++                                    asyncResp,
++                                    "xyz.openbmc_project.mail.alert.secondary",
++                                    *tlsenable);
++                            }
++                        }
++                        else
++                        {
++                            setTlsEnable(
++                                asyncResp,
++                                "xyz.openbmc_project.mail.alert.secondary",
++                                *tlsenable);
++                        }
+                     }
+                     if (enable)
+                     {
+@@ -872,6 +1481,16 @@ inline void requestRoutesSubmitTestEvent(App& app)
+     });
+ }
+ 
++inline void requestRoutesSSLEvent(App& app)
++{
++    BMCWEB_ROUTE(
++        app,
++        "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.SSLCertificateUpload")
++        .privileges(redfish::privileges::postEventService)
++        .methods(boost::beast::http::verb::post)(
++            std::bind_front(handleSSLCertificateUploadAction, std::ref(app)));
++}
++
+ inline void doSubscriptionCollection(
+     const boost::system::error_code& ec,
+     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+-- 
+2.34.1
+

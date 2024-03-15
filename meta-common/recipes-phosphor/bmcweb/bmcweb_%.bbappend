@@ -128,6 +128,7 @@ SRC_URI:append = "   \
             file://0215-Add-Proper-Logic-for-IP-Same-Series-Check.patch \
             file://0218-SNMP-Send-Test-Support-in-Redfish.patch \
             file://0202-Smtp-Mail-Alert-Support-in-Redfish.patch \
+            file://0210-Redfish-Support-SMTP-server-switch-SSL-Security.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
