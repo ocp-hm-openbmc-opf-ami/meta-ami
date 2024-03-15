@@ -57,6 +57,7 @@ do_compile() {
   src/com/ami/kvm/jviewer/soc/reader/*.java \
   src/com/ami/kvm/jviewer/soc/video/*.java \
   src/com/ami/kvm/jviewer/videorecord/*.java \
+  src/com/ami/nbd/*.java \
   src/com/ami/rfb/*.java \
   src/com/ami/vmedia/*.java \
   src/com/ami/vmedia/gui/*.java
