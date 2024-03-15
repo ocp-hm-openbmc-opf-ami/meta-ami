@@ -126,6 +126,7 @@ SRC_URI:append = "   \
             file://0212-Added-the-Error-message-when-both-Ipv4StaticAddress-and-Gateway-are-equal.patch \
             file://0214-Added-SNMPTrap-in-Redfish-Event-Service.patch \
             file://0215-Add-Proper-Logic-for-IP-Same-Series-Check.patch \
+            file://0218-SNMP-Send-Test-Support-in-Redfish.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \

@@ -1,0 +1,196 @@
+From 7b9b6d0e0e7d40cfd2527859dfd8f5e11c191383 Mon Sep 17 00:00:00 2001
+From: prasannas <prasannas@ami.com>
+Date: Thu, 7 Mar 2024 12:08:49 +0530
+Subject: [PATCH 218/218] SNMP Send Test Support in Redfish
+
+---
+ redfish-core/include/redfish.hpp      |  2 +
+ redfish-core/lib/network_protocol.hpp | 39 +++++++++++++-
+ redfish-core/lib/pef_service.hpp      | 75 +++++++++++++++++++++++++++
+ 3 files changed, 115 insertions(+), 1 deletion(-)
+
+diff --git a/redfish-core/include/redfish.hpp b/redfish-core/include/redfish.hpp
+index 85d21cd3..9a5580ed 100644
+--- a/redfish-core/include/redfish.hpp
++++ b/redfish-core/include/redfish.hpp
+@@ -309,6 +309,8 @@ class RedfishService
+         requestFipsManagerRoutes(app);
+ 
+         requestRoutesPefService(app);
++        requestRoutesSendTrap(app);
++
+         // PcieSwitch
+         requestRoutesPcieSwitchCollection(app);
+         requestRoutesPcieSwitchInstanceCollection(app);
+diff --git a/redfish-core/lib/network_protocol.hpp b/redfish-core/lib/network_protocol.hpp
+index 851a3ace..4d363c8c 100644
+--- a/redfish-core/lib/network_protocol.hpp
++++ b/redfish-core/lib/network_protocol.hpp
+@@ -153,6 +153,25 @@ inline void afterNetworkPortRequest(
+     }
+ }
+ 
++inline void
++    getSNMPProtocolEnabled(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    sdbusplus::asio::getProperty<bool>(
++        *crow::connections::systemBus, "xyz.openbmc_project.Snmp",
++        "/xyz/openbmc_project/Snmp", "xyz.openbmc_project.Snmp.SnmpUtils",
++        "SnmpTrapStatus",
++        [asyncResp](const boost::system::error_code& ec, bool protocolEnabled) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("D-BUS response error on SnmpTrapStatus Get{}",
++                             ec);
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        asyncResp->res.jsonValue["SNMP"]["ProtocolEnabled"] = protocolEnabled;
++    });
++}
++
+ inline void getNetworkData(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+                            const crow::Request& req)
+ {
+@@ -199,6 +218,7 @@ inline void getNetworkData(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+     asyncResp->res.jsonValue["HostName"] = hostName;
+ 
+     getNTPProtocolEnabled(asyncResp);
++    getSNMPProtocolEnabled(asyncResp);
+ 
+     getEthernetIfaceData(
+         [hostName, asyncResp](const bool& success,
+@@ -539,6 +559,7 @@ inline void handleManagersNetworkProtocolPatch(
+     std::optional<bool> ipmiEnabled;
+     std::optional<bool> sshEnabled;
+     std::optional<std::string> vId;
++    std::optional<bool> snmpEnabled;
+ 
+     // clang-format off
+         if (!json_util::readJsonPatch(
+@@ -548,7 +569,8 @@ inline void handleManagersNetworkProtocolPatch(
+                 "NTP/ProtocolEnabled", ntpEnabled,
+                 "IPMI/ProtocolEnabled", ipmiEnabled,
+                 "SSH/ProtocolEnabled", sshEnabled,
+-		"Id", vId))
++		"Id", vId,
++                "SNMP/ProtocolEnabled",snmpEnabled))
+         {
+             return;
+         }
+@@ -599,6 +621,21 @@ inline void handleManagersNetworkProtocolPatch(
+         handleProtocolEnabled(*sshEnabled, asyncResp,
+                               encodeServiceObjectPath(sshServiceName));
+     }
++    if (snmpEnabled)
++    {
++        sdbusplus::asio::setProperty(
++            *crow::connections::systemBus, "xyz.openbmc_project.Snmp",
++            "/xyz/openbmc_project/Snmp", "xyz.openbmc_project.Snmp.SnmpUtils",
++            "SnmpTrapStatus", *snmpEnabled,
++            [asyncResp](const boost::system::error_code& ec) {
++            if (ec)
++            {
++                BMCWEB_LOG_ERROR("D-Bus responses error: {}", ec);
++                messages::internalError(asyncResp->res);
++                return;
++            }
++        });
++    }
+ }
+ 
+ inline void handleManagersNetworkProtocolHead(
+diff --git a/redfish-core/lib/pef_service.hpp b/redfish-core/lib/pef_service.hpp
+index 6d94d16f..961b27ac 100644
+--- a/redfish-core/lib/pef_service.hpp
++++ b/redfish-core/lib/pef_service.hpp
+@@ -264,6 +264,10 @@ inline void requestRoutesPefService(App& app)
+         aResp->res.jsonValue["Actions"]["#PefService.SendAlertMail"]["target"] =
+             "/redfish/v1/PefService/Actions/"
+             "PefService.SendAlertMail/";
++        aResp->res
++            .jsonValue["Actions"]["#PefService.SendAlertSNMPTrap"]["target"] =
++            "/redfish/v1/PefService/Actions/"
++            "PefService.SendAlertSNMPTrap/";
+ 
+         getFilterEnable(aResp);
+         getPefConfParam(aResp);
+@@ -341,4 +345,75 @@ inline void requestRoutesPefService(App& app)
+             mailBuf);
+     });
+ }
++
++inline void requestRoutesSendTrap(App& app)
++{
++    BMCWEB_ROUTE(app,
++                 "/redfish/v1/PefService/Actions/PefService.SendAlertSNMPTrap/")
++        .privileges({{"Login"}, {"ConfigureComponents"}})
++        .methods(boost::beast::http::verb::post)(
++            [&app](const crow::Request& req,
++                   const std::shared_ptr<bmcweb::AsyncResp>& aResp) {
++        if (!redfish::setUpRedfishRoute(app, req, aResp))
++        {
++            return;
++        }
++        crow::connections::systemBus->async_method_call(
++            [aResp](const boost::system::error_code ec) {
++            if (ec)
++            {
++                BMCWEB_LOG_ERROR("SendMail: Can't get "
++                                 "alertMailIface ");
++                messages::internalError(aResp->res);
++                return;
++            }
++            else
++            {
++                sdbusplus::message::object_path path(
++                    "/xyz/openbmc_project/network/snmp/manager");
++                dbus::utility::getManagedObjects(
++                    "xyz.openbmc_project.Network.SNMP", path,
++                    [aResp](const boost::system::error_code& ec2,
++                            const dbus::utility::ManagedObjectType& resp) {
++                    if (ec2)
++                    {
++                        BMCWEB_LOG_WARNING("D-Bus responses error: {}", ec2);
++                        return;
++                    }
++                    sdbusplus::asio::getProperty<bool>(
++                        *crow::connections::systemBus,
++                        "xyz.openbmc_project.Snmp", "/xyz/openbmc_project/Snmp",
++                        "xyz.openbmc_project.Snmp.SnmpUtils", "SnmpTrapStatus",
++                        [aResp, resp](const boost::system::error_code& ec,
++                                      bool protocolEnabled) {
++                        if (ec)
++                        {
++                            BMCWEB_LOG_ERROR(
++                                "D-BUS response error on SnmpTrapStatus Get{}",
++                                ec);
++                            messages::internalError(aResp->res);
++                            return;
++                        }
++                        else if (!protocolEnabled)
++                        {
++                            messages::serviceDisabled(aResp->res,
++                                                      "SNMP Service Disabled");
++                            return;
++                            return;
++                        }
++                        else if (resp.size() == 0)
++                        {
++                            messages::internalError(aResp->res);
++                            return;
++                        }
++                        messages::success(aResp->res);
++                    });
++                });
++            }
++        },
++            "xyz.openbmc_project.Snmp", "/xyz/openbmc_project/Snmp",
++            "xyz.openbmc_project.Snmp.SnmpUtils", "SendSNMPTrap");
++    });
++}
++
+ } // namespace redfish
+-- 
+2.34.1
+
