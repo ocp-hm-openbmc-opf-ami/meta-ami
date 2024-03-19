@@ -19,7 +19,8 @@ SRC_URI += "file://nfs.cfg \
             file://CVE-2023-6817.patch \
   	    file://0029-ip_address_update_ncsi_interface.patch \           
             file://0030-Fix-USB-gadget-hid-driver-for-kernel-upgrade.patch \
-	    file://0030-SSIF-Support.patch \           
+	    file://0030-SSIF-Support.patch \          
+	    file://0031-Add-dev-ipmi-ssif-postcodes-to-recieve-sbmr-boot-pro.patch \ 
 	    "
 
 NON_PFR_SRC_URI_AMI = "file://0012-Add-new-layout-as-per-AMI-requirements.patch \

@@ -1,0 +1,467 @@
+From ffbdbdb00f5e9b4be9b62f8606f30c10280c3f42 Mon Sep 17 00:00:00 2001
+From: balajirg <balajirg@ami.com>
+Date: Mon, 18 Mar 2024 18:20:49 +0530
+Subject: [PATCH] Intergrating SBMR boot progress code support to
+ lpcsnoop.service provided by phosphor-host-postd.
+
+---
+ lpcsnoop.service.in                           |   2 +-
+ main.cpp                                      |  61 +++-
+ meson.build                                   |   6 +
+ meson.options                                 |  14 +
+ sbmrbootprogress/sbmr_boot_progress.hpp       | 261 ++++++++++++++++++
+ sbmrbootprogress/sbmr_boot_progress_code.json |  27 ++
+ 6 files changed, 359 insertions(+), 12 deletions(-)
+ create mode 100644 sbmrbootprogress/sbmr_boot_progress.hpp
+ create mode 100755 sbmrbootprogress/sbmr_boot_progress_code.json
+
+diff --git a/lpcsnoop.service.in b/lpcsnoop.service.in
+index 6ace17e..e6abeec 100644
+--- a/lpcsnoop.service.in
++++ b/lpcsnoop.service.in
+@@ -1,6 +1,6 @@
+ [Unit]
+ Description=LPC Snoop Daemon
+-After=systemd-modules-load.service
++After=@SYSTEMD_AFTER_SERVICE@
+ 
+ [Service]
+ Restart=always
+diff --git a/main.cpp b/main.cpp
+index e977ce0..0451645 100644
+--- a/main.cpp
++++ b/main.cpp
+@@ -42,6 +42,12 @@
+ #include <optional>
+ #include <thread>
+ 
++#ifdef REPORT_SBMR
++#include "sbmrbootprogress/sbmr_boot_progress.hpp"
++#endif //REPORT_SBMR
++
++#define POST_CODE_MAX 256
++
+ static size_t codeSize = 1; /* Size of each POST code in bytes */
+ static bool verbose = false;
+ 
+@@ -130,23 +136,46 @@ void PostCodeEventHandler(PostReporter* reporter, sdeventplus::source::IO& s,
+ {
+     uint64_t code = 0;
+     ssize_t readb;
++    uint8_t postCodeBuffer[POST_CODE_MAX] = {0};
++    secondary_post_code_t secondary_code = {};
+ 
+-    while ((readb = read(postFd, &code, codeSize)) > 0)
++    while ((readb = read(postFd, postCodeBuffer, codeSize)) > 0)
+     {
+-        code = le64toh(code);
+-        if (verbose)
+-        {
+-            fprintf(stderr, "Code: 0x%" PRIx64 "\n", code);
+-        }
++	if(codeSize <= sizeof(code))
++	{
++	    memcpy(&code, &postCodeBuffer[0], codeSize);
++	    code = le64toh(code);
++	    if (verbose)
++	    {
++		fprintf(stderr, "Code: 0x%" PRIx64 "\n", code);
++	    }
++	} 
++	else
++	{
++	    code = 0;
++	    for(uint8_t i = 0; i < codeSize; i++)
++	    {
++		secondary_code.push_back(postCodeBuffer[i]);
++		if(verbose)
++		{
++		    fprintf(stderr, "Secondary code: 0x%x\n", postCodeBuffer[i]);
++		}
++	    }
++	}
+         // HACK: Always send property changed signal even for the same code
+         // since we are single threaded, external users will never see the
+         // first value.
+-        reporter->value(std::make_tuple(~code, secondary_post_code_t{}), true);
+-        reporter->value(std::make_tuple(code, secondary_post_code_t{}));
+-
++        reporter->value(std::make_tuple(~code, secondary_code), true);
++        reporter->value(std::make_tuple(code, secondary_code));
++	postcode_t post_code{code, secondary_code};
++#ifdef REPORT_SBMR
++	SbmrBootProgress sbmr;
++        sbmr.updateBootProgressProperties(post_code, 0);
++#endif //REPORT_SBMR
+         // read depends on old data being cleared since it doens't always read
+         // the full code size
+         code = 0;
++	secondary_code.clear();
+ 
+         if (rateLimit(*reporter, s))
+         {
+@@ -231,13 +260,23 @@ int main(int argc, char* argv[])
+             case 'b':
+             {
+                 codeSize = atoi(optarg);
+-
++#ifdef REPORT_SBMR
++		if(codeSize < 1 || codeSize > 9)
++#else
+                 if (codeSize < 1 || codeSize > 8)
+-                {
++#endif //REPORT_SBMR
++		{
++#ifdef REPORT_SBMR
++                    fprintf(stderr,
++                            "Invalid POST code size '%s'. Must be "
++                            "an integer from 1 to 9.\n",
++                            optarg);
++#else
+                     fprintf(stderr,
+                             "Invalid POST code size '%s'. Must be "
+                             "an integer from 1 to 8.\n",
+                             optarg);
++#endif //REPORT_SBMR
+                     exit(EXIT_FAILURE);
+                 }
+                 break;
+diff --git a/meson.build b/meson.build
+index 715045c..9ed773d 100644
+--- a/meson.build
++++ b/meson.build
+@@ -24,6 +24,12 @@ libgpiodcxx = dependency('libgpiodcxx')
+ conf_data = configuration_data()
+ conf_data.set('bindir', get_option('prefix') / get_option('bindir'))
+ conf_data.set('SYSTEMD_TARGET', get_option('systemd-target'))
++conf_data.set('SYSTEMD_AFTER_SERVICE', get_option('systemd-after-service'))
++
++if get_option('sbmr-boot-progress').enabled()
++  add_project_arguments('-DREPORT_SBMR',language : 'cpp')
++  install_data('sbmrbootprogress/sbmr_boot_progress_code.json', install_dir : get_option('datadir') / 'sbmrbootprogress')
++endif
+ 
+ snoopd_src = ['main.cpp']
+ snoopd_args = ''
+diff --git a/meson.options b/meson.options
+index 9e0ef64..e5cd273 100644
+--- a/meson.options
++++ b/meson.options
+@@ -40,3 +40,17 @@ option(
+     min: 0,
+     value: 1000
+ )
++
++option(
++    'sbmr-boot-progress', 
++    type: 'feature', 
++    description: 'Read boot progress code through SSIF.',
++    value: 'disabled',
++)
++
++option(
++    'systemd-after-service',
++    description: 'Service after which lpc will start',
++    type: 'string'
++)
++
+diff --git a/sbmrbootprogress/sbmr_boot_progress.hpp b/sbmrbootprogress/sbmr_boot_progress.hpp
+new file mode 100644
+index 0000000..3902b80
+--- /dev/null
++++ b/sbmrbootprogress/sbmr_boot_progress.hpp
+@@ -0,0 +1,261 @@
++#pragma once
++
++#include <nlohmann/json.hpp>
++#include <chrono>
++#include <fstream>
++#include <phosphor-logging/elog-errors.hpp>
++#include <sdbusplus/asio/object_server.hpp>
++#include <xyz/openbmc_project/State/Boot/Raw/server.hpp>
++
++constexpr auto sbmrBootProgressSize = 9;
++constexpr auto bootProgressCode = 0x01;
++constexpr auto bootErrorCode = 0x02;
++constexpr auto bootDebugCode = 0x03;
++constexpr auto severityByte = 8;
++constexpr auto operationByte = 10;
++constexpr auto errorMinor = 0x40;
++constexpr auto errorMajor = 0x80;
++constexpr auto errorUnrecoverd = 0x90;
++constexpr auto errorUncontained = 0xA0;
++constexpr auto socketMask = 0xC0;
++constexpr auto instanceMask = 0x3F;
++
++constexpr auto subClassNvFwBoot = 0x01;
++constexpr auto classNvFw = 0xc1;
++constexpr auto nvFwBootJsonKey = 0xff0f;
++
++constexpr auto sbmrBootProgressService = "xyz.openbmc_project.State.Boot.Raw";
++constexpr auto sbmrBootProgressObj = "/xyz/openbmc_project/state/boot/raw0";
++constexpr auto bootProgressService = "xyz.openbmc_project.State.Host";
++constexpr auto bootProgressObject = "/xyz/openbmc_project/state/host0";
++constexpr auto bootProgressInf = "xyz.openbmc_project.State.Boot.Progress";
++constexpr auto loggingService = "xyz.openbmc_project.Logging";
++constexpr auto loggingObject = "/xyz/openbmc_project/logging";
++constexpr auto loggingInterface = "xyz.openbmc_project.Logging.Create";
++constexpr auto warnSeverity = "xyz.openbmc_project.Logging.Entry.Level.Warning";
++constexpr auto errorSeverity = "xyz.openbmc_project.Logging.Entry.Level.Error";
++constexpr auto postCodeService = "xyz.openbmc_project.State.Boot.PostCode0";
++constexpr auto postCodeObject = "/xyz/openbmc_project/State/Boot/PostCode0";
++constexpr auto postCodeInterface = "xyz.openbmc_project.State.Boot.PostCode";
++
++static const std::map<std::string, std::string> sbmrBootProgressStages{
++    {"0x01000000050001c100", "PrimaryProcInit"},
++    {"0x01000000060001c100", "SecondaryProcInit"},
++    {"0x010000000110010200", "PCIInit"},
++    {"0x010000000110040300", "SystemInitComplete"},
++    {"0x010000000700050300", "SystemSetup"},
++    {"0x010000000180050300", "OSStart"},
++    {"0x010000001910100300", "OSRunning"}};
++
++constexpr auto oemSbmrBootStage = "OEM";
++constexpr auto valueProperty = "Value";
++constexpr auto bootProgressSizeWithoutInstance = 8;
++constexpr auto progressCodeJson =
++    "/usr/share/sbmrbootprogress/sbmr_boot_progress_code.json";
++
++boost::asio::io_context io;
++auto conn = std::make_shared<sdbusplus::asio::connection>(io);
++
++constexpr auto dbusOrgPropertyInterface =
++    "org.freedesktop.DBus.Properties";
++using PrimaryCode_t = uint64_t;
++using SecondaryCode_t = std::vector<uint8_t>;
++using BootProgress_t = std::tuple<PrimaryCode_t, SecondaryCode_t>;
++using Json = nlohmann::json;
++using RawInterface = sdbusplus::xyz::openbmc_project::State::Boot::server::Raw;
++
++struct SbmrBootProgress
++{
++    SbmrBootProgress()
++    {
++        // parse JSON file when Service started
++        errorLog = parseJSONConfig(progressCodeJson);
++    }
++
++    ~SbmrBootProgress()
++    {
++    }
++    Json parseJSONConfig(const std::string& configFile);
++    void updateBootProgressProperties(BootProgress_t sbmrBootProgressCode,
++                                      uint64_t tsUS);
++  private:
++    void updateBootProgressOem(const std::string& oemLastState);
++    void updateBootProgressLastUpdate(uint64_t tsUS);
++    void updatePropertyBootProgress(const std::string& sbmrBootProgressStage);
++    Json errorLog;
++};
++
++Json SbmrBootProgress::parseJSONConfig(const std::string& configFile)
++{
++    std::ifstream jsonFile(configFile);
++    if (!jsonFile.is_open())
++    {
++        phosphor::logging::log<phosphor::logging::level::INFO>(
++            "Boot progress JSON file not found");
++    }
++    auto data = Json::parse(jsonFile, nullptr, false);
++    if (data.is_discarded())
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Boot progress JSON parser failure");
++    }
++    return data;
++}
++
++void SbmrBootProgress::updateBootProgressProperties(
++    BootProgress_t sbmrBootProgressCode, uint64_t tsUS)
++{
++
++    auto logEvent = 0;
++    auto bootProgressRecord =
++        std::get<std::vector<uint8_t>>(sbmrBootProgressCode);
++
++    if (bootProgressRecord.empty() ||
++        bootProgressRecord.size() != sbmrBootProgressSize)
++    {
++        return;
++    }
++    if (!tsUS)
++    {
++        tsUS = std::chrono::duration_cast<std::chrono::microseconds>(
++                   std::chrono::system_clock::now().time_since_epoch())
++                   .count();
++        logEvent = 1;
++    }
++    std::stringstream hexCode;
++    hexCode << "0x" << std::hex << std::setfill('0');
++
++    for (auto iterator = 0; iterator < bootProgressSizeWithoutInstance;
++         iterator++)
++    {
++        hexCode << std::setw(2) << std::setfill('0')
++                << static_cast<int>(bootProgressRecord[iterator]);
++    }
++    // Filter Severity to the bootProgressJsonKey
++    auto bootProgressJsonKey = hexCode.str().replace(severityByte,2,"00");
++
++    // add instance to the hexCode
++    hexCode << std::setw(2) << std::setfill('0')
++            << static_cast<int>(bootProgressRecord[8]);
++    auto bootProgressStage = hexCode.str();
++
++    updateBootProgressOem(bootProgressStage);
++    updateBootProgressLastUpdate(tsUS);
++    // Find the mapping
++    auto found = sbmrBootProgressStages.find(bootProgressStage);
++    if (found == sbmrBootProgressStages.end())
++    {
++        updatePropertyBootProgress(oemSbmrBootStage);
++    }
++    else
++    {
++        updatePropertyBootProgress(found->second);
++    }
++
++    // Don't log event when BMC rebooted/Service start
++    if (!errorLog.is_discarded() && logEvent)
++    {
++        if (bootProgressRecord[0] == bootErrorCode)
++        {
++            // Handle the specific case of EFI_NV_FW_BOOT_EC_LAST_BOOT_ERROR
++            // Their operation code is **8*, **9*, **A*
++            // * means that it could be 0~F
++            if ((bootProgressRecord[6] == subClassNvFwBoot) && (bootProgressRecord[7] == classNvFw)) {
++                if (bootProgressRecord[5]) {
++                    hexCode.str("");
++                    hexCode.clear();
++                    hexCode << std::setw(4) << (nvFwBootJsonKey | bootProgressRecord[5]);
++                    bootProgressJsonKey = bootProgressJsonKey.replace(operationByte, 4,
++                        hexCode.str());
++                }
++            }
++            auto message = errorLog.value(bootProgressJsonKey, "");
++            if (!message.empty())
++            {
++                try
++                {
++                    std::map<std::string, std::string> additionData = {};
++                    std::stringstream logMessage;
++                    auto socket = (bootProgressRecord[8] & socketMask) >> 6;
++                    auto instance = bootProgressRecord[8] & instanceMask;
++                    logMessage << message << ", Socket 0x" << std::hex << socket << ", Instance 0x"<< std::hex << instance;
++                    auto method =
++                        conn->new_method_call(loggingService, loggingObject,
++                                              loggingInterface, "Create");
++                    method.append(logMessage.str());
++                    if (bootProgressRecord[3] == errorMinor)
++                    {
++                        method.append(warnSeverity);
++                     }
++                    else
++                    {
++                        method.append(errorSeverity);
++                    }
++                    method.append(additionData);
++                    auto reply = conn->call(method);
++                }
++                catch (const std::exception& e)
++                {
++                    phosphor::logging::log<phosphor::logging::level::ERR>(
++                        e.what());
++                }
++            }
++        }
++    }
++
++    return;
++}
++void SbmrBootProgress::updateBootProgressOem(const std::string& oemLastState)
++{
++    try
++    {
++        std::variant<std::string> variantStringValue(oemLastState);
++        auto method = conn->new_method_call(bootProgressService, bootProgressObject,
++                                            dbusOrgPropertyInterface, "Set");
++        method.append(bootProgressInf, "BootProgressOem", variantStringValue);
++        auto reply = conn->call(method);
++    }
++    catch (const std::exception& e)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(e.what());
++    }
++    return;
++}
++void SbmrBootProgress::updatePropertyBootProgress(
++    const std::string& sbmrBootProgressStage)
++{
++    try
++    {
++        auto enumValue =
++            "xyz.openbmc_project.State.Boot.Progress.ProgressStages." +
++            sbmrBootProgressStage;
++        std::variant<std::string> variantValue(enumValue);
++        auto method = conn->new_method_call(bootProgressService, bootProgressObject,
++                                            dbusOrgPropertyInterface, "Set");
++
++        method.append(bootProgressInf, "BootProgress", variantValue);
++        auto reply = conn->call(method);
++    }
++    catch (const std::exception& e)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(e.what());
++    }
++
++    return;
++}
++void SbmrBootProgress::updateBootProgressLastUpdate(uint64_t tsUS)
++{
++    try
++    {
++        std::variant<uint64_t> variantTimeValue(tsUS);
++        auto method = conn->new_method_call(bootProgressService, bootProgressObject,
++                                            dbusOrgPropertyInterface, "Set");
++        method.append(bootProgressInf, "BootProgressLastUpdate", variantTimeValue);
++        auto reply = conn->call(method);
++    }
++    catch (const std::exception& e)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(e.what());
++    }
++    return;
++}
+diff --git a/sbmrbootprogress/sbmr_boot_progress_code.json b/sbmrbootprogress/sbmr_boot_progress_code.json
+new file mode 100755
+index 0000000..6a3d683
+--- /dev/null
++++ b/sbmrbootprogress/sbmr_boot_progress_code.json
+@@ -0,0 +1,27 @@
++{
++    "0x02000000000001c0":"EFI_NV_HW_QSPI_EC_FW_FLASH_INIT_FAILED",
++    "0x02000000010001c0":"EFI_NV_HW_QSPI_EC_MB1_FW_FLASH_INIT_FAILED",
++    "0x02000000020001c0":"EFI_NV_HW_QSPI_EC_MB1_DATA_FLASH_INIT_FAILED",
++    "0x02000000000002c0":"EFI_NV_HW_UPHY_EC_INIT_FAILED",
++    "0x02000000000003c0":"EFI_NV_HW_NVLINK_EC_INIT_FAILED",
++    "0x02000000010003c0":"EFI_NV_HW_NVLINK_EC_TRAINING_TIMEOUT",
++    "0x02000000000004c0":"EFI_NV_HW_NVC2C_EC_INIT_FAILED",
++    "0x02000000000005c0":"EFI_NV_HW_DRAM_EC_TRAINING_FAILED",
++    "0x02000000010005c0":"EFI_NV_HW_DRAM_EC_CHANNEL_LOW_COUNT",
++    "0x02000000020005c0":"EFI_NV_HW_DRAM_EC_MB1_ECC_ERROR",
++    "0x02000000030005c0":"EFI_NV_HW_DRAM_EC_MB2_ECC_ERROR",
++    "0x02000000000006c0":"EFI_NV_HW_THERMAL_EC_TEMP_OUT_OF_RANGE",
++    "0x02000000000007c0":"EFI_NV_HW_CPU_EC_INIT_FAILED",
++    "0x02000000000001c1":"EFI_NV_FW_BOOT_EC_BRBCT_LOAD_FAILED",
++    "0x02000000010001c1":"EFI_NV_FW_BOOT_EC_BINARY_LOAD_FAILED",
++    "0x02000000020001c1":"EFI_NV_FW_BOOT_EC_CSA_FAILED",
++    "0x02000000ff8f01c1":"EFI_NV_FW_BOOT_EC_LAST_BOOT_ERROR",
++    "0x02000000ff9f01c1":"EFI_NV_FW_BOOT_EC_LAST_BOOT_ERROR",
++    "0x02000000ffaf01c1":"EFI_NV_FW_BOOT_EC_LAST_BOOT_ERROR",
++    "0x02000000000003c1":"EFI_NV_FW_UEFI_EC_NO_SMBIOS_TABLE",
++    "0x02000000010003c1":"EFI_NV_FW_UEFI_EC_SMBIOS_TRANSFER_FAILED",
++    "0x02000000020003c1":"EFI_NV_FW_UEFI_EC_M2_NOT_DETECTED",
++    "0x02000000030003c1":"EFI_NV_FW_UEFI_EC_M2_NO_EFI_PARTITION",
++    "0x02000000040003c1":"EFI_NV_FW_UEFI_EC_M2_PARTITION_NOT_FAT",
++    "0x02000000050003c1":"EFI_NV_FW_UEFI_EC_M2_NOT_NVME"
++}

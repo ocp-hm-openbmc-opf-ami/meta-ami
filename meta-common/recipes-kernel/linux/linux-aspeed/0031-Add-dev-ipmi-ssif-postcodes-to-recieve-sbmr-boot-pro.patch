@@ -1,0 +1,245 @@
+From ff44f301d1d8b52f477e4c620519c0c6d29921ce Mon Sep 17 00:00:00 2001
+From: balajirg <balajirg@ami.com>
+Date: Mon, 18 Mar 2024 17:49:40 +0530
+Subject: [PATCH] Add /dev/ipmi-ssif-postcodes to recieve sbmr boot progress
+ code from host by phosphor-host-postd application. Add Kconfig to
+ CONFIG_SEPARATE_SSIF_POSTCODES to enable or disable ssif-postcode.
+
+---
+ drivers/char/ipmi/Kconfig    |   4 +
+ drivers/char/ipmi/ssif_bmc.c | 149 ++++++++++++++++++++++++++++++++++-
+ 2 files changed, 151 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/char/ipmi/Kconfig b/drivers/char/ipmi/Kconfig
+index d82323f8393b..cb6b6b68af47 100644
+--- a/drivers/char/ipmi/Kconfig
++++ b/drivers/char/ipmi/Kconfig
+@@ -197,6 +197,10 @@ config SSIF_IPMI_BMC
+ 	  The driver implements the BMC side of the SMBus system
+ 	  interface (SSIF).
+ 
++config SEPARATE_SSIF_POSTCODES
++        bool "Separate ipmi post codes writes to another channel"
++        depends on SSIF_IPMI_BMC
++
+ config IPMB_DEVICE_INTERFACE
+ 	tristate 'IPMB Interface handler'
+ 	depends on I2C
+diff --git a/drivers/char/ipmi/ssif_bmc.c b/drivers/char/ipmi/ssif_bmc.c
+index 4d50b51e4438..50a1415c2dd0 100644
+--- a/drivers/char/ipmi/ssif_bmc.c
++++ b/drivers/char/ipmi/ssif_bmc.c
+@@ -19,8 +19,14 @@
+ #include <linux/jiffies.h>
+ #include <linux/ipmi_ssif_bmc.h>
+ #include <linux/i2c-aspeed.h>
++#include <linux/kfifo.h>
+ 
+ #define DEVICE_NAME                             "ipmi-ssif-host"
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++#define DEVICE_NAME_POST			"ipmi-ssif-postcodes"
++#define POST_CODE_SIZE				9
++#define POST_CODE_OFFSET			3
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
+ 
+ #define GET_8BIT_ADDR(addr_7bit)                (((addr_7bit) << 1) & 0xff)
+ 
+@@ -47,6 +53,8 @@
+  */
+ #define RESPONSE_TIMEOUT                        500 /* ms */
+ 
++#define BUFFER_SIZE 1024
++
+ struct ssif_part_buffer {
+ 	u8 address;
+ 	u8 smbus_cmd;
+@@ -104,6 +112,13 @@ struct ssif_bmc_ctx {
+ 	struct ipmi_ssif_msg    response;
+ 	struct ipmi_ssif_msg    request;
+ 	int 			nackstatus;
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++	struct miscdevice       miscdev_post;
++	spinlock_t              lock_post_rd;
++	wait_queue_head_t       wait_queue_post_rd;
++	u8                      running_post;
++	struct kfifo 		fifo_post;
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
+ };
+ 
+ static void on_stop_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val);
+@@ -172,6 +187,97 @@ static ssize_t ssif_bmc_read(struct file *file, char __user *buf, size_t count,
+ 	return (ret < 0) ? ret : count;
+ }
+ 
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++static inline struct ssif_bmc_ctx *to_ssif_bmc_post(struct file *file)
++{
++	return container_of(file->private_data, struct ssif_bmc_ctx, miscdev_post);
++}
++
++
++static ssize_t ssif_bmc_read_post(struct file *file, char __user *buf, size_t count_in, loff_t *ppos)
++{
++	struct ssif_bmc_ctx *ssif_bmc = to_ssif_bmc_post(file);
++	unsigned long flags;
++	unsigned int count_out;
++	ssize_t ret = 0;
++
++	if (kfifo_is_empty(&ssif_bmc->fifo_post)) {
++		if (file->f_flags & O_NONBLOCK)
++			return -EAGAIN;
++		ret = wait_event_interruptible(ssif_bmc->wait_queue_post_rd, !kfifo_is_empty(&ssif_bmc->fifo_post));
++		if (ret == -ERESTARTSYS)
++			return ret;
++	}
++	spin_lock_irqsave(&ssif_bmc->lock_post_rd, flags);
++	ret = kfifo_to_user(&ssif_bmc->fifo_post, buf, count_in, &count_out);
++	spin_unlock_irqrestore(&ssif_bmc->lock_post_rd, flags);
++	return (ret < 0) ? ret : count_out;
++}
++
++static int ssif_bmc_open_post(struct inode *inode, struct file *file)
++{
++	struct ssif_bmc_ctx *ssif_bmc = to_ssif_bmc_post(file);
++	int ret = 0;
++
++	if (!ssif_bmc->running_post)
++		ssif_bmc->running_post = 1;
++	else
++		ret = -EBUSY;
++
++	return ret;
++}
++
++static __poll_t ssif_bmc_poll_post(struct file *file, poll_table *wait)
++{
++	struct ssif_bmc_ctx *ssif_bmc = to_ssif_bmc_post(file);
++
++	poll_wait(file, &ssif_bmc->wait_queue_post_rd, wait);
++	if (!kfifo_is_empty(&ssif_bmc->fifo_post)) {
++		return POLLIN | POLLRDNORM;
++	}
++	return 0;
++}
++
++static int ssif_bmc_release_post(struct inode *inode, struct file *file)
++{
++	struct ssif_bmc_ctx *ssif_bmc = to_ssif_bmc_post(file);
++
++	ssif_bmc->running_post = 0;
++
++	return 0;
++}
++
++static const struct file_operations ssif_bmc_post_fops = {
++	.owner		= THIS_MODULE,
++	.open		= ssif_bmc_open_post,
++	.read		= ssif_bmc_read_post,
++	.release	= ssif_bmc_release_post,
++	.poll		= ssif_bmc_poll_post,
++};
++
++void send_post_code(struct ssif_bmc_ctx *ssif_bmc)
++{
++	unsigned long flags = 0;
++	int rc = 0;
++
++	if (kfifo_initialized(&ssif_bmc->fifo_post) && ssif_bmc->request.len >= (POST_CODE_SIZE + POST_CODE_OFFSET)) {
++		ssize_t to_send = POST_CODE_SIZE;
++		spin_lock_irqsave(&ssif_bmc->lock_post_rd, flags);
++		if ((BUFFER_SIZE - kfifo_len(&ssif_bmc->fifo_post)) < to_send)
++			kfifo_reset(&ssif_bmc->fifo_post);
++		rc = kfifo_in(&ssif_bmc->fifo_post, &ssif_bmc->request.payload[POST_CODE_OFFSET], to_send);
++		if (rc != to_send) {
++			kfifo_reset(&ssif_bmc->fifo_post);
++			spin_unlock_irqrestore(&ssif_bmc->lock_post_rd, flags);
++			return;
++		}
++		spin_unlock_irqrestore(&ssif_bmc->lock_post_rd, flags);
++
++		wake_up_all(&ssif_bmc->wait_queue_post_rd);
++	}
++}
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
++
+ /* Handle SSIF message that is written by user */
+ static ssize_t ssif_bmc_write(struct file *file, const char __user *buf, size_t count,
+ 			      loff_t *ppos)
+@@ -324,6 +430,12 @@ static void response_timeout(struct timer_list *t)
+ /* Called with ssif_bmc->lock held. */
+ static void handle_request(struct ssif_bmc_ctx *ssif_bmc)
+ {
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++	int netfn = ssif_bmc->request.payload[0] >> 2;
++	int cmd   = ssif_bmc->request.payload[1];
++	int group = ssif_bmc->request.payload[2];
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
++
+ 	/* set ssif_bmc to busy waiting for response */
+ 	ssif_bmc->busy = true;
+ 	/* Request message is available to process */
+@@ -333,6 +445,12 @@ static void handle_request(struct ssif_bmc_ctx *ssif_bmc)
+ 	dev_dbg(&ssif_bmc->client->dev, "enable nack\n");
+ 	/* Clean old response buffer */
+ 	memset(&ssif_bmc->response, 0, sizeof(struct ipmi_ssif_msg));
++
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++	if(netfn == 0x2c && cmd == 0x02 && group == 0xAE) {
++		send_post_code(ssif_bmc);	
++	}
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
+ 	/* This is the new READ request.*/
+ 	wake_up_all(&ssif_bmc->wait_queue);
+ 
+@@ -864,15 +982,37 @@ static int ssif_bmc_probe(struct i2c_client *client)
+ 	ret = misc_register(&ssif_bmc->miscdev);
+ 	if (ret)
+ 		return ret;
+-
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++	ssif_bmc->running_post = 0;
++	spin_lock_init(&ssif_bmc->lock_post_rd);
++	init_waitqueue_head(&ssif_bmc->wait_queue_post_rd);
++	ret = kfifo_alloc(&ssif_bmc->fifo_post, BUFFER_SIZE, GFP_KERNEL);
++	if (ret) {
++		misc_deregister(&ssif_bmc->miscdev);
++		return ret;
++	}
++	ssif_bmc->miscdev_post.minor = MISC_DYNAMIC_MINOR;
++	ssif_bmc->miscdev_post.name = DEVICE_NAME_POST;
++	ssif_bmc->miscdev_post.fops = &ssif_bmc_post_fops;
++	ssif_bmc->miscdev_post.parent = &client->dev;
++	ret = misc_register(&ssif_bmc->miscdev_post);
++	if (ret) {
++		misc_deregister(&ssif_bmc->miscdev);
++		return ret;
++	}
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
+ 	ssif_bmc->client = client;
+ 	ssif_bmc->client->flags |= I2C_CLIENT_SLAVE;
+ 
+ 	/* Register I2C slave */
+ 	i2c_set_clientdata(client, ssif_bmc);
+ 	ret = i2c_slave_register(client, ssif_bmc_cb);
+-	if (ret)
++	if (ret) {
+ 		misc_deregister(&ssif_bmc->miscdev);
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++		misc_deregister(&ssif_bmc->miscdev_post);
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
++	}
+ 
+ 	return ret;
+ }
+@@ -883,6 +1023,11 @@ static void ssif_bmc_remove(struct i2c_client *client)
+ 
+ 	i2c_slave_unregister(client);
+ 	misc_deregister(&ssif_bmc->miscdev);
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++	kfifo_free(&ssif_bmc->fifo_post);
++	misc_deregister(&ssif_bmc->miscdev_post);
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
++
+ }
+ 
+ static const struct of_device_id ssif_bmc_match[] = {
