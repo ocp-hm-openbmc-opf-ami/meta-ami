@@ -2,6 +2,7 @@ FILESEXTRAPATHS:append := "${THISDIR}/${PN}:"
 
 SRC_URI += " \
            file://0001-Added-change-to-launch-Multisol-session-via-IPMI.patch \
+           file://0002-Fix-to-Handle-payload-instance-for-MultiSOL.patch \
            "
 
 ALT_RMCPP_IFACE_ETH1 = "eth1"

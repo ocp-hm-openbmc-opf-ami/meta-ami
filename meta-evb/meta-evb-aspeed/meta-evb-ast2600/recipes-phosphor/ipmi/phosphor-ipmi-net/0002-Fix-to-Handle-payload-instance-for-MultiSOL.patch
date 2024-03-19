@@ -1,0 +1,93 @@
+From a28b624b046a934f99ee94bc7c9e1b88febb09e7 Mon Sep 17 00:00:00 2001
+From: pandiarajt <pandiarajt@ami.com>
+Date: Tue, 19 Mar 2024 11:00:34 +0530
+Subject: [PATCH 303/303] Fix to handle SOL payload instance for MultiSOL
+
+---
+ command/payload_cmds.cpp | 37 +++++++++++++++++++++++++++----------
+ 1 file changed, 27 insertions(+), 10 deletions(-)
+
+diff --git a/command/payload_cmds.cpp b/command/payload_cmds.cpp
+index 1ddbace..248ef22 100644
+--- a/command/payload_cmds.cpp
++++ b/command/payload_cmds.cpp
+@@ -80,11 +80,17 @@ std::vector<uint8_t> activatePayload(const std::vector<uint8_t>& inPayload,
+         return outPayload;
+     }
+ 
+-    auto status = sol::Manager::get().isPayloadActive(request->payloadInstance);
+-    if (status)
++
++    for(int solInstance = 1; solInstance < MAX_PAYLOAD_INSTANCE + 1; solInstance++)
+     {
+-        response->completionCode = IPMI_CC_PAYLOAD_ALREADY_ACTIVE;
+-        return outPayload;
++        auto status = sol::Manager::get().isPayloadActive(solInstance);
++
++        if (status)
++        {
++            std::cout << "SOL playload instance" << solInstance << ": Active "  << std::endl;
++            response->completionCode = IPMI_CC_PAYLOAD_ALREADY_ACTIVE;
++            return outPayload;
++        }
+     }
+ 
+     // Set the current command's socket channel to the session
+@@ -117,6 +123,7 @@ std::vector<uint8_t>
+     deactivatePayload(const std::vector<uint8_t>& inPayload,
+                       std::shared_ptr<message::Handler>& handler)
+ {
++    uint8_t payloadInst = 0;    
+     auto request =
+         reinterpret_cast<const DeactivatePayloadRequest*>(inPayload.data());
+     if (inPayload.size() != sizeof(*request))
+@@ -143,8 +150,18 @@ std::vector<uint8_t>
+         return outPayload;
+     }
+ 
+-    auto status = sol::Manager::get().isPayloadActive(request->payloadInstance);
+-    if (!status)
++
++    for(int solInstance = 1; solInstance < MAX_PAYLOAD_INSTANCE + 1; solInstance++)
++    {
++        auto status = sol::Manager::get().isPayloadActive(solInstance);
++
++        if (status)
++        {
++            payloadInst = solInstance;
++        }
++    }
++
++    if(payloadInst == 0)
+     {
+         response->completionCode = IPMI_CC_PAYLOAD_DEACTIVATED;
+         return outPayload;
+@@ -153,9 +170,9 @@ std::vector<uint8_t>
+     auto currentSession =
+         session::Manager::get().getSession(handler->sessionID);
+     auto solSessionID =
+-        sol::Manager::get().getContext(request->payloadInstance).sessionID;
++        sol::Manager::get().getContext(payloadInst).sessionID;
+     auto solActiveSession =
+-        sol::Manager::get().getContext(request->payloadInstance).session;
++        sol::Manager::get().getContext(payloadInst).session;
+     // The session owner or the ADMIN could deactivate the session
+     if (currentSession->userName != solActiveSession->userName &&
+         currentSession->currentPrivilege() !=
+@@ -167,11 +184,11 @@ std::vector<uint8_t>
+ 
+     try
+     {
+-        sol::Manager::get().stopPayloadInstance(request->payloadInstance);
++        sol::Manager::get().stopPayloadInstance(payloadInst);
+ 
+         try
+         {
+-            activating(request->payloadInstance, solSessionID);
++            activating(payloadInst, solSessionID);
+         }
+         catch (const std::exception& e)
+         {
+-- 
+2.34.1
+
