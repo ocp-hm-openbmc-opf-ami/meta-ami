@@ -1,0 +1,190 @@
+From c489983b3978e5b81c6fbdbc0a7239ba3d1706f5 Mon Sep 17 00:00:00 2001
+From: ethanwei <ethanwei@ami.com>
+Date: Tue, 12 Mar 2024 18:29:08 +0800
+Subject: [PATCH] Fix OT 3891. Accepting Reverse Range for IP Range 
+ modified:   src/firewall_configuration.cpp
+
+---
+ src/firewall_configuration.cpp | 116 ++++++++++++++++++++++++++-------
+ 1 file changed, 91 insertions(+), 25 deletions(-)
+
+diff --git a/src/firewall_configuration.cpp b/src/firewall_configuration.cpp
+index 66931ca..1f4c1dc 100644
+--- a/src/firewall_configuration.cpp
++++ b/src/firewall_configuration.cpp
+@@ -61,8 +61,12 @@ int16_t Configuration::addRule(FirewallIface::Target target, uint8_t control, Fi
+         return -1;
+     } // else if
+ 
++    if ( !endIPAddress.empty() && !(startIPAddress.find(":") == std::string::npos && endIPAddress.find(":") == std::string::npos
++             || startIPAddress.find(".") == std::string::npos && endIPAddress.find(".") == std::string::npos)) {
++        log<level::ERR>(fmt::format("Type of IP Range are different. Start IP Address: {} End IP Address: {}\n", startIPAddress, endIPAddress).c_str());
++        return -1;
++    } // if
+     std::string params = fmt::format("-A INPUT -j {}", target == FirewallIface::Target::ACCEPT ? "ACCEPT" : "DROP");
+-
+     if ((control & (uint8_t)ControlBit::PROTOCOL) == (uint8_t)ControlBit::PROTOCOL) {
+         params = params + " -p " + (protocol == FirewallIface::Protocol::TCP ? "tcp" :
+                                     protocol == FirewallIface::Protocol::UDP ? "udp" :
+@@ -71,19 +75,41 @@ int16_t Configuration::addRule(FirewallIface::Target target, uint8_t control, Fi
+ 
+     if ((control & (uint8_t)ControlBit::IP) == (uint8_t)ControlBit::IP) {
+         std::variant<in_addr, in6_addr> addr1, addr2;
+-        if (startIPAddress.find(":") != endIPAddress.find(":")) {
+-            return -1;
++        if (startIPAddress.find(":") != std::string::npos && endIPAddress.find(":") != std::string::npos) {
++            in6_addr tmp1, tmp2;
++            inet_pton(AF_INET6, startIPAddress.c_str(), &tmp1);
++            if (!endIPAddress.empty()) {
++                inet_pton(AF_INET6, endIPAddress.c_str(), &tmp2);
++                for (int i = 0; i < 4; i++) {
++                    try {
++                        if (ntohl(tmp1.s6_addr32[i]) > ntohl(tmp2.s6_addr32[i])) {
++                            log<level::ERR>(fmt::format("Incorrect IP Range. Start IP Address: {} End IP Address: {}\n", startIPAddress, endIPAddress).c_str());
++                            return -1;
++                        }
++                    } catch (std::exception &e) {
++                        log<level::ERR>(fmt::format("error = {}\n", e.what()).c_str());
++                    }
++                }
++            }
++
++            addr1=tmp1;
++            addr2=tmp2;
+         } // if
+-        else if (startIPAddress.find(":") != std::string::npos && endIPAddress.find(":") != std::string::npos) {
+-            inet_pton(AF_INET6, startIPAddress.c_str(), &addr1);
+-            inet_pton(AF_INET6, endIPAddress.c_str(), &addr2);
+-        } // else if
+         else if (startIPAddress.find(".") != std::string::npos && endIPAddress.find(".") != std::string::npos) {
+-            inet_pton(AF_INET, startIPAddress.c_str(), &addr1);
+-            inet_pton(AF_INET, endIPAddress.c_str(), &addr2);
++            in_addr tmp1, tmp2;
++            inet_pton(AF_INET, startIPAddress.c_str(), &tmp1);
++            if (!endIPAddress.empty()) {
++                inet_pton(AF_INET, endIPAddress.c_str(), &tmp2);
++                if (ntohl(tmp1.s_addr) > ntohl(tmp2.s_addr)) {
++                    log<level::ERR>(fmt::format("Incorrect IP Range. Start IP Address: {} End IP Address: {}\n", startIPAddress, endIPAddress).c_str());
++                    return -1;
++                }
++            }
++            addr1=tmp1;
++            addr2=tmp2;
+         }
+ 
+-        if (memcmp(&addr1, &addr2, sizeof(std::variant<in_addr, in6_addr>)) == 0) {
++        if (endIPAddress.empty() || memcmp(&addr1, &addr2, sizeof(std::variant<in_addr, in6_addr>)) == 0) {
+             params += " -s " + startIPAddress;
+         } // if
+         else {
+@@ -94,7 +120,6 @@ int16_t Configuration::addRule(FirewallIface::Target target, uint8_t control, Fi
+     if ((control & (uint8_t)ControlBit::PORT) == (uint8_t)ControlBit::PORT) {
+         if ((control & (uint8_t)ControlBit::PROTOCOL) != (uint8_t)ControlBit::PROTOCOL
+              || protocol == FirewallIface::Protocol::ICMP
+-             || protocol == FirewallIface::Protocol::ALL
+              || startPort == 0) {
+             return -1;
+         }
+@@ -142,6 +167,20 @@ int16_t Configuration::delRule(FirewallIface::Target target, uint8_t control, Fi
+         return -1;
+     } // if
+ 
++
++    if (startIPAddress.find(":") == std::string::npos && (getRules(FirewallIface::IP::IPV4)).size() >= MAX_RULE_NUM ) {
++        return -1;
++    } // if
++    else if (startIPAddress.find(":") != std::string::npos && (getRules(FirewallIface::IP::IPV6).size()) >= MAX_RULE_NUM ) {
++        return -1;
++    } // else if
++
++    if ( !endIPAddress.empty() && !(startIPAddress.find(":") == std::string::npos && endIPAddress.find(":") == std::string::npos
++             || startIPAddress.find(".") == std::string::npos && endIPAddress.find(".") == std::string::npos)) {
++        log<level::ERR>(fmt::format("Type of IP Range are different. Start IP Address: {} End IP Address: {}\n", startIPAddress, endIPAddress).c_str());
++        return -1;
++    } // if
++
+     std::string params = fmt::format("-D INPUT -j {}", target == FirewallIface::Target::ACCEPT ? "ACCEPT" : "DROP");
+ 
+     if ((control & (uint8_t)ControlBit::PROTOCOL) == (uint8_t)ControlBit::PROTOCOL) {
+@@ -152,19 +191,41 @@ int16_t Configuration::delRule(FirewallIface::Target target, uint8_t control, Fi
+ 
+     if ((control & (uint8_t)ControlBit::IP) == (uint8_t)ControlBit::IP) {
+         std::variant<in_addr, in6_addr> addr1, addr2;
+-        if (startIPAddress.find(":") != std::string::npos && endIPAddress.find(".") != std::string::npos) {
+-            return -1;
++        if (startIPAddress.find(":") != std::string::npos && endIPAddress.find(":") != std::string::npos) {
++            in6_addr tmp1, tmp2;
++            inet_pton(AF_INET6, startIPAddress.c_str(), &tmp1);
++            if (!endIPAddress.empty()) {
++                inet_pton(AF_INET6, endIPAddress.c_str(), &tmp2);
++                for (int i = 0; i < 4; i++) {
++                    try {
++                        if (ntohl(tmp1.s6_addr32[i]) > ntohl(tmp2.s6_addr32[i])) {
++                            log<level::ERR>(fmt::format("Incorrect IP Range. Start IP Address: {} End IP Address: {}\n", startIPAddress, endIPAddress).c_str());
++                            return -1;
++                        }
++                    } catch (std::exception &e) {
++                        log<level::ERR>(fmt::format("error = {}\n", e.what()).c_str());
++                    }
++                }
++            }
++
++            addr1=tmp1;
++            addr2=tmp2;
+         } // if
+-        else if (startIPAddress.find(":") != std::string::npos && endIPAddress.find(":") != std::string::npos) {
+-            inet_pton(AF_INET6, startIPAddress.c_str(), &addr1);
+-            inet_pton(AF_INET6, endIPAddress.c_str(), &addr2);
+-        } // else if
+         else if (startIPAddress.find(".") != std::string::npos && endIPAddress.find(".") != std::string::npos) {
+-            inet_pton(AF_INET, startIPAddress.c_str(), &addr1);
+-            inet_pton(AF_INET, endIPAddress.c_str(), &addr2);
++            in_addr tmp1, tmp2;
++            inet_pton(AF_INET, startIPAddress.c_str(), &tmp1);
++            if (!endIPAddress.empty()) {
++                inet_pton(AF_INET, endIPAddress.c_str(), &tmp2);
++                if (ntohl(tmp1.s_addr) > ntohl(tmp2.s_addr)) {
++                    log<level::ERR>(fmt::format("Incorrect IP Range. Start IP Address: {} End IP Address: {}\n", startIPAddress, endIPAddress).c_str());
++                    return -1;
++                }
++            }
++            addr1=tmp1;
++            addr2=tmp2;
+         }
+ 
+-        if (memcmp(&addr1, &addr2, sizeof(std::variant<in_addr, in6_addr>)) == 0) {
++        if (endIPAddress.empty() || memcmp(&addr1, &addr2, sizeof(std::variant<in_addr, in6_addr>)) == 0) {
+             params += " -s " + startIPAddress;
+         } // if
+         else {
+@@ -174,8 +235,7 @@ int16_t Configuration::delRule(FirewallIface::Target target, uint8_t control, Fi
+ 
+     if ((control & (uint8_t)ControlBit::PORT) == (uint8_t)ControlBit::PORT) {
+         if ((control & (uint8_t)ControlBit::PROTOCOL) != (uint8_t)ControlBit::PROTOCOL
+-             || protocol == FirewallIface::Protocol::ICMP
+-             || protocol == FirewallIface::Protocol::ALL) {
++             || protocol == FirewallIface::Protocol::ICMP) {
+             return -1;
+         }
+         params += fmt::format(" --dport {}:{} ", startPort, endPort != 0 ? endPort : MAX_PORT_NUM);
+@@ -298,9 +358,15 @@ std::vector<IPTableElementTuple> Configuration::getRules(FirewallIface::IP ip) {
+                     } // else if
+                     else if (vec.at(i) == "--dport") {
+                         i++;
+-                        auto ports = splitStr(vec.at(i), ":");
+-                        std::get<6>(element) = std::stoi(ports.at(0));
+-                        std::get<7>(element) = std::stoi(ports.at(1));
++                        if (vec.at(i).find(":") != std::string::npos) {
++                            auto ports = splitStr(vec.at(i), ":");
++                            std::get<6>(element) = std::stoi(ports.at(0));
++                            std::get<7>(element) = std::stoi(ports.at(1));
++                        } // if
++                        else {
++                            std::get<6>(element) = std::stoi(vec.at(i));
++                            std::get<7>(element) = std::stoi(vec.at(i));
++                        } // else
+                         std::get<2>(element) |= (uint8_t)ControlBit::PORT;
+                     } // else if
+                     else if (vec.at(i) == "--mac-source") {
+-- 
+2.34.1
