@@ -18,6 +18,7 @@ SRC_URI += " \
              file://0019-manual-lockout-fix.patch \
              file://0020-add-media-group.patch \
              file://0021-add-snmp-group.patch \
+             file://0016-Restricting-the-asd-user-under-redfish.patch \
            "
 
 #OEM Privilege
