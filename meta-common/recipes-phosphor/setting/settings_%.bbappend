@@ -10,6 +10,12 @@ SRC_URI += " \
            file://0005-Adding-systemlock-object-path-interface-and-systemlo.patch \
 "
 
+
+SRC_URI_evb_aspeed:append =  " \
+           file://0005-Add-Restriction-Mode-Interface.patch \
+            "
+SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb-aspeed', SRC_URI_evb_aspeed, '', d)}"
+
 RDEPENDS:${PN} = "bash"
 inherit systemd
 SYSTEMD_SERVICE:${PN} += "system-guid.service"
