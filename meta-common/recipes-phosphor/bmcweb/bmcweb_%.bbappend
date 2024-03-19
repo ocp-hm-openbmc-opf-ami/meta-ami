@@ -130,6 +130,7 @@ SRC_URI:append = "   \
             file://0202-Smtp-Mail-Alert-Support-in-Redfish.patch \
             file://0210-Redfish-Support-SMTP-server-switch-SSL-Security.patch \
             file://0220-Restrict-special-characters-in-NTPServers.patch \
+            file://0221-NTPServer-out-of-lime-return-PropertyValueOutOfRange.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
