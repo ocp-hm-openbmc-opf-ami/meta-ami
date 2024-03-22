@@ -1,0 +1,234 @@
+From d50a8a9955cee5da8eb38b28d926365ae517542d Mon Sep 17 00:00:00 2001
+From: nandakumarn <nandakumarn@ami.com>
+Date: Fri, 22 Mar 2024 18:35:22 +0530
+Subject: [PATCH 72/72] Fix for SNMP related issues
+
+---
+ snmp_client.cpp       | 42 ++++++++++++++++++++++++-------
+ snmp_notification.cpp | 58 +++++++++++++++++++++++++++++++++++--------
+ 2 files changed, 80 insertions(+), 20 deletions(-)
+
+diff --git a/snmp_client.cpp b/snmp_client.cpp
+index 4531b05..6af157f 100644
+--- a/snmp_client.cpp
++++ b/snmp_client.cpp
+@@ -23,6 +23,13 @@ using namespace phosphor::logging;
+ using namespace sdbusplus::xyz::openbmc_project::Common::Error;
+ using Argument = xyz::openbmc_project::Common::InvalidArgument;
+ 
++std::vector<std::string> supported_encryption{"AES128",};
++std::vector<std::string> supported_algorithm{
++	"SHA256",
++	"SHA384",
++	"SHA512",
++};
++
+ Client::Client(sdbusplus::bus_t& bus, const char* objPath, ConfManager& parent,
+                const std::string& address, uint16_t port, const std::string version, const std::string user) :
+     Ifaces(bus, objPath, Ifaces::action::defer_emit),
+@@ -93,19 +100,30 @@ std::string Client::version(std::string value)
+     }
+ 
+     if((value != "v2c") && (value != "v1") && (value != "v3"))
+-      {
++    {
+          lg2::error("Version Type not supported");
+ 	     elog<InvalidArgument>(Argument::ARGUMENT_NAME("version"),
+                                Argument::ARGUMENT_VALUE(value.c_str()));
+-      }
+-      auto version = Ifaces::version(value);
+-      serialize(id, *this, parent.dbusPersistentLocation);
+-      return version;
++    }
++
++    if(((value == "v1") || (value == "v2c")) && (Ifaces::version() == "v3"))
++    {
++	 lg2::error("Version Type not supported");
++             elog<InvalidArgument>(Argument::ARGUMENT_NAME("version"),
++                               Argument::ARGUMENT_VALUE(value.c_str()));
++    }
++
++    auto version = Ifaces::version(value);
++    serialize(id, *this, parent.dbusPersistentLocation);
++    return version;
+ }
+ 
+ std::string Client::user(std::string value)
+ {
+-  if (value == Ifaces::user())
++  
++  int userlen = strlen(value.c_str());
++  
++  if (value == Ifaces::user() && (userlen != 0))
+     {
+         return value;
+     }
+@@ -143,6 +161,12 @@ std::string Client::user(std::string value)
+ 				Argument::ARGUMENT_VALUE(value.c_str()));
+ 	}
+     }
++  else if((version() == "v1" || version() == "v2c") && (userlen != 0))
++  {
++      lg2::error("User not allowed for version other than v3");
++          elog<InvalidArgument>(Argument::ARGUMENT_NAME("user"),
++                                Argument::ARGUMENT_VALUE(value.c_str()));
++  }
+   auto username = Ifaces::user(value);
+   serialize(id, *this, parent.dbusPersistentLocation);
+   return username;
+@@ -155,8 +179,8 @@ std::string Client::algorithm(std::string value)
+     {
+       return value;
+     }
+-  
+-  if((value != "SHA256") && (value != "SHA384") && (value != "SHA512"))
++
++  if((std::find(supported_algorithm.begin(),supported_algorithm.end(),value) == supported_algorithm.end()) || (version() != "v3"))
+     {
+       lg2::error("Algorithm Type not supported");
+       elog<InvalidArgument>(Argument::ARGUMENT_NAME("algorithm"),
+@@ -175,7 +199,7 @@ std::string Client::encryption(std::string value)
+       return value;
+     }
+   
+-    if(value != "AES128")
++    if((std::find(supported_encryption.begin(),supported_encryption.end(),value) == supported_encryption.end()) || (version() != "v3"))
+       {
+ 	lg2::error("Encryption Type not supported");
+ 	elog<InvalidArgument>(Argument::ARGUMENT_NAME("encryption"),
+diff --git a/snmp_notification.cpp b/snmp_notification.cpp
+index e2fb98d..079b0af 100644
+--- a/snmp_notification.cpp
++++ b/snmp_notification.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include "snmp_util.hpp"
+ #include "xyz/openbmc_project/Common/error.hpp"
++#include <grp.h>
+ #include <fstream>
+ #include <phosphor-logging/elog-errors.hpp>
+ #include <phosphor-logging/lg2.hpp>
+@@ -83,6 +84,7 @@ void Notification::sendTrap()
+     // TODO: https://github.com/openbmc/openbmc/issues/3145
+     auto version = getVersion();    
+     auto mgrs = getManagers();
++    bool trapsent = false;
+ 
+     for (auto& mgr : mgrs)
+       {
+@@ -106,9 +108,38 @@ void Notification::sendTrap()
+          else if (mgr.version == "v3")
+ 	  {
+             session.version = SNMP_VERSION_3;
+-            /* set the SNMPv3 user name */
++            
++	    /* set the SNMPv3 user name and check if the user is available*/
++	    
+             session.securityName = mgr.user.data();
+             session.securityNameLen = mgr.user.size();
++	    struct group* gr = getgrent();
++            bool foundUser = false;
++
++            while(gr != nullptr)
++            {
++                if(strcmp(gr->gr_name,"snmp") == 0)
++                {
++                    int i=0;
++                    while(gr->gr_mem[i] != nullptr)
++                    {
++                        if(strcmp(session.securityName,gr->gr_mem[i]) == 0)
++                        {
++                            foundUser = true;
++                            break;
++                        }
++                        i++;
++                    }
++                }
++                gr = getgrent();
++            }
++            endgrent();
++
++            if(foundUser == false)
++            {
++                lg2::error("User {USER} not found in snmp group","USER",mgr.user);
++		continue;
++            }
+ 
+ 	    u_char engineId[SNMP_MAXBUF] = {0};
+ 	    size_t engineIdLen=0;
+@@ -156,7 +187,7 @@ void Notification::sendTrap()
+          else
+ 	   {	
+ 	     lg2::error("Failed with unsupported SNMP Version");
+-	     elog<InternalFailure>();
++	     continue;
+ 	  }
+ 	session.peername = const_cast<char*>(mgr.ipaddress.c_str());
+ 	
+@@ -169,7 +200,7 @@ void Notification::sendTrap()
+         {
+             lg2::error("Unable to get the snmp session: {SNMPMANAGER}",
+                        "SNMPMANAGER", mgr.ipaddress);
+-            elog<InternalFailure>();
++	    continue;
+         }
+ 
+         // Wrap the raw pointer in RAII
+@@ -191,7 +222,7 @@ void Notification::sendTrap()
+         if (!pdu)
+         {
+             lg2::error("Failed to create notification PDU");
+-            elog<InternalFailure>();
++	    continue;
+         }
+ 
+         // https://tools.ietf.org/search/rfc3416#page-22
+@@ -205,7 +236,7 @@ void Notification::sendTrap()
+         {
+             lg2::error("Failed to add the SNMP var(systime)");
+             snmp_free_pdu(pdu);
+-            elog<InternalFailure>();
++	    continue;
+         }
+ 
+         pdu->trap_type = SNMP_TRAP_ENTERPRISESPECIFIC;
+@@ -220,7 +251,7 @@ void Notification::sendTrap()
+         {
+             lg2::error("Failed to add the SNMP var(trapID)");
+             snmp_free_pdu(pdu);
+-            elog<InternalFailure>();
++	    continue;
+         }
+ 
+         auto objectList = getFieldOIDList();
+@@ -234,17 +265,22 @@ void Notification::sendTrap()
+             {
+                 lg2::error("Failed to add the SNMP var");
+                 snmp_free_pdu(pdu);
+-                elog<InternalFailure>();
+             }
+         }
+         // pdu is freed by snmp_send
+ 	auto retval = snmp_send(sessionPtr.get(), pdu);
+ 	if(!retval)
+-	  {
+-            lg2::error("Failed to send the snmp trap.");
+-            elog<InternalFailure>();
+-	  }
++	{
++            lg2::error("Failed to send the snmp trap for {MGR}", "MGR", mgr.ipaddress);
++	    continue;
++	}
+         lg2::debug("Sent SNMP Trap: {MGR}", "MGR", mgr.ipaddress);
++        trapsent = true;
++    }
++    if (trapsent == false)
++    {
++	lg2::error("Failed to send the snmp trap for all managers.");
++	elog<InternalFailure>();
+     }
+ }
+ 
+-- 
+2.34.1
+
