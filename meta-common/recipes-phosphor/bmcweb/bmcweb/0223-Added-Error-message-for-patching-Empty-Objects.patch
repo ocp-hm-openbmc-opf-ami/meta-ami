@@ -1,0 +1,235 @@
+From 1f1780e81fc7bb6b432638158547cbfee733f0a5 Mon Sep 17 00:00:00 2001
+From: prasannas <prasannas@ami.com>
+Date: Thu, 21 Mar 2024 10:19:19 +0530
+Subject: [PATCH 223/223] Added Error message for patching Empty Objects
+
+---
+ redfish-core/lib/network_protocol.hpp | 174 +++++++++++++++++---------
+ 1 file changed, 115 insertions(+), 59 deletions(-)
+
+diff --git a/redfish-core/lib/network_protocol.hpp b/redfish-core/lib/network_protocol.hpp
+index fe73e2ae..75f01bb4 100644
+--- a/redfish-core/lib/network_protocol.hpp
++++ b/redfish-core/lib/network_protocol.hpp
+@@ -312,7 +312,8 @@ inline void
+     if (ntpServerObjects.size() > limit)
+     {
+         BMCWEB_LOG_DEBUG("out of Limit");
+-        messages::propertyValueOutOfRange(asyncResp->res, ntpServerObjects, "NTP/NTPServers");
++        messages::propertyValueOutOfRange(asyncResp->res, ntpServerObjects,
++                                          "NTP/NTPServers");
+         return;
+     }
+ 
+@@ -335,7 +336,7 @@ inline void
+         {
+             BMCWEB_LOG_DEBUG("Invalid character found in NTP server address.");
+             messages::propertyValueFormatError(asyncResp->res, ntpServerObjects,
+-                                           "NTPServers");
++                                               "NTPServers");
+             return;
+         }
+     }
+@@ -578,87 +579,142 @@ inline void handleManagersNetworkProtocolPatch(
+         return;
+     }
+     std::optional<std::string> newHostName;
+-    std::optional<std::vector<nlohmann::json>> ntpServerObjects;
+-    std::optional<bool> ntpEnabled;
+-    std::optional<bool> ipmiEnabled;
+-    std::optional<bool> sshEnabled;
+     std::optional<std::string> vId;
+-    std::optional<bool> snmpEnabled;
+-
++    std::optional<nlohmann::json> ntp;
++    std::optional<nlohmann::json> ipmi;
++    std::optional<nlohmann::json> ssh;
++    std::optional<nlohmann::json> snmp;
+     // clang-format off
+-        if (!json_util::readJsonPatch(
++         if (!json_util::readJsonPatch(
+                 req, asyncResp->res,
+                 "HostName", newHostName,
+-                "NTP/NTPServers", ntpServerObjects,
+-                "NTP/ProtocolEnabled", ntpEnabled,
+-                "IPMI/ProtocolEnabled", ipmiEnabled,
+-                "SSH/ProtocolEnabled", sshEnabled,
+-		"Id", vId,
+-                "SNMP/ProtocolEnabled",snmpEnabled))
++                "NTP",ntp,
++                "IPMI",ipmi,
++                "SSH",ssh,
++                "Id", vId,
++                "SNMP",snmp))
+         {
+             return;
+         }
+-	if (vId)
+-     	{
++    if (vId)
++        {
+           messages::propertyNotWritable(asyncResp->res, "Id");
+           asyncResp->res.result(boost::beast::http::status::bad_request);
+           return;
+-     	}
++        }
+     // clang-format on
+-
+     asyncResp->res.result(boost::beast::http::status::no_content);
+     if (newHostName)
+     {
+         messages::propertyNotWritable(asyncResp->res, "HostName");
+         return;
+     }
+-
+-    if (ntpEnabled)
+-    {
+-        handleNTPProtocolEnabled(*ntpEnabled, asyncResp);
+-    }
+-    if (ntpServerObjects)
++    if (ntp)
+     {
+-        getEthernetIfaceData(
+-            [asyncResp, ntpServerObjects](
+-                const bool success, std::vector<std::string>& currentNtpServers,
+-                const std::vector<std::string>& /*domainNames*/) {
+-            if (!success)
+-            {
+-                messages::internalError(asyncResp->res);
+-                return;
+-            }
+-            handleNTPServersPatch(asyncResp, *ntpServerObjects,
+-                                  std::move(currentNtpServers));
+-        });
++        std::optional<bool> ntpEnabled;
++        std::optional<std::vector<nlohmann::json>> ntpServerObjects;
++        std::size_t ntp_size = ntp.value().size();
++        if (ntp_size == 0)
++        {
++            messages::propertyValueTypeError(asyncResp->res,ntp.value(), "NTP");
++            return;
++        }
++        if (!json_util::readJson(*ntp, asyncResp->res, "ProtocolEnabled",
++                                 ntpEnabled, "NTPServers", ntpServerObjects))
++        {
++            return;
++        }
++        if (ntpEnabled)
++        {
++            handleNTPProtocolEnabled(*ntpEnabled, asyncResp);
++        }
++        if (ntpServerObjects)
++        {
++            getEthernetIfaceData(
++                [asyncResp, ntpServerObjects](
++                    const bool success,
++                    std::vector<std::string>& currentNtpServers,
++                    const std::vector<std::string>& /*domainNames*/) {
++                if (!success)
++                {
++                    messages::internalError(asyncResp->res);
++                    return;
++                }
++                handleNTPServersPatch(asyncResp, *ntpServerObjects,
++                                      std::move(currentNtpServers));
++            });
++        }
+     }
+-
+-    if (ipmiEnabled)
++    if (ipmi)
+     {
+-        handleProtocolEnabled(
+-            *ipmiEnabled, asyncResp,
+-            encodeServiceObjectPath(std::string(ipmiServiceName)));
++        std::optional<bool> ipmiEnabled;
++        std::size_t ipmi_size = ipmi.value().size();
++        if (ipmi_size == 0)
++        {
++            messages::propertyValueTypeError(asyncResp->res,ipmi.value(), "IPMI");
++            return;
++        }
++        if (!json_util::readJson(*ipmi, asyncResp->res, "ProtocolEnabled",
++                                 ipmiEnabled))
++        {
++            return;
++        }
++        if (ipmiEnabled)
++        {
++            handleProtocolEnabled(
++                *ipmiEnabled, asyncResp,
++                encodeServiceObjectPath(std::string(ipmiServiceName)));
++        }
+     }
+-
+-    if (sshEnabled)
++    if (ssh)
+     {
+-        handleProtocolEnabled(*sshEnabled, asyncResp,
+-                              encodeServiceObjectPath(sshServiceName));
++        std::optional<bool> sshEnabled;
++        std::size_t ssh_size = ssh.value().size();
++        if (ssh_size == 0)
++        {
++            messages::propertyValueTypeError(asyncResp->res,ssh.value(), "SSH");
++            return;
++        }
++        if (!json_util::readJson(*ssh, asyncResp->res, "ProtocolEnabled",
++                                 sshEnabled))
++        {
++            return;
++        }
++        if (sshEnabled)
++        {
++            handleProtocolEnabled(*sshEnabled, asyncResp,
++                                  encodeServiceObjectPath(sshServiceName));
++        }
+     }
+-    if (snmpEnabled)
++    if (snmp)
+     {
+-        sdbusplus::asio::setProperty(
+-            *crow::connections::systemBus, "xyz.openbmc_project.Snmp",
+-            "/xyz/openbmc_project/Snmp", "xyz.openbmc_project.Snmp.SnmpUtils",
+-            "SnmpTrapStatus", *snmpEnabled,
+-            [asyncResp](const boost::system::error_code& ec) {
+-            if (ec)
+-            {
+-                BMCWEB_LOG_ERROR("D-Bus responses error: {}", ec);
+-                messages::internalError(asyncResp->res);
+-                return;
+-            }
+-        });
++        std::optional<bool> snmpEnabled;
++        std::size_t snmp_size = snmp.value().size();
++        if (snmp_size == 0)
++        {
++            messages::propertyValueTypeError(asyncResp->res,snmp.value(), "SNMP");
++            return;
++        }
++        if (!json_util::readJson(*snmp, asyncResp->res, "ProtocolEnabled",
++                                 snmpEnabled))
++        {
++            return;
++        }
++        if (snmpEnabled)
++        {
++            sdbusplus::asio::setProperty(
++                *crow::connections::systemBus, "xyz.openbmc_project.Snmp",
++                "/xyz/openbmc_project/Snmp",
++                "xyz.openbmc_project.Snmp.SnmpUtils", "SnmpTrapStatus",
++                *snmpEnabled, [asyncResp](const boost::system::error_code& ec) {
++                if (ec)
++                {
++                    BMCWEB_LOG_ERROR("D-Bus responses error: {}", ec);
++                    messages::internalError(asyncResp->res);
++                    return;
++                }
++            });
++        }
+     }
+ }
+ 
+-- 
+2.43.2
+

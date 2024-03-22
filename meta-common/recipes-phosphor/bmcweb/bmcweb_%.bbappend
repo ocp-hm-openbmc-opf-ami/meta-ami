@@ -132,6 +132,7 @@ SRC_URI:append = "   \
             file://0220-Restrict-special-characters-in-NTPServers.patch \
             file://0221-NTPServer-out-of-lime-return-PropertyValueOutOfRange.patch \
             file://0211-Fixed-ErrorCode-in-eventServiceSSE.patch \
+            file://0223-Added-Error-message-for-patching-Empty-Objects.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
