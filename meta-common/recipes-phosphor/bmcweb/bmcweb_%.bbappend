@@ -140,6 +140,7 @@ SRC_URI:append = "   \
             file://0233-To-print-Proper-error-message-in-insertmedia.patch \
             file://0219-Throw-error-when-IPv4StaticAddresses-Address-equals-Gateway.patch \
             file://0229-Patch-valid-NTP-servers.patch \
+            file://0232-Throw-OperationNotAllowed-error-message-in-InsertMedia.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
