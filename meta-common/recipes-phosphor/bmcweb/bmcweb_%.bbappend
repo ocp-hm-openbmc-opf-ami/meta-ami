@@ -137,6 +137,7 @@ SRC_URI:append = "   \
 	    file://0206-Added-post-call-for-BRCM-PCIE-switch.patch \
             file://0200-Added-the-Condition-to-verify-IPV6-is-DHCP-while-patch-IPv6StaticDefaultGateways.patch \
             file://0226-Fixed-pipeline-errors.patch \
+            file://0233-To-print-Proper-error-message-in-insertmedia.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
