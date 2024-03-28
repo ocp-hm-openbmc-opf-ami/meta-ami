@@ -138,6 +138,7 @@ SRC_URI:append = "   \
             file://0200-Added-the-Condition-to-verify-IPV6-is-DHCP-while-patch-IPv6StaticDefaultGateways.patch \
             file://0226-Fixed-pipeline-errors.patch \
             file://0233-To-print-Proper-error-message-in-insertmedia.patch \
+            file://0219-Throw-error-when-IPv4StaticAddresses-Address-equals-Gateway.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
