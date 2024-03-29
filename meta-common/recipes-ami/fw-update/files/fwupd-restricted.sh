@@ -24,6 +24,12 @@ whitelist=/run/initramfs/whitelist
 uboot_env_bin_file="uboot_env_data.bin"
 NON_INTEL_PLATFORMS_MODE=1
 
+#Check the type of firmware currently being updated
+BMC_FW_UPDATING=1
+OTHER_FW_UPDATING=2
+RET_FAILED=1
+RET_NORMAL=0
+
 update_percentage() {
     if [ -n "$img_obj" ]; then
         busctl set-property xyz.openbmc_project.Software.BMC.Updater \
@@ -31,6 +37,61 @@ update_percentage() {
                xyz.openbmc_project.Software.ActivationProgress Progress \
                y $1 || return 0
     fi
+}
+
+is_BMC_FW_updated() {
+    local IS_BMC_FW_UPDATING=1
+    #If BMC device is being updated with firmware, 
+    #In this state, the BMC will no longer be allowed to execute other firmware updates. 
+    local data_type Purpose_data
+    local Purpose_value=$(busctl get-property xyz.openbmc_project.Software.BMC.Updater /xyz/openbmc_project/software/${1} xyz.openbmc_project.Software.Version Purpose)
+    local Purpose=$(echo "$Purpose_value" | awk '{print $2}'| tr -d '"')
+    if [ "${Purpose}" = "xyz.openbmc_project.Software.Version.VersionPurpose.BMC" ];then
+        return ${IS_BMC_FW_UPDATING}
+    fi
+    return 0
+    
+}
+
+Other_firmware_is_being_updated() {
+    #Check_other_firmware_is_updating
+    local objIds=$(busctl tree xyz.openbmc_project.Software.BMC.Updater | grep -oE '/xyz/openbmc_project/software/[0-9a-f_]+')
+    while IFS= read -r line; do
+        local objId=$(awk -F'/' '{print $5}' <<< "$line")
+        if [ ${#objId} -gt 15 ] && [ "${1}" != "${objId}" ]; then
+            local ret_Progress=$(busctl get-property xyz.openbmc_project.Software.BMC.Updater /xyz/openbmc_project/software/${objId} xyz.openbmc_project.Software.ActivationProgress Progress 2>/dev/null)
+            local UpdateProgress=$(echo "$ret_Progress" | awk '{print $2}')
+
+            if [ "${UpdateProgress}" = "100" ] || [ "${UpdateProgress}" = "" ]; then
+                continue
+            else
+                #Other FW is updating
+                local ret_Purpose=$(busctl get-property xyz.openbmc_project.Software.BMC.Updater /xyz/openbmc_project/software/${objId} xyz.openbmc_project.Software.Version Purpose)
+                local Purpose=$(echo "$ret_Purpose" | awk '{print $2}'| tr -d '"')
+                if [ "${Purpose}" = "xyz.openbmc_project.Software.Version.VersionPurpose.BMC" ]; then
+                    return ${BMC_FW_UPDATING}
+                else 
+                    return ${OTHER_FW_UPDATING}
+                fi
+            fi
+        fi
+    done <<< "$objIds"
+}
+
+IsMeetsMultiFirmwareRules() {
+    #Check if other firmware image is updating
+    Other_firmware_is_being_updated ${1}
+    local is_alread_fw_task_running=$?
+    if [ "${is_alread_fw_task_running}" = "${BMC_FW_UPDATING}" ];then
+        return ${RET_FAILED}
+    elif [ "${is_alread_fw_task_running}" = "${OTHER_FW_UPDATING}" ];then
+        #check if ${img_obj} is updated for bmc fw
+        is_BMC_FW_updated ${1}
+        if [ "$?" = "${BMC_FW_UPDATING}" ];then
+            return ${RET_FAILED}
+        fi
+    fi
+    return ${RET_NORMAL}
 }
 
 check_preserv_config() {
@@ -142,6 +203,16 @@ set_activation_status() {
     fi
 }
 
+
+set_requestedactivation_status() {
+    local status="$1"
+    if [ $local_file -eq 0 ]; then
+        busctl set-property xyz.openbmc_project.Software.BMC.Updater \
+            /xyz/openbmc_project/software/$img_obj \
+            xyz.openbmc_project.Software.Activation RequestedActivation \
+            s "xyz.openbmc_project.Software.Activation.RequestedActivations.$status"
+    fi
+}
 
 get_requestedactivation_status() {
     local image="$1"
@@ -713,6 +784,15 @@ update_fw() {
             COMPONENTNAME="pldm"
         fi    
     fi  
+    
+    log "Check firmware update priority"
+    IsMeetsMultiFirmwareRules ${img_obj}
+    if [[ "$?" = "${RET_FAILED}" ]];then
+        log "Multiple firmware updates failed - priority error"
+        set_requestedactivation_status None
+        return "${RET_FAILED}"
+    fi
+
     echo "Updating image $LOCAL_PATH"
     case "$COMPONENTNAME" in
         "bmc")
