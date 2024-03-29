@@ -139,6 +139,7 @@ SRC_URI:append = "   \
             file://0226-Fixed-pipeline-errors.patch \
             file://0233-To-print-Proper-error-message-in-insertmedia.patch \
             file://0219-Throw-error-when-IPv4StaticAddresses-Address-equals-Gateway.patch \
+            file://0229-Patch-valid-NTP-servers.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
