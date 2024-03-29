@@ -1,0 +1,119 @@
+From dd00f014985f3586a2b03010ac57664f3aa89ab8 Mon Sep 17 00:00:00 2001
+From: rkarthika <rkarthika@ami.com>
+Date: Wed, 20 Mar 2024 23:16:46 +0530
+Subject: [PATCH 228/228] Update IPv4 and IPv6 StaticAddressess in Single Patch
+
+---
+ redfish-core/lib/ethernet.hpp | 71 ++++++++++++++++++++++++++++++-----
+ 1 file changed, 62 insertions(+), 9 deletions(-)
+
+diff --git a/redfish-core/lib/ethernet.hpp b/redfish-core/lib/ethernet.hpp
+index f3c08589..2d09270f 100644
+--- a/redfish-core/lib/ethernet.hpp
++++ b/redfish-core/lib/ethernet.hpp
+@@ -1210,6 +1210,11 @@ inline void triggerDHCPDisable(
+     {
+         nextv4DHCPState = *v4dhcpParms.dhcpv4Enabled;
+     }
++    else if (!flag && !ipv6AcceptRA)
++    {
++        nextv4DHCPState = false;
++        ipv6AcceptRA = true;
++    }
+     else
+     {
+         nextv4DHCPState = ipv4Active;
+@@ -1223,6 +1228,11 @@ inline void triggerDHCPDisable(
+     {
+         nextv6DHCPState = (*v6dhcpParms.dhcpv6OperatingMode == "Enabled");
+     }
++    else if (flag && !ipv6AcceptRA)
++    {
++        nextv6DHCPState = false;
++        ipv6AcceptRA = true;
++    }
+     else
+     {
+         nextv6DHCPState = ipv6Active;
+@@ -2471,17 +2481,57 @@ inline void handleEthernetInterfaceInstancePatch(
+             handleMACAddressPatch(ifaceId, *macAddress, asyncResp);
+         }
+ 
+-        if (ipv4StaticAddresses && ipv4AddressValid)
++        bool staticAddrSetFlag = true;
++        if (ipv4StaticAddresses && ipv6StaticAddresses)
+         {
+-            // TODO(ed) for some reason the capture of
+-            // ipv4Addresses above is returning a const value,
+-            // not a non-const value. This doesn't really work
+-            // for us, as we need to be able to efficiently move
+-            // out the intermedia nlohmann::json objects. This
+-            // makes a copy of the structure, and operates on
+-            // that, but could be done more efficiently
++            if (ipv4StaticAddresses)
++            {
++                if (validateIPv4Json(asyncResp,*ipv4StaticAddresses))
++                {
++                    ipv4AddressValid =  true;
++                }
++                else {
++                    ipv4AddressValid = false;
++                }
++            }
++            if (ipv6StaticAddresses)
++            {
++                if ((validateipv6AddressJson(asyncResp, *ipv6StaticAddresses)))
++                {
++                    ipv6AddressValid = true;
++                }
++                else {
++                    ipv6AddressValid = false;
++                }
++            }
++            if (ipv6AddressValid && ipv4AddressValid)
++            {
++            staticAddrSetFlag = false;
++            ipv6AcceptRA = false;
++
++            handleIPv6StaticAddressesPatch(ifaceId, *ipv6StaticAddresses, ipv6Data, ethData, v4dhcpParms, v6dhcpParms, ipv6AcceptRA, asyncResp);
++
+             nlohmann::json::array_t ipv4Static = *ipv4StaticAddresses;
+             handleIPv4StaticPatch(ifaceId, ipv4Static, ipv4Data, ethData, v4dhcpParms, v6dhcpParms, ipv6AcceptRA, asyncResp);
++
++            staticAddrSetFlag = false;
++           }
++        }
++
++        if (ipv4StaticAddresses && ipv4AddressValid)
++        {
++            if (staticAddrSetFlag)
++            {
++                // TODO(ed) for some reason the capture of
++                // ipv4Addresses above is returning a const value,
++                // not a non-const value. This doesn't really work
++                // for us, as we need to be able to efficiently move
++                // out the intermedia nlohmann::json objects. This
++                // makes a copy of the structure, and operates on
++                // that, but could be done more efficiently
++                nlohmann::json::array_t ipv4Static = *ipv4StaticAddresses;
++                handleIPv4StaticPatch(ifaceId, ipv4Static, ipv4Data, ethData, v4dhcpParms, v6dhcpParms, ipv6AcceptRA, asyncResp);
++            }
+         }
+ 
+         if (ipv6StaticDefaultGateways)
+@@ -2505,8 +2555,11 @@ inline void handleEthernetInterfaceInstancePatch(
+ 
+         if (ipv6StaticAddresses && ipv6AddressValid)
+         {
+-            handleIPv6StaticAddressesPatch(ifaceId, *ipv6StaticAddresses, ipv6Data, ethData, v4dhcpParms, v6dhcpParms, ipv6AcceptRA,
++            if (staticAddrSetFlag)
++            {
++                handleIPv6StaticAddressesPatch(ifaceId, *ipv6StaticAddresses, ipv6Data, ethData, v4dhcpParms, v6dhcpParms, ipv6AcceptRA,
+                                             asyncResp);
++            }
+         }
+ 
+         if (interfaceEnabled)
+-- 
+2.43.2
+
