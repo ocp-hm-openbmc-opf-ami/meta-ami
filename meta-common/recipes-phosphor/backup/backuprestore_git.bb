@@ -3,7 +3,7 @@ DESCRIPTION = "Backup and Restore backend implementing Backup and Restoring Conf
 LICENSE = "CLOSED"
 # Modify these as desired
 PV = "1.0+git${SRCPV}"
-SRCREV = "e0db7697dcd9cdf0bbd56381e2527f5364fbfcbd"
+SRCREV = "43ae87d8e1b78ba50bc91147fc6d6cb4643d4a00"
 
 inherit meson pkgconfig
 inherit obmc-phosphor-dbus-service
@@ -16,10 +16,11 @@ DEPENDS += "phosphor-dbus-interfaces"
 DEPENDS += "systemd"
 DEPENDS += "phosphor-logging"
 DEPENDS += "nlohmann-json"
+DEPENDS += "openssl"
 
 DBUS_PACKAGES = "${PN}"
 
-SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/backup-restore.git;protocol=https;branch=main"
+SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/backup-restore.git;protocol=https;branch=restart_service"
 SRC_URI += "file://xyz.openbmc_project.Backup.BackupRestore.service"
 SRC_URI += "file://backupconf.json"
 
@@ -32,6 +33,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 do_install:append() {
 	install -d ${D}${systemd_system_unitdir}/
 	install -d ${D}/var/backups/
+	install -d ${D}/etc/backups/
 	install -m 0644 ${WORKDIR}/xyz.openbmc_project.Backup.BackupRestore.service ${D}${systemd_system_unitdir}/
 	install -m 0644 ${WORKDIR}/backupconf.json ${D}/var/backups/
 }
