@@ -1,0 +1,95 @@
+From bb40cfeb476c98d0e42078643f045db6da1283a0 Mon Sep 17 00:00:00 2001
+From: ethanwei <ethanwei@ami.com>
+Date: Tue, 26 Mar 2024 11:41:06 +0800
+Subject: [PATCH] Remain IP Address After Disable Enable Interface
+
+---
+ src/ethernet_interface.cpp | 52 +++++++++++++++++++++++++++++++++++++-
+ src/ethernet_interface.hpp |  2 ++
+ 2 files changed, 53 insertions(+), 1 deletion(-)
+
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index e851250..902a0e8 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -870,7 +870,7 @@ bool EthernetInterface::nicEnabled(bool value)
+     }
+ 
+     EthernetInterfaceIntf::nicEnabled(value);
+-    writeConfigurationFile();
++    writeNicConfiguration(value);
+     if (!value)
+     {
+         // We only need to bring down the interface, networkd will always bring
+@@ -1245,6 +1245,56 @@ ServerList EthernetInterface::ntpServers(ServerList /*servers*/)
+     elog<NotAllowed>(NotAllowedArgument::REASON("ReadOnly Property"));
+ }
+ 
++void EthernetInterface::writeNicConfiguration(bool isActive)
++{
++    std::ifstream ifs(config::pathForIntfConf(manager.get().getConfDir(), interfaceName()));
++    std::string line;
++    std::vector<std::string> vec;
++    if (!ifs.is_open())
++    {
++        log<level::INFO>(fmt::format("writeNicConfiguration {} file not opened.\n",
++                            config::pathForIntfConf(manager.get().getConfDir(), interfaceName()).generic_string()).c_str());
++    }
++
++    if (isActive)
++    {
++        while (ifs.peek() != EOF)
++        {
++            std::getline(ifs, line);
++            if (!line.starts_with("Unmanaged"))
++            {
++                vec.push_back(line);
++            }
++
++            line.clear();
++        }
++    }
++    else
++    {
++        while (ifs.peek() != EOF)
++        {
++            std::getline(ifs, line);
++            vec.push_back(line);
++            if (line.starts_with("[Link]"))
++            {
++                vec.push_back("Unmanaged=yes");
++            }
++
++            line.clear();
++        }
++    }
++
++    ifs.close();
++    std::ofstream ofs(config::pathForIntfConf(manager.get().getConfDir(), interfaceName()));
++    for (auto& v: vec)
++    {
++        ofs << v << std::endl;
++    }
++
++    ofs.flush();
++    ofs.close();
++}
++
+ void EthernetInterface::writeConfigurationFile()
+ {
+     config::Parser config;
+diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
+index 926a3f3..d8f01cc 100644
+--- a/src/ethernet_interface.hpp
++++ b/src/ethernet_interface.hpp
+@@ -413,6 +413,8 @@ class EthernetInterface : public Ifaces
+      */
+     void writeConfiguration();
+ 
++    void writeNicConfiguration(bool isActive);
++
+     /** @brief set the ARP Response status in sysctl config for the ethernet interface.
+      *  @param[in] cmd - shell command.
+      *  @return status of the shell command execution
+-- 
+2.34.1
