@@ -133,7 +133,6 @@ SRC_URI:append = "   \
             file://0221-NTPServer-out-of-lime-return-PropertyValueOutOfRange.patch \
             file://0211-Fixed-ErrorCode-in-eventServiceSSE.patch \
             file://0223-Added-Error-message-for-patching-Empty-Objects.patch \
-            file://0224-Fix-for-missing-protocol-while-get-snmp-subscription-created-by-dbus.patch \
 	    file://0206-Added-post-call-for-BRCM-PCIE-switch.patch \
             file://0200-Added-the-Condition-to-verify-IPV6-is-DHCP-while-patch-IPv6StaticDefaultGateways.patch \
             file://0226-Fixed-pipeline-errors.patch \
