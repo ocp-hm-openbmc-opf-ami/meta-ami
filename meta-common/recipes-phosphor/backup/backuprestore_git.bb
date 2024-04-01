@@ -20,7 +20,7 @@ DEPENDS += "openssl"
 
 DBUS_PACKAGES = "${PN}"
 
-SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/backup-restore.git;protocol=https;branch=restart_service"
+SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/backup-restore.git;protocol=https;branch=main"
 SRC_URI += "file://xyz.openbmc_project.Backup.BackupRestore.service"
 SRC_URI += "file://backupconf.json"
 
