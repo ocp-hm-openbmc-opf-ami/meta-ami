@@ -116,7 +116,6 @@ SRC_URI:append = "   \
             file://0208-Fix-for-TaskStatus-should-not-be-set-until-the-task-Completed.patch \
             file://0192-Firewall-Feature-Support-in-Redfish.patch \
             file://0193-NodeManager.ChangeState-returns-204-response.patch \
-            file://0195-Verify-Set-DateTime-With-Invalid-Data.patch \
             file://0207-Set-Sensor-Reading-fractional-value-as-4-digits.patch \
             file://0187-Receiving-SubmitTestEvent-in-SSE.patch \
             file://0209-Thrown-proper-error-message-for-POST-certificate.patch \
@@ -141,6 +140,7 @@ SRC_URI:append = "   \
             file://0229-Patch-valid-NTP-servers.patch \
             file://0232-Throw-OperationNotAllowed-error-message-in-InsertMedia.patch \
             file://0228-Update-IPv4-and-IPv6-StaticAddressess-in-Single-Patch.patch \
+            file://0195-Fix-for-getting-an-error-when-manually-setting-the-date-and-time.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
