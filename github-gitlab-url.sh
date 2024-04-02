@@ -52,7 +52,7 @@ if [ -d "openbmc-meta-intel/meta-restricted" ]; then
 
 	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.spdmapplib.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.libraries.spdmapplib.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/fw-security/spdmapplib.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.ras-manager.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.ras-manager.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/ras-offload/ras-manager_git.bb
+	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.ras-manager.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.ras-manager.git;protocol=https;branch=openbmc\/release\/birchstream\/common/g' openbmc-meta-intel/meta-restricted/recipes-intel/ras-offload/ras-manager_git.bb
 
 	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.crashdump.git;branch=main;protocol=ssh/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.crashdump.git;branch=main;protocol=https/g' openbmc-meta-intel/meta-restricted/recipes-intel/acd/crashdump_git.bb
 
@@ -60,7 +60,7 @@ if [ -d "openbmc-meta-intel/meta-restricted" ]; then
 
 	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.node-manager.git;protocol=ssh;branch=bhs/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.node-manager.git;protocol=https;branch=bhs/g' openbmc-meta-intel/meta-restricted/recipes-intel/nm/node-manager_git.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.node-manager.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.node-manager.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/nm/node-manager_git.bb
+	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.node-manager.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.node-manager.git;protocol=https;branch=bhs/g' openbmc-meta-intel/meta-restricted/recipes-intel/nm/node-manager_git.bb
 
 	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.bmc-collector.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.bmc-collector.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/acd/bmc-collector_git.bb
 
@@ -72,7 +72,7 @@ if [ -d "openbmc-meta-intel/meta-restricted" ]; then
 
 	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=egs/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.cups-service.git;protocol=https;branch=egs/g' openbmc-meta-intel/meta-restricted/recipes-intel/telemetry/cups-ut-native.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.platform-monitoring-technology.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.platform-monitoring-technology.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/telemetry/pmt_git.bb
+	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.platform-monitoring-technology.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.platform-monitoring-technology.git;protocol=https;branch=bhs-common/g' openbmc-meta-intel/meta-restricted/recipes-intel/telemetry/pmt_git.bb
 
 	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.mmbi-seamless.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.mmbi-seamless.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/seamless/mmbi-seamless.bb
 
@@ -96,7 +96,7 @@ if [ -d "openbmc-meta-intel/meta-intel" ]; then
 
 	sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.dimm-devices-accessor.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.dimm-devices-accessor.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-intel/recipes-intel/dimm-devices-accessor/dimm-devices-accessor.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.libpmt.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.libraries.libpmt.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-intel/recipes-intel/pmt/libpmt_git.bb
+	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.libpmt.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.libraries.libpmt.git;protocol=https;branch=bhs-common/g' openbmc-meta-intel/meta-intel/recipes-intel/pmt/libpmt_git.bb
 
 	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.power-feature-discovery.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.power-feature-discovery.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-intel/recipes-intel/power-feature-discovery/power-feature-discovery_git.bb
 
