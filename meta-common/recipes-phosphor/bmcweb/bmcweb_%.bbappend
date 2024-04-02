@@ -141,6 +141,7 @@ SRC_URI:append = "   \
             file://0232-Throw-OperationNotAllowed-error-message-in-InsertMedia.patch \
             file://0228-Update-IPv4-and-IPv6-StaticAddressess-in-Single-Patch.patch \
             file://0195-Fix-for-getting-an-error-when-manually-setting-the-date-and-time.patch \
+            file://0235-Added-Openbmc-Object-in-Smtp.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
