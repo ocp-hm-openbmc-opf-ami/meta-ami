@@ -142,6 +142,7 @@ SRC_URI:append = "   \
             file://0228-Update-IPv4-and-IPv6-StaticAddressess-in-Single-Patch.patch \
             file://0195-Fix-for-getting-an-error-when-manually-setting-the-date-and-time.patch \
             file://0235-Added-Openbmc-Object-in-Smtp.patch \
+            file://0234-Fix-for-patching-the-properties-is-possible-even-when-the-interface-is-disabled.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
