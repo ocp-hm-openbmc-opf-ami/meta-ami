@@ -42,6 +42,7 @@ SRC_URI:append = " \
              file://0031-Do-not-allow-invalid-DNS-Server-IP-Address.patch \
              file://0032-Fix-Accepting-Reverse-Range-for-IP-Range.patch \
              file://0033-Remain-IP-Address-After-Disabling-Enabling-Interface.patch \
+             file://0033-Fix-to-update-static-gateway6-when-ipv6-source-is-static.patch \
           "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
