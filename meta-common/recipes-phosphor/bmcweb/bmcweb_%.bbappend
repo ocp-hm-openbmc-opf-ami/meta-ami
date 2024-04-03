@@ -143,6 +143,7 @@ SRC_URI:append = "   \
             file://0195-Fix-for-getting-an-error-when-manually-setting-the-date-and-time.patch \
             file://0235-Added-Openbmc-Object-in-Smtp.patch \
             file://0234-Fix-for-patching-the-properties-is-possible-even-when-the-interface-is-disabled.patch \
+            file://0194-Reduce-RoleId-duplicate-response.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \

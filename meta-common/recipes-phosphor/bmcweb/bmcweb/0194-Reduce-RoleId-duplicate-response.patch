@@ -1,0 +1,154 @@
+From f246fd8fc9a20b2eac157458cbc6f6e7a31fdb82 Mon Sep 17 00:00:00 2001
+From: KarthikaR <rkarthika@ami.com>
+Date: Tue, 2 Apr 2024 16:05:37 +0530
+Subject: [PATCH 194/194] Reduce RoleId duplicate response
+
+---
+ redfish-core/lib/account_service.hpp | 33 +++++++++++++++++++++++-----
+ 1 file changed, 28 insertions(+), 5 deletions(-)
+
+diff --git a/redfish-core/lib/account_service.hpp b/redfish-core/lib/account_service.hpp
+index 5a63b0d2..49485da5 100644
+--- a/redfish-core/lib/account_service.hpp
++++ b/redfish-core/lib/account_service.hpp
+@@ -1371,8 +1371,12 @@ inline void updateUserProperties(
+         [dbusObjectPath, username, password, roleId, enabled, locked,
+          accountTypes(std::move(accountTypes)), passwordChangeRequired,
+          userSelf, oemAccountTypes, asyncResp{std::move(asyncResp)}](int rc) {
++        // isDuplicateCreated used to reduce success message for each patch
++        std::optional<bool> isDuplicateCreated = true;
++
+         if (rc <= 0)
+         {
++            isDuplicateCreated = false;
+             messages::resourceNotFound(asyncResp->res, "ManagerAccount",
+                                        username);
+             return;
+@@ -1380,6 +1384,7 @@ inline void updateUserProperties(
+ 
+         if (passwordChangeRequired)
+         {
++            isDuplicateCreated = false;
+             messages::propertyNotWritable(asyncResp->res,
+                                           "PasswordChangeRequired");
+         }
+@@ -1389,6 +1394,7 @@ inline void updateUserProperties(
+             int pamrc = pamAuthenticateUser(username, *password);
+             if ((pamrc == PAM_NEW_AUTHTOK_REQD))
+             {
++                isDuplicateCreated = false;
+                 BMCWEB_LOG_ERROR("Need to provide new Password");
+                 messages::passwordResetFailed(asyncResp->res);
+                 return;
+@@ -1397,11 +1403,13 @@ inline void updateUserProperties(
+ 
+             if (retval == PAM_USER_UNKNOWN)
+             {
++                isDuplicateCreated = false;
+                 messages::resourceNotFound(asyncResp->res, "ManagerAccount",
+                                            username);
+             }
+             else if (retval == PAM_AUTHTOK_ERR)
+             {
++                isDuplicateCreated = false;
+                 // If password is invalid
+                 messages::propertyValueFormatError(asyncResp->res, nullptr,
+                                                    "Password");
+@@ -1409,12 +1417,14 @@ inline void updateUserProperties(
+             }
+             else if (retval != PAM_SUCCESS)
+             {
++                isDuplicateCreated = false;
+                 messages::passwordResetFailed(asyncResp->res);
+                 return;
+             }
+             else
+             {
+-                messages::success(asyncResp->res);
++                //messages::success(asyncResp->res);
++                isDuplicateCreated = true;
+             }
+         }
+ 
+@@ -1424,19 +1434,22 @@ inline void updateUserProperties(
+                 *crow::connections::systemBus,
+                 "xyz.openbmc_project.User.Manager", dbusObjectPath,
+                 "xyz.openbmc_project.User.Attributes", "UserEnabled", *enabled,
+-                [asyncResp](const boost::system::error_code& ec) {
++                [asyncResp, &isDuplicateCreated](const boost::system::error_code& ec) {
+                 if (ec)
+                 {
++                    isDuplicateCreated = false;
+                     BMCWEB_LOG_ERROR("D-Bus responses error: {}", ec);
+                     messages::internalError(asyncResp->res);
+                     return;
+                 }
+-                messages::success(asyncResp->res);
++                //messages::success(asyncResp->res);
++                isDuplicateCreated = true;
+             });
+         }
+ 
+         if ((username == "root") && roleId)
+         {
++            isDuplicateCreated = false;
+             BMCWEB_LOG_ERROR(
+                 "Not able to change privilage level for root user");
+             const std::string& arg = "redfish/v1/AccountService/Accounts/" +
+@@ -1449,6 +1462,7 @@ inline void updateUserProperties(
+             std::string priv = getPrivilegeFromRoleId(*roleId);
+             if (priv.empty())
+             {
++                isDuplicateCreated = false;
+                 messages::propertyValueNotInList(asyncResp->res, true,
+                                                  "Locked");
+                 return;
+@@ -1458,13 +1472,15 @@ inline void updateUserProperties(
+                 *crow::connections::systemBus,
+                 "xyz.openbmc_project.User.Manager", dbusObjectPath,
+                 "xyz.openbmc_project.User.Attributes", "UserPrivilege", priv,
+-                [asyncResp](const boost::system::error_code& ec) {
++                [asyncResp, &isDuplicateCreated](const boost::system::error_code& ec) {
+                 if (ec)
+                 {
++                    isDuplicateCreated = false;
+                     BMCWEB_LOG_ERROR("D-Bus responses error: {}", ec);
+                     messages::internalError(asyncResp->res);
+                     return;
+                 }
++                isDuplicateCreated = true;
+                 messages::success(asyncResp->res);
+             });
+         }
+@@ -1486,13 +1502,15 @@ inline void updateUserProperties(
+                 "xyz.openbmc_project.User.Manager", dbusObjectPath,
+                 "xyz.openbmc_project.User.Attributes",
+                 "UserLockedForFailedAttempt", *locked,
+-                [asyncResp](const boost::system::error_code& ec) {
++                [asyncResp, &isDuplicateCreated](const boost::system::error_code& ec) {
+                 if (ec)
+                 {
++                    isDuplicateCreated = false;
+                     BMCWEB_LOG_ERROR("D-Bus responses error: {}", ec);
+                     messages::internalError(asyncResp->res);
+                     return;
+                 }
++                isDuplicateCreated = true;
+                 messages::success(asyncResp->res);
+             });
+         }
+@@ -1556,6 +1574,11 @@ inline void updateUserProperties(
+                 }
+             });
+         }
++        if (isDuplicateCreated)
++        {
++            messages::success(asyncResp->res);
++            return;
++        }
+     });
+ }
+ 
+-- 
+2.25.1
+
