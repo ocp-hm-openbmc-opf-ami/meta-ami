@@ -144,6 +144,7 @@ SRC_URI:append = "   \
             file://0235-Added-Openbmc-Object-in-Smtp.patch \
             file://0234-Fix-for-patching-the-properties-is-possible-even-when-the-interface-is-disabled.patch \
             file://0194-Reduce-RoleId-duplicate-response.patch \
+	    file://0222-Added-New-Method-for-BRCM-and-MSCC-Raid.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
