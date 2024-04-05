@@ -6,6 +6,7 @@ SRC_URI += " \
            file://0015-Add-to-warm-reset.patch \
            file://0016-Postpone-To-Wait-Network-Service.patch \
            file://0017-EIP-761466-Return-If-ReservedBit-used.patch \
+           file://0001-Fixed-the-coredump-issue-in-rmcpping.patch \
            "
 ALT_RMCPP_IFACE = "usb0"
 SYSTEMD_SERVICE:${PN} += " \
