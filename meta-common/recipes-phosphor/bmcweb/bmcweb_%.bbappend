@@ -151,6 +151,7 @@ SRC_URI:append = "   \
             file://0237-Delete-the-return-statement-and-continue-next-validation.patch \
             file://0234-Fix-for-enable-the-interface-combined-with-other-patch-operation-results-in-internal-server-error.patch \
             file://0227-TLS-SSL-name-should-not-be-a-static.patch \
+            file://0238-update-Message.ExtendedInfo-for-ComputerSystem.Reset.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
