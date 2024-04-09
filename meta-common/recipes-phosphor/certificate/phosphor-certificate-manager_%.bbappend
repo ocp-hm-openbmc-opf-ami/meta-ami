@@ -10,4 +10,5 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 SRC_URI += " \
 	    file://0001-renew-rekey.patch \
 	    file://0002-asd-certificate.patch \
+            file://0003-throw-CertificateExists-error.patch \
            "
