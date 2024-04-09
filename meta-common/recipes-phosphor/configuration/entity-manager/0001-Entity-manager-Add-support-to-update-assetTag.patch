@@ -1,0 +1,215 @@
+From 57880f36cab978b2e8130ad093e5a12fe7dd1381 Mon Sep 17 00:00:00 2001
+From: thrishalig <thrishalig@ami.com>
+Date: Wed, 13 Mar 2024 19:53:44 +0530
+Subject: [PATCH] Entity-manager: Add support to update assetTag Asset tag is
+ an updateable property from User level interface like dcmi. User-level
+ interface will update Asset tag in entity-manager, which will further update
+ the needed FRU interface property exposed.
+
+Tested:
+Successfully updated in assetTag interface as well as in fru interface
+using dcmi set asset tag
+
+root@AMIOT-a6909df7d56e:~# ipmitool raw 0x2c 0x08 0xdc 0x00 0x10 0x31 0x32 0x33 0x34 0x35 0x36 0x40 0x61 0x62 0x63 0x64 0x65 0x66 0x67 0x68 0x31
+ dc 10
+root@AMIOT-a6909df7d56e:~# ipmitool raw 0x2c 0x06 0xdc 0x00 0x10
+ dc 10 31 32 33 34 35 36 40 61 62 63 64 65 66 67
+ 68 31
+
+root@AMIOT-a6909df7d56e:~# busctl introspect  xyz.openbmc_project.EntityManager /xyz/openbmc_project/inventory/system/board/AC_Baseboard
+NAME                                                 TYPE      SIGNATURE RESULT/VALUE                             FLAGS
+org.freedesktop.DBus.Introspectable                  interface -         -                                        -
+.Introspect                                          method    -         s                                        -
+org.freedesktop.DBus.Peer                            interface -         -                                        -
+.GetMachineId                                        method    -         s                                        -
+.Ping                                                method    -         -                                        -
+org.freedesktop.DBus.Properties                      interface -         -                                        -
+.Get                                                 method    ss        v                                        -
+.GetAll                                              method    s         a{sv}                                    -
+.Set                                                 method    ssv       -                                        -
+.PropertiesChanged                                   signal    sa{sv}as  -                                        -
+xyz.openbmc_project.AddObject                        interface -         -                                        -
+.AddObject                                           method    a{sv}     -                                        -
+xyz.openbmc_project.Inventory.Decorator.Asset        interface -         -                                        -
+.Manufacturer                                        property  s         "Intel Corporation"                      emits-change
+.Model                                               property  s         "ArcherCity"                             emits-change
+.PartNumber                                          property  s         ".........."                             emits-change
+.SerialNumber                                        property  s         "Intel_3245"                             emits-change
+xyz.openbmc_project.Inventory.Decorator.AssetTag     interface -         -                                        -
+.Delete                                              method    -         -                                        -
+.AssetTag                                            property  s         "123456@abcdefgh1"                       emits-change writable
+xyz.openbmc_project.Inventory.Item.Board             interface -         -                                        -
+.FoundProbePath                                      property  s         "/xyz/openbmc_project/FruDevice/Arche... emits-change
+.Name                                                property  s         "AC Baseboard"                           emits-change
+.Probe                                               property  as        3 "xyz.openbmc_project.FruDevice({\'P... emits-change
+.Type                                                property  s         "Board"                                  emits-change
+xyz.openbmc_project.Inventory.Item.Board.Motherboard interface -         -                                        -
+.ProductId                                           property  t         156                                      emits-change
+xyz.openbmc_project.Inventory.Item.System            interface -         -                                        -
+
+Signed-off-by: thrishalig <thrishalig@ami.com>
+---
+ src/entity_manager.cpp | 98 +++++++++++++++++++++++++++++++++++-------
+ src/perform_scan.cpp   |  3 ++
+ 2 files changed, 86 insertions(+), 15 deletions(-)
+
+diff --git a/src/entity_manager.cpp b/src/entity_manager.cpp
+index af229d3..31b6da7 100644
+--- a/src/entity_manager.cpp
++++ b/src/entity_manager.cpp
+@@ -53,6 +53,13 @@ constexpr const char* lastConfiguration = "/tmp/configuration/last.json";
+ constexpr const char* currentConfiguration = "/var/configuration/system.json";
+ constexpr const char* globalSchema = "global.json";
+ 
++using foundProbeData = std::map<std::string, std::string>;
++static foundProbeData foundData;
++static std::map<std::string, foundProbeData> mapFoundData;
++
++constexpr const char* fruConn = "xyz.openbmc_project.FruDevice";
++constexpr const char* fruIntf = "xyz.openbmc_project.FruDevice";
++
+ const boost::container::flat_map<const char*, probe_type_codes, CmpStr>
+     probeTypes{{{"FALSE", probe_type_codes::FALSE_T},
+                 {"TRUE", probe_type_codes::TRUE_T},
+@@ -217,6 +224,43 @@ void addArrayToDbus(const std::string& name, const nlohmann::json& array,
+     }
+ }
+ 
++template <typename PropertyType>
++bool persistAssetTag(const PropertyType& newVal,
++                     const std::string& jsonPointerString)
++{
++    std::size_t found = jsonPointerString.find_last_of("/\\");
++    std::string jsonPointerPath = jsonPointerString.substr(0, found);
++
++    auto it = mapFoundData.find(jsonPointerPath);
++    if (it == mapFoundData.end())
++    {
++        std::cerr << "Error in finding jsonPointerPath in mapFoundData"
++                  << "\n";
++        return false;
++    }
++
++    foundProbeData& tmpMap = it->second;
++    auto foundPath = tmpMap.find("foundPath");
++    if (foundPath == tmpMap.end())
++    {
++        std::cerr << "No prob object data is avaliable in foundProbeData"
++                  << "\n";
++        return false;
++    }
++
++    systemBus->async_method_call(
++        [](const boost::system::error_code& ec) {
++            if (ec)
++            {
++                std::cerr << "Error setting AssetTag in FRU interface " << ec
++                          << "\n";
++            }
++        },
++        fruConn, foundPath->second, "org.freedesktop.DBus.Properties", "Set",
++        fruIntf, "PRODUCT_ASSET_TAG", std::variant<PropertyType>(newVal));
++    return true;
++}
++
+ template <typename PropertyType>
+ void addProperty(const std::string& name, const PropertyType& value,
+                  sdbusplus::asio::dbus_interface* iface,
+@@ -231,22 +275,32 @@ void addProperty(const std::string& name, const PropertyType& value,
+     }
+     iface->register_property(
+         name, value,
+-        [&systemConfiguration,
++        [name, &systemConfiguration,
+          jsonPointerString{std::string(jsonPointerString)}](
+             const PropertyType& newVal, PropertyType& val) {
+-        val = newVal;
+-        if (!setJsonFromPointer(jsonPointerString, val, systemConfiguration))
+-        {
+-            std::cerr << "error setting json field\n";
+-            return -1;
+-        }
+-        if (!writeJsonFiles(systemConfiguration))
+-        {
+-            std::cerr << "error setting json file\n";
+-            return -1;
+-        }
+-        return 1;
+-    });
++            if (name == "AssetTag")
++            {
++                if (!persistAssetTag(newVal, jsonPointerString))
++                {
++                    std::cerr << "error setting AssetTag in FRU interface\n";
++                    return -1;
++                }
++            }
++
++            val = newVal;
++            if (!setJsonFromPointer(jsonPointerString, val,
++                                    systemConfiguration))
++            {
++                std::cerr << "error setting json field\n";
++                return -1;
++            }
++            if (!writeJsonFiles(systemConfiguration))
++            {
++                std::cerr << "error setting json file\n";
++                return -1;
++            }
++            return 1;
++        });
+ }
+ 
+ void createDeleteObjectMethod(
+@@ -632,18 +686,32 @@ void postToDbus(const nlohmann::json& newConfiguration,
+         populateInterfaceFromJson(systemConfiguration, jsonPointerPath,
+                                   boardIface, boardValues, objServer);
+         jsonPointerPath += "/";
++        std::string foundPath;
+         // iterate through board properties
+         for (const auto& [propName, propValue] : boardValues.items())
+         {
++            if (propName == "FoundProbePath")
++            {
++                foundPath = propValue;
++            }
++
+             if (propValue.type() == nlohmann::json::value_t::object)
+             {
+                 std::shared_ptr<sdbusplus::asio::dbus_interface> iface =
+                     createInterface(objServer, boardPath, propName,
+                                     boardNameOrig);
++                auto perm = sdbusplus::asio::PropertyPermission::readOnly;
++                if (propName ==
++                    "xyz.openbmc_project.Inventory.Decorator.AssetTag")
++                {
++                    foundData["foundPath"] = foundPath;
++                    mapFoundData[jsonPointerPath + propName] = foundData;
++                    perm = sdbusplus::asio::PropertyPermission::readWrite;
++                }
+ 
+                 populateInterfaceFromJson(systemConfiguration,
+                                           jsonPointerPath + propName, iface,
+-                                          propValue, objServer);
++                                          propValue, objServer, perm);
+             }
+         }
+ 
+diff --git a/src/perform_scan.cpp b/src/perform_scan.cpp
+index 5e5b715..319fd9a 100644
+--- a/src/perform_scan.cpp
++++ b/src/perform_scan.cpp
+@@ -539,6 +539,9 @@ void PerformScan::updateSystemConfiguration(const nlohmann::json& recordRef,
+         getName.value() = deviceName;
+         usedNames.insert(deviceName);
+ 
++        // Save the dbus path info of the device
++        record["FoundProbePath"] = path;
++
+         for (auto keyPair = record.begin(); keyPair != record.end(); keyPair++)
+         {
+             if (keyPair.key() != "Name")
+-- 
+2.25.1
+

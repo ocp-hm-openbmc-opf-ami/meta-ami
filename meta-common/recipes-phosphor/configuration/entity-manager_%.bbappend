@@ -1,6 +1,7 @@
 FILESEXTRAPATHS:append := ":${THISDIR}/${PN}"
 
 SRC_URI:append = " \
+    file://0001-Entity-manager-Add-support-to-update-assetTag.patch \
     file://solum_pssf162202_psu.json \
     file://cpld.json \
     "
