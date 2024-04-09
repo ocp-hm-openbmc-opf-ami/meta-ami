@@ -1,0 +1,190 @@
+From 975f1c2c94e415dee612252cc6bd8f9de9d4e88c Mon Sep 17 00:00:00 2001
+From: Gokulprasath <gokulp@ami.com>
+Date: Tue, 9 Apr 2024 08:54:13 +0530
+Subject: [PATCH 225/225] SMTP Redfish support for Escalate by severity level
+
+---
+ redfish-core/lib/pef_service.hpp | 152 +++++++++++++++++++++++++++++++
+ 1 file changed, 152 insertions(+)
+
+diff --git a/redfish-core/lib/pef_service.hpp b/redfish-core/lib/pef_service.hpp
+index ea4bb112..98a84de2 100644
+--- a/redfish-core/lib/pef_service.hpp
++++ b/redfish-core/lib/pef_service.hpp
+@@ -223,6 +223,99 @@ inline void setPefConfParam(const std::shared_ptr<bmcweb::AsyncResp>& aResp,
+         std::array<const char*, 1>{pefConfIface});
+ }
+ 
++void getEventEntries(const std::shared_ptr<bmcweb::AsyncResp>& aResp,
++                     nlohmann::json& entriesArray)
++{
++    std::cerr << "PEF getEventEntries: " << endl;
++    crow::connections::systemBus->async_method_call(
++        [aResp, &entriesArray](const boost::system::error_code ec,
++                               const std::vector<std::string>& storageList) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("Volume mapper call error");
++            return;
++        }
++
++        for (const std::string& objpath : storageList)
++        {
++            std::cerr << "PEF getEventEntries inside for: " << endl;
++            std::size_t lastPos = objpath.rfind('/');
++            if (lastPos == std::string::npos || (objpath.size() <= lastPos + 1))
++            {
++                BMCWEB_LOG_ERROR("Failed to find '/' in ", objpath);
++                continue;
++            }
++            entriesArray.push_back(
++                {{"@odata.id",
++                  "/redfish/v1/PefService/" + objpath.substr(lastPos + 1)}});
++            std::cerr << "PEF getEventEntries entry details : " << objpath;
++        }
++    },
++
++        "xyz.openbmc_project.ObjectMapper",
++        "/xyz/openbmc_project/object_mapper",
++        "xyz.openbmc_project.ObjectMapper", "GetSubTreePaths",
++        "/xyz/openbmc_project/PefAlertManager/EventFilterTable/", 0,
++        std::array<const char*, 1>{"xyz.openbmc_project.pef.EventFilterTable"});
++}
++
++inline void getEventSeverity(const std::shared_ptr<bmcweb::AsyncResp>& aResp,
++                             const std::string entryValue)
++{
++    sdbusplus::asio::getProperty<uint8_t>(
++        *crow::connections::systemBus, "xyz.openbmc_project.pef.alert.manager",
++        "/xyz/openbmc_project/PefAlertManager/EventFilterTable/" + entryValue,
++        "xyz.openbmc_project.pef.EventFilterTable", "EventSeverity",
++        [aResp](const boost::system::error_code& ec, uint8_t eventValue) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("D-BUS response error on EventSeverity Get{}", ec);
++            messages::internalError(aResp->res);
++            return;
++        }
++        if (eventValue == 2)
++        {
++            aResp->res.jsonValue["EventSeverity"] = "Information";
++        }
++        else if (eventValue == 4)
++        {
++            aResp->res.jsonValue["EventSeverity"] = "OK";
++        }
++        else if (eventValue == 8)
++        {
++            aResp->res.jsonValue["EventSeverity"] = "Warning";
++        }
++        else if (eventValue == 10)
++        {
++            aResp->res.jsonValue["EventSeverity"] = "Critical";
++        }
++        else if (eventValue == 30)
++        {
++            aResp->res.jsonValue["EventSeverity"] = "All";
++        }
++        else
++            aResp->res.jsonValue["EventSeverity"] = "NULL";
++    });
++}
++
++inline void setEventSeverity(const std::shared_ptr<bmcweb::AsyncResp>& aResp,
++                             const std::optional<uint8_t>& eventId,
++                             const std::string entryValue)
++{
++    sdbusplus::asio::setProperty(
++        *crow::connections::systemBus, "xyz.openbmc_project.pef.alert.manager",
++        "/xyz/openbmc_project/PefAlertManager/EventFilterTable/" + entryValue,
++        "xyz.openbmc_project.pef.EventFilterTable", "EventSeverity", *eventId,
++        [aResp](const boost::system::error_code& ec) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("D-Bus responses error: {}", ec);
++            messages::internalError(aResp->res);
++            return;
++        }
++    });
++}
++
+ inline void requestRoutesPefService(App& app)
+ {
+     BMCWEB_ROUTE(app, "/redfish/v1/PefService/")
+@@ -242,7 +335,10 @@ inline void requestRoutesPefService(App& app)
+             .jsonValue["Actions"]["#PefService.SendAlertSNMPTrap"]["target"] =
+             "/redfish/v1/PefService/Actions/"
+             "PefService.SendAlertSNMPTrap/";
++        nlohmann::json& entriesntrollerArray = aResp->res.jsonValue["Members"];
++        entriesntrollerArray = nlohmann::json::array();
+ 
++        getEventEntries(aResp, entriesntrollerArray);
+         getFilterEnable(aResp);
+         getPefConfParam(aResp);
+     });
+@@ -271,6 +367,62 @@ inline void requestRoutesPefService(App& app)
+         }
+     });
+ 
++    BMCWEB_ROUTE(app, "/redfish/v1/PefService/<str>")
++        .privileges({{"Login"}, {"ConfigureComponents"}})
++        .methods(boost::beast::http::verb::get)(
++            [&app](const crow::Request& req,
++                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                   const std::string& entryId) {
++        if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++        {
++            return;
++        }
++        getEventSeverity(asyncResp, entryId);
++    });
++
++    BMCWEB_ROUTE(app, "/redfish/v1/PefService/<str>")
++        .privileges({{"Login"}, {"ConfigureComponents"}})
++        .methods(boost::beast::http::verb::patch)(
++            [&app](const crow::Request& req,
++                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                   const std::string& entryId) {
++        std::optional<string> eventSeverity;
++        if (!json_util::readJsonPatch(req, asyncResp->res, "EventSeverity",
++                                      eventSeverity))
++        {
++            return;
++        }
++
++        if (eventSeverity)
++        {
++            if (eventSeverity == "Information")
++            {
++                setEventSeverity(asyncResp, 2, entryId);
++            }
++            else if (eventSeverity == "OK")
++            {
++                setEventSeverity(asyncResp, 4, entryId);
++            }
++            else if (eventSeverity == "Warning")
++            {
++                setEventSeverity(asyncResp, 8, entryId);
++            }
++            else if (eventSeverity == "Critical")
++            {
++                setEventSeverity(asyncResp, 10, entryId);
++            }
++            else if (eventSeverity == "All")
++            {
++                setEventSeverity(asyncResp, 30, entryId);
++            }
++            else
++            {
++                messages::propertyValueNotInList(
++                    asyncResp->res, "EventSeverity", *eventSeverity);
++            }
++        }
++    });
++
+     BMCWEB_ROUTE(app,
+                  "/redfish/v1/PefService/Actions/PefService.SendAlertMail/")
+         .privileges({{"Login"}, {"ConfigureComponents"}})
+-- 
+2.34.1
+
