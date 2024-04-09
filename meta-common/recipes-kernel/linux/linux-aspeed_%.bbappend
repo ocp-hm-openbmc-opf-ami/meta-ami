@@ -29,8 +29,10 @@ NON_PFR_SRC_URI_AMI = "file://0012-Add-new-layout-as-per-AMI-requirements.patch 
 
 SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '',NON_PFR_SRC_URI_AMI, d)}"
 
-PFR_SRC_URI_AMI = " file://0027-Fix-for-JFFS2-issue-due-to-SPI-tx-bus-width.patch \
-                       "
+PFR_SRC_URI_AMI = "file://0027-pfr-fix-bhs-jffs2-issue-due-to-spi-tx-bus-width.patch \
+                   file://0029-pfr-fix-egs-jffs2-issue-due-to-spi-tx-bus-width.patch \
+                   file://0030-pfr256-add-winbond-w25q02jv-support.patch \
+                  "
 
 SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', PFR_SRC_URI_AMI, '', d)}"
 
