@@ -1,0 +1,474 @@
+From c275a9cb3626de1a069d2841e6666e5395f89917 Mon Sep 17 00:00:00 2001
+From: kirubagharanas <kirubagharanas@ami.com>
+Date: Fri, 5 Apr 2024 18:19:11 +0530
+Subject: [PATCH] Add support to Apply time property
+
+---
+ redfish-core/lib/update_service.hpp | 371 +++++++++++++++++++++++++---
+ 1 file changed, 342 insertions(+), 29 deletions(-)
+
+diff --git a/redfish-core/lib/update_service.hpp b/redfish-core/lib/update_service.hpp
+index d26f2b27..6accb36e 100644
+--- a/redfish-core/lib/update_service.hpp
++++ b/redfish-core/lib/update_service.hpp
+@@ -73,6 +73,23 @@ inline static void cleanUp()
+     fwUpdateMatcher = nullptr;
+     fwUpdateErrorMatcher = nullptr;
+ }
++
++inline const PropertyValue getApplyTimePropertyValue(
++    const std::string& servicePath, const std::string& objectName,
++    const std::string& interface, const std::string& property_Name)
++{
++    PropertyValue value{};
++    constexpr const char* dbusPropertyInterface = "org.freedesktop.DBus.Properties";
++    auto b = sdbusplus::bus::new_default_system();
++    auto method = b.new_method_call(servicePath.c_str(), objectName.c_str(),
++                                    dbusPropertyInterface, "Get");
++
++    method.append(interface, property_Name);
++    auto reply = b.call(method);
++    reply.read(value);
++    return value;
++}
++
+ inline static void activateImage(const std::string& objPath,
+                                  const std::string& service,
+                                  const std::vector<std::string>& imgUriTargets)
+@@ -235,16 +252,15 @@ static void
+                 // xyz.openbmc_project.Software.Activation interface
+                 // is added
+                 fwAvailableTimer = nullptr;
+-
++                std::shared_ptr<task::TaskData> task = NULL;
+                 activateImage(objPath.str, objInfo[0].first, imgTargets);
+                 if (asyncResp)
+                 {
+-                    std::shared_ptr<task::TaskData> task =
+-                        task::TaskData::createTask(
+-                            [](const boost::system::error_code& ec2,
+-                               sdbusplus::message_t& msg,
+-                               const std::shared_ptr<task::TaskData>&
+-                                   taskData) {
++                    task = task::TaskData::createTask(
++                        [objPath](
++                            const boost::system::error_code& ec2,
++                            sdbusplus::message_t& msg,
++                            const std::shared_ptr<task::TaskData>& taskData) {
+                         if (ec2)
+                         {
+                             return task::completed;
+@@ -344,6 +360,84 @@ static void
+                             // if we're getting status updates it's
+                             // still alive, update timer
+                             taskData->extendTimer(std::chrono::minutes(10));
++                        }else if(iface == "xyz.openbmc_project.Common.Task")
++                        {
++                            const std::string* taskState = nullptr;
++                            for (const auto& property : values)
++                            {
++                                if (property.first == "Status")
++                                {
++                                    taskState = std::get_if<std::string>(
++                                        &property.second);
++                                    if (taskState == nullptr)
++                                    {
++                                        taskData->messages.emplace_back(
++                                            messages::internalError());
++                                        return task::completed;
++                                    }
++                                }
++                            }
++
++                            if (taskState == nullptr)
++                            {
++                                return !task::completed;
++                            }
++
++                            if (taskState->ends_with("Cancelled"))
++                            {
++                                taskData->state = "Cancelled";
++                                taskData->status = "Warning";
++                                taskData->messages.emplace_back(
++                                    messages::taskCancelled(index));
++                                return task::completed;
++                            }
++
++                            if (taskState->ends_with("New"))
++                            {
++                                taskData->state = "Pending";
++                                taskData->messages.emplace_back(
++                                    messages::taskPaused(index));
++                                auto startTimeout = std::get<
++                                    uint64_t>(getApplyTimePropertyValue(
++                                    "xyz.openbmc_project.Software.BMC.Updater",
++                                    objPath.str,
++                                    "xyz.openbmc_project.Software.ApplyTime",
++                                    "MaintenanceWindowStartTime"));
++                                auto duration = std::get<
++                                    uint64_t>(getApplyTimePropertyValue(
++                                    "xyz.openbmc_project.Software.BMC.Updater",
++                                    objPath.str,
++                                    "xyz.openbmc_project.Software.ApplyTime",
++                                    "MaintenanceWindowDurationInSeconds"));
++                                // Current BMC Timezone
++                                const auto current_time =
++                                    std::chrono::system_clock::to_time_t(
++                                        std::chrono::system_clock::now());
++
++                                if ((startTimeout + duration) >
++                                    static_cast<std::uint64_t>(
++                                        std::chrono::duration_cast<
++                                            std::chrono::seconds>(
++                                            std::chrono::system_clock::
++                                                from_time_t(current_time)
++                                                    .time_since_epoch())
++                                            .count()))
++                                {
++                                    auto timeout =
++                                        (startTimeout + duration) -
++                                        (static_cast<std::uint64_t>(
++                                            std::chrono::duration_cast<
++                                                std::chrono::seconds>(
++                                                std::chrono::system_clock::
++                                                    from_time_t(current_time)
++                                                        .time_since_epoch())
++                                                .count()));
++
++                                    taskData->extendTimer(std::chrono::seconds(
++                                        timeout+(5*60)));
++                                    return !task::completed;
++                                }
++                            }
+                         }
+ 
+                         // as firmware update often results in a
+@@ -359,6 +453,22 @@ static void
+                     task->populateResp(asyncResp->res);
+                     task->payload.emplace(std::move(payload));
+                 }
++                // Set the requested image apply time
++                sdbusplus::asio::setProperty(
++                    *crow::connections::systemBus,
++                    "xyz.openbmc_project.Software.BMC.Updater",
++                    objPath.str ,
++                    "xyz.openbmc_project.Common.Task",
++                    "TaskId", static_cast<uint16_t>(task->index),
++                    [asyncResp](const boost::system::error_code& ec) {
++                    if (ec)
++                    {
++                        BMCWEB_LOG_ERROR("D-Bus responses error: {}", ec);
++                        messages::internalError(asyncResp->res);
++                        return;
++                    }
++                    messages::success(asyncResp->res);
++                    });
+                 fwUpdateInProgress = false;
+             });
+ 
+@@ -689,15 +799,16 @@ inline void setApplyTime(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+                          const std::string& applyTime)
+ {
+     std::string applyTimeNewVal;
+-    if (applyTime == "Immediate")
++    std::vector<std::string> applyTimeAllowableValues = {
++        "Immediate", "OnReset", "AtMaintenanceWindowStart",
++        "InMaintenanceWindowOnReset"};
++    auto it = std::find(applyTimeAllowableValues.begin(),
++                        applyTimeAllowableValues.end(), applyTime);
++    if (it != applyTimeAllowableValues.end())
+     {
+         applyTimeNewVal =
+-            "xyz.openbmc_project.Software.ApplyTime.RequestedApplyTimes.Immediate";
+-    }
+-    else if (applyTime == "OnReset")
+-    {
+-        applyTimeNewVal =
+-            "xyz.openbmc_project.Software.ApplyTime.RequestedApplyTimes.OnReset";
++            "xyz.openbmc_project.Software.ApplyTime.RequestedApplyTimes." +
++            applyTime;
+     }
+     else
+     {
+@@ -806,6 +917,62 @@ inline void
+     uploadImageFile(asyncResp->res, *uploadData);
+ }
+ 
++inline bool checkApplyTime(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    auto requestedApplyTime = std::get<std::string>(getApplyTimePropertyValue(
++        "xyz.openbmc_project.Settings",
++        "/xyz/openbmc_project/software/apply_time",
++        "xyz.openbmc_project.Software.ApplyTime", "RequestedApplyTime"));
++    if (requestedApplyTime.substr(requestedApplyTime.find_last_of('.') + 1) ==
++            "AtMaintenanceWindowStart" ||
++        requestedApplyTime.substr(requestedApplyTime.find_last_of('.') + 1) ==
++            "InMaintenanceWindowOnReset")
++    {
++        auto maintenanceWindowStartTime =
++            std::get<uint64_t>(getApplyTimePropertyValue(
++                "xyz.openbmc_project.Settings",
++                "/xyz/openbmc_project/software/apply_time",
++                "xyz.openbmc_project.Software.ApplyTime",
++                "MaintenanceWindowStartTime"));
++        auto maintenanceWindowDurationInSeconds =
++            std::get<uint64_t>(getApplyTimePropertyValue(
++                "xyz.openbmc_project.Settings",
++                "/xyz/openbmc_project/software/apply_time",
++                "xyz.openbmc_project.Software.ApplyTime",
++                "MaintenanceWindowDurationInSeconds"));
++        const auto current_time = std::chrono::system_clock::to_time_t(
++            std::chrono::system_clock::now());
++        if (static_cast<std::uint64_t>(
++                std::chrono::duration_cast<std::chrono::seconds>(
++                    std::chrono::system_clock::from_time_t(current_time)
++                        .time_since_epoch())
++                    .count()) >
++            (static_cast<std::uint64_t>(maintenanceWindowStartTime) +
++             static_cast<std::uint64_t>(maintenanceWindowDurationInSeconds)))
++        {
++            nlohmann::json jsonValue;
++            jsonValue["HttpPushUriOptions"]["HttpPushUriApplyTime"]
++                     ["ApplyTime"] = requestedApplyTime.substr(
++                         requestedApplyTime.find_last_of('.') + 1);
++            jsonValue["HttpPushUriOptions"]["HttpPushUriApplyTime"]
++                     ["MaintenanceWindowStartTime"] =
++                         redfish::time_utils::getDateTimeUint(
++                             maintenanceWindowStartTime);
++            jsonValue["HttpPushUriOptions"]["HttpPushUriApplyTime"]
++                     ["MaintenanceWindowDurationInSeconds"] =
++                         maintenanceWindowDurationInSeconds;
++
++            messages::propertyValueIncorrect(
++                asyncResp->res,
++                "Combination of MaintenanceWindowStartTime and MaintenanceWindowDurationInSeconds is Invalid ",
++                jsonValue);
++            return false;
++        }
++        return true;
++    }
++    return true;
++}
++
+ inline void
+     handleUpdateServicePost(App& app, const crow::Request& req,
+                             const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
+@@ -826,6 +993,12 @@ inline void
+         monitorForSoftwareAvailable(asyncResp, req, "/redfish/v1/UpdateService",
+                                     httpPushUriTargets);
+ 
++        if(checkApplyTime(asyncResp) == false)
++        {
++             messages::internalError(asyncResp->res);
++             return;
++        }
++
+         uploadImageFile(asyncResp->res, req.body());
+     }
+     else if (contentType.starts_with("multipart/form-data"))
+@@ -907,12 +1080,13 @@ inline void requestRoutesUpdateService(App& app)
+             "TFTP"};
+ #endif
+         // Get the current ApplyTime value
+-        sdbusplus::asio::getProperty<std::string>(
++        sdbusplus::asio::getAllProperties(
+             *crow::connections::systemBus, "xyz.openbmc_project.Settings",
+             "/xyz/openbmc_project/software/apply_time",
+-            "xyz.openbmc_project.Software.ApplyTime", "RequestedApplyTime",
+-            [asyncResp](const boost::system::error_code& ec,
+-                        const std::string& applyTime) {
++            "xyz.openbmc_project.Software.ApplyTime",
++            [asyncResp](
++                const boost::system::error_code& ec,
++                const dbus::utility::DBusPropertiesMap& propertiesList) {
+             if (ec)
+             {
+                 BMCWEB_LOG_DEBUG("DBUS response error {}", ec);
+@@ -920,22 +1094,56 @@ inline void requestRoutesUpdateService(App& app)
+                 return;
+             }
+ 
+-            // Store the ApplyTime Value
+-            if (applyTime == "xyz.openbmc_project.Software.ApplyTime."
+-                             "RequestedApplyTimes.Immediate")
++            BMCWEB_LOG_DEBUG("Got {}properties for apply_time",
++                             propertiesList.size());
++
++            const std::string* requestedApplyTime = nullptr;
++            const uint64_t* maintenanceWindowDurationInSeconds = nullptr;
++            const uint64_t* maintenanceWindowStartTime = nullptr;
++
++            const bool success = sdbusplus::unpackPropertiesNoThrow(
++                dbus_utils::UnpackErrorPrinter(), propertiesList,
++                "RequestedApplyTime", requestedApplyTime,
++                "MaintenanceWindowStartTime", maintenanceWindowStartTime,
++                "MaintenanceWindowDurationInSeconds",
++                maintenanceWindowDurationInSeconds);
++
++            if (!success)
+             {
+-                asyncResp->res.jsonValue["HttpPushUriOptions"]
+-                                        ["HttpPushUriApplyTime"]["ApplyTime"] =
+-                    "Immediate";
++                messages::internalError(asyncResp->res);
++                return;
+             }
+-            else if (applyTime == "xyz.openbmc_project.Software.ApplyTime."
+-                                  "RequestedApplyTimes.OnReset")
++
++            if (requestedApplyTime != nullptr)
+             {
+                 asyncResp->res.jsonValue["HttpPushUriOptions"]
+                                         ["HttpPushUriApplyTime"]["ApplyTime"] =
+-                    "OnReset";
++                    requestedApplyTime->substr(
++                        requestedApplyTime->find_last_of('.') + 1);
+             }
+-        });
++            asyncResp->res
++                .jsonValue["HttpPushUriOptions"]["HttpPushUriApplyTime"]
++                          ["ApplyTime@Redfish.AllowableValues"] = {
++                "Immediate", "OnReset", "AtMaintenanceWindowStart",
++                "InMaintenanceWindowOnReset"};
++
++            if (maintenanceWindowStartTime != nullptr)
++            {
++                asyncResp->res
++                    .jsonValue["HttpPushUriOptions"]["HttpPushUriApplyTime"]
++                              ["MaintenanceWindowStartTime"] =
++                    redfish::time_utils::getDateTimeUint(
++                        *maintenanceWindowStartTime);
++            }
++
++            if (maintenanceWindowDurationInSeconds != nullptr)
++            {
++                asyncResp->res
++                    .jsonValue["HttpPushUriOptions"]["HttpPushUriApplyTime"]
++                              ["MaintenanceWindowDurationInSeconds"] =
++                    *maintenanceWindowDurationInSeconds;
++            }
++            });
+ 
+         // Get the ApplyOptions value
+         crow::connections::systemBus->async_method_call(
+@@ -1038,14 +1246,119 @@ inline void requestRoutesUpdateService(App& app)
+             if (pushUriApplyTime)
+             {
+                 std::optional<std::string> applyTime;
++                std::optional<std::string> maintenanceWindowStartTime;
++                std::optional<std::uint64_t> maintenanceWindowDurationInSeconds;
+                 if (!json_util::readJson(*pushUriApplyTime, asyncResp->res,
+-                                         "ApplyTime", applyTime))
++                                         "ApplyTime", applyTime,
++                                         "MaintenanceWindowDurationInSeconds",
++                                         maintenanceWindowDurationInSeconds,
++                                         "MaintenanceWindowStartTime",
++                                         maintenanceWindowStartTime))
+                 {
+                     return;
+                 }
+ 
+                 if (applyTime)
+                 {
++                    if (applyTime == "AtMaintenanceWindowStart" ||
++                        applyTime == "InMaintenanceWindowOnReset")
++                    {
++                        if (maintenanceWindowStartTime &&
++                            maintenanceWindowDurationInSeconds)
++                        {
++                            std::optional<redfish::time_utils::usSinceEpoch>
++                                us = redfish::time_utils::dateStringToEpoch(
++                                    *maintenanceWindowStartTime);
++                            if (!us)
++                            {
++                                messages::propertyValueFormatError(
++                                    asyncResp->res, *pushUriApplyTime,
++                                    "MaintenanceWindowStartTime");
++                                return;
++                            }
++
++                            // Current BMC Timezone
++                            const auto current_time =
++                                std::chrono::system_clock::to_time_t(
++                                    std::chrono::system_clock::now());
++
++                            if (static_cast<std::uint64_t>(
++                                    std::chrono::duration_cast<
++                                        std::chrono::seconds>(
++                                        std::chrono::system_clock::from_time_t(
++                                            current_time)
++                                            .time_since_epoch())
++                                        .count()) >
++                                (static_cast<std::uint64_t>(
++                                     std::chrono::duration_cast<
++                                         std::chrono::seconds>(*us)
++                                         .count()) +
++                                 static_cast<std::uint64_t>(
++                                     *maintenanceWindowDurationInSeconds)))
++                            {
++                                messages::propertyValueIncorrect(
++                                    asyncResp->res,
++                                    "MaintenanceWindowStartTime",
++                                    *maintenanceWindowStartTime);
++                                return;
++                            }
++
++                            // Set the MaintenanceWindowStartTime value
++                            sdbusplus::asio::setProperty(
++                                *crow::connections::systemBus,
++                                "xyz.openbmc_project.Settings",
++                                "/xyz/openbmc_project/software/apply_time",
++                                "xyz.openbmc_project.Software.ApplyTime",
++                                "MaintenanceWindowStartTime",
++                                static_cast<std::uint64_t>(
++                                    std::chrono::duration_cast<
++                                        std::chrono::seconds>(*us)
++                                        .count()),
++                                [asyncResp](
++                                    const boost::system::error_code& ec) {
++                                if (ec)
++                                {
++                                    BMCWEB_LOG_ERROR(
++                                        "D-Bus responses error: {}", ec);
++                                    messages::internalError(asyncResp->res);
++                                    return;
++                                }
++                                messages::success(asyncResp->res);
++                                });
++
++                            if (maintenanceWindowDurationInSeconds)
++                            {
++                                // Set the MaintenanceWindowDurationInSeconds
++                                // value
++                                sdbusplus::asio::setProperty(
++                                    *crow::connections::systemBus,
++                                    "xyz.openbmc_project.Settings",
++                                    "/xyz/openbmc_project/software/apply_time",
++                                    "xyz.openbmc_project.Software.ApplyTime",
++                                    "MaintenanceWindowDurationInSeconds",
++                                    *maintenanceWindowDurationInSeconds,
++                                    [asyncResp](
++                                        const boost::system::error_code& ec) {
++                                    if (ec)
++                                    {
++                                        BMCWEB_LOG_ERROR(
++                                            "D-Bus responses error: {}", ec);
++                                        messages::internalError(asyncResp->res);
++                                        return;
++                                    }
++                                    messages::success(asyncResp->res);
++                                    });
++                            }
++                        }
++                        else
++                        {
++                            BMCWEB_LOG_ERROR(
++                                "Missing Property MaintenanceWindowStartTime");
++                            messages::propertyMissing(
++                                asyncResp->res, "MaintenanceWindowStartTime");
++                            return;
++                        }
++                    }
+                     setApplyTime(asyncResp, *applyTime);
+                 }
+             }

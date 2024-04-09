@@ -23,6 +23,8 @@ update=/run/initramfs/update
 whitelist=/run/initramfs/whitelist
 uboot_env_bin_file="uboot_env_data.bin"
 NON_INTEL_PLATFORMS_MODE=1
+immediate="xyz.openbmc_project.Software.ApplyTime.RequestedApplyTimes.Immediate"
+atMaintenanceWindowStart="xyz.openbmc_project.Software.ApplyTime.RequestedApplyTimes.AtMaintenanceWindowStart"
 
 #Check the type of firmware currently being updated
 BMC_FW_UPDATING=1
@@ -94,6 +96,16 @@ IsMeetsMultiFirmwareRules() {
     return ${RET_NORMAL}
 }
 
+create_Phosphor_log() {
+    local evt=$1
+    local sev=$2
+    local msg=$3
+    busctl call xyz.openbmc_project.Logging \
+               /xyz/openbmc_project/logging \
+               xyz.openbmc_project.Logging.Create Create \
+               ssa{ss} OpenBMC.0.4.0.FirmwareUpdateCompleted xyz.openbmc_project.Logging.Entry.Level.Critical 2 REDFISH_MESSAGE_ID OpenBMC.0.4.0.FirmwareUpdateCompleted  REDFISH_MESSAGE_ARGS NA,NA
+}
+
 check_preserv_config() {
     value=$(busctl get-property xyz.openbmc_project.Software.BMC.Updater \
             /xyz/openbmc_project/software \
@@ -109,13 +121,15 @@ check_preserv_config() {
             log "BMC Full Flash - Not Preserved the Config"
         else
             log "BMC Full Flash - Start Preserve Config"
-            #mount nv rwfs mtd partition
-            mount -t jffs2 -o sync,ro mtd:rwfs /tmp/.rwfs
-            #start nv sync
-            systemctl start nv-sync.service
-            #stop nv sync to dump overlay files to nv storage
-            wait_for_log_sync
-            systemctl stop nv-sync.service
+            if [[ "$applytime" == "$immediate" || "$applytime" == "$atMaintenanceWindowStart"  ]];then
+                #mount nv rwfs mtd partition
+                mount -t jffs2 -o sync,ro mtd:rwfs /tmp/.rwfs
+                #start nv sync  
+                systemctl start nv-sync.service
+                #stop nv sync to dump overlay files to nv storage
+                wait_for_log_sync
+                systemctl stop nv-sync.service
+            fi
             log "BMC Full Flash - Preserve Config Done"
 
             if [ "$1" = "$NON_INTEL_PLATFORMS_MODE" ];then
@@ -140,23 +154,24 @@ redfish_log_fw_evt() {
     case "$evt" in
         start)
             update_percentage $UPDATE_PERCENT_INIT
-            evt=OpenBMC.0.1.FirmwareUpdateStarted
+            evt=OpenBMC.0.4.0.FirmwareUpdateStarted
             msg="${FWTYPE} firmware update to version ${FWVER} started."
             sev=OK
             ;;
         success)
             update_percentage $UPDATE_PERCENT_SUCCESS
-            evt=OpenBMC.0.1.FirmwareUpdateCompleted
+            evt=OpenBMC.0.4.0.FirmwareUpdateCompleted
             msg="${FWTYPE} firmware update to version ${FWVER} completed successfully."
             sev=OK
             ;;
         staged)
-            evt=OpenBMC.0.1.FirmwareUpdateStaged
+            evt=OpenBMC.0.4.0.FirmwareUpdateStaged
             msg="${FWTYPE} firmware update to version ${FWVER} staged successfully."
             sev=OK
             ;;
         *) return ;;
     esac
+    create_Phosphor_log $evt $sev $msg
     logger-systemd --journald <<-EOF
 		MESSAGE=$msg
 		PRIORITY=2
@@ -380,10 +395,12 @@ bmc_full_flash() {
                 log "Start Update Both BMC Active and Backup  images. It will take ~20 minutes...."
                 log "BMC Full Flash - Starting the SPI write on active CS0 spi. It will take ~8 minutes...."
                 local mtdPart=$(cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"bmc\"" {print $1}')
-                # stop nv sync
-                systemctl stop nv-sync.service
-                # unmount rwfs
-                umount /tmp/.rwfs
+                if [[ "$applytime" == "$immediate" || "$applytime" == "$atMaintenanceWindowStart"  ]];then
+                    # stop nv sync
+                    systemctl stop nv-sync.service
+                    # unmount rwfs
+                    umount /tmp/.rwfs
+                fi    
 
                 log "BMC Full Flash - Backup u-boot-env partition"
                 backup_uboot_env_data
@@ -459,10 +476,12 @@ bmc_full_flash() {
                     log "BMC Full Flash - Starting the SPI write on bkup CS1 spi. It will take ~8 minutes...."
                     local mtdPart=$(cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"bmc\"" {print $1}')
                     flashoffset=0
-                    # stop nv sync
-                    systemctl stop nv-sync.service
-                    # unmount rwfs
-                    umount /tmp/.rwfs
+                    if [[ "$applytime" == "$immediate" || "$applytime" == "$atMaintenanceWindowStart"  ]];then
+                        # stop nv sync
+                        systemctl stop nv-sync.service
+                        # unmount rwfs
+                        umount /tmp/.rwfs
+                    fi    
 
                     log "BMC Full Flash - Backup u-boot-env partition"
                     backup_uboot_env_data
@@ -500,11 +519,12 @@ bmc_full_flash() {
                 if [ "$BOOT_SOURCE" -eq 0 ]; then
                     log "BMC Full Flash - Starting the SPI write on active CS0 spi. It will take ~8 minutes...."
                     local mtdPart=$(cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"bmc\"" {print $1}')
-                    # stop nv sync
-                    systemctl stop nv-sync.service
-                    # unmount rwfs
-                    umount /tmp/.rwfs
-
+                    if [[ "$applytime" == "$immediate" || "$applytime" == "$atMaintenanceWindowStart"  ]];then
+                        # stop nv sync
+                        systemctl stop nv-sync.service
+                        # unmount rwfs
+                        umount /tmp/.rwfs
+                    fi
                     log "BMC Full Flash - Backup u-boot-env partition"
                     backup_uboot_env_data
                 else
@@ -542,11 +562,12 @@ bmc_full_flash() {
                 return 0
             fi
         fi
-        #stop nv sync
-        systemctl stop nv-sync.service
-        #unmount rwfs  
-        umount /tmp/.rwfs
-
+        if [[ "$applytime" == "$immediate" || "$applytime" == "$atMaintenanceWindowStart"  ]];then
+            #stop nv sync
+            systemctl stop nv-sync.service
+            #unmount rwfs  
+            umount /tmp/.rwfs
+        fi
         log "BMC Full Flash - Backup u-boot-env partition"
         backup_uboot_env_data
 
@@ -629,8 +650,10 @@ ping_pong_update() {
     cat "$LOCAL_PATH" > "$TGT"
     # fw_setenv "bootcmd" "bootm ${BOOTADDR}"
     wait_for_log_sync
-    # stop the nv-sync.service to trigger the overlay sync and unmount before 'reboot -f'
-    systemctl stop nv-sync.service
+    if [[ "$applytime" == "$immediate" || "$applytime" == "$atMaintenanceWindowStart"  ]];then
+        # stop the nv-sync.service to trigger the overlay sync and unmount before 'reboot -f'
+        systemctl stop nv-sync.service
+    fi    
     redfish_log_fw_evt success
     update_percentage $UPDATE_PERCENT_SUCCESS
     set_activation_status Active 
@@ -763,6 +786,10 @@ fetch_fw() {
 update_fw() {
     # determine firmware file type
     # local componentName=$(cat $LOCAL_PATH | awk -F= '$1=="ComponentName"{print $2}')
+    applytime=$(busctl get-property xyz.openbmc_project.Software.BMC.Updater \
+            /xyz/openbmc_project/software/$img_obj \
+            xyz.openbmc_project.Software.ApplyTime RequestedApplyTime \
+            | awk '{print $2}' | tr -d '"')
     if [ -z "$COMPONENTNAME" ] ; then
         if [ -f "$(dirname "$METAFILE_PATH")/image-runtime" ] || [ -f "$(dirname "$METAFILE_PATH")/image-kernel" ]; then
             if [ -f "$(dirname "$METAFILE_PATH")/image-runtime" ]; then LOCAL_PATH="$(dirname "$METAFILE_PATH")/image-runtime"; else LOCAL_PATH="$(dirname "$METAFILE_PATH")/image-kernel"; fi

@@ -2,7 +2,9 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI_NON_PFR:append = "file://0001-Add-Purpose-for-other-components-and-add-image-mtd-s.patch \
                    file://0004-Add-write-public-key-in-image-support.patch \
-                   file://fwupdinband@.service "
+                   file://fwupdinband@.service \
+		             file://0005-Add-support-to-applytime-property.patch \
+		"
 
 SRC_URI:append = " ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
 

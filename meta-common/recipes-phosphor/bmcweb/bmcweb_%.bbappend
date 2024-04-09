@@ -151,6 +151,7 @@ SRC_URI:append = "   \
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
 		    file://0197-Add-support-to-update-both-BMC-active-and-Backup-ima.patch \
+            file://0242-Add-support-to-applytime-property.patch \
 "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
 SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \

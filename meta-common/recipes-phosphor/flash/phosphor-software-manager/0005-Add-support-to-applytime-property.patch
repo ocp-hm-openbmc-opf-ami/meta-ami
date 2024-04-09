@@ -1,0 +1,278 @@
+From 8db2a6f788432cb56f23e1b96e55c0582cdc6aff Mon Sep 17 00:00:00 2001
+From: kirubagharanas <kirubagharanas@ami.com>
+Date: Fri, 5 Apr 2024 18:19:44 +0530
+Subject: [PATCH] Add support to Apply time property
+
+---
+ activation.cpp | 22 +++++++++++-
+ activation.hpp |  4 +++
+ meson.build    |  3 +-
+ task.cpp       | 76 +++++++++++++++++++++++++++++++++++++++
+ task.hpp       | 96 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ 5 files changed, 199 insertions(+), 2 deletions(-)
+ create mode 100644 task.cpp
+ create mode 100644 task.hpp
+
+diff --git a/activation.cpp b/activation.cpp
+index 9a1f72d..7fd06b1 100644
+--- a/activation.cpp
++++ b/activation.cpp
+@@ -122,7 +122,19 @@ auto Activation::activation(Activations value) -> Activations
+                 }
+             }
+ #endif
+-            flashWrite();
++            if (Activation::task->requestedApplyTime() ==
++                    Task::ApplyTime::RequestedApplyTimes::
++                        AtMaintenanceWindowStart ||
++                Activation::task->requestedApplyTime() ==
++                    Task::ApplyTime::RequestedApplyTimes::Immediate)
++            {
++                flashWrite();
++            }
++            else
++            {
++                softwareServer::Activation::activation(
++                    softwareServer::Activation::Activations::Staged);
++            }
+         }
+         else if (activationProgress->progress() == 100)
+         {
+@@ -316,8 +328,16 @@ auto Activation::requestedActivation(RequestedActivations value)
+             (softwareServer::Activation::activation() ==
+              softwareServer::Activation::Activations::Failed))
+         {
++          if (!task) {
++            task = std::make_unique<Task>(bus, path, *this);
++          }
++
++          if (task->isUpdateInMaintenenceWindow()) {
++            task->startTaskTimer();
++          } else {
+             Activation::activation(
+                 softwareServer::Activation::Activations::Activating);
++          }
+         }
+     }
+     else if ((value ==
+diff --git a/activation.hpp b/activation.hpp
+index 04562ea..7ed73af 100644
+--- a/activation.hpp
++++ b/activation.hpp
+@@ -4,6 +4,7 @@
+ 
+ #include "flash.hpp"
+ #include "utils.hpp"
++#include "task.hpp"
+ #include "xyz/openbmc_project/Software/ActivationProgress/server.hpp"
+ #include "xyz/openbmc_project/Software/RedundancyPriority/server.hpp"
+ 
+@@ -320,6 +321,9 @@ class Activation : public ActivationInherit, public Flash
+     /** @brief Persistent ActivationProgress dbus object */
+     std::unique_ptr<ActivationProgress> activationProgress;
+ 
++    /** @brief Persistent map of Task D-Bus objects  */
++    std::unique_ptr<Task> task;
++
+     /** @brief Used to subscribe to dbus systemd signals **/
+     sdbusplus::bus::match_t systemdSignals;
+ 
+diff --git a/meson.build b/meson.build
+index c7f5528..acb7a79 100644
+--- a/meson.build
++++ b/meson.build
+@@ -160,7 +160,8 @@ image_updater_sources = files(
+     'serialize.cpp',
+     'version.cpp',
+     'utils.cpp',
+-    'msl_verify.cpp'
++    'msl_verify.cpp',
++    'task.cpp'
+ )
+ 
+ if get_option('bmc-layout').contains('static')
+diff --git a/task.cpp b/task.cpp
+new file mode 100644
+index 0000000..0680c25
+--- /dev/null
++++ b/task.cpp
+@@ -0,0 +1,76 @@
++#include "config.h"
++#include "activation.hpp"
++#include "task.hpp"
++#include <iostream>
++
++
++namespace phosphor
++{
++namespace software
++{
++namespace updater
++{
++namespace softwareServer =
++                    sdbusplus::server::xyz::openbmc_project::software;
++namespace TaskServer = sdbusplus::server::xyz::openbmc_project::common;
++
++void Task::startTaskTimer()
++{
++    auto maintenanceStartTime = maintenanceWindowStartTime();
++    const auto current_time =
++        std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
++    std::cout << "CurrentTime = "
++              << static_cast<std::uint64_t>(
++                     std::chrono::duration_cast<std::chrono::seconds>(
++                         std::chrono::system_clock::from_time_t(current_time)
++                             .time_since_epoch())
++                         .count())
++              << std::endl;
++    std::uint64_t timeout =
++        static_cast<std::uint64_t>(maintenanceStartTime) -
++        static_cast<std::uint64_t>(
++            std::chrono::duration_cast<std::chrono::seconds>(
++                std::chrono::system_clock::from_time_t(current_time)
++                    .time_since_epoch())
++                .count());
++    std::cout << "maintenanceWindowStartTime = " << maintenanceStartTime
++              << " timediff = " << timeout << std::endl;
++    if (requestedApplyTime() ==
++            ApplyTime::RequestedApplyTimes::AtMaintenanceWindowStart ||
++        requestedApplyTime() ==
++            ApplyTime::RequestedApplyTimes::InMaintenanceWindowOnReset)
++    {
++        status(Task::OperationStatus::New);
++        timer.expires_after(std::chrono::seconds(timeout));
++        timer.async_wait([this](boost::system::error_code ec) {
++            if (ec == boost::asio::error::operation_aborted)
++            {
++               
++                return; // completed successfully
++            }
++            if (!ec)
++            {
++                // change ec to error as timer expired
++                status(Task::OperationStatus::InProgress);
++                parent.activation(
++                    softwareServer::Activation::Activations::Activating);
++            }
++        });
++    }
++}
++
++Task::OperationStatus Task::status( Task::OperationStatus value)
++{
++    if (value == Task::OperationStatus::Cancelled)
++    {
++        //  parent.activation(
++        //                 softwareServer::Activation::Activations::Failed);
++        timer.cancel();
++    }
++        
++    return TaskServer::Task::status(value);
++}
++
++} // namespace updater
++} // namespace software
++} // namespace phosphor
+\ No newline at end of file
+diff --git a/task.hpp b/task.hpp
+new file mode 100644
+index 0000000..6acdf1f
+--- /dev/null
++++ b/task.hpp
+@@ -0,0 +1,96 @@
++#pragma once
++
++#include "config.h"
++#include "flash.hpp"
++
++#include <sdbusplus/server.hpp>
++#include <xyz/openbmc_project/Common/Task/server.hpp>
++#include <xyz/openbmc_project/Software/ApplyTime/server.hpp>
++#include <xyz/openbmc_project/Software/Activation/server.hpp>
++#include <boost/asio/post.hpp>
++#include <boost/asio/steady_timer.hpp>
++#include <boost/url/format.hpp>
++#include <sdbusplus/bus/match.hpp>
++
++#include <chrono>
++#include <memory>
++#include <ranges>
++#include <variant>
++
++extern boost::asio::io_context& getIOContext();
++namespace phosphor
++{
++namespace software
++{
++namespace updater
++{
++    using TaskInherit = sdbusplus::server::object_t<
++    sdbusplus::server::xyz::openbmc_project::software::ApplyTime,
++    sdbusplus::server::xyz::openbmc_project::common::Task>;
++    class Activation;
++
++class Task : public TaskInherit
++{
++     public:
++
++
++     Task(sdbusplus::bus_t& bus, const std::string& path,
++               Activation& parent) :
++        TaskInherit(bus, path.c_str(),
++                          TaskInherit::action::defer_emit),
++        bus(bus), path(path), parent(parent), timer(getIOContext())
++    {
++         auto RequestedApplyTime = utils::getProperty<std::string>(
++                bus, "/xyz/openbmc_project/software/apply_time",
++                 "xyz.openbmc_project.Software.ApplyTime", "RequestedApplyTime");
++        requestedApplyTime(convertStringToRequestedApplyTimes(RequestedApplyTime).value());
++         auto MaintenanceWindowDurationInSeconds = utils::getProperty<std::uint64_t>(
++                bus, "/xyz/openbmc_project/software/apply_time",
++                 "xyz.openbmc_project.Software.ApplyTime", "MaintenanceWindowDurationInSeconds");
++        maintenanceWindowDurationInSeconds(MaintenanceWindowDurationInSeconds);
++        auto MaintenanceWindowStartTime = utils::getProperty<std::uint64_t>(
++                bus, "/xyz/openbmc_project/software/apply_time",
++                 "xyz.openbmc_project.Software.ApplyTime", "MaintenanceWindowStartTime");
++        maintenanceWindowStartTime(MaintenanceWindowStartTime);
++        emit_object_added();
++    }
++
++
++    void startTaskTimer();
++
++    bool isUpdateInMaintenenceWindow()
++    {
++        if (requestedApplyTime() ==
++                ApplyTime::RequestedApplyTimes::AtMaintenanceWindowStart ||
++            requestedApplyTime() ==
++                ApplyTime::RequestedApplyTimes::InMaintenanceWindowOnReset)
++        {
++            return true;
++        }
++
++        return false;
++    }
++
++    void cancelTask()
++    {
++        timer.cancel();
++
++    }
++
++    OperationStatus status(OperationStatus value) override;
++
++    /** @brief Persistent sdbusplus DBus bus connection */
++    sdbusplus::bus_t& bus;
++
++    /** @brief Persistent DBus object path */
++    std::string path;
++
++    /** @brief Parent Object. */
++    Activation& parent;
++
++    boost::asio::steady_timer timer;
++
++};
++} // namespace updater
++} // namespace software
++} // namespace phosphor
