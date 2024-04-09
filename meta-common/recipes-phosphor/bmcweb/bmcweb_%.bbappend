@@ -163,6 +163,7 @@ SRC_URI:append = "   \
             file://0250-Fixed-internal-error-500.patch \
             file://0247-Fix-for-Redfish-Reference-Checker.patch \
             file://0051-Changing-MaxConcurrentSessions-value-to-1.patch \
+            file://0243-Change-the-value-of-Chassis-Instance-Sensors-Voltage-ReadingRangeMax-to-4-digits-after-decimal.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
