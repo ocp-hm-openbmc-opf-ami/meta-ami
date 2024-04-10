@@ -1,0 +1,853 @@
+From f630a528953291ef082ef8a5f52c945f64ba9149 Mon Sep 17 00:00:00 2001
+From: thrishalig <thrishalig@ami.com>
+Date: Fri, 15 Mar 2024 13:35:48 +0530
+Subject: [PATCH] Thermal OEM condtions Feature Enhancement
+
+1.One fan rotor failed:
+
+Action to be taken.
+
+The Group which it belongs to will raise fan-duty to 80 % immediately.
+2.One of PSU fan failed:
+
+Action to be taken
+
+The Group which it belongs, will raise fan-duty to 80 % immediately.
+3. Upon power on:
+
+Action to be taken
+
+If all fans in any zone are no detect, no readings or 0 RPM, then BMC turn off the system
+
+4.Sensor reaches to the upper non-critical threshold.
+
+Action to be taken
+
+Warning in event log. The Fan Zone which it belongs, will raise fan-duty to 80 % immediately.
+5.Sensor reaches to the upper critical threshold.
+
+Action to be taken
+
+System shutdown.
+
+Signed-off-by: thrishalig <thrishalig@ami.com>
+---
+ conf.hpp                   |  17 +++
+ dbus/dbusconfiguration.cpp |  39 +++++++
+ dbus/dbusutil.hpp          |  13 +++
+ meson.build                |   1 +
+ pid/actioncontroller.cpp   |  80 +++++++++++++
+ pid/actioncontroller.hpp   | 231 +++++++++++++++++++++++++++++++++++++
+ pid/builder.cpp            |   3 +-
+ pid/oemactions.hpp         | 188 ++++++++++++++++++++++++++++++
+ pid/zone.cpp               |  19 ++-
+ pid/zone.hpp               |  60 +++++++++-
+ 10 files changed, 642 insertions(+), 9 deletions(-)
+ create mode 100644 pid/actioncontroller.cpp
+ create mode 100644 pid/actioncontroller.hpp
+ create mode 100644 pid/oemactions.hpp
+
+diff --git a/conf.hpp b/conf.hpp
+index 265da09..e15154e 100644
+--- a/conf.hpp
++++ b/conf.hpp
+@@ -74,6 +74,20 @@ struct CycleTime
+  * and a set of configuration settings.  This structure gets filled out with
+  * the zone configuration settings and not the PID details.
+  */
++
++/*
++ * Structure for holding the configuration of a OEM conditions.
++ */
++
++struct OemConfig
++{
++    uint8_t maxPwm;
++    uint8_t minNumberFailedFans;
++    uint8_t maxnumberFans;
++    uint8_t setMaxPwm;
++    std::vector<std::string> name;
++};
++
+ struct ZoneConfig
+ {
+     /* The minimum set-point value we would ever want (typically in RPM) */
+@@ -84,6 +98,9 @@ struct ZoneConfig
+ 
+     /* Customize time settings for every cycle */
+     CycleTime cycleTime;
++
++    /*OEM conditions structure*/
++    OemConfig oemconfig;
+ };
+ 
+ using PIDConf = std::map<std::string, ControllerInfo>;
+diff --git a/dbus/dbusconfiguration.cpp b/dbus/dbusconfiguration.cpp
+index 2ca629c..ee48d56 100644
+--- a/dbus/dbusconfiguration.cpp
++++ b/dbus/dbusconfiguration.cpp
+@@ -647,6 +647,45 @@ bool init(sdbusplus::bus_t& bus, boost::asio::steady_timer& timer,
+                                 details.cycleTime.cycleIntervalTimeMS);
+             getCycleTimeSetting(zone, index, "UpdateThermalsTimeMS",
+                                 details.cycleTime.updateThermalsTimeMS);
++            for (const auto& [intf, cfg] : configuration.second)
++            {
++                if (intf.find("OemConditions") == std::string::npos)
++                {
++                    continue;
++                }
++                auto nameFind = cfg.find("Name");
++                if (nameFind != cfg.end())
++                {
++                    details.oemconfig.name.push_back(
++                        std::get<std::string>(nameFind->second));
++                }
++                auto maxPwmFind = cfg.find("MaxPwm");
++                if (maxPwmFind != cfg.end())
++                {
++                    details.oemconfig.maxPwm = std::visit(VariantToIntVisitor(),
++                                                          maxPwmFind->second);
++                }
++                auto minNumberFansFind = cfg.find("MinnumberFailedFans");
++                if (minNumberFansFind != cfg.end())
++                {
++                    details.oemconfig.minNumberFailedFans = std::visit(
++                        VariantToIntVisitor(), minNumberFansFind->second);
++                }
++
++                auto maxNumberFansFind = cfg.find("MaxnumberFans");
++
++                if (maxNumberFansFind != cfg.end())
++                {
++                    details.oemconfig.maxnumberFans = std::visit(
++                        VariantToIntVisitor(), maxNumberFansFind->second);
++                }
++                auto setMaxPwmFind = cfg.find("SetMaxPwm");
++                if (setMaxPwmFind != cfg.end())
++                {
++                    details.oemconfig.setMaxPwm = std::visit(
++                        VariantToIntVisitor(), setMaxPwmFind->second);
++                }
++            }
+         }
+         auto findBase = configuration.second.find(pidConfigurationInterface);
+         // loop through all the PID configurations and fill out a sensor config
+diff --git a/dbus/dbusutil.hpp b/dbus/dbusutil.hpp
+index 49ec859..2391c61 100644
+--- a/dbus/dbusutil.hpp
++++ b/dbus/dbusutil.hpp
+@@ -28,6 +28,19 @@ struct VariantToDoubleVisitor
+     }
+ };
+ 
++struct VariantToIntVisitor
++{
++    template <typename T>
++    int operator()(const T& t) const
++    {
++        if constexpr (std::is_arithmetic_v<T>)
++        {
++            return static_cast<int>(t);
++        }
++        throw std::invalid_argument("Cannot translate type to int");
++    }
++};
++
+ std::string getSensorPath(const std::string& type, const std::string& id);
+ std::string getMatch(const std::string& path);
+ void scaleSensorReading(const double min, const double max, double& value);
+diff --git a/meson.build b/meson.build
+index 552634e..99f244c 100644
+--- a/meson.build
++++ b/meson.build
+@@ -120,6 +120,7 @@ libswampd_sources = [
+     'pid/zone.cpp',
+     'pid/util.cpp',
+     'pid/pidloop.cpp',
++    'pid/actioncontroller.cpp',
+     'pid/tuning.cpp',
+     'buildjson/buildjson.cpp',
+     'experiments/drive.cpp',
+diff --git a/pid/actioncontroller.cpp b/pid/actioncontroller.cpp
+new file mode 100644
+index 0000000..9945c87
+--- /dev/null
++++ b/pid/actioncontroller.cpp
+@@ -0,0 +1,80 @@
++#include "actioncontroller.hpp"
++
++#include "oemactions.hpp"
++
++#include <string.h>
++
++#include <iostream>
++
++/** @brief Process Fan defined action
++ *  @param[in] reading  sensor reading
++ *  @param[in] sensorName sensor name
++ *  @param[in] readFailureCnt  count number of fan having reading 0
++ *  @return The setpoint to set pwm value
++ */
++namespace pid_control
++{
++double ActionOem::processFanAction(double reading, std::string sensorName,
++                                   uint8_t* readFailureCnt)
++{
++    double setpoint = 0;
++
++    if (!(reading > 0))
++    {
++        (*readFailureCnt)++;
++    }
++    std::vector<std::string> oemConditionName = getOemName();
++
++    if (std::find(oemConditionName.begin(), oemConditionName.end(),
++                  minFailFanZoneLeft) != oemConditionName.end() ||
++        std::find(oemConditionName.begin(), oemConditionName.end(),
++                  minFailFanZoneRight) != oemConditionName.end())
++    {
++        uint8_t minimumNumFailedFan = getOemMinFailFan();
++        setpoint = oemMinFailAspeedFan(sensorName, readFailureCnt,
++                                       &minimumNumFailedFan);
++    }
++    if (std::find(oemConditionName.begin(), oemConditionName.end(),
++                  minFailFanPsu) != oemConditionName.end())
++    {
++        uint8_t minimumNumFailedFan = getOemMinFailFan();
++        setpoint = oemMinFailPsuFan(sensorName, readFailureCnt,
++                                    &minimumNumFailedFan);
++    }
++    if (std::find(oemConditionName.begin(), oemConditionName.end(),
++                  maxFailFanZoneLeft) != oemConditionName.end() ||
++        std::find(oemConditionName.begin(), oemConditionName.end(),
++                  maxFailFanZoneRight) != oemConditionName.end())
++    {
++        uint8_t maxFanFailure = getOemMaxFailFan();
++        maxFailAspeedFan(sensorName, readFailureCnt, &maxFanFailure);
++    }
++    if (std::find(oemConditionName.begin(), oemConditionName.end(),
++                  maxFailFanPsu) != oemConditionName.end())
++    {
++        uint8_t maxFanFailure = getOemMaxFailFan();
++        maxFailPsuFan(sensorName, readFailureCnt, &maxFanFailure);
++    }
++    return setpoint;
++}
++
++/** @brief Process Temp sensor defined action
++ *  @param[in] sensorName sensor name
++ *  @param[in] The setpoint to set pwm value
++ */
++
++void ActionOem::processThermalAction(std::string sensorName, double* setpoint)
++{
++    std::vector<std::string> oemConditionName = getOemName();
++    if (std::find(oemConditionName.begin(), oemConditionName.end(),
++                  sensorUnc) != oemConditionName.end())
++    {
++        *setpoint = monitorSensorUnc(sensorName);
++    }
++    if (std::find(oemConditionName.begin(), oemConditionName.end(),
++                  sensorUcr) != oemConditionName.end())
++    {
++        monitorSensorUcr(sensorName);
++    }
++}
++} // namespace pid_control
+diff --git a/pid/actioncontroller.hpp b/pid/actioncontroller.hpp
+new file mode 100644
+index 0000000..e947b44
+--- /dev/null
++++ b/pid/actioncontroller.hpp
+@@ -0,0 +1,231 @@
++#pragma once
++#include "conf.hpp"
++#include "dbus/dbusconfiguration.hpp"
++#include "dbus/dbushelper.hpp"
++#include "util.hpp"
++
++#include <boost/asio.hpp>
++#include <boost/asio/io_context.hpp>
++#include <boost/asio/io_service.hpp>
++#include <phosphor-logging/log.hpp>
++#include <sdbusplus/asio/connection.hpp>
++#include <sdbusplus/asio/object_server.hpp>
++#include <sdbusplus/bus.hpp>
++
++#include <fstream>
++#include <iostream>
++#include <map>
++#include <memory>
++#include <string>
++#include <variant>
++
++constexpr auto PROP_INTF = "org.freedesktop.DBus.Properties";
++constexpr auto METHOD_GET = "Get";
++constexpr auto METHOD_GET_ALL = "GetAll";
++constexpr auto METHOD_SET = "Set";
++
++/*power*/
++static constexpr const char* pwrService = "xyz.openbmc_project.State.Chassis";
++static constexpr const char* pwrStateObjPath =
++    "/xyz/openbmc_project/state/chassis0";
++static constexpr const char* pwrStateIface =
++    "xyz.openbmc_project.State.Chassis";
++static constexpr const char* pwrCtlOff =
++    "xyz.openbmc_project.State.Chassis.Transition.Off";
++
++static constexpr const char* pwrHostStateObjPath =
++    "/xyz/openbmc_project/state/host0";
++
++static constexpr const char* pwrHostStateIface =
++    "xyz.openbmc_project.State.Host";
++
++static constexpr const char* pwrCtlOn =
++    "xyz.openbmc_project.State.Chassis.Transition.On";
++/*sensor*/
++constexpr const char* warningInterface =
++    "xyz.openbmc_project.Sensor.Threshold.Warning";
++constexpr const char* criticalInterface =
++    "xyz.openbmc_project.Sensor.Threshold.Critical";
++constexpr auto sensorObjectPath = "/xyz/openbmc_project/sensors/temperature/";
++
++static const std::string psuFan = "PSU";
++static const std::string aspeedFan = "Fan_";
++const std::string tempSensor = "_Temp";
++
++/*Oem conditions*/
++constexpr std::string sensorUnc = "sensor UNC";
++const std::string minFailFanZoneLeft = "Fan Fail Left Zone";
++const std::string minFailFanZoneRight = "Fan Fail Right Zone";
++constexpr std::string minFailFanPsu = "PSU Fan Fail";
++const std::string maxFailFanZoneLeft = "Max Fans Fail LeftZone";
++const std::string maxFailFanZoneRight = "Max Fans Fail RightZone";
++constexpr std::string maxFailFanPsu = "Max Fans Fail";
++constexpr std::string sensorUcr = "sensor UCR";
++
++using property = std::string;
++using sensorValue = std::variant<int64_t, double, std::string, bool>;
++using propertyMap = std::map<property, sensorValue>;
++
++using value = std::variant<uint8_t, uint16_t, std::string>;
++using namespace phosphor::logging;
++using namespace sdbusplus;
++
++namespace pid_control
++{
++class ActionOem
++{
++  private:
++    const conf::OemConfig _oemconfig;
++
++  protected:
++    double oem_setpoint = 0;
++
++  public:
++    ActionOem(conf::OemConfig oemconfig) : _oemconfig(oemconfig), oem_setpoint()
++    {}
++
++    double processFanAction(double reading, std::string sensorName,
++                            uint8_t* readFailureCnt);
++    void processThermalAction(std::string sensorName, double* setpoint);
++
++    double monitorThreshold(std::string sensorName);
++
++    double oemMinFailAspeedFan(std::string sensorName, uint8_t* readFailureCnt,
++                               uint8_t* minimumNumFailedFan);
++    double oemMinFailPsuFan(std::string sensorName, uint8_t* readFailureCnt,
++                            uint8_t* minimumNumFailedFan);
++    void maxFailAspeedFan(std::string sensorName, uint8_t* readFailureCnt,
++                          uint8_t* maxFanFailure);
++    void maxFailPsuFan(std::string sensorName, uint8_t* readFailureCnt,
++                       uint8_t* maxFanFailure);
++    double monitorSensorUnc(std::string sensorName);
++    void monitorSensorUcr(std::string sensorName);
++
++    uint64_t getoemMaxPwm(void) const
++    {
++        return _oemconfig.maxPwm;
++    }
++    uint64_t getOemMinFailFan(void) const
++    {
++        return _oemconfig.minNumberFailedFans;
++    }
++    uint64_t getOemMaxFailFan(void) const
++    {
++        return _oemconfig.maxnumberFans;
++    }
++
++    uint64_t getOemSetMaxPwm(void) const
++    {
++        return _oemconfig.setMaxPwm;
++    }
++    std::vector<std::string> getOemName(void) const
++    {
++        return _oemconfig.name;
++    }
++};
++
++inline bool getPowerStatus(std::shared_ptr<sdbusplus::asio::connection> conn)
++{
++    bool pwrGood = false;
++    std::string pwrStatus;
++    value variant;
++    try
++    {
++        auto method = conn->new_method_call(pwrService, pwrStateObjPath,
++                                            PROP_INTF, METHOD_GET);
++        method.append(pwrStateIface, "CurrentPowerState");
++        auto reply = conn->call(method);
++        reply.read(variant);
++        pwrStatus = std::get<std::string>(variant);
++    }
++    catch (sdbusplus::exception_t& e)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Failed to get getPowerStatus Value",
++            phosphor::logging::entry("EXCEPTION=%s", e.what()));
++        return pwrGood;
++    }
++    if (pwrStatus == "xyz.openbmc_project.State.Chassis.PowerState.On")
++    {
++        pwrGood = true;
++    }
++    return pwrGood;
++}
++
++inline bool powerOn(std::shared_ptr<sdbusplus::asio::connection> conn)
++{
++    bool pwrGood = false;
++    std::string pwrStatus;
++    value variant;
++    try
++    {
++        auto method = conn->new_method_call(pwrService, pwrHostStateObjPath,
++                                            PROP_INTF, METHOD_GET);
++        method.append(pwrHostStateIface, "CurrentHostState");
++        auto reply = conn->call(method);
++        reply.read(variant);
++        pwrStatus = std::get<std::string>(variant);
++    }
++    catch (sdbusplus::exception_t& e)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Failed to get getPowerStatus Value",
++            phosphor::logging::entry("EXCEPTION=%s", e.what()));
++        return pwrGood;
++    }
++    if (pwrStatus == "xyz.openbmc_project.State.Host.HostState.Off")
++    {
++        pwrGood = true;
++    }
++    return pwrGood;
++}
++inline void poweroff(std::shared_ptr<sdbusplus::asio::connection> conn)
++{
++    std::cerr << " poweroff \n";
++    auto method = conn->new_method_call(pwrService, pwrStateObjPath, PROP_INTF,
++                                        METHOD_SET);
++    method.append(pwrStateIface, "RequestedPowerTransition");
++    method.append(std::variant<std::string>(pwrCtlOff));
++
++    auto reply = conn->call(method);
++
++    if (reply.is_method_error())
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "ailed to set RequestedPowerTransition poweroff");
++    }
++}
++inline std::string getService(const std::string& intf, const std::string& path)
++{
++    auto bus = bus::new_default_system();
++    auto mapper = bus.new_method_call("xyz.openbmc_project.ObjectMapper",
++                                      "/xyz/openbmc_project/object_mapper",
++                                      "xyz.openbmc_project.ObjectMapper",
++                                      "GetObject");
++
++    mapper.append(path);
++    mapper.append(std::vector<std::string>({intf}));
++
++    std::map<std::string, std::vector<std::string>> response;
++
++    try
++    {
++        auto responseMsg = bus.call(mapper);
++
++        responseMsg.read(response);
++    }
++    catch (const sdbusplus::exception::exception& ex)
++    {
++        log<level::ERR>("ObjectMapper call failure",
++                        entry("WHAT=%s", ex.what()));
++        throw;
++    }
++
++    if (response.begin() == response.end())
++    {
++        throw std::runtime_error("Unable to find Object: " + path);
++    }
++
++    return response.begin()->first;
++}
++} // namespace pid_control
+diff --git a/pid/builder.cpp b/pid/builder.cpp
+index 39d0076..13677b8 100644
+--- a/pid/builder.cpp
++++ b/pid/builder.cpp
+@@ -76,7 +76,8 @@ std::unordered_map<int64_t, std::shared_ptr<ZoneInterface>>
+         auto zone = std::make_shared<DbusPidZone>(
+             zoneId, zoneConf->second.minThermalOutput,
+             zoneConf->second.failsafePercent, zoneConf->second.cycleTime, mgr,
+-            modeControlBus, getControlPath(zoneId).c_str(), deferSignals);
++            modeControlBus, getControlPath(zoneId).c_str(), deferSignals,
++            zoneConf->second.oemconfig);
+ 
+         std::cerr << "Zone Id: " << zone->getZoneID() << "\n";
+ 
+diff --git a/pid/oemactions.hpp b/pid/oemactions.hpp
+new file mode 100644
+index 0000000..1c21134
+--- /dev/null
++++ b/pid/oemactions.hpp
+@@ -0,0 +1,188 @@
++#include "actioncontroller.hpp"
++
++#include <iostream>
++
++namespace pid_control
++{
++/** @brief OemMinfailAspeedfan defined action
++ *  @param[in] sensorName sensor name
++ *  @param[in] readFailureCnt  count number of fan having reading 0
++ *  @param[in] Minimum number  of fan should have reading 0
++ *  @return The setpoint to set pwm value
++ */
++inline double ActionOem::oemMinFailAspeedFan(std::string sensorName,
++                                             uint8_t* readFailureCnt,
++                                             uint8_t* minimumNumFailedFan)
++{
++    double setpoint = 0;
++
++    if (((*readFailureCnt == *minimumNumFailedFan) &&
++         !(std::strncmp(sensorName.c_str(), aspeedFan.c_str(),
++                        strlen(aspeedFan.c_str())))))
++    {
++        setpoint = getoemMaxPwm();
++        return setpoint;
++    }
++    return setpoint;
++}
++/** @brief OemMinfailPSUFan defined action
++ *  @param[in] sensorName sensor name
++ *  @param[in] readFailureCnt  count number of PSU fan having reading 0
++ *  @param[in] Minimum number  of PSU fan should have reading 0
++ *  @return The setpoint to set pwm value
++ */
++
++inline double ActionOem::oemMinFailPsuFan(std::string sensorName,
++                                          uint8_t* readFailureCnt,
++                                          uint8_t* minimumNumFailedFan)
++{
++    double setpoint = 0;
++    if (((*readFailureCnt == *minimumNumFailedFan) &&
++         !(std::strncmp(sensorName.c_str(), psuFan.c_str(),
++                        strlen(psuFan.c_str())))))
++    {
++        setpoint = getoemMaxPwm();
++        return setpoint;
++    }
++    return setpoint;
++}
++
++/** @brief MaxfailAspeedFan defined action
++ *  @param[in] sensorName sensor name
++ *  @param[in] readFailureCnt  count number of fan having reading 0
++ *  @param[in] Maximum  number  of fan should have reading 0
++ */
++
++inline void ActionOem::maxFailAspeedFan(std::string sensorName,
++                                        uint8_t* readFailureCnt,
++                                        uint8_t* maxFanFailure)
++{
++    if ((*readFailureCnt == *maxFanFailure) &&
++        !(std::strncmp(sensorName.c_str(), aspeedFan.c_str(),
++                       strlen(aspeedFan.c_str()))))
++    {
++        boost::asio::io_context io;
++        auto conn = std::make_shared<sdbusplus::asio::connection>(io);
++        if (getPowerStatus(conn))
++        {
++            poweroff(conn);
++        }
++    }
++}
++
++/** @brief MaxfailPSUFan defined action
++ *  @param[in] sensorName sensor name
++ *  @param[in] readFailureCnt  count number of PSU fan having reading 0
++ *  @param[in] Maximum number  of PSU fan should have reading 0
++ */
++
++inline void ActionOem::maxFailPsuFan(std::string sensorName,
++                                     uint8_t* readFailureCnt,
++                                     uint8_t* maxFanFailure)
++{
++    if (((*readFailureCnt == *maxFanFailure) &&
++         !(std::strncmp(sensorName.c_str(), psuFan.c_str(),
++                        strlen(psuFan.c_str())))))
++    {
++        boost::asio::io_context io;
++        auto conn = std::make_shared<sdbusplus::asio::connection>(io);
++        if (getPowerStatus(conn))
++        {
++            poweroff(conn);
++        }
++    }
++}
++/** @brief monitorSensorUNC defined action
++ *  @param[in] sensorName sensor name
++ *  @return setpoint to set pwm value when sensor triggers to unc event
++ */
++
++inline double ActionOem::monitorSensorUnc(std::string sensorName)
++{
++    std::string objectPath = sensorObjectPath;
++    double setpoint = 0;
++    boost::asio::io_context io;
++    auto conn = std::make_shared<sdbusplus::asio::connection>(io);
++    objectPath = objectPath + sensorName;
++    std::string service;
++
++    // warning interface
++    try
++    {
++        service = getService(warningInterface, objectPath.c_str());
++        propertyMap warningMap;
++        auto method = conn->new_method_call(service.c_str(), objectPath.c_str(),
++                                            PROP_INTF, METHOD_GET_ALL);
++        method.append(warningInterface);
++        auto reply = conn->call(method);
++        if (reply.is_method_error())
++        {
++            phosphor::logging::log<phosphor::logging::level::ERR>(
++                "Failed to get all properties");
++        }
++        reply.read(warningMap);
++        auto findWarningHigh = warningMap.find("WarningAlarmHigh");
++        if (findWarningHigh != warningMap.end())
++        {
++            if (std::get<bool>(warningMap.at("WarningAlarmHigh")))
++            {
++                setpoint = getOemSetMaxPwm();
++            }
++        }
++    }
++    catch (sdbusplus::exception_t& e)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Failed to fetch",
++            phosphor::logging::entry("EXCEPTION=%s", e.what()));
++    }
++    return setpoint;
++}
++/** @brief monitorSensorUNC defined action
++ *  @param[in] sensorName sensor name
++ */
++
++inline void ActionOem::monitorSensorUcr(std::string sensorName)
++{
++    std::string objectPath = sensorObjectPath;
++    boost::asio::io_context io;
++    auto conn = std::make_shared<sdbusplus::asio::connection>(io);
++    objectPath = objectPath + sensorName;
++    std::string service;
++    // critical interface
++    try
++    {
++        service = getService(criticalInterface, objectPath.c_str());
++        propertyMap criticalMap;
++        auto method = conn->new_method_call(service.c_str(), objectPath.c_str(),
++                                            PROP_INTF, METHOD_GET_ALL);
++        method.append(criticalInterface);
++        auto reply = conn->call(method);
++        if (reply.is_method_error())
++        {
++            phosphor::logging::log<phosphor::logging::level::ERR>(
++                "Failed to get all properties");
++        }
++        reply.read(criticalMap);
++        auto findCriticalHigh = criticalMap.find("CriticalAlarmHigh");
++
++        if (findCriticalHigh != criticalMap.end())
++        {
++            if (std::get<bool>(criticalMap.at("CriticalAlarmHigh")))
++            {
++                if (getPowerStatus(conn))
++                {
++                    poweroff(conn);
++                }
++            }
++        }
++    }
++    catch (sdbusplus::exception_t& e)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Failed to fetch",
++            phosphor::logging::entry("EXCEPTION=%s", e.what()));
++    }
++}
++
++} // namespace pid_control
+diff --git a/pid/zone.cpp b/pid/zone.cpp
+index e5eddca..f9c5c0e 100644
+--- a/pid/zone.cpp
++++ b/pid/zone.cpp
+@@ -115,11 +115,13 @@ int64_t DbusPidZone::getZoneID(void) const
+ void DbusPidZone::addSetPoint(double setPoint, const std::string& name)
+ {
+     /* exclude disabled pidloop from _maximumSetPoint calculation*/
+-    if (!isPidProcessEnabled(name))
++    if (!((name.find(aspeedFan)) || (name.find(psuFan))))
+     {
+-        return;
++        if (!isPidProcessEnabled(name))
++        {
++            return;
++        }
+     }
+-
+     _SetPoints.push_back(setPoint);
+     /*
+      * if there are multiple thermal controllers with the same
+@@ -127,8 +129,15 @@ void DbusPidZone::addSetPoint(double setPoint, const std::string& name)
+      */
+     if (_maximumSetPoint < setPoint)
+     {
+-        _maximumSetPoint = setPoint;
+-        _maximumSetPointName = name;
++        if (setPoint < oem_setpoint)
++        {
++            _maximumSetPoint = oem_setpoint;
++        }
++        else
++        {
++            _maximumSetPoint = setPoint;
++            _maximumSetPointName = name;
++        }
+     }
+ }
+ 
+diff --git a/pid/zone.hpp b/pid/zone.hpp
+index 464e672..152cef6 100644
+--- a/pid/zone.hpp
++++ b/pid/zone.hpp
+@@ -1,5 +1,6 @@
+ #pragma once
+ 
++#include "actioncontroller.hpp"
+ #include "conf.hpp"
+ #include "controller.hpp"
+ #include "pidcontroller.hpp"
+@@ -8,6 +9,12 @@
+ #include "tuning.hpp"
+ #include "zone_interface.hpp"
+ 
++#include <boost/asio.hpp>
++#include <boost/asio/io_context.hpp>
++#include <boost/asio/io_service.hpp>
++#include <phosphor-logging/log.hpp>
++#include <sdbusplus/asio/connection.hpp>
++#include <sdbusplus/asio/object_server.hpp>
+ #include <sdbusplus/bus.hpp>
+ #include <sdbusplus/server.hpp>
+ #include <xyz/openbmc_project/Control/Mode/server.hpp>
+@@ -44,16 +51,17 @@ namespace pid_control
+  * control mode changes.  It primarily holds all PID loops and holds the sensor
+  * value cache that's used per iteration of the PID loops.
+  */
+-class DbusPidZone : public ZoneInterface, public ModeObject
++class DbusPidZone : public ZoneInterface, public ModeObject, public ActionOem
+ {
+   public:
+     DbusPidZone(int64_t zone, double minThermalOutput, double failSafePercent,
+                 conf::CycleTime cycleTime, const SensorManager& mgr,
+-                sdbusplus::bus_t& bus, const char* objPath, bool defer) :
++                sdbusplus::bus_t& bus, const char* objPath, bool defer,
++                conf::OemConfig oem) :
+         ModeObject(bus, objPath,
+                    defer ? ModeObject::action::defer_emit
+                          : ModeObject::action::emit_object_added),
+-        _zoneId(zone), _maximumSetPoint(),
++        ActionOem(oem), _zoneId(zone), _maximumSetPoint(),
+         _minThermalOutputSetPt(minThermalOutput),
+         _zoneFailSafePercent(failSafePercent), _cycleTime(cycleTime), _mgr(mgr)
+     {
+@@ -63,6 +71,8 @@ class DbusPidZone : public ZoneInterface, public ModeObject
+         }
+     }
+ 
++    conf::OemConfig oem;
++
+     bool getManualMode(void) const override;
+     /* Could put lock around this since it's accessed from two threads, but
+      * only one reader/one writer.
+@@ -130,11 +140,55 @@ class DbusPidZone : public ZoneInterface, public ModeObject
+     void processSensorInputs(const std::vector<std::string>& sensorInputs,
+                              std::chrono::high_resolution_clock::time_point now)
+     {
++        uint8_t readFailureCnt = 0;
++        boost::asio::io_context io;
++        auto conn = std::make_shared<sdbusplus::asio::connection>(io);
++
+         for (const auto& sensorInput : sensorInputs)
+         {
+             auto sensor = _mgr.getSensor(sensorInput);
+             ReadReturn r = sensor->read();
+             _cachedValuesByName[sensorInput] = {r.value, r.unscaled};
++
++            std::string sensorName = sensor->getName();
++            if (fanSensorLogging == true)
++            {
++                if (((sensorName.find(aspeedFan)) || (sensorName.find(psuFan))))
++                {
++                    static boost::asio::io_context io;
++                    static boost::asio::steady_timer PowerDelay(io);
++                    double setpoint = 0;
++
++                    if (powerOn(conn))
++                    {
++                        tryRestartControlLoops();
++                    }
++                    if (getPowerStatus(conn))
++                    {
++                        setpoint = processFanAction(r.value, sensorName,
++                                                    &readFailureCnt);
++                    }
++                    if (setpoint > 0)
++                    {
++                        DbusPidZone::addSetPoint(setpoint, sensorName);
++                    }
++                }
++            }
++            else
++            {
++                if ((sensorName.find(tempSensor)))
++                {
++                    double setpoint = 0;
++
++                    processThermalAction(sensorName, &setpoint);
++
++                    if (setpoint > 0)
++                    {
++                        oem_setpoint = setpoint;
++                        DbusPidZone::addSetPoint(setpoint, sensorName);
++                    }
++                }
++            }
+             int64_t timeout = sensor->getTimeout();
+             std::chrono::high_resolution_clock::time_point then = r.updated;
+ 
+-- 
+2.25.1
+
