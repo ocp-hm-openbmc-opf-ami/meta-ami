@@ -147,6 +147,7 @@ SRC_URI:append = "   \
 	    file://0222-Added-New-Method-for-BRCM-and-MSCC-Raid.patch \
             file://0236-Certificate-error-handle-and-fix-the-status-code.patch \
             file://0225-SMTP-Redfish-support-for-Escalate-by-severity-level.patch \
+            file://0216-Exist-CredentialBootstrapping-Account.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
