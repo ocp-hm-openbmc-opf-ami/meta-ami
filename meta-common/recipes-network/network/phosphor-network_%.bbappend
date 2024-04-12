@@ -3,6 +3,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 NETWORK_BONDING_SRC_URI += "file://0023-Support-Network-Bonding.patch \
                             file://0027-Bond_Function_With_Static_IP_Address_Is_Not_Working_Properly.patch \
 			    file://0027-Update-Bond-active-slave-when-all-active-slaves-are-down.patch \
+                            file://0033-Fix-IPMI-not-works-when-Bond-Enabled.patch \
                            "
 
 SRC_URI:append = " \

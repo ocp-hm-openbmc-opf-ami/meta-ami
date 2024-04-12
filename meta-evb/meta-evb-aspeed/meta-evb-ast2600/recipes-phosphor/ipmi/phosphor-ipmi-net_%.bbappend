@@ -11,6 +11,12 @@ SYSTEMD_SERVICE:${PN} += " \
      ${PN}@${ALT_RMCPP_IFACE_ETH1}.socket \
      "
 
+ALT_RMCPP_IFACE_BOND = "bond0"
+SYSTEMD_SERVICE:${PN} += " \
+     ${PN}@${ALT_RMCPP_IFACE_BOND}.service \
+     ${PN}@${ALT_RMCPP_IFACE_BOND}.socket \
+     "
+
 PACKAGECONFIG:append ="${@bb.utils.contains('MULTI_SOL_ENABLED', '1', ' multi_sol', ' ', d)}"
 PACKAGECONFIG[multi_sol] = "-Dmulti_sol=enabled,-Dmulti_sol=disabled"
 
