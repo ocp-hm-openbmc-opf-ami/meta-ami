@@ -147,6 +147,7 @@ SRC_URI:append = "   \
 	    file://0222-Added-New-Method-for-BRCM-and-MSCC-Raid.patch \
             file://0236-Certificate-error-handle-and-fix-the-status-code.patch \
             file://0225-SMTP-Redfish-support-for-Escalate-by-severity-level.patch \
+            file://0241-Rearrage-the-Order-of-verifying-the-Version.patch \
             file://0216-Exist-CredentialBootstrapping-Account.patch \
             file://0237-Delete-the-return-statement-and-continue-next-validation.patch \
         "
