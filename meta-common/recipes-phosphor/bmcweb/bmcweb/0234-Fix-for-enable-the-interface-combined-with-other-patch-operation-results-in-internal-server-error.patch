@@ -1,0 +1,141 @@
+From 9ab8de47743055795355a9a860c3fbcbc7a6c56a Mon Sep 17 00:00:00 2001
+From: MuthuLakshmiN <muthulakshmin@ami.com>
+Date: Thu, 4 Apr 2024 15:57:34 +0530
+Subject: [PATCH 234/234] Fix for enable the interface combined with other
+ patch operation results in internal server error
+
+---
+ redfish-core/include/error_messages.hpp       | 12 +++++++++++
+ .../registries/base_message_registry.hpp      | 13 ++++++++++++
+ redfish-core/lib/ethernet.hpp                 | 21 +++++++++++++++++--
+ redfish-core/src/error_messages.cpp           | 19 +++++++++++++++++
+ 4 files changed, 63 insertions(+), 2 deletions(-)
+
+diff --git a/redfish-core/include/error_messages.hpp b/redfish-core/include/error_messages.hpp
+index bcc8abf7..a7a75acd 100644
+--- a/redfish-core/include/error_messages.hpp
++++ b/redfish-core/include/error_messages.hpp
+@@ -431,6 +431,18 @@ nlohmann::json chassisPowerStateOffRequired(std::string_view arg1);
+ 
+ void chassisPowerStateOffRequired(crow::Response& res, std::string_view arg1);
+ 
++/**
++ * @brief Formats InterfaceDisabled message into JSON
++ * Message body: "The property could not be written because its value would conflict
++ * with the value of the property '<arg1>' which is disabled."
++ *
++ * @param[in] arg1 Parameter of message that will replace %1 in its body.
++ *
++ * @returns Message interfaceDisabled formatted to JSON */
++nlohmann::json interfaceDisabled(std::string_view arg1);
++
++void interfaceDisabled(crow::Response& res, std::string_view arg1);
++
+ /**
+  * @brief Formats PropertyValueConflict message into JSON
+  * Message body: "The property '<arg1>' could not be written because its value
+diff --git a/redfish-core/include/registries/base_message_registry.hpp b/redfish-core/include/registries/base_message_registry.hpp
+index bd4aa0d3..518e37f8 100644
+--- a/redfish-core/include/registries/base_message_registry.hpp
++++ b/redfish-core/include/registries/base_message_registry.hpp
+@@ -1357,6 +1357,18 @@ constexpr std::array registry =
+         },
+         "Please Make sure that correct value for the property is provided in the request body and resubmit the request"
+     }},
++    MessageEntry{
++        "InterfaceDisabled",
++        {
++            "Indicates that the requested write of a property value could not be completed, because of the interface for given patch is disabled.",
++            "The property could not be written because its value would conflict with the value of the property %1 which is disabled.",
++            "Warning",
++            1,
++            {
++                "string",
++            },
++            "Enable interface and try patch.",
++        }},
+ };
+ 
+ enum class Index
+@@ -1475,5 +1487,6 @@ enum class Index
+     passwordResetFailed=111,
+     differentIpSeries=112,
+     propertyValueEmpty=113,
++    interfaceDisabled=114,
+ };
+ } // namespace redfish::registries::base
+diff --git a/redfish-core/lib/ethernet.hpp b/redfish-core/lib/ethernet.hpp
+index eba3ebfc..e5a48e32 100644
+--- a/redfish-core/lib/ethernet.hpp
++++ b/redfish-core/lib/ethernet.hpp
+@@ -2373,6 +2373,23 @@ inline void handleEthernetInterfaceInstancePatch(
+                                         ifaceId);
+             return;
+         }
++	bool isNicEnabled = ethData.nicEnabled;
++
++        if(interfaceEnabled.has_value())
++	{
++        isNicEnabled = *interfaceEnabled;
++        setEthernetInterfaceBoolProperty(ifaceId, "NICEnabled",
++                                            *interfaceEnabled, asyncResp);
++	}
++        if(!isNicEnabled)
++	{
++           if(dhcpv4 || dhcpv6 || fqdn || hostname || ipv4StaticAddresses || ipv6DefaultGateway || ipv6StaticDefaultGateways || ipv6StaticAddresses || macAddress || mtuSize || ipv6AutoConfigEnabled || staticNameServers)
++	   {
++               messages::interfaceDisabled(asyncResp->res, "InterfaceEnabled");
++               return;
++	   }
++	}
++
+         bool ipv4AddressValid = true;
+         if(ipv4StaticAddresses)  // IPv4StaticAddresses attribute is present
+         {
+@@ -2584,11 +2601,11 @@ inline void handleEthernetInterfaceInstancePatch(
+             }
+         }
+ 
+-        if (interfaceEnabled)
++        /*if (interfaceEnabled)
+         {
+             setEthernetInterfaceBoolProperty(ifaceId, "NICEnabled",
+                                                 *interfaceEnabled, asyncResp);
+-        }
++        }*/
+ 
+         if (mtuSize)
+         {
+diff --git a/redfish-core/src/error_messages.cpp b/redfish-core/src/error_messages.cpp
+index 3ac6cbe0..8c8b81c5 100644
+--- a/redfish-core/src/error_messages.cpp
++++ b/redfish-core/src/error_messages.cpp
+@@ -778,6 +778,25 @@ void chassisPowerStateOffRequired(crow::Response& res, std::string_view arg1)
+     addMessageToErrorJson(res.jsonValue, chassisPowerStateOffRequired(arg1));
+ }
+ 
++/**
++ * @internal
++ * @brief Formats InterfaceDisabled message into JSON
++ *
++ * See header file for more information
++ * @endinternal
++ */
++nlohmann::json interfaceDisabled(std::string_view arg1)
++{
++    return getLog(redfish::registries::base::Index::interfaceDisabled,
++                  std::to_array({arg1}));
++}
++
++void interfaceDisabled(crow::Response& res, std::string_view arg1)
++{
++    res.result(boost::beast::http::status::bad_request);
++    addMessageToErrorJson(res.jsonValue, interfaceDisabled(arg1));
++}
++
+ /**
+  * @internal
+  * @brief Formats PropertyValueConflict message into JSON
+-- 
+2.43.0
+

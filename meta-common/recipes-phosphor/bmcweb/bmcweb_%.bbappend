@@ -142,7 +142,6 @@ SRC_URI:append = "   \
             file://0228-Update-IPv4-and-IPv6-StaticAddressess-in-Single-Patch.patch \
             file://0195-Fix-for-getting-an-error-when-manually-setting-the-date-and-time.patch \
             file://0235-Added-Openbmc-Object-in-Smtp.patch \
-            file://0234-Fix-for-patching-the-properties-is-possible-even-when-the-interface-is-disabled.patch \
             file://0194-Reduce-RoleId-duplicate-response.patch \
 	    file://0222-Added-New-Method-for-BRCM-and-MSCC-Raid.patch \
             file://0236-Certificate-error-handle-and-fix-the-status-code.patch \
@@ -150,6 +149,7 @@ SRC_URI:append = "   \
             file://0241-Rearrage-the-Order-of-verifying-the-Version.patch \
             file://0216-Exist-CredentialBootstrapping-Account.patch \
             file://0237-Delete-the-return-statement-and-continue-next-validation.patch \
+            file://0234-Fix-for-enable-the-interface-combined-with-other-patch-operation-results-in-internal-server-error.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
