@@ -9,6 +9,8 @@ SRC_URI += " \
            file://phosphor-ipmi-host-evb-ami.service \
            "
 
+SRC_URI_EGS:append = " \
+    file://0001-Fix-for-sensorlist-timeout.patch"
 
 do_install:append(){
   install -d ${D}${includedir}/phosphor-ipmi-host
@@ -21,6 +23,8 @@ do_install:append(){
   fi
 
 }
+
+SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'egs', SRC_URI_EGS, '', d)}"
 
 FILES:${PN} += "${systemd_system_unitdir}/*"
 
