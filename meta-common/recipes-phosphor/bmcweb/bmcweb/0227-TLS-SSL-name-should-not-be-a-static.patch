@@ -1,0 +1,179 @@
+From d676810bd9d1c5a04fea10f5422e5a4070a7920a Mon Sep 17 00:00:00 2001
+From: Gokulprasath <gokulp@ami.com>
+Date: Fri, 12 Apr 2024 16:42:59 +0530
+Subject: [PATCH 227/227] TLS SSL name should not be a static
+
+---
+ redfish-core/lib/event_service.hpp | 85 +++++++++++++++++++++++++-----
+ 1 file changed, 71 insertions(+), 14 deletions(-)
+
+diff --git a/redfish-core/lib/event_service.hpp b/redfish-core/lib/event_service.hpp
+index b3c33bac..846b95ea 100644
+--- a/redfish-core/lib/event_service.hpp
++++ b/redfish-core/lib/event_service.hpp
+@@ -507,7 +507,8 @@ inline void uploadSSLFile(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+ }
+ 
+ inline void readSSLContext(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+-                           const MultipartParser& parser)
++                           const MultipartParser& parser,
++                           const std::string& configurationType)
+ {
+     const std::string* uploadData = nullptr;
+     for (const FormPart& formpart : parser.mime_fields)
+@@ -539,8 +540,32 @@ inline void readSSLContext(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+             else
+             {
+                 SSLFileName = param.second;
+-                std::cerr << "Read SSl files Name " << SSLFileName << "\n";
+-                uploadData = &(formpart.content);
++                std::cerr << "Read SSl Original files Name " << SSLFileName
++                          << "\n";
++                if (SSLFileName.substr(SSLFileName.find_last_of(".") + 1) ==
++                    "crt")
++                {
++                    uploadData = &(formpart.content);
++                    SSLFileName = configurationType + "_server.crt";
++                }
++                else if (SSLFileName.substr(SSLFileName.find_last_of(".") +
++                                            1) == "pem")
++                {
++                    uploadData = &(formpart.content);
++                    SSLFileName = configurationType + "_cacert.pem";
++                }
++                else if (SSLFileName.substr(SSLFileName.find_last_of(".") +
++                                            1) == "key")
++                {
++                    uploadData = &(formpart.content);
++                    SSLFileName = configurationType + "_server.key";
++                }
++                else
++                    messages::propertyValueTypeError(
++                        asyncResp->res, SSLFileName, "InValid Format");
++
++                std::cerr << "Read SSl Rename files Name " << SSLFileName
++                          << "\n";
+             }
+         }
+     }
+@@ -553,7 +578,7 @@ inline void readSSLContext(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+     uploadSSLFile(asyncResp, *uploadData, SSLFileName);
+ }
+ 
+-inline void handleSSLCertificateUploadAction(
++inline void handleSSLCertificatePrimaryUploadAction(
+     App& app, const crow::Request& req,
+     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
+ {
+@@ -575,7 +600,33 @@ inline void handleSSLCertificateUploadAction(
+             messages::internalError(asyncResp->res);
+             return;
+         }
+-        readSSLContext(asyncResp, parser);
++        readSSLContext(asyncResp, parser, "primary");
++    }
++}
++
++inline void handleSSLCertificateSecondaryUploadAction(
++    App& app, const crow::Request& req,
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++    {
++        return;
++    }
++    std::string_view contentType = req.getHeaderValue("Content-Type");
++    BMCWEB_LOG_DEBUG("doPost: contentType= ", contentType);
++    if (contentType.starts_with("multipart/form-data"))
++    {
++        MultipartParser parser;
++        ParserError ec = parser.parse(req);
++        if (ec != ParserError::PARSER_SUCCESS)
++        {
++            // handle error
++            BMCWEB_LOG_ERROR("SSL Certificate parse failed, ec :",
++                             static_cast<int>(ec));
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        readSSLContext(asyncResp, parser, "secondary");
+     }
+ }
+ 
+@@ -1091,7 +1142,7 @@ inline void requestRoutesEventService(App& app)
+                                         .jsonValue["Actions"]
+                                                   ["#SMTP.certificate"]
+                                                   ["target"] =
+-                                        "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.SSLCertificateUpload";
++                                        "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.PrimarySSLCertificateUpload";
+                                     messages::propertyValueEmpty(
+                                         asyncResp->res,
+                                         primaryCacertFileName +
+@@ -1108,7 +1159,7 @@ inline void requestRoutesEventService(App& app)
+                                         .jsonValue["Actions"]
+                                                   ["#SMTP.certificate"]
+                                                   ["target"] =
+-                                        "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.SSLCertificateUpload";
++                                        "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.PrimarySSLCertificateUpload";
+                                     messages::propertyValueEmpty(
+                                         asyncResp->res,
+                                         primaryServerKeyFileName +
+@@ -1124,7 +1175,7 @@ inline void requestRoutesEventService(App& app)
+                                         .jsonValue["Actions"]
+                                                   ["#SMTP.certificate"]
+                                                   ["target"] =
+-                                        "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.SSLCertificateUpload";
++                                        "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.PrimarySSLCertificateUpload";
+                                     messages::propertyValueEmpty(
+                                         asyncResp->res,
+                                         primaryServerCRTFileName +
+@@ -1406,7 +1457,7 @@ inline void requestRoutesEventService(App& app)
+                                         .jsonValue["Actions"]
+                                                   ["#SMTP.certificate"]
+                                                   ["target"] =
+-                                        "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.SSLCertificateUpload";
++                                        "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.SecondarySSLCertificateUpload";
+                                     messages::propertyValueEmpty(
+                                         asyncResp->res,
+                                         "SSL cacert.pem Certificate is not exits",
+@@ -1422,7 +1473,7 @@ inline void requestRoutesEventService(App& app)
+                                         .jsonValue["Actions"]
+                                                   ["#SMTP.certificate"]
+                                                   ["target"] =
+-                                        "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.SSLCertificateUpload";
++                                        "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.SecondarySSLCertificateUpload";
+                                     messages::propertyValueEmpty(
+                                         asyncResp->res,
+                                         "SSL Server.crt Certificate is not exits",
+@@ -1437,7 +1488,7 @@ inline void requestRoutesEventService(App& app)
+                                         .jsonValue["Actions"]
+                                                   ["#SMTP.certificate"]
+                                                   ["target"] =
+-                                        "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.SSLCertificateUpload";
++                                        "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.SecondarySSLCertificateUpload";
+                                     messages::propertyValueEmpty(
+                                         asyncResp->res,
+                                         "SSL Server.Key Certificate is not exits",
+@@ -1520,10 +1571,16 @@ inline void requestRoutesSSLEvent(App& app)
+ {
+     BMCWEB_ROUTE(
+         app,
+-        "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.SSLCertificateUpload")
++        "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.PrimarySSLCertificateUpload")
+         .privileges(redfish::privileges::postEventService)
+-        .methods(boost::beast::http::verb::post)(
+-            std::bind_front(handleSSLCertificateUploadAction, std::ref(app)));
++        .methods(boost::beast::http::verb::post)(std::bind_front(
++            handleSSLCertificatePrimaryUploadAction, std::ref(app)));
++    BMCWEB_ROUTE(
++        app,
++        "/redfish/v1/EventService/Actions/Oem/Ami/SMTP.SecondarySSLCertificateUpload")
++        .privileges(redfish::privileges::postEventService)
++        .methods(boost::beast::http::verb::post)(std::bind_front(
++            handleSSLCertificateSecondaryUploadAction, std::ref(app)));
+ }
+ 
+ inline void doSubscriptionCollection(
+-- 
+2.34.1
+
