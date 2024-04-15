@@ -158,6 +158,7 @@ SRC_URI:append = "   \
             file://0244-Added-the-error-message-when-trying-to-confgure-more-than-two-VLANs.patch \ 
             file://0249-Fix-for-ipv4-disappears-while-Setting-invalid-subnet.patch \
 	    file://0203-Fixed-USB0-interface-dhcp-and-MACAddress-configs.patch \
+            file://0245-get-NetworkInterfaces-instances.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
