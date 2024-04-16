@@ -7,6 +7,8 @@ SRC_URI:append = " \
     "
 SRCREV = "6fa0602db8250905808991e5f7206151dd28b346"
 
+EXTRA_OEMESON:append = " -Dfru-device-resizefru=true"
+
 do_install:append(){
 
      install -m 0444 ${WORKDIR}/cpld.json ${D}/usr/share/entity-manager/configurations
