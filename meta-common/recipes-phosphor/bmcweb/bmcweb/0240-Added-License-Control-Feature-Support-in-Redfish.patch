@@ -1,0 +1,391 @@
+From b8d0d4be713ac525f8303222b359744baf479618 Mon Sep 17 00:00:00 2001
+From: Abinaya L <abinayal@ami.com>
+Date: Fri, 5 Apr 2024 13:03:58 +0530
+Subject: [PATCH 240/240] Added License Control Feature Support in Redfish
+
+---
+ redfish-core/include/redfish.hpp              |   5 +
+ .../include/registries/privilege_registry.hpp |   5 +
+ redfish-core/lib/license_control.hpp          | 317 ++++++++++++++++++
+ redfish-core/lib/service_root.hpp             |   2 +
+ 4 files changed, 329 insertions(+)
+ create mode 100644 redfish-core/lib/license_control.hpp
+
+diff --git a/redfish-core/include/redfish.hpp b/redfish-core/include/redfish.hpp
+index ade2bad3..08a00854 100644
+--- a/redfish-core/include/redfish.hpp
++++ b/redfish-core/include/redfish.hpp
+@@ -32,6 +32,7 @@
+ #include "fips_manager.hpp"
+ #include "fru.hpp"
+ #include "hypervisor_system.hpp"
++#include "license_control.hpp"
+ #include "license_service.hpp"
+ #include "log_services.hpp"
+ #include "manager_diagnostic_data.hpp"
+@@ -353,6 +354,10 @@ class RedfishService
+         requestRoutesPcieSwitchCoreDump(app);
+         requestRoutesPcieSwitchTraseBuffer(app);
+         requestRoutesPcieSwitchFWUpdate(app);
++
++        // License Control
++        requestRoutesLicenseControl(app);
++
+         // Note, this must be the last route registered
+         requestRoutesRedfish(app);
+     }
+diff --git a/redfish-core/include/registries/privilege_registry.hpp b/redfish-core/include/registries/privilege_registry.hpp
+index d5facd70..820fa598 100644
+--- a/redfish-core/include/registries/privilege_registry.hpp
++++ b/redfish-core/include/registries/privilege_registry.hpp
+@@ -1665,5 +1665,10 @@ const static auto& postLicense = privilegeSetConfigureComponents;
+ const static auto& getFIPS = privilegeSetLogin;
+ const static auto& patchFIPS = privilegeSetConfigureComponents;
+ 
++//License control - OEM AMI
++const static auto& getLicenseControl = privilegeSetLogin;
++const static auto& patchLicenseControl = privilegeSetConfigureComponents;
++const static auto& postLicenseControl = privilegeSetConfigureComponents;
++
+ } // namespace redfish::privileges
+ // clang-format on
+diff --git a/redfish-core/lib/license_control.hpp b/redfish-core/lib/license_control.hpp
+new file mode 100644
+index 00000000..c7fdb557
+--- /dev/null
++++ b/redfish-core/lib/license_control.hpp
+@@ -0,0 +1,317 @@
++#pragma once
++
++#include "app.hpp"
++#include "dbus_utility.hpp"
++#include "error_messages.hpp"
++#include "managers.hpp"
++#include "registries/privilege_registry.hpp"
++#include "utils/dbus_utils.hpp"
++#include "utils/json_utils.hpp"
++
++#include <sdbusplus/asio/property.hpp>
++#include <sdbusplus/unpack_properties.hpp>
++
++#include <array>
++#include <optional>
++#include <string>
++#include <string_view>
++#include <vector>
++
++namespace redfish
++{
++inline void getLicenseKey(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    crow::connections::systemBus->async_method_call(
++        [asyncResp](const boost::system::error_code ec,
++                    const std::string licenseKey) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("Get License Key DBUS response error: {}", ec);
++            return;
++        }
++        asyncResp->res.jsonValue["Oem"]["AMI"]["LicenseKey"] = licenseKey;
++    },
++        "xyz.openbmc_project.License", "/xyz/openbmc_project/License",
++        "xyz.openbmc_project.License.LicenseControl", "GetLicenseKey");
++}
++
++inline void getGlobalLicenseValidity(
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    crow::connections::systemBus->async_method_call(
++        [asyncResp](const boost::system::error_code ec,
++                    const int64_t globalLicenseValidity) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR(
++                "Get GlobalLicense Validity DBUS response error: {}", ec);
++            return;
++        }
++        asyncResp->res.jsonValue["Oem"]["AMI"]["GlobalLicenseValidity"] =
++            globalLicenseValidity;
++    },
++        "xyz.openbmc_project.License", "/xyz/openbmc_project/License",
++        "xyz.openbmc_project.License.LicenseControl", "GlobalLicenseValidity");
++}
++
++inline void
++    getServicesUpCountDays(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    crow::connections::systemBus->async_method_call(
++        [asyncResp](const boost::system::error_code ec,
++                    const int64_t servicesUpCountDays) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR(
++                "Get Services UpCount Days DBUS response error: {}", ec);
++            return;
++        }
++        asyncResp->res.jsonValue["Oem"]["AMI"]["ServicesUpCountDays"] =
++            servicesUpCountDays;
++    },
++        "xyz.openbmc_project.License", "/xyz/openbmc_project/License",
++        "xyz.openbmc_project.License.LicenseControl", "ServicesUpCountDays");
++}
++
++inline void getAlertMessage(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    sdbusplus::asio::getProperty<std::string>(
++        *crow::connections::systemBus, "xyz.openbmc_project.License",
++        "/xyz/openbmc_project/License",
++        "xyz.openbmc_project.License.LicenseControl", "AlertMessage",
++        [asyncResp](const boost::system::error_code& ec,
++                    const std::string alertMessage) {
++        if (ec)
++        {
++            BMCWEB_LOG_DEBUG("Alert message DBUS response error {}", ec);
++            return;
++        }
++
++        BMCWEB_LOG_DEBUG("Alert Message: {}", alertMessage);
++
++        asyncResp->res.jsonValue["Oem"]["AMI"]["AlertMessage"] = alertMessage;
++    });
++}
++
++inline void
++    getUserAlertCount(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    sdbusplus::asio::getProperty<uint32_t>(
++        *crow::connections::systemBus, "xyz.openbmc_project.License",
++        "/xyz/openbmc_project/License",
++        "xyz.openbmc_project.License.LicenseControl", "UserAlertCount",
++        [asyncResp](const boost::system::error_code& ec,
++                    const uint32_t userAlertCount) {
++        if (ec)
++        {
++            BMCWEB_LOG_DEBUG("User Alert Count DBUS response error {}", ec);
++            return;
++        }
++
++        BMCWEB_LOG_DEBUG("User Alert Count {}", userAlertCount);
++
++        asyncResp->res.jsonValue["Oem"]["AMI"]["userAlertCount"] =
++            userAlertCount;
++    });
++}
++
++inline void
++    handleLicenseControlGet(App& app, const crow::Request& req,
++                            const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++    {
++        return;
++    }
++
++    asyncResp->res.jsonValue["@odata.id"] =
++        "/redfish/v1/Oem/AMI/LicenseControl";
++    asyncResp->res.jsonValue["@odata.type"] =
++        "#AMILicenseControl.v1_0_0.AMILicenseControl";
++    asyncResp->res.jsonValue["Name"] = "License Control";
++    asyncResp->res.jsonValue["Id"] = "License Control";
++
++    getLicenseKey(asyncResp);
++    getGlobalLicenseValidity(asyncResp);
++    getServicesUpCountDays(asyncResp);
++    getAlertMessage(asyncResp);
++    getUserAlertCount(asyncResp);
++}
++
++inline void
++    setUserAlertCount(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                      const uint32_t userAlertCount)
++{
++    sdbusplus::asio::setProperty(
++        *crow::connections::systemBus, "xyz.openbmc_project.License",
++        "/xyz/openbmc_project/License",
++        "xyz.openbmc_project.License.LicenseControl", "UserAlertCount",
++        userAlertCount, [asyncResp](const boost::system::error_code& ec) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("Set UserAlertCount DBUS response error {}", ec);
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        BMCWEB_LOG_DEBUG("User Alert Count set successfully done");
++    });
++}
++
++inline void handleLicenseControlPatch(
++    App& app, const crow::Request& req,
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++    {
++        return;
++    }
++
++    std::optional<uint32_t> userAlertCount;
++
++    if (!json_util::readJsonPatch(req, asyncResp->res, "UserAlertCount",
++                                  userAlertCount))
++    {
++        return;
++    }
++
++    if (userAlertCount)
++    {
++        setUserAlertCount(asyncResp, userAlertCount.value());
++    }
++}
++
++inline void uploadLicenseKeyFile(crow::Response& res, std::string_view body)
++{
++    if(fs::exists("/tmp/license-control"))
++    {
++        fs::remove_all("/tmp/license-control");
++    }
++
++    fs::create_directory("/tmp/license-control");
++    std::filesystem::path path = "/tmp/license-control/output.key";
++    std::ofstream out(path, std::ofstream::out | std::ofstream::binary |
++                        std::ofstream::trunc);
++    out << body;
++    if (out.bad())
++    {
++        messages::internalError(res);
++        return;
++    }
++
++    crow::connections::systemBus->async_method_call(
++        [&res](const boost::system::error_code& ec) {
++        if (ec)
++        {
++            messages::internalError(res);
++            return;
++        }
++    },
++        "xyz.openbmc_project.License", "/xyz/openbmc_project/License",
++        "xyz.openbmc_project.License.LicenseControl", "AddLicenseKey");
++   res.result(boost::beast::http::status::no_content);
++}
++
++inline void
++    readMultipartContext(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                           const MultipartParser& parser)
++{
++    const std::string* uploadData = nullptr;
++
++    for (const FormPart& formpart : parser.mime_fields)
++    {
++        boost::beast::http::fields::const_iterator it =
++                formpart.fields.find("Content-Disposition");
++        if (it == formpart.fields.end())
++        {
++            BMCWEB_LOG_ERROR("Couldn't find Content-Disposition");
++            return;
++        }
++
++        BMCWEB_LOG_INFO("Parsing value {}", it->value());
++
++        // The construction parameters of param_list must start with `;`
++        size_t index = it->value().find(';');
++        if (index == std::string::npos)
++        {
++            continue;
++        }
++       for (const auto& param :
++             boost::beast::http::param_list{it->value().substr(index)})
++        {
++            if (param.first != "name" || param.second.empty())
++            {
++                continue;
++            }
++            else if (param.second == "LicenseKeyFile")
++            {
++                uploadData = &(formpart.content);
++            }
++           }
++    }
++
++    if (uploadData == nullptr)
++    {
++        BMCWEB_LOG_ERROR("Upload data is NULL");
++        messages::propertyMissing(asyncResp->res, "LicenseKeyFile");
++        return;
++    }
++
++    uploadLicenseKeyFile(asyncResp->res, *uploadData);
++}
++
++inline void handleLicenseControlPost(App& app, const crow::Request& req,
++                                    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++    {
++        return;
++    }
++
++    std::string_view contentType = req.getHeaderValue("Content-Type");
++
++    BMCWEB_LOG_DEBUG("doPost: contentType= {}",contentType);
++
++    if (boost::iequals(contentType, "application/octet-stream"))
++    {
++        uploadLicenseKeyFile(asyncResp->res, req.body());
++    }
++    else if (contentType.starts_with("multipart/form-data"))
++    {
++        MultipartParser parser;
++
++        ParserError ec = parser.parse(req);
++        if (ec != ParserError::PARSER_SUCCESS)
++        {
++            // handle error
++            BMCWEB_LOG_ERROR("MIME parse failed, ec : {}",
++                             static_cast<int>(ec));
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        readMultipartContext(asyncResp, parser);
++    }
++    else
++    {
++        BMCWEB_LOG_DEBUG("Bad content type specified:{}", contentType);
++        asyncResp->res.result(boost::beast::http::status::bad_request);
++    }
++}
++
++inline void requestRoutesLicenseControl(App& app)
++{
++    BMCWEB_ROUTE(app, "/redfish/v1/Oem/AMI/LicenseControl/")
++        .privileges(redfish::privileges::getLicenseControl)
++        .methods(boost::beast::http::verb::get)(
++            std::bind_front(handleLicenseControlGet, std::ref(app)));
++
++    BMCWEB_ROUTE(app, "/redfish/v1/Oem/AMI/LicenseControl/")
++        .privileges(redfish::privileges::postLicenseControl)
++        .methods(boost::beast::http::verb::post)(
++           std::bind_front(handleLicenseControlPost, std::ref(app)));
++
++    BMCWEB_ROUTE(app, "/redfish/v1/Oem/AMI/LicenseControl/")
++        .privileges(redfish::privileges::patchLicenseControl)
++        .methods(boost::beast::http::verb::patch)(
++            std::bind_front(handleLicenseControlPatch, std::ref(app)));
++}
++} // namespace redfish
+\ No newline at end of file
+diff --git a/redfish-core/lib/service_root.hpp b/redfish-core/lib/service_root.hpp
+index 4605dcb9..dfc846ca 100644
+--- a/redfish-core/lib/service_root.hpp
++++ b/redfish-core/lib/service_root.hpp
+@@ -105,6 +105,8 @@ inline void handleServiceRootGetImpl(
+         "/redfish/v1/#Oem/Ami";
+     asyncResp->res.jsonValue["Oem"]["Ami"]["PcieSwitch"] = {
+         {"@odata.id", "/redfish/v1/Oem/Ami/PcieSwitch"}};
++    asyncResp->res.jsonValue["Oem"]["AMI"]["LicenseControl"] = {
++        {"@odata.id", "/redfish/v1/Oem/AMI/LicenseControl"}};
+ 
+     asyncResp->res.jsonValue["Links"]["ManagerProvidingService"]["@odata.id"] =
+         "/redfish/v1/Managers/bmc";
+-- 
+2.25.1
+
