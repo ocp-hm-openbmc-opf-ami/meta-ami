@@ -155,6 +155,7 @@ SRC_URI:append = "   \
             file://0238-update-Message.ExtendedInfo-for-ComputerSystem.Reset.patch \
             file://0230-Fixed-dateTime-changes-in-patch.patch \
             file://0248-RedFish-support-for-BandExternal.patch \
+            file://0244-Added-the-error-message-when-trying-to-confgure-more-than-two-VLANs.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
