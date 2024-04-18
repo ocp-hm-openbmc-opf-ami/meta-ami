@@ -1,0 +1,441 @@
+From 2aa0cf88edfb914517f5c6ef17a8c7a78a95eb1b Mon Sep 17 00:00:00 2001
+From: Gokulprasath <gokulp@ami.com>
+Date: Wed, 17 Apr 2024 22:41:59 +0530
+Subject: [PATCH 248/248] RedFish support for BandExternal
+
+---
+ redfish-core/include/utils/service_utils.hpp |  58 ++++++++-
+ redfish-core/lib/network_protocol.hpp        | 117 +++++++++++++++++--
+ redfish-core/lib/systems.hpp                 |  39 ++++++-
+ 3 files changed, 199 insertions(+), 15 deletions(-)
+
+diff --git a/redfish-core/include/utils/service_utils.hpp b/redfish-core/include/utils/service_utils.hpp
+index 1937c856..45c04b1d 100644
+--- a/redfish-core/include/utils/service_utils.hpp
++++ b/redfish-core/include/utils/service_utils.hpp
+@@ -14,7 +14,7 @@ namespace service_util
+ static constexpr const char* serviceManagerService =
+     "xyz.openbmc_project.Control.Service.Manager";
+ static constexpr const char* serviceManagerPath =
+-    "/xyz/openbmc_project/control/service";
++    "/xyz/openbmc_project/control/service/";
+ static constexpr const char* serviceConfigInterface =
+     "xyz.openbmc_project.Control.Service.Attributes";
+ static constexpr const char* portConfigInterface =
+@@ -32,6 +32,46 @@ static bool matchService(const sdbusplus::message::object_path& objPath,
+     return fullUnitName.substr(0, pos) == serviceName;
+ }
+ 
++void getSerialConsoleSshMasked(
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++    const std::string& serviceName, const std::string& ObjectName,
++    const std::string& subObjectName, const std::string& propertyName)
++{
++    sdbusplus::asio::getProperty<bool>(
++        *crow::connections::systemBus, serviceManagerService,
++        serviceManagerPath + serviceName, serviceConfigInterface, "Masked",
++        [asyncResp, ObjectName, subObjectName,
++         propertyName](const boost::system::error_code& ec, bool eventValue) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("D-BUS response error on EventSeverity Get{}", ec);
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        asyncResp->res.jsonValue[ObjectName][subObjectName][propertyName] =
++            eventValue;
++    });
++}
++
++void getMasked(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++               const std::string& serviceName, const std::string& ObjectName,
++               const std::string& propertyName)
++{
++    sdbusplus::asio::getProperty<bool>(
++        *crow::connections::systemBus, serviceManagerService,
++        serviceManagerPath + serviceName, serviceConfigInterface, "Masked",
++        [asyncResp, ObjectName,
++         propertyName](const boost::system::error_code& ec, bool eventValue) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("D-BUS response error on EventSeverity Get{}", ec);
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        asyncResp->res.jsonValue[ObjectName][propertyName] = eventValue;
++    });
++}
++
+ void getEnabled(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+                 const std::string& serviceName,
+                 const nlohmann::json::json_pointer& valueJsonPtr)
+@@ -215,6 +255,22 @@ void setEnabled(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+         "org.freedesktop.DBus.ObjectManager", "GetManagedObjects");
+ }
+ 
++void setMasked(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++               const std::string& serviceName, const bool enabled)
++{
++    sdbusplus::asio::setProperty(
++        *crow::connections::systemBus, serviceManagerService,
++        serviceManagerPath + serviceName, serviceConfigInterface, "Masked",
++        enabled, [asyncResp](const boost::system::error_code& ec) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("D-Bus responses error: {}", ec);
++            messages::internalError(asyncResp->res);
++            return;
++        }
++    });
++}
++
+ void setPortNumber(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+                    const std::string& serviceName, const uint16_t portNumber)
+ {
+diff --git a/redfish-core/lib/network_protocol.hpp b/redfish-core/lib/network_protocol.hpp
+index a7498ffd..92309555 100644
+--- a/redfish-core/lib/network_protocol.hpp
++++ b/redfish-core/lib/network_protocol.hpp
+@@ -42,15 +42,17 @@ std::string getHostName();
+ 
+ static constexpr const char* sshServiceName = "dropbear";
+ static constexpr const char* httpsServiceName = "bmcweb";
+-static constexpr const char* ipmiServiceName = "phosphor_2dipmi_2dnet";
++static constexpr const char* ipmbServiceName = "ipmb";
++static constexpr const char* ipmiServiceName = "phosphor_2dipmi_2dnet_40eth0";
+ 
+ // Mapping from Redfish NetworkProtocol key name to backend service that hosts
+ // that protocol.
+-static constexpr std::array<std::pair<const char*, const char*>, 3>
++static constexpr std::array<std::pair<const char*, const char*>, 4>
+ 
+     networkProtocolToDbus = {{{"SSH", sshServiceName},
+                               {"HTTPS", httpsServiceName},
+-                              {"IPMI", ipmiServiceName}}};
++                              {"IPMI", ipmiServiceName},
++                              {"IPMB", ipmbServiceName}}};
+ 
+ inline void extractNTPServersAndDomainNamesData(
+     const dbus::utility::ManagedObjectType& dbusData,
+@@ -167,7 +169,8 @@ inline void
+                              ec);
+             messages::internalError(asyncResp->res);
+             return;
+-        }asyncResp->res.jsonValue["SNMP"]["Port"] = 162;
++        }
++        asyncResp->res.jsonValue["SNMP"]["Port"] = 162;
+         asyncResp->res.jsonValue["SNMP"]["ProtocolEnabled"] = protocolEnabled;
+     });
+ }
+@@ -582,6 +585,8 @@ inline void handleManagersNetworkProtocolPatch(
+     std::optional<std::string> vId;
+     std::optional<nlohmann::json> ntp;
+     std::optional<nlohmann::json> ipmi;
++    std::optional<nlohmann::json> ipmb;
++    std::optional<nlohmann::json> bmcweb;
+     std::optional<nlohmann::json> ssh;
+     std::optional<nlohmann::json> snmp;
+     // clang-format off
+@@ -590,6 +595,8 @@ inline void handleManagersNetworkProtocolPatch(
+                 "HostName", newHostName,
+                 "NTP",ntp,
+                 "IPMI",ipmi,
++                "IPMB",ipmb,
++                "HTTPS", bmcweb,
+                 "SSH",ssh,
+                 "Id", vId,
+                 "SNMP",snmp))
+@@ -616,7 +623,8 @@ inline void handleManagersNetworkProtocolPatch(
+         std::size_t ntp_size = ntp.value().size();
+         if (ntp_size == 0)
+         {
+-            messages::propertyValueTypeError(asyncResp->res,ntp.value(), "NTP");
++            messages::propertyValueTypeError(asyncResp->res, ntp.value(),
++                                             "NTP");
+             return;
+         }
+         if (!json_util::readJson(*ntp, asyncResp->res, "ProtocolEnabled",
+@@ -648,14 +656,16 @@ inline void handleManagersNetworkProtocolPatch(
+     if (ipmi)
+     {
+         std::optional<bool> ipmiEnabled;
++        std::optional<bool> ipmiMasked;
+         std::size_t ipmi_size = ipmi.value().size();
+         if (ipmi_size == 0)
+         {
+-            messages::propertyValueTypeError(asyncResp->res,ipmi.value(), "IPMI");
++            messages::propertyValueTypeError(asyncResp->res, ipmi.value(),
++                                             "IPMI");
+             return;
+         }
+         if (!json_util::readJson(*ipmi, asyncResp->res, "ProtocolEnabled",
+-                                 ipmiEnabled))
++                                 ipmiEnabled, "Masked", ipmiMasked))
+         {
+             return;
+         }
+@@ -665,18 +675,78 @@ inline void handleManagersNetworkProtocolPatch(
+                 *ipmiEnabled, asyncResp,
+                 encodeServiceObjectPath(std::string(ipmiServiceName)));
+         }
++        if (ipmiMasked)
++        {
++            service_util::setMasked(asyncResp, ipmiServiceName, *ipmiMasked);
++        }
++    }
++    if (bmcweb)
++    {
++        std::optional<bool> bmcwebEnabled;
++        std::optional<bool> bmcwebMasked;
++        std::size_t bmcweb_size = bmcweb.value().size();
++        if (bmcweb_size == 0)
++        {
++            messages::propertyValueTypeError(asyncResp->res, bmcweb.value(),
++                                             "HTTPS");
++            return;
++        }
++        if (!json_util::readJson(*bmcweb, asyncResp->res, "ProtocolEnabled",
++                                 bmcwebEnabled, "Masked", bmcwebMasked))
++        {
++            return;
++        }
++        if (bmcwebEnabled)
++        {
++            handleProtocolEnabled(
++                *bmcwebEnabled, asyncResp,
++                encodeServiceObjectPath(std::string(httpsServiceName)));
++        }
++        if (bmcwebMasked)
++        {
++            service_util::setMasked(asyncResp, httpsServiceName, *bmcwebMasked);
++        }
++    }
++    if (ipmb)
++    {
++        std::optional<bool> ipmbEnabled;
++        std::optional<bool> ipmbMasked;
++        std::size_t ipmb_size = ipmb.value().size();
++        if (ipmb_size == 0)
++        {
++            messages::propertyValueTypeError(asyncResp->res, ipmb.value(),
++                                             "IPMB");
++            return;
++        }
++        if (!json_util::readJson(*ipmb, asyncResp->res, "ProtocolEnabled",
++                                 ipmbEnabled, "Masked", ipmbMasked))
++        {
++            return;
++        }
++        if (ipmbEnabled)
++        {
++            handleProtocolEnabled(
++                *ipmbEnabled, asyncResp,
++                encodeServiceObjectPath(std::string(ipmbServiceName)));
++        }
++        if (ipmbMasked)
++        {
++            service_util::setMasked(asyncResp, ipmbServiceName, *ipmbMasked);
++        }
+     }
+     if (ssh)
+     {
+         std::optional<bool> sshEnabled;
++        std::optional<bool> sshMasked;
+         std::size_t ssh_size = ssh.value().size();
+         if (ssh_size == 0)
+         {
+-            messages::propertyValueTypeError(asyncResp->res,ssh.value(), "SSH");
++            messages::propertyValueTypeError(asyncResp->res, ssh.value(),
++                                             "SSH");
+             return;
+         }
+         if (!json_util::readJson(*ssh, asyncResp->res, "ProtocolEnabled",
+-                                 sshEnabled))
++                                 sshEnabled, "Masked", sshMasked))
+         {
+             return;
+         }
+@@ -685,6 +755,10 @@ inline void handleManagersNetworkProtocolPatch(
+             handleProtocolEnabled(*sshEnabled, asyncResp,
+                                   encodeServiceObjectPath(sshServiceName));
+         }
++        if (sshMasked)
++        {
++            service_util::setMasked(asyncResp, sshServiceName, *sshMasked);
++        }
+     }
+     if (snmp)
+     {
+@@ -692,7 +766,8 @@ inline void handleManagersNetworkProtocolPatch(
+         std::size_t snmp_size = snmp.value().size();
+         if (snmp_size == 0)
+         {
+-            messages::propertyValueTypeError(asyncResp->res,snmp.value(), "SNMP");
++            messages::propertyValueTypeError(asyncResp->res, snmp.value(),
++                                             "SNMP");
+             return;
+         }
+         if (!json_util::readJson(*snmp, asyncResp->res, "ProtocolEnabled",
+@@ -731,12 +806,34 @@ inline void handleManagersNetworkProtocolHead(
+         "</redfish/v1/JsonSchemas/ManagerNetworkProtocol/ManagerNetworkProtocol.json>; rel=describedby");
+ }
+ 
++inline void getIpmiMasked(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    service_util::getMasked(asyncResp, ipmiServiceName, "IPMI", "Masked");
++}
++
++inline void getSSHMasked(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    service_util::getMasked(asyncResp, sshServiceName, "SSH", "Masked");
++}
++
++inline void getBMCWEBMasked(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    service_util::getMasked(asyncResp, httpsServiceName, "HTTPS", "Masked");
++}
++inline void getIpmbMasked(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    service_util::getMasked(asyncResp, ipmbServiceName, "IPMB", "Masked");
++}
+ inline void handleManagersNetworkProtocolGet(
+     App& app, const crow::Request& req,
+     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
+ {
+     handleManagersNetworkProtocolHead(app, req, asyncResp);
+     getNetworkData(asyncResp, req);
++    getIpmiMasked(asyncResp);
++    getSSHMasked(asyncResp);
++    getBMCWEBMasked(asyncResp);
++    getIpmbMasked(asyncResp);
+ }
+ 
+ inline void requestRoutesNetworkProtocol(App& app)
+diff --git a/redfish-core/lib/systems.hpp b/redfish-core/lib/systems.hpp
+index 54644443..c5bad52d 100644
+--- a/redfish-core/lib/systems.hpp
++++ b/redfish-core/lib/systems.hpp
+@@ -3095,6 +3095,9 @@ inline void getSerialConsoleSshStatus(
+     service_util::getEnabled(
+         asyncResp, serialConsoleSshServiceName,
+         nlohmann::json::json_pointer("/SerialConsole/SSH/ServiceEnabled"));
++    service_util::getSerialConsoleSshMasked(asyncResp,
++                                            serialConsoleSshServiceName,
++                                            "SerialConsole", "SSH", "Masked");
+     service_util::getPortNumber(
+         asyncResp, serialConsoleSshServiceName,
+         nlohmann::json::json_pointer("/SerialConsole/SSH/Port"));
+@@ -3115,6 +3118,8 @@ inline void
+     service_util::getEnabled(
+         asyncResp, virtualMediaServiceName,
+         nlohmann::json::json_pointer("/VirtualMediaConfig/ServiceEnabled"));
++    service_util::getMasked(asyncResp, virtualMediaServiceName,
++                            "VirtualMediaConfig", "Masked");
+ }
+ 
+ /**
+@@ -3132,6 +3137,8 @@ inline void getKvmConfig(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
+     asyncResp->res.jsonValue["GraphicalConsole"] = {
+         {"ConnectTypesSupported", {"KVMIP"}},
+     };
++    service_util::getMasked(asyncResp, kvmServiceName, "GraphicalConsole",
++                            "Masked");
+ }
+ 
+ inline void handleComputerSystemCollectionHead(
+@@ -3800,7 +3807,8 @@ inline void
+     }
+     else
+     {
+-        messages::actionParameterNotSupported(asyncResp->res, resetType,"ResetType");
++        messages::actionParameterNotSupported(asyncResp->res, resetType,
++                                              "ResetType");
+         return;
+     }
+ 
+@@ -4175,6 +4183,9 @@ inline void
+     // Fill in SerialConsole info
+     asyncResp->res.jsonValue["SerialConsole"]["MaxConcurrentSessions"] = 15;
+     asyncResp->res.jsonValue["SerialConsole"]["IPMI"]["ServiceEnabled"] = true;
++    service_util::getSerialConsoleSshMasked(asyncResp,
++                                            serialConsoleSshServiceName,
++                                            "SerialConsole", "IPMI", "Masked");
+ 
+     getPortStatusAndPath(std::span{protocolToDBusForSystems},
+                          std::bind_front(afterPortRequest, asyncResp));
+@@ -4405,9 +4416,10 @@ inline void handleComputerSystemPatch(
+     if (kvmConfig)
+     {
+         std::optional<bool> kvmServiceEnabled;
++        std::optional<bool> kvmServiceMasked;
+ 
+         if (!json_util::readJson(*kvmConfig, asyncResp->res, "ServiceEnabled",
+-                                 kvmServiceEnabled))
++                                 kvmServiceEnabled, "Masked", kvmServiceMasked))
+         {
+             return;
+         }
+@@ -4421,6 +4433,11 @@ inline void handleComputerSystemPatch(
+                 {"ConnectTypesSupported", {"KVMIP"}},
+             };
+         }
++        if (kvmServiceMasked)
++        {
++            service_util::setMasked(asyncResp, kvmServiceName,
++                                    *kvmServiceMasked);
++        }
+     }
+ 
+     if (serialConsole)
+@@ -4434,9 +4451,11 @@ inline void handleComputerSystemPatch(
+         if (ssh)
+         {
+             std::optional<bool> sshServiceEnabled;
++            std::optional<bool> sshServiceMasked;
+             std::optional<uint16_t> sshPortNumber;
+             if (!json_util::readJson(*ssh, asyncResp->res, "ServiceEnabled",
+-                                     sshServiceEnabled, "Port", sshPortNumber))
++                                     sshServiceEnabled, "Port", sshPortNumber,
++                                     "Masked", sshServiceMasked))
+             {
+                 return;
+             }
+@@ -4446,6 +4465,11 @@ inline void handleComputerSystemPatch(
+                 service_util::setEnabled(asyncResp, serialConsoleSshServiceName,
+                                          *sshServiceEnabled);
+             }
++            if (sshServiceMasked)
++            {
++                service_util::setMasked(asyncResp, kvmServiceName,
++                                        *sshServiceMasked);
++            }
+ 
+             if (sshPortNumber)
+             {
+@@ -4458,8 +4482,10 @@ inline void handleComputerSystemPatch(
+     if (virtualMediaConfig)
+     {
+         std::optional<bool> vmServiceEnabled;
++        std::optional<bool> vmServiceMasked;
+         if (!json_util::readJson(*virtualMediaConfig, asyncResp->res,
+-                                 "ServiceEnabled", vmServiceEnabled))
++                                 "ServiceEnabled", vmServiceEnabled, "Masked",
++                                 vmServiceMasked))
+         {
+             return;
+         }
+@@ -4469,6 +4495,11 @@ inline void handleComputerSystemPatch(
+             service_util::setEnabled(asyncResp, virtualMediaServiceName,
+                                      *vmServiceEnabled);
+         }
++        if (vmServiceMasked)
++        {
++            service_util::setMasked(asyncResp, virtualMediaServiceName,
++                                    *vmServiceMasked);
++        }
+     }
+ }
+ 
+-- 
+2.34.1
+

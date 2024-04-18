@@ -154,6 +154,7 @@ SRC_URI:append = "   \
             file://0227-TLS-SSL-name-should-not-be-a-static.patch \
             file://0238-update-Message.ExtendedInfo-for-ComputerSystem.Reset.patch \
             file://0230-Fixed-dateTime-changes-in-patch.patch \
+            file://0248-RedFish-support-for-BandExternal.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
