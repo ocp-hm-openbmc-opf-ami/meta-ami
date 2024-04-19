@@ -1,35 +1,72 @@
-From b113846f18c842ca8a35ec498351f4ce8c8b4ea2 Mon Sep 17 00:00:00 2001
-From: balajirg <balajirg@ami.com>
-Date: Thu, 7 Mar 2024 07:38:01 +0530
-Subject: [PATCH] SSIF Support -> Add driver changes to support SSIF Sys
- Interface for ARM  platforms. -> SSIF NACK support is added in ssif_bmc
- driver. -> I2C aspeed interrupt handling is worked to handle SSIF packets
- (byte mode).
+From 07eccbd1f1cd4d55bcd194dc66e63c8ac74bfaaf Mon Sep 17 00:00:00 2001
+From: dineshkumar <dineshkumar@ami.com>
+Date: Thu, 18 Apr 2024 13:27:10 +0530
+Subject: [PATCH] Add SSIF support
 
 ---
- drivers/char/ipmi/ssif_bmc.c    |  52 +++++++-
- drivers/i2c/busses/i2c-aspeed.c |  54 ++++++--
+ drivers/char/ipmi/Kconfig       |   4 +
+ drivers/char/ipmi/ssif_bmc.c    | 201 +++++++++++++++++++++++++++--
+ drivers/i2c/busses/i2c-aspeed.c |  38 +++++-
  include/linux/i2c-aspeed.h      | 216 ++++++++++++++++++++++++++++++++
- 3 files changed, 305 insertions(+), 17 deletions(-)
+ 4 files changed, 446 insertions(+), 13 deletions(-)
  create mode 100644 include/linux/i2c-aspeed.h
 
+diff --git a/drivers/char/ipmi/Kconfig b/drivers/char/ipmi/Kconfig
+index d82323f8393b..cb6b6b68af47 100644
+--- a/drivers/char/ipmi/Kconfig
++++ b/drivers/char/ipmi/Kconfig
+@@ -197,6 +197,10 @@ config SSIF_IPMI_BMC
+ 	  The driver implements the BMC side of the SMBus system
+ 	  interface (SSIF).
+ 
++config SEPARATE_SSIF_POSTCODES
++        bool "Separate ipmi post codes writes to another channel"
++        depends on SSIF_IPMI_BMC
++
+ config IPMB_DEVICE_INTERFACE
+ 	tristate 'IPMB Interface handler'
+ 	depends on I2C
 diff --git a/drivers/char/ipmi/ssif_bmc.c b/drivers/char/ipmi/ssif_bmc.c
-index caee848261e9..4d50b51e4438 100644
+index caee848261e9..50a1415c2dd0 100644
 --- a/drivers/char/ipmi/ssif_bmc.c
 +++ b/drivers/char/ipmi/ssif_bmc.c
-@@ -18,6 +18,7 @@
+@@ -18,8 +18,15 @@
  #include <linux/timer.h>
  #include <linux/jiffies.h>
  #include <linux/ipmi_ssif_bmc.h>
 +#include <linux/i2c-aspeed.h>
++#include <linux/kfifo.h>
  
  #define DEVICE_NAME                             "ipmi-ssif-host"
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++#define DEVICE_NAME_POST			"ipmi-ssif-postcodes"
++#define POST_CODE_SIZE				9
++#define POST_CODE_OFFSET			3
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
  
-@@ -102,8 +103,11 @@ struct ssif_bmc_ctx {
+ #define GET_8BIT_ADDR(addr_7bit)                (((addr_7bit) << 1) & 0xff)
+ 
+@@ -46,6 +53,8 @@
+  */
+ #define RESPONSE_TIMEOUT                        500 /* ms */
+ 
++#define BUFFER_SIZE 1024
++
+ struct ssif_part_buffer {
+ 	u8 address;
+ 	u8 smbus_cmd;
+@@ -102,8 +111,18 @@ struct ssif_bmc_ctx {
  	struct ssif_part_buffer part_buf;
  	struct ipmi_ssif_msg    response;
  	struct ipmi_ssif_msg    request;
 +	int 			nackstatus;
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++	struct miscdevice       miscdev_post;
++	spinlock_t              lock_post_rd;
++	wait_queue_head_t       wait_queue_post_rd;
++	u8                      running_post;
++	struct kfifo 		fifo_post;
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
  };
  
 +static void on_stop_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val);
@@ -37,7 +74,105 @@ index caee848261e9..4d50b51e4438 100644
  static inline struct ssif_bmc_ctx *to_ssif_bmc(struct file *file)
  {
  	return container_of(file->private_data, struct ssif_bmc_ctx, miscdev);
-@@ -220,6 +224,10 @@ static ssize_t ssif_bmc_write(struct file *file, const char __user *buf, size_t
+@@ -168,6 +187,97 @@ static ssize_t ssif_bmc_read(struct file *file, char __user *buf, size_t count,
+ 	return (ret < 0) ? ret : count;
+ }
+ 
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++static inline struct ssif_bmc_ctx *to_ssif_bmc_post(struct file *file)
++{
++	return container_of(file->private_data, struct ssif_bmc_ctx, miscdev_post);
++}
++
++
++static ssize_t ssif_bmc_read_post(struct file *file, char __user *buf, size_t count_in, loff_t *ppos)
++{
++	struct ssif_bmc_ctx *ssif_bmc = to_ssif_bmc_post(file);
++	unsigned long flags;
++	unsigned int count_out;
++	ssize_t ret = 0;
++
++	if (kfifo_is_empty(&ssif_bmc->fifo_post)) {
++		if (file->f_flags & O_NONBLOCK)
++			return -EAGAIN;
++		ret = wait_event_interruptible(ssif_bmc->wait_queue_post_rd, !kfifo_is_empty(&ssif_bmc->fifo_post));
++		if (ret == -ERESTARTSYS)
++			return ret;
++	}
++	spin_lock_irqsave(&ssif_bmc->lock_post_rd, flags);
++	ret = kfifo_to_user(&ssif_bmc->fifo_post, buf, count_in, &count_out);
++	spin_unlock_irqrestore(&ssif_bmc->lock_post_rd, flags);
++	return (ret < 0) ? ret : count_out;
++}
++
++static int ssif_bmc_open_post(struct inode *inode, struct file *file)
++{
++	struct ssif_bmc_ctx *ssif_bmc = to_ssif_bmc_post(file);
++	int ret = 0;
++
++	if (!ssif_bmc->running_post)
++		ssif_bmc->running_post = 1;
++	else
++		ret = -EBUSY;
++
++	return ret;
++}
++
++static __poll_t ssif_bmc_poll_post(struct file *file, poll_table *wait)
++{
++	struct ssif_bmc_ctx *ssif_bmc = to_ssif_bmc_post(file);
++
++	poll_wait(file, &ssif_bmc->wait_queue_post_rd, wait);
++	if (!kfifo_is_empty(&ssif_bmc->fifo_post)) {
++		return POLLIN | POLLRDNORM;
++	}
++	return 0;
++}
++
++static int ssif_bmc_release_post(struct inode *inode, struct file *file)
++{
++	struct ssif_bmc_ctx *ssif_bmc = to_ssif_bmc_post(file);
++
++	ssif_bmc->running_post = 0;
++
++	return 0;
++}
++
++static const struct file_operations ssif_bmc_post_fops = {
++	.owner		= THIS_MODULE,
++	.open		= ssif_bmc_open_post,
++	.read		= ssif_bmc_read_post,
++	.release	= ssif_bmc_release_post,
++	.poll		= ssif_bmc_poll_post,
++};
++
++void send_post_code(struct ssif_bmc_ctx *ssif_bmc)
++{
++	unsigned long flags = 0;
++	int rc = 0;
++
++	if (kfifo_initialized(&ssif_bmc->fifo_post) && ssif_bmc->request.len >= (POST_CODE_SIZE + POST_CODE_OFFSET)) {
++		ssize_t to_send = POST_CODE_SIZE;
++		spin_lock_irqsave(&ssif_bmc->lock_post_rd, flags);
++		if ((BUFFER_SIZE - kfifo_len(&ssif_bmc->fifo_post)) < to_send)
++			kfifo_reset(&ssif_bmc->fifo_post);
++		rc = kfifo_in(&ssif_bmc->fifo_post, &ssif_bmc->request.payload[POST_CODE_OFFSET], to_send);
++		if (rc != to_send) {
++			kfifo_reset(&ssif_bmc->fifo_post);
++			spin_unlock_irqrestore(&ssif_bmc->lock_post_rd, flags);
++			return;
++		}
++		spin_unlock_irqrestore(&ssif_bmc->lock_post_rd, flags);
++
++		wake_up_all(&ssif_bmc->wait_queue_post_rd);
++	}
++}
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
++
+ /* Handle SSIF message that is written by user */
+ static ssize_t ssif_bmc_write(struct file *file, const char __user *buf, size_t count,
+ 			      loff_t *ppos)
+@@ -220,6 +330,10 @@ static ssize_t ssif_bmc_write(struct file *file, const char __user *buf, size_t
  
  	/* Clean old request buffer */
  	memset(&ssif_bmc->request, 0, sizeof(struct ipmi_ssif_msg));
@@ -48,7 +183,17 @@ index caee848261e9..4d50b51e4438 100644
  exit:
  	spin_unlock_irqrestore(&ssif_bmc->lock, flags);
  
-@@ -320,6 +328,9 @@ static void handle_request(struct ssif_bmc_ctx *ssif_bmc)
+@@ -316,12 +430,27 @@ static void response_timeout(struct timer_list *t)
+ /* Called with ssif_bmc->lock held. */
+ static void handle_request(struct ssif_bmc_ctx *ssif_bmc)
+ {
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++	int netfn = ssif_bmc->request.payload[0] >> 2;
++	int cmd   = ssif_bmc->request.payload[1];
++	int group = ssif_bmc->request.payload[2];
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
++
+ 	/* set ssif_bmc to busy waiting for response */
  	ssif_bmc->busy = true;
  	/* Request message is available to process */
  	ssif_bmc->request_available = true;
@@ -57,8 +202,16 @@ index caee848261e9..4d50b51e4438 100644
 +	dev_dbg(&ssif_bmc->client->dev, "enable nack\n");
  	/* Clean old response buffer */
  	memset(&ssif_bmc->response, 0, sizeof(struct ipmi_ssif_msg));
++
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++	if(netfn == 0x2c && cmd == 0x02 && group == 0xAE) {
++		send_post_code(ssif_bmc);	
++	}
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
  	/* This is the new READ request.*/
-@@ -576,11 +587,6 @@ static void process_request_part(struct ssif_bmc_ctx *ssif_bmc)
+ 	wake_up_all(&ssif_bmc->wait_queue);
+ 
+@@ -576,11 +705,6 @@ static void process_request_part(struct ssif_bmc_ctx *ssif_bmc)
  
  static void process_smbus_cmd(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
  {
@@ -70,7 +223,7 @@ index caee848261e9..4d50b51e4438 100644
  	if (*val == SSIF_IPMI_SINGLEPART_WRITE || *val == SSIF_IPMI_MULTIPART_WRITE_START) {
  		/*
  		 * The response maybe not come in-time, causing host SSIF driver
-@@ -590,10 +596,19 @@ static void process_smbus_cmd(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
+@@ -590,10 +714,19 @@ static void process_smbus_cmd(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
  		if (ssif_bmc->response_in_progress)
  			complete_response(ssif_bmc);
  
@@ -90,7 +243,7 @@ index caee848261e9..4d50b51e4438 100644
  }
  
  static void on_read_requested_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
-@@ -665,9 +680,20 @@ static void on_read_processed_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
+@@ -665,9 +798,20 @@ static void on_read_processed_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
  
  static void on_write_requested_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
  {
@@ -111,7 +264,7 @@ index caee848261e9..4d50b51e4438 100644
  	} else if (ssif_bmc->state == SSIF_START ||
  		   ssif_bmc->state == SSIF_REQ_RECVING ||
  		   ssif_bmc->state == SSIF_RES_SENDING) {
-@@ -680,6 +706,21 @@ static void on_write_requested_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
+@@ -680,6 +824,21 @@ static void on_write_requested_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
  
  	ssif_bmc->msg_idx = 0;
  	ssif_bmc->part_buf.address = *val;
@@ -133,7 +286,7 @@ index caee848261e9..4d50b51e4438 100644
  }
  
  static void on_write_received_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
-@@ -813,6 +854,7 @@ static int ssif_bmc_probe(struct i2c_client *client)
+@@ -813,6 +972,7 @@ static int ssif_bmc_probe(struct i2c_client *client)
  	ssif_bmc->response_in_progress = false;
  	ssif_bmc->busy = false;
  	ssif_bmc->response_timer_inited = false;
@@ -141,8 +294,60 @@ index caee848261e9..4d50b51e4438 100644
  
  	/* Register misc device interface */
  	ssif_bmc->miscdev.minor = MISC_DYNAMIC_MINOR;
+@@ -822,15 +982,37 @@ static int ssif_bmc_probe(struct i2c_client *client)
+ 	ret = misc_register(&ssif_bmc->miscdev);
+ 	if (ret)
+ 		return ret;
+-
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++	ssif_bmc->running_post = 0;
++	spin_lock_init(&ssif_bmc->lock_post_rd);
++	init_waitqueue_head(&ssif_bmc->wait_queue_post_rd);
++	ret = kfifo_alloc(&ssif_bmc->fifo_post, BUFFER_SIZE, GFP_KERNEL);
++	if (ret) {
++		misc_deregister(&ssif_bmc->miscdev);
++		return ret;
++	}
++	ssif_bmc->miscdev_post.minor = MISC_DYNAMIC_MINOR;
++	ssif_bmc->miscdev_post.name = DEVICE_NAME_POST;
++	ssif_bmc->miscdev_post.fops = &ssif_bmc_post_fops;
++	ssif_bmc->miscdev_post.parent = &client->dev;
++	ret = misc_register(&ssif_bmc->miscdev_post);
++	if (ret) {
++		misc_deregister(&ssif_bmc->miscdev);
++		return ret;
++	}
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
+ 	ssif_bmc->client = client;
+ 	ssif_bmc->client->flags |= I2C_CLIENT_SLAVE;
+ 
+ 	/* Register I2C slave */
+ 	i2c_set_clientdata(client, ssif_bmc);
+ 	ret = i2c_slave_register(client, ssif_bmc_cb);
+-	if (ret)
++	if (ret) {
+ 		misc_deregister(&ssif_bmc->miscdev);
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++		misc_deregister(&ssif_bmc->miscdev_post);
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
++	}
+ 
+ 	return ret;
+ }
+@@ -841,6 +1023,11 @@ static void ssif_bmc_remove(struct i2c_client *client)
+ 
+ 	i2c_slave_unregister(client);
+ 	misc_deregister(&ssif_bmc->miscdev);
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++	kfifo_free(&ssif_bmc->fifo_post);
++	misc_deregister(&ssif_bmc->miscdev_post);
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
++
+ }
+ 
+ static const struct of_device_id ssif_bmc_match[] = {
 diff --git a/drivers/i2c/busses/i2c-aspeed.c b/drivers/i2c/busses/i2c-aspeed.c
-index 2c1f229aa775..8752450aca4e 100644
+index b3e3b5c5f09c..1db28bf08816 100644
 --- a/drivers/i2c/busses/i2c-aspeed.c
 +++ b/drivers/i2c/busses/i2c-aspeed.c
 @@ -233,6 +233,7 @@ struct aspeed_i2c_bus {
@@ -153,55 +358,30 @@ index 2c1f229aa775..8752450aca4e 100644
  #endif /* CONFIG_I2C_SLAVE */
  };
  
-@@ -447,7 +448,7 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
- 	u32 command, irq_handled = 0;
- 	struct i2c_client *slave = bus->slave;
- 	u8 value;
--	int ret;
-+	int ret;		
- 
- 	if (!slave)
- 		return 0;
-@@ -480,7 +481,7 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
- 
- 	dev_dbg(bus->dev, "slave irq status 0x%08x, cmd 0x%08x\n",
- 		irq_status, command);
--
-+	command = 0;
- 	/*
- 	 * If a peer master sends messages too quickly before it processes
- 	 * previous slave DMA data handling, this indicator will be set. It's
-@@ -543,7 +544,9 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
- 		bus->slave_state = ASPEED_I2C_SLAVE_READ_PROCESSED;
+@@ -544,6 +545,7 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
  		i2c_slave_event(slave, I2C_SLAVE_READ_REQUESTED, &value);
  		writel(value, bus->base + ASPEED_I2C_BYTE_BUF_REG);
--		writel(ASPEED_I2CD_S_TX_CMD, bus->base + ASPEED_I2C_CMD_REG);
-+		//writel(ASPEED_I2CD_S_TX_CMD, bus->base + ASPEED_I2C_CMD_REG);
-+		command |= ASPEED_I2CD_S_TX_CMD;
+ 		writel(ASPEED_I2CD_S_TX_CMD, bus->base + ASPEED_I2C_CMD_REG);
 +		dev_dbg(bus->dev, "RRq: %x\n", value);
  		break;
  	case ASPEED_I2C_SLAVE_READ_PROCESSED:
  		if (unlikely(!(irq_status & ASPEED_I2CD_INTR_TX_ACK))) {
-@@ -554,7 +557,9 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
- 		irq_handled |= ASPEED_I2CD_INTR_TX_ACK;
+@@ -555,6 +557,7 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
  		i2c_slave_event(slave, I2C_SLAVE_READ_PROCESSED, &value);
  		writel(value, bus->base + ASPEED_I2C_BYTE_BUF_REG);
--		writel(ASPEED_I2CD_S_TX_CMD, bus->base + ASPEED_I2C_CMD_REG);
-+		//writel(ASPEED_I2CD_S_TX_CMD, bus->base + ASPEED_I2C_CMD_REG);
-+		command |= ASPEED_I2CD_S_TX_CMD;
+ 		writel(ASPEED_I2CD_S_TX_CMD, bus->base + ASPEED_I2C_CMD_REG);
 +		dev_dbg(bus->dev, "RPro: %x\n", value);
  		break;
  	case ASPEED_I2C_SLAVE_WRITE_REQUESTED:
  		bus->slave_state = ASPEED_I2C_SLAVE_WRITE_RECEIVED;
-@@ -563,13 +568,17 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+@@ -563,13 +566,16 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
  		 * Slave ACK's on this address phase already but as the backend driver
  		 * returns an errno, the bus driver should nack the next incoming byte.
  		 */
 -		if (ret < 0)
 -			writel(ASPEED_I2CD_M_S_RX_CMD_LAST, bus->base + ASPEED_I2C_CMD_REG);
 +		if (ret < 0) {
-+			//writel(ASPEED_I2CD_M_S_RX_CMD_LAST, bus->base + ASPEED_I2C_CMD_REG);
-+			command |= ASPEED_I2CD_M_S_RX_CMD_LAST;
++			writel(ASPEED_I2CD_M_S_RX_CMD_LAST, bus->base + ASPEED_I2C_CMD_REG);	
 +		}
  		aspeed_i2c_slave_handle_write_requested(bus, &value);
 +		dev_dbg(bus->dev, "WRq: %x\n", value);
@@ -213,7 +393,7 @@ index 2c1f229aa775..8752450aca4e 100644
  		break;
  	case ASPEED_I2C_SLAVE_GCALL_REQUESTED:
  		bus->slave_state = ASPEED_I2C_SLAVE_WRITE_RECEIVED;
-@@ -578,6 +587,7 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+@@ -578,6 +584,7 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
  	case ASPEED_I2C_SLAVE_STOP:
  		i2c_slave_event(slave, I2C_SLAVE_STOP, &value);
  		bus->slave_state = ASPEED_I2C_SLAVE_INACTIVE;
@@ -221,28 +401,18 @@ index 2c1f229aa775..8752450aca4e 100644
  		break;
  	case ASPEED_I2C_SLAVE_START:
  	case ASPEED_I2C_SLAVE_GCALL_START:
-@@ -589,6 +599,11 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+@@ -589,6 +596,10 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
  		bus->slave_state = ASPEED_I2C_SLAVE_INACTIVE;
  		break;
  	}
 +	
-+	writel(command, bus->base + ASPEED_I2C_CMD_REG); 
 +	/* Ack all handled interrupts */
 +	writel(irq_handled, bus->base + ASPEED_I2C_INTR_STS_REG);
 +	readl(bus->base + ASPEED_I2C_INTR_STS_REG);
  
  	return irq_handled;
  }
-@@ -690,7 +705,7 @@ static void aspeed_i2c_do_start(struct aspeed_i2c_bus *bus)
- 	 * state to 'pending' then H/W will continue handling this master
- 	 * command when the bus comes back to the idle state.
- 	 */
--	if (bus->slave_state != ASPEED_I2C_SLAVE_INACTIVE) {
-+	if (bus->slave_state != ASPEED_I2C_SLAVE_INACTIVE) {	
- 		bus->master_state = ASPEED_I2C_MASTER_PENDING;
- 		return;
- 	}
-@@ -886,6 +901,11 @@ static u32 aspeed_i2c_master_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+@@ -886,6 +897,11 @@ static u32 aspeed_i2c_master_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
  	u8 recv_byte;
  	int ret;
  
@@ -254,16 +424,7 @@ index 2c1f229aa775..8752450aca4e 100644
  	if (irq_status & ASPEED_I2CD_INTR_BUS_RECOVER_DONE) {
  		bus->master_state = ASPEED_I2C_MASTER_INACTIVE;
  		irq_handled |= ASPEED_I2CD_INTR_BUS_RECOVER_DONE;
-@@ -949,7 +969,7 @@ static u32 aspeed_i2c_master_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
- 		if (unlikely(irq_status & ASPEED_I2CD_INTR_SLAVE_MATCH)) {
- 			writel(readl(bus->base + ASPEED_I2C_CMD_REG) &
- 				~ASPEED_I2CD_MASTER_CMDS_MASK,
--			       bus->base + ASPEED_I2C_CMD_REG);
-+			       bus->base + ASPEED_I2C_CMD_REG);	
- 			bus->master_state = ASPEED_I2C_MASTER_PENDING;
- 			dev_dbg(bus->dev,
- 				"master goes pending due to a slave start\n");
-@@ -1094,9 +1114,9 @@ static irqreturn_t aspeed_i2c_bus_irq(int irq, void *dev_id)
+@@ -1094,9 +1110,9 @@ static irqreturn_t aspeed_i2c_bus_irq(int irq, void *dev_id)
  	spin_lock(&bus->lock);
  	irq_received = readl(bus->base + ASPEED_I2C_INTR_STS_REG);
  	/* Ack all interrupts except for Rx done */
@@ -276,7 +437,7 @@ index 2c1f229aa775..8752450aca4e 100644
  	irq_received &= ASPEED_I2CD_INTR_RECV_MASK;
  	irq_remaining = irq_received;
  
-@@ -1132,8 +1152,9 @@ static irqreturn_t aspeed_i2c_bus_irq(int irq, void *dev_id)
+@@ -1132,8 +1148,9 @@ static irqreturn_t aspeed_i2c_bus_irq(int irq, void *dev_id)
  	 * completed.
  	 */
  	if (bus->master_state == ASPEED_I2C_MASTER_PENDING &&
@@ -287,7 +448,7 @@ index 2c1f229aa775..8752450aca4e 100644
  #else
  	irq_handled = aspeed_i2c_master_irq(bus, irq_remaining);
  #endif /* CONFIG_I2C_SLAVE */
-@@ -1482,6 +1503,15 @@ static int aspeed_i2c_init(struct aspeed_i2c_bus *bus,
+@@ -1486,6 +1503,15 @@ static int aspeed_i2c_init(struct aspeed_i2c_bus *bus,
  	/* If slave has already been registered, re-enable it. */
  	if (bus->slave)
  		__aspeed_i2c_reg_slave(bus, bus->slave->addr);
@@ -525,3 +686,6 @@ index 000000000000..57d47d2ea82c
 +#define SSIF_RETRIES            250
 +
 +#endif
+-- 
+2.34.1
+
