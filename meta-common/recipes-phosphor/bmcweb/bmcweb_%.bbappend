@@ -157,6 +157,7 @@ SRC_URI:append = "   \
             file://0248-RedFish-support-for-BandExternal.patch \
             file://0244-Added-the-error-message-when-trying-to-confgure-more-than-two-VLANs.patch \ 
             file://0249-Fix-for-ipv4-disappears-while-Setting-invalid-subnet.patch \
+	    file://0203-Fixed-USB0-interface-dhcp-and-MACAddress-configs.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
