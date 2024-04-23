@@ -5,9 +5,9 @@ ENABLE="$1"
 REBOOT_DELAY_TIME="$2"
 
 OPENSSL_CNF_DEFAULT="/etc/default/openssl.cnf"
-OPENSSL_CNF="/usr/lib/ssl-3/openssl.cnf"
-OPENSSL_CNF_TMP="/usr/lib/ssl-3/openssl.cnf.tmp"
-FIPS_CNF="/usr/lib/ssl-3/fipsmodule.cnf"
+OPENSSL_CNF="/etc/ssl/openssl.cnf"
+OPENSSL_CNF_TMP="/etc/ssl/openssl.cnf.tmp"
+FIPS_CNF="/etc/ssl/fipsmodule.cnf"
 
 FIPS_SO="/usr/lib/ossl-modules/fips.so"
 
@@ -19,7 +19,7 @@ reboot_after_change () {
 fips_on () {
 	openssl fipsinstall -module "$FIPS_SO" -out "$FIPS_CNF" -provider_name fips > /dev/null 2>&1
 	cp -f $OPENSSL_CNF_DEFAULT $OPENSSL_CNF_TMP
-	sed -i "s/^# fips = fips_sect/fips = fips_sect\nbase = base_sect\n\n\[base_sect\]\nactivate = 1\n\n.include \/usr\/lib\/ssl-3\/fipsmodule.cnf/g" $OPENSSL_CNF_TMP
+	sed -i "s/^# fips = fips_sect/fips = fips_sect\nbase = base_sect\n\n\[base_sect\]\nactivate = 1\n\n.include \/etc\/ssl\/fipsmodule.cnf/g" $OPENSSL_CNF_TMP
 	sed -i 's/^default = default_sect/# default = default_sect/g' $OPENSSL_CNF_TMP
 	mv $OPENSSL_CNF_TMP $OPENSSL_CNF
 }
@@ -29,7 +29,7 @@ fips_off () {
 	sed -i 's/^fips = fips_sect/# fips = fips_sect/g' $OPENSSL_CNF_TMP
 	sed -i '/base = base_sect/,+1d' $OPENSSL_CNF_TMP
 	sed -i '/\[base_sect\]/,+2d' $OPENSSL_CNF_TMP
-	sed -i '/.include \/usr\/lib\/ssl-3\/fipsmodule.cnf/d' $OPENSSL_CNF_TMP
+	sed -i '/.include \/etc\/ssl\/fipsmodule.cnf/d' $OPENSSL_CNF_TMP
 	sed -i 's/^# default = default_sect/default = default_sect/g' $OPENSSL_CNF_TMP
 	mv $OPENSSL_CNF_TMP $OPENSSL_CNF
 	rm -f $FIPS_CNF > /dev/null 2>&1

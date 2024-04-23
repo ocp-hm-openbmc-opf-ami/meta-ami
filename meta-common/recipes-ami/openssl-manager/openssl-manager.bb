@@ -30,6 +30,7 @@ EXTRA_OEMESON:append = " -Dtests=disabled"
 
 SRC_URI += "${@bb.utils.contains('OPENSSL_FIPS_SUPPORT', 'enabled', 'file://openssl_fips_swich.sh','', d)} \
             file://0001-Implement-OpenSSL-Manager-to-Control-OpenSSL-and-its-Functionality.patch \
+            file://0002-Change-Conf-File-Location.patch \
             "
 
 
