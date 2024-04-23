@@ -1,0 +1,171 @@
+From 6da659a126d863305e3cb8dfe214982c63da4b37 Mon Sep 17 00:00:00 2001
+From: Pranoy Goru <gorumanip@ami.com>
+Date: Mon, 15 Apr 2024 14:03:20 +0530
+Subject: [PATCH 246/246] Added session timeout and Port info
+
+Signed-off-by: Pranoy Goru <gorumanip@ami.com>
+---
+ redfish-core/lib/redfish_sessions.hpp | 132 +++++++++++++++++++++++++-
+ 1 file changed, 131 insertions(+), 1 deletion(-)
+
+diff --git a/redfish-core/lib/redfish_sessions.hpp b/redfish-core/lib/redfish_sessions.hpp
+index 32b19daf..c3485b81 100644
+--- a/redfish-core/lib/redfish_sessions.hpp
++++ b/redfish-core/lib/redfish_sessions.hpp
+@@ -490,6 +490,54 @@ inline void
+ 
+     asyncResp->res.jsonValue["Sessions"]["@odata.id"] =
+         "/redfish/v1/SessionService/Sessions";
++    crow::connections::systemBus->async_method_call(
++        [asyncResp](const boost::system::error_code ec,
++                    const std::variant<uint16_t>& value) {
++        if (ec)
++        {
++            BMCWEB_LOG_DEBUG("failed to get property Value  ", ec);
++            return;
++        }
++
++        const uint16_t* s = std::get_if<uint16_t>(&value);
++        asyncResp->res.jsonValue["Oem"]["OpenBmc"]["BMCwebSessionTimeout"] = *s;
++    },
++        "xyz.openbmc_project.Control.Service.Manager",
++        "/xyz/openbmc_project/control/service/bmcweb",
++        "org.freedesktop.DBus.Properties", "Get",
++        "xyz.openbmc_project.Control.Service.Attributes", "SessionTimeOut");
++    crow::connections::systemBus->async_method_call(
++        [asyncResp](const boost::system::error_code ec,
++                    const std::variant<uint16_t>& value) {
++        if (ec)
++        {
++            BMCWEB_LOG_DEBUG("failed to get property Value  ", ec);
++            return;
++        }
++
++        const uint16_t* s = std::get_if<uint16_t>(&value);
++        asyncResp->res.jsonValue["Oem"]["OpenBmc"]["BMCwebPort"] = *s;
++    },
++        "xyz.openbmc_project.Control.Service.Manager",
++        "/xyz/openbmc_project/control/service/bmcweb",
++        "org.freedesktop.DBus.Properties", "Get",
++        "xyz.openbmc_project.Control.Service.SocketAttributes", "Port");
++    crow::connections::systemBus->async_method_call(
++        [asyncResp](const boost::system::error_code ec,
++                    const std::variant<uint16_t>& value) {
++        if (ec)
++        {
++            BMCWEB_LOG_DEBUG("failed to get property Value  ", ec);
++            return;
++        }
++
++        const uint16_t* s = std::get_if<uint16_t>(&value);
++        asyncResp->res.jsonValue["Oem"]["OpenBmc"]["KVMSessionTimeout"] = *s;
++    },
++        "xyz.openbmc_project.Control.Service.Manager",
++        "/xyz/openbmc_project/control/service/start_2dipkvm",
++        "org.freedesktop.DBus.Properties", "Get",
++        "xyz.openbmc_project.Control.Service.Attributes", "SessionTimeOut");
+ }
+ 
+ inline void handleSessionServicePatch(
+@@ -501,8 +549,9 @@ inline void handleSessionServicePatch(
+         return;
+     }
+     std::optional<int64_t> sessionTimeout;
++    std::optional<nlohmann::json> oem;
+     if (!json_util::readJsonPatch(req, asyncResp->res, "SessionTimeout",
+-                                  sessionTimeout))
++                                  sessionTimeout, "Oem", oem))
+     {
+         return;
+     }
+@@ -528,6 +577,87 @@ inline void handleSessionServicePatch(
+                                              "SessionTimeOut");
+         }
+     }
++
++    if (oem)
++    {
++        std::optional<nlohmann::json> openBmc;
++
++        if (!json_util::readJson(*oem, asyncResp->res, "OpenBmc", openBmc))
++        {
++            return;
++        }
++        if (openBmc)
++        {
++            std::optional<uint16_t> bmcwebSessionTimeout;
++            std::optional<uint16_t> kvmSessionTimeout;
++            std::optional<uint16_t> bmcwebPort;
++            if (!json_util::readJson(
++                    *openBmc, asyncResp->res, "BMCwebSessionTimeout",
++                    bmcwebSessionTimeout, "KVMSessionTimeout",
++                    kvmSessionTimeout, "BMCwebPort", bmcwebPort))
++            {
++                return;
++            }
++            if (bmcwebSessionTimeout)
++            {
++                crow::connections::systemBus->async_method_call(
++                    [asyncResp](const boost::system::error_code ec) {
++                    if (ec)
++                    {
++                        BMCWEB_LOG_ERROR("Error patching {}", ec);
++                        messages::internalError(asyncResp->res);
++                        return;
++                    }
++                    messages::success(asyncResp->res);
++                },
++                    "xyz.openbmc_project.Control.Service.Manager",
++                    "/xyz/openbmc_project/control/service/bmcweb",
++                    "org.freedesktop.DBus.Properties", "Set",
++                    "xyz.openbmc_project.Control.Service.Attributes",
++                    "SessionTimeOut",
++                    std::variant<uint16_t>(*bmcwebSessionTimeout));
++            }
++
++            if (kvmSessionTimeout)
++            {
++                crow::connections::systemBus->async_method_call(
++                    [asyncResp](const boost::system::error_code ec) {
++                    if (ec)
++                    {
++                        BMCWEB_LOG_ERROR("Error patching {}", ec);
++                        messages::internalError(asyncResp->res);
++                        return;
++                    }
++                    messages::success(asyncResp->res);
++                },
++                    "xyz.openbmc_project.Control.Service.Manager",
++                    "/xyz/openbmc_project/control/service/start_2dipkvm",
++                    "org.freedesktop.DBus.Properties", "Set",
++                    "xyz.openbmc_project.Control.Service.Attributes",
++                    "SessionTimeOut",
++                    std::variant<uint16_t>(*kvmSessionTimeout));
++            }
++
++            if (bmcwebPort)
++            {
++                crow::connections::systemBus->async_method_call(
++                    [asyncResp](const boost::system::error_code ec) {
++                    if (ec)
++                    {
++                        BMCWEB_LOG_ERROR("Error patching {}", ec);
++                        messages::internalError(asyncResp->res);
++                        return;
++                    }
++                    messages::success(asyncResp->res);
++                },
++                    "xyz.openbmc_project.Control.Service.Manager",
++                    "/xyz/openbmc_project/control/service/bmcweb",
++                    "org.freedesktop.DBus.Properties", "Set",
++                    "xyz.openbmc_project.Control.Service.SocketAttributes",
++                    "Port", std::variant<uint16_t>(*bmcwebPort));
++            }
++        }
++    }
+ }
+ 
+ inline void requestRoutesSession(App& app)
+-- 
+2.34.1
+
