@@ -160,6 +160,7 @@ SRC_URI:append = "   \
 	    file://0203-Fixed-USB0-interface-dhcp-and-MACAddress-configs.patch \
             file://0245-get-NetworkInterfaces-instances.patch \
 	    file://0246-Added-session-timeout-and-Port-info.patch \
+            file://0250-Fixed-internal-error-500.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
