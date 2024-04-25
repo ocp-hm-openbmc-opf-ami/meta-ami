@@ -1,0 +1,187 @@
+From 7a140f4c241250bb1008e31be50a5a9478986608 Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Wed, 17 Apr 2024 16:16:45 +0800
+Subject: [PATCH] Implement PHY Control for Bond
+
+---
+ src/bond.cpp               | 32 ++++++++++++++++++++++----------
+ src/bond.hpp               |  7 ++++++-
+ src/ethernet_interface.cpp | 15 +++++++++------
+ 3 files changed, 37 insertions(+), 17 deletions(-)
+
+diff --git a/src/bond.cpp b/src/bond.cpp
+index 85c97e4..f185ac1 100644
+--- a/src/bond.cpp
++++ b/src/bond.cpp
+@@ -75,7 +75,10 @@ void Bond::delete_()
+ 
+     /**Save Information of Bond0 and later restore*/
+     auto it = eth.manager.get().interfaces.find(intf);
+-    std::map<std::string, std::variant<bool, std::string, std::vector<std::optional<std::string>>>> map;
++    std::map<std::string, std::variant<bool, std::string,
++                                       std::vector<std::optional<std::string>>,
++                                       uint8_t, uint32_t>>
++        map;
+     if (it != eth.manager.get().interfaces.end()) {
+         map.emplace("ipv6StaticRtrAddr", it->second->ipv6StaticRtrAddr());
+         map.emplace("ipv6EnableStaticRtr", it->second->ipv6EnableStaticRtr());
+@@ -83,6 +86,9 @@ void Bond::delete_()
+         map.emplace("ipv6IndexUsedList", it->second->ipv6IndexUsedList);
+         map.emplace("ipv4Enable", it->second->ipv4Enable());
+         map.emplace("ipv6Enable", it->second->ipv6Enable());
++        map.emplace("autoNeg", it->second->autoNeg());
++        map.emplace("duplex", static_cast<uint8_t>(it->second->duplex()));
++        map.emplace("speed", it->second->speed());
+     }
+ 
+     auto obj = std::move(it->second);
+@@ -160,7 +166,12 @@ Bond::Mode Bond::mode(Mode /*Bonding Mode*/)
+     elog<NotAllowed>(REASON("Property update is not allowed"));
+ }
+ 
+-void Bond::restoreConfiguration(std::map<std::string, std::variant<bool, std::string, std::vector<std::optional<std::string>>>> map) {
++void Bond::restoreConfiguration(
++    std::map<std::string, std::variant<bool, std::string,
++                                       std::vector<std::optional<std::string>>,
++                                       uint8_t, uint32_t>>
++        map)
++{
+     if (auto it = eth.manager.get().interfaces.find(activeSlave()); it != eth.manager.get().interfaces.end()) {
+         {
+             it->second->EthernetInterfaceIntf::ipv4Enable(std::get<bool>(map["ipv4Enable"]), true);
+@@ -169,6 +180,15 @@ void Bond::restoreConfiguration(std::map<std::string, std::variant<bool, std::st
+             it->second->ipv6IndexUsedList = std::move(std::get<std::vector<std::optional<std::string>>>(map["ipv6IndexUsedList"]));
+             it->second->EthernetInterfaceIntf::ipv6EnableStaticRtr(std::get<bool>(map["ipv6EnableStaticRtr"]), true);
+             it->second->EthernetInterfaceIntf::ipv6StaticRtrAddr(std::get<std::string>(map["ipv6StaticRtrAddr"]), true);
++            it->second->EthernetInterfaceIntf::autoNeg(
++                std::get<bool>(map["autoNeg"]), true);
++            it->second->EthernetInterfaceIntf::duplex(
++                (std::get<uint8_t>(map["duplex"]) == 1
++                     ? EthernetInterface::Duplex::full
++                     : EthernetInterface::Duplex::half),
++                true);
++            it->second->EthernetInterfaceIntf::speed(
++                std::get<uint32_t>(map["speed"]), true);
+         }
+         {
+             config::Parser config(config::pathForIntfConf(eth.manager.get().getConfDir(), "bond0"));
+@@ -198,7 +218,6 @@ void Bond::writeBondConfiguration(bool isActive) {
+     std::ofstream ofs;
+     std::ifstream ifs;
+     std::string intfName, line, IfaceConfDir;
+-    std::filebuf infile, outfile;
+     if (isActive) {
+         ifs.open(config::pathForIntfConf(eth.manager.get().getBondingConfBakDir(), BondIntf::activeSlave()));
+         if (!ifs.is_open()) {
+@@ -211,8 +230,6 @@ void Bond::writeBondConfiguration(bool isActive) {
+         }
+ 
+         intfName = "Name=bond0";
+-        infile.open(config::pathForIntfInfo(eth.manager.get().getIfaceConfDir(), BondIntf::activeSlave()), std::ios::in | std::ios::binary);
+-        outfile.open(config::pathForIntfInfo(eth.manager.get().getIfaceConfDir(), "bond0"), std::ios::out | std::ios::binary);
+     } // if
+     else {
+         ifs.open(config::pathForIntfConf(eth.manager.get().getConfDir(), "bond0"));
+@@ -226,8 +243,6 @@ void Bond::writeBondConfiguration(bool isActive) {
+         }
+ 
+         intfName = fmt::format("Name={}", BondIntf::activeSlave());
+-        infile.open(config::pathForIntfInfo(eth.manager.get().getIfaceConfDir(), "bond0"), std::ios::in | std::ios::binary);
+-        outfile.open(config::pathForIntfInfo(eth.manager.get().getIfaceConfDir(), BondIntf::activeSlave()), std::ios::out | std::ios::binary);
+     } // else
+ 
+     while (ifs.peek() != EOF) {
+@@ -244,9 +259,6 @@ void Bond::writeBondConfiguration(bool isActive) {
+     ofs.flush();
+     ofs.close();
+     ifs.close();
+-    std::copy(std::istreambuf_iterator<char>(&infile), {}, std::ostreambuf_iterator<char>(&outfile));
+-    infile.close();
+-    outfile.close();
+ 
+     auto readJsonFile =
+         [](const std::string& configFile) -> nlohmann::ordered_json {
+diff --git a/src/bond.hpp b/src/bond.hpp
+index a93317f..50c008c 100644
+--- a/src/bond.hpp
++++ b/src/bond.hpp
+@@ -63,7 +63,12 @@ class Bond : public BondObj
+     std::string activeSlave(std::string) override;
+ 
+     void writeBondConfiguration(bool isActive);
+-    void restoreConfiguration(std::map<std::string, std::variant<bool, std::string, std::vector<std::optional<std::string>>>> map);
++    void restoreConfiguration(
++        std::map<std::string,
++                 std::variant<bool, std::string,
++                              std::vector<std::optional<std::string>>, uint8_t,
++                              uint32_t>>
++            map);
+ 
+     inline const auto& getObjPath() const
+     {
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index 1767ea5..2f269a1 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -161,6 +161,7 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+ 
+     ipv4IndexUsedList.resize(IPV4_MAX_NUM+1, std::nullopt);
+     ipv6IndexUsedList.resize(IPV6_MAX_NUM+1, std::nullopt);
+-    if (!this->vlan.has_value() && getPHYInfo(ifaceConfig).has_value())
++    if ((!this->vlan.has_value() && !this->bonding.has_value()) &&
++         getPHYInfo(ifaceConfig).has_value())
+     {
+         auto [autoNeg, duplex, speed] = getPHYInfo(ifaceConfig).value();
+@@ -1248,10 +1248,10 @@ ObjectPath EthernetInterface::createBond(std::string activeSlave, uint8_t miiMon
+         it->second->ipv6IndexUsedList = std::move(ipv6IndexUsedList);
+         it->second->EthernetInterfaceIntf::ipv6EnableStaticRtr(ipv6EnableStaticRtr, true);
+         it->second->EthernetInterfaceIntf::ipv6StaticRtrAddr(ipv6StaticRtrAddr, true);
+-        it->second->bonding->writeBondConfiguration(true);
+     }
+ 
+-    execute("/bin/systemctl", "systemctl", "restart", "systemd-networkd.service");
++    execute("/bin/systemctl", "systemctl", "restart",
++            "systemd-networkd.service");
+ 
+     manager.get().addReloadPostHook([&]() {
+         std::this_thread::sleep_for(std::chrono::seconds(5));
+@@ -1471,6 +1471,9 @@ void EthernetInterface::writeConfigurationFile()
+                 network["PrimarySlave"].emplace_back("true");
+             }
+         }
++        {
++            writeIfaceStateFile(interfaceName());
++        }
+     }
+     else {
+ 
+@@ -2244,7 +2247,7 @@ int EthernetInterface::getCreatedVLANNum(fs::path confFile) {
+ 
+ bool EthernetInterface::autoNeg(bool value)
+ {
+-    if (this->vlan.has_value())
++    if (this->vlan.has_value() || this->bonding.has_value())
+     {
+         log<level::ERR>(
+             "Not allow changing PHY configuration directly in VLAN interface.\n");
+@@ -2273,7 +2276,7 @@ bool EthernetInterface::autoNeg(bool value)
+ 
+ uint32_t EthernetInterface::speed(uint32_t value)
+ {
+-    if (this->vlan.has_value())
++    if (this->vlan.has_value() || this->bonding.has_value())
+     {
+         log<level::ERR>(
+             "Not allow changing PHY configuration directly in VLAN interface.\n");
+@@ -2322,7 +2325,7 @@ uint32_t EthernetInterface::speed(uint32_t value)
+ 
+ EthernetInterface::Duplex EthernetInterface::duplex(Duplex value)
+ {
+-    if (this->vlan.has_value())
++    if (this->vlan.has_value() || this->bonding.has_value())
+     {
+         log<level::ERR>(
+             "Not allow changing PHY configuration directly in VLAN interface.\n");
+-- 
+2.25.1
+

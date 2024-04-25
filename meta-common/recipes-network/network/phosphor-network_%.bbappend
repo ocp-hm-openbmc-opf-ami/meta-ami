@@ -4,6 +4,7 @@ NETWORK_BONDING_SRC_URI += "file://0023-Support-Network-Bonding.patch \
                             file://0027-Bond_Function_With_Static_IP_Address_Is_Not_Working_Properly.patch \
 			    file://0027-Update-Bond-active-slave-when-all-active-slaves-are-down.patch \
                             file://0033-Fix-IPMI-not-works-when-Bond-Enabled.patch \
+                            file://0034-Implement-PHY-Control-for-Bond.patch \
                            "
 
 SRC_URI:append = " \
@@ -44,6 +45,7 @@ SRC_URI:append = " \
              file://0032-Fix-Accepting-Reverse-Range-for-IP-Range.patch \
              file://0033-Remain-IP-Address-After-Disabling-Enabling-Interface.patch \
              file://0033-Fix-to-update-static-gateway6-when-ipv6-source-is-static.patch \
+             file://0034-Implement-PHY-Control-for-Non-Bond.patch \
           "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
