@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-dbus-interfaces.git;branch=main;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "d14f02e68c42b974edf10cb028da41fa96ed4882"
+SRCREV_override = "9b490d9c1b4c425d0c77820e7c2894006b29d6fc"
 
 SRC_URI += "file://0036-EnhancedPasswordPolicy.patch \
             file://0005-Add-Bootstrap-credential-support.patch \
