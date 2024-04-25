@@ -1,0 +1,409 @@
+From 75655098126186ccd959528acd0e42dc0b11abd3 Mon Sep 17 00:00:00 2001
+From: Amlana Bhuyan <amlanab@ami.com>
+Date: Mon, 22 Apr 2024 23:33:27 +0530
+Subject: [PATCH] VMM Session Management Support
+
+Addition of Session Register functionality when new media-
+redirection starts.
+
+Addition of Session Unregister functionality when media-
+redirection is stopped.
+
+Addition of functionality to stop specific media-
+redirection when Session unregister called by other
+services.
+
+Signed-off-by: Amlana Bhuyan <amlanab@ami.com>
+---
+ src/main.cpp   |  12 +-
+ src/system.hpp | 292 +++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 301 insertions(+), 3 deletions(-)
+
+diff --git a/src/main.cpp b/src/main.cpp
+index a20c68a..ff13505 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -29,7 +29,7 @@ class App
+     App(boost::asio::io_context& ioc, const Configuration& config,
+         sd_bus* custom_bus = nullptr) :
+         ioc(ioc),
+-        devMonitor(ioc), config(config)
++        devMonitor(ioc), config(config), dbusMonitor()
+     {
+         if (!custom_bus)
+         {
+@@ -60,6 +60,12 @@ class App
+         });
+     }
+
++    void run()
++    {
++        auto sessionMatch = dbusMonitor.sessionMonitor(bus);
++        ioc.run();
++    }
++
+   private:
+     boost::container::flat_map<std::string,
+                                std::shared_ptr<MountPointStateMachine>>
+@@ -70,6 +76,7 @@ class App
+     std::shared_ptr<sdbusplus::server::manager::manager> objManager;
+     DeviceMonitor devMonitor;
+     const Configuration& config;
++    DbusMonitor dbusMonitor;
+ };
+
+ int main()
+@@ -109,8 +116,7 @@ int main()
+ #endif
+     sd_bus_default_system(&b);
+     App app(ioc, config, b);
+-
+-    ioc.run();
++    app.run();
+
+     return 0;
+ }
+diff --git a/src/system.hpp b/src/system.hpp
+index e6d1cf8..98c0e83 100644
+--- a/src/system.hpp
++++ b/src/system.hpp
+@@ -3,6 +3,7 @@
+ #include "logger.hpp"
+
+ #include <sys/prctl.h>
++
+ #include <algorithm>
+ #include <boost/asio.hpp>
+ #include <boost/asio/spawn.hpp>
+@@ -11,9 +12,17 @@
+ #include <filesystem>
+ #include <fstream>
+ #include <sdbusplus/asio/object_server.hpp>
++#include <sdbusplus/bus.hpp>
++#include <sdbusplus/bus/match.hpp>
++#include <string>
++#include <variant>
+
+ namespace fs = std::filesystem;
+
++/* Map to keep track of Active session and bind [Slot_N - sessionID] */
++using activesessionmap = std::map<std::string, uint8_t>;
++static activesessionmap activeSessons;
++
+ namespace udev
+ {
+ #include <libudev.h>
+@@ -477,6 +486,198 @@ class Process : public std::enable_shared_from_this<Process>
+     const NBDDevice& dev;
+ };
+
++#define DEFAULT_SID 0           // Default SID (Session ID)
++#define DEFAULT_IP "~"          // Default IP address
++#define DEFAULT_USER "local"    // Default user
++#define VMEDIA 2                // vMedia Session type
++#define PRIV_LEVEL_ADMIN 0x04   // Privilege level for admin
++#define DEFAULT_USER_ID 0       // Default user ID
++#define LOGOUT 0x01             // Reson for session unregister
++
++#define DBUS_PROPERTIES_INTERFACE "org.freedesktop.DBus.Properties"
++
++const std::string sessMgrService = "xyz.openbmc_project.SessionManager";
++const std::string sessMgrObjPath = "/xyz/openbmc_project/SessionManager";
++const std::string sessMgrIface = "xyz.openbmc_project.SessionManager";
++const std::string sessMgrVmediaIface =
++    "xyz.openbmc_project.SessionManager.Vmedia";
++
++using sessionInfo =
++    std::tuple<uint16_t, std::string, std::string, uint8_t, uint8_t, uint8_t>;
++using sessionList = std::vector<sessionInfo>;
++using propertyVariant = std::variant<std::vector<sessionInfo>>;
++
++static void unMount(std::string Slot)
++{
++    std::string vMediaService = "xyz.openbmc_project.VirtualMedia";
++    std::string obj = "/xyz/openbmc_project/";
++    std::string iface = "xyz.openbmc_project.VirtualMedia.";
++
++    if (Slot == "Slot_0" || Slot == "Slot_1")
++    {
++        obj = obj + "VirtualMedia/Proxy/" + Slot;
++        iface = iface + "Proxy";
++    }
++    else
++    {
++        obj = obj + "VirtualMedia/Legacy/" + Slot;
++        iface = iface + "Legacy";
++    }
++
++    auto umnt = sdbusplus::bus::new_system();
++    auto msgumnt = umnt.new_method_call(vMediaService.c_str(), obj.c_str(),
++                                        iface.c_str(), "Unmount");
++
++    auto reply = umnt.call(msgumnt);
++    if (!reply)
++    {
++        LogMsg(Logger::Error, " Unmount call on ", Slot, " Failed.");
++        return;
++    }
++
++    LogMsg(Logger::Info, " Unmount call on ", Slot, " Successful.");
++}
++/*
++ * @brief Class to monitor Dbus
++ */
++
++class DbusMonitor
++{
++  public:
++    DbusMonitor() = default;
++    ~DbusMonitor() = default;
++    DbusMonitor(const DbusMonitor&) = delete;
++    DbusMonitor& operator=(const DbusMonitor&) = delete;
++    DbusMonitor(DbusMonitor&&) = delete;
++    DbusMonitor& operator=(DbusMonitor&&) = delete;
++
++    std::string findKeyForValue(const activesessionmap& map, uint16_t value)
++    {
++        for (const auto& pair : map)
++        {
++            if (pair.second == value)
++            {
++                // Return the key corresponding to the value
++                return pair.first;
++            }
++        }
++        // Return "INVALID" if the value is not found
++        return "INVALID";
++    }
++
++    std::vector<uint16_t>
++        findRemovedSessionIDs(const std::vector<uint16_t>& activeSessionIDs,
++                              const std::vector<uint16_t>& updatedSessionIDs)
++    {
++        std::vector<uint16_t> removedSessionIDs;
++
++        // Sort the vectors to perform set difference operation
++        std::vector<uint16_t> sortedActiveSessionIDs = activeSessionIDs;
++        std::vector<uint16_t> sortedUpdatedSessionIDs = updatedSessionIDs;
++        std::sort(sortedActiveSessionIDs.begin(), sortedActiveSessionIDs.end());
++        std::sort(sortedUpdatedSessionIDs.begin(),
++                  sortedUpdatedSessionIDs.end());
++
++        // Find missing session IDs using set difference operation
++        std::set_difference(
++            sortedActiveSessionIDs.begin(), sortedActiveSessionIDs.end(),
++            sortedUpdatedSessionIDs.begin(), sortedUpdatedSessionIDs.end(),
++            std::back_inserter(removedSessionIDs));
++
++        return removedSessionIDs;
++    }
++
++    void handleSessions(const sessionList& list)
++    {
++        std::vector<uint16_t> updatedSessionIDs;
++        std::vector<uint16_t> activeSessionIDs;
++        std::vector<uint16_t> removedSessionIDs;
++        std::string Slot;
++
++        for (const auto& tuple : list)
++        {
++            uint16_t sessionID = std::get<0>(tuple);
++            updatedSessionIDs.push_back(sessionID);
++        }
++
++        for (const auto& pair : activeSessons)
++        {
++            activeSessionIDs.push_back(pair.second);
++        }
++
++        removedSessionIDs =
++            findRemovedSessionIDs(activeSessionIDs, updatedSessionIDs);
++        for (uint16_t rmvID : removedSessionIDs)
++        {
++            LogMsg(Logger::Info, "Removed Session ID: ", rmvID);
++
++            Slot = findKeyForValue(activeSessons, rmvID);
++
++            if (Slot != "INVALID")
++            {
++                LogMsg(Logger::Info, "associated Slot: ", Slot);
++                activeSessons.erase(Slot);
++
++                /*
++                 *  Child process is spawned to make this operation non-blocking
++                 *  and avoid service restart.
++                 */
++                if (fork() == 0)
++                {
++                    unMount(Slot);
++                    exit(0);
++                }
++            }
++        }
++    }
++
++    sdbusplus::bus::match_t
++        sessionMonitor(std::shared_ptr<sdbusplus::asio::connection> conn)
++    {
++        auto sessionCallback = [&conn, this](sdbusplus::message_t& msg) {
++            try
++            {
++                sessionList updatedlist;
++                std::string interfaceName;
++
++                boost::container::flat_map<std::string, propertyVariant>
++                    sessionProperty;
++                msg.read(interfaceName, sessionProperty);
++
++                LogMsg(Logger::Debug, "interface name: ", interfaceName);
++
++                if (interfaceName == sessMgrVmediaIface)
++                {
++                    for (const auto& entry : sessionProperty)
++                    {
++                        LogMsg(Logger::Debug, "Property: ", entry.first);
++
++                        if (entry.first == "VmediaSessionInfo")
++                        {
++                            updatedlist = std::get<sessionList>(entry.second);
++                            handleSessions(updatedlist);
++                        }
++                    }
++                }
++            }
++            catch (const std::exception& e)
++            {
++                LogMsg(Logger::Error,
++                       "[sessionMonitor]Error handling Dbus signal ERROR= %s ",
++                       e.what());
++            }
++        };
++
++        sdbusplus::bus::match_t sessionMatcher(
++            static_cast<sdbusplus::bus::bus&>(*conn),
++            "type='signal',member='PropertiesChanged',path='" + sessMgrObjPath +
++                "',arg0namespace='" + sessMgrVmediaIface + "'",
++            std::move(sessionCallback));
++
++        return sessionMatcher;
++    }
++};
++
+ /* Returns slot number if ejected, -1 otherwise */
+ static int eject_status(const std::string& filePath)
+ {
+@@ -544,6 +745,17 @@ struct UsbGadget
+         const fs::path massStorageDir = configDir / "mass_storage.usb0";
+         const fs::path configStringsDir = configDir / "strings/0x409";
+
++        /* Parameters for Session management register/unregister */
++
++        uint8_t sessionId;
++        std::string ipAddr;
++        std::string userName;
++        uint8_t sessionType;
++        uint8_t previlage;
++        uint8_t userId;
++        bool status = false;
++        int reason;
++
+         if (change == StateChange::inserted)
+         {
+             try
+@@ -565,6 +777,58 @@ struct UsbGadget
+                 echoToFile(funcMassStorageDir / "lun.0/cdrom", "0");
+                 echoToFile(funcMassStorageDir / "lun.0/file", path);
+
++                /* Register session to Session Manager Service */
++
++                sessionId = DEFAULT_SID;
++                ipAddr = DEFAULT_IP;
++                userName = DEFAULT_USER;
++                sessionType = VMEDIA;
++                previlage = PRIV_LEVEL_ADMIN;
++                userId = DEFAULT_USER_ID;
++
++                propertyVariant propertyVar;
++                auto bus = sdbusplus::bus::new_system();
++                auto msgReg = bus.new_method_call(
++                    sessMgrService.c_str(), sessMgrObjPath.c_str(),
++                    sessMgrIface.c_str(), "SessionRegister");
++
++                msgReg.append(sessionId, ipAddr, userName, sessionType,
++                              previlage, userId);
++
++                auto reply = bus.call(msgReg);
++                reply.read(status);
++
++                if (status)
++                {
++                    /* Get and update the SessionID in activeSessons */
++                    auto msgGet = bus.new_method_call(
++                        sessMgrService.c_str(), sessMgrObjPath.c_str(),
++                        DBUS_PROPERTIES_INTERFACE, "Get");
++
++                    msgGet.append(sessMgrVmediaIface.c_str(),
++                                  "VmediaSessionInfo");
++
++                    auto reply1 = bus.call(msgGet);
++                    reply1.read(propertyVar);
++
++                    if (std::holds_alternative<sessionList>(propertyVar))
++                    {
++                        sessionList& sesList =
++                            std::get<sessionList>(propertyVar);
++
++                        if (!sesList.empty())
++                        {
++                            const auto& latestEntry = sesList.back();
++                            sessionId =
++                                static_cast<uint8_t>(std::get<0>(latestEntry));
++                            activeSessons.insert({name, sessionId});
++                            LogMsg(Logger::Info, "For ", name,
++                                   " assigned SessionID :",
++                                   static_cast<int>(activeSessons[name]));
++                        }
++                    }
++                }
++
+                 /* Spawn a child process to monitor eject status from host */
+                 if (fork() == 0)
+                 {
+@@ -654,6 +918,34 @@ struct UsbGadget
+         // earlier. We'll get here only for removed, or cleanup
+
+         echoToFile(gadgetDir / "UDC", "");
++
++        /*Unregister session from Session Manager Service */
++        if (activeSessons.count(name) > 0)
++        {
++            /*retrive the stored sessionID from activeSessons */
++            sessionId = activeSessons[name];
++            sessionType = VMEDIA;
++            reason = LOGOUT;
++
++            LogMsg(Logger::Info,
++                   "Unregistering SessionID: ", static_cast<int>(sessionId),
++                   " Slot: ", name);
++
++            auto busUnreg = sdbusplus::bus::new_system();
++            auto msgUnreg = busUnreg.new_method_call(
++                sessMgrService.c_str(), sessMgrObjPath.c_str(),
++                sessMgrIface.c_str(), "SessionUnregister");
++
++            msgUnreg.append(sessionId, sessionType, reason);
++            auto reply = busUnreg.call(msgUnreg);
++            reply.read(status);
++            if (!status)
++            {
++                LogMsg(Logger::Error, "failed to Unregister Session");
++            }
++            activeSessons.erase(name);
++        }
++
+         const std::array<const char*, 6> dirs = {
+             massStorageDir.c_str(),   funcMassStorageDir.c_str(),
+             configStringsDir.c_str(), configDir.c_str(),
+--
+2.25.1
+
