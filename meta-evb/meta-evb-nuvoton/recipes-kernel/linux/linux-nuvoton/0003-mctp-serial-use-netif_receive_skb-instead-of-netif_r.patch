@@ -1,0 +1,41 @@
+From 461a626fc1c0a435724a9fe41f6107dd23fc843c Mon Sep 17 00:00:00 2001
+From: Jeremy Kerr <jk@codeconstruct.com.au>
+Date: Tue, 17 Oct 2023 18:12:54 +0800
+Subject: [PATCH 3/3] mctp: serial: use netif_receive_skb instead of netif_rx
+
+In the change to netif_rx_ni, we ended up converging on netif_rx for
+MCTP serial packet ingress. In backlog mode, netif_rx will end up
+queueing to a CPU-specific queue, which may result in out-of-order
+packets when those queues are processed.
+
+The MCTP spec doesn't have provision for packet reordering, so we need
+to be particularly careful to prevent correct sequencing of reassembly
+flows.
+
+Use netif_receive_skb() for packet ingress instead; this means we won't
+end up with packets on the per-cpu NAPI backlog queue.
+
+[We will need proper MCTP skb hash support for RPS, but that will be a
+later change...]
+
+Signed-off-by: Jeremy Kerr <jk@codeconstruct.com.au>
+---
+ drivers/net/mctp/mctp-serial.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/mctp/mctp-serial.c b/drivers/net/mctp/mctp-serial.c
+index 9f9eaf896047..77e496a4334c 100644
+--- a/drivers/net/mctp/mctp-serial.c
++++ b/drivers/net/mctp/mctp-serial.c
+@@ -288,7 +288,7 @@ static void mctp_serial_rx(struct mctp_serial *dev)
+ 	cb = __mctp_cb(skb);
+ 	cb->halen = 0;
+ 
+-	netif_rx(skb);
++	netif_receive_skb(skb);
+ 	dev->netdev->stats.rx_packets++;
+ 	dev->netdev->stats.rx_bytes += dev->rxlen;
+ }
+-- 
+2.39.2
+

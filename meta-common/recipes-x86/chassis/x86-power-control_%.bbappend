@@ -20,5 +20,5 @@ EVB:append = "file://0003-evb-Not-able-to-do-power-cycle-if-one-task-is-in-runni
 
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'egs', SRC_URI_EGS, '', d)}"
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'bhs', SRC_URI_BHS, '', d)}"
-SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb', EVB, '', d)}"
+SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb-ast2600', EVB, '', d)}"
 
