@@ -1,0 +1,174 @@
+From 63c14efbffd297b9c77ba3781016bbcb2e626fb1 Mon Sep 17 00:00:00 2001
+From: hariharanr <hariharanr@ami.com>
+Date: Fri, 26 Apr 2024 14:17:10 +0530
+Subject: [PATCH 8/8] OT-3061 Posix fadvise cache drop for virtual media
+ redirection
+
+Issue:
+In some platforms, when copying media inside host, other services are not getting
+enough space in kernel cache memory, which eventually leads to BMC reboot.
+
+Fix:
+Added mechanism to spawn a child process to execute 'Posix_fadvice' cache drop
+when media-redirection starts.
+This will free up unused kernel cache memory of virtual-media
+redirection.
+
+Signed-off-by: Amlana Bhuyan <amlanab@ami.com>
+Signed-off-by: hariharanr <hariharanr@ami.com>
+
+%% original patch: 0008-Posix_fadvise-cache-drop-for-virtual-media-redirection.patch
+---
+ src/system.hpp | 109 +++++++++++++++++++++++++++++++++++++------------
+ 1 file changed, 82 insertions(+), 27 deletions(-)
+
+diff --git a/src/system.hpp b/src/system.hpp
+index 9417a05..129f51d 100644
+--- a/src/system.hpp
++++ b/src/system.hpp
+@@ -3,6 +3,7 @@
+ #include "logger.hpp"
+ 
+ #include <sys/prctl.h>
++#include <time.h>
+ 
+ #include <algorithm>
+ #include <boost/asio.hpp>
+@@ -486,13 +487,13 @@ class Process : public std::enable_shared_from_this<Process>
+     const NBDDevice& dev;
+ };
+ 
+-#define DEFAULT_SID 0           // Default SID (Session ID)
+-#define DEFAULT_IP "~"          // Default IP address
+-#define DEFAULT_USER "local"    // Default user
+-#define VMEDIA 2                // vMedia Session type
+-#define PRIV_LEVEL_ADMIN 0x04   // Privilege level for admin
+-#define DEFAULT_USER_ID 0       // Default user ID
+-#define LOGOUT 0x01             // Reson for session unregister
++#define DEFAULT_SID 0         // Default SID (Session ID)
++#define DEFAULT_IP "~"        // Default IP address
++#define DEFAULT_USER "local"  // Default user
++#define VMEDIA 2              // vMedia Session type
++#define PRIV_LEVEL_ADMIN 0x04 // Privilege level for admin
++#define DEFAULT_USER_ID 0     // Default user ID
++#define LOGOUT 0x01           // Reson for session unregister
+ 
+ #define DBUS_PROPERTIES_INTERFACE "org.freedesktop.DBus.Properties"
+ 
+@@ -701,6 +702,14 @@ static int eject_status(const std::string& filePath)
+     return slotNumber;
+ }
+ 
++static void sleep_ms(int milliseconds)
++{
++    struct timespec ts;
++    ts.tv_sec = milliseconds / 1000;
++    ts.tv_nsec = (milliseconds % 1000) * 1000000;
++    nanosleep(&ts, NULL);
++}
++
+ struct UsbGadget
+ {
+   private:
+@@ -871,32 +880,78 @@ struct UsbGadget
+                         }
+                         sleep(1);
+                     }
++                    exit(0);
+                 }
+-
+-                for (const auto& port :
+-                     fs::directory_iterator("/sys/bus/platform/devices/" +
+-                                            usbVirtualHub + ".usb-vhub"))
++                else
+                 {
+-                    const std::string portId = port.path().filename();
+-
+-                    if (portId.find(usbVirtualHub + ".usb-vhub:p") !=
+-                        std::string::npos)
++                    /*
++                     * Spawn a child process for cache dropping during
++                     * media-redirection.
++                     */
++                    if (fork() == 0)
+                     {
+-                        constexpr std::string_view portDelimiter = ":p";
+-                        const std::string portNumber = portId.substr(
+-                            portId.find(portDelimiter) + portDelimiter.size());
+-
+-                        // GadgetId is port number minus 1
+-                        const int gadgetId = std::stoi(portNumber) - 1;
++                        int nbdFd = open(path.c_str(), O_RDWR);
++                        if (nbdFd < 0)
++                        {
++                            LogMsg(Logger::Error, "Failed to open:", path);
++                            exit(0);
++                        }
++                        LogMsg(Logger::Info,
++                               "posix_fadvise cache drop started for: ", path);
++                        while (fs::exists(gadgetDir))
++                        {
++                            /* Sync & Drop any cached data for this device */
++                            if (fsync(nbdFd) != 0)
++                            {
++                                LogMsg(Logger::Error, "fsync failed", path);
++                                continue;
++                            }
++                            if (posix_fadvise(nbdFd, 0, 0,
++                                              POSIX_FADV_DONTNEED) != 0)
++                            {
++                                LogMsg(Logger::Error,
++                                       "posix_fadvise cache drop failed", path);
++                                continue;
++                            }
++                            sleep_ms(100);
++                        }
++                        LogMsg(Logger::Info,
++                               "posix_fadvise cache drop stopped for: ", path);
++                        close(nbdFd);
++                        exit(0);
++                    }
++                    else
++                    {
++                        for (const auto& port : fs::directory_iterator(
++                                 "/sys/bus/platform/devices/" + usbVirtualHub +
++                                 ".usb-vhub"))
++                        {
++                            const std::string portId = port.path().filename();
+ 
+-                        if (fs::is_directory(port) && !fs::is_symlink(port) &&
+-                            !fs::exists(port.path() /
++                            if (portId.find(usbVirtualHub + ".usb-vhub:p") !=
++                                std::string::npos)
++                            {
++                                constexpr std::string_view portDelimiter = ":p";
++                                const std::string portNumber =
++                                    portId.substr(portId.find(portDelimiter) +
++                                                  portDelimiter.size());
++
++                                // GadgetId is port number minus 1
++                                const int gadgetId = std::stoi(portNumber) - 1;
++
++                                if (fs::is_directory(port) &&
++                                    !fs::is_symlink(port) &&
++                                    !fs::exists(
++                                        port.path() /
+                                         ("gadget." + std::to_string(gadgetId)) /
+                                         "suspended"))
+-                        {
+-                            LogMsg(Logger::Debug, "Use port : ", portId);
+-                            echoToFile(gadgetDir / "UDC", portId);
+-                            return 0;
++                                {
++                                    LogMsg(Logger::Debug,
++                                           "Use port : ", portId);
++                                    echoToFile(gadgetDir / "UDC", portId);
++                                    return 0;
++                                }
++                            }
+                         }
+                     }
+                 }
+-- 
+2.34.1
+
