@@ -24,6 +24,7 @@ SRC_URI += "file://nfs.cfg \
 	    file://CVE-2024-0841.patch \
             file://CVE-2024-1085.patch \
             file://CVE-2024-1086.patch \
+            file://0032-Fix-NCSI-Auto-Failover.patch \
 	    "
 
 NON_PFR_SRC_URI_AMI = "file://0012-Add-new-layout-as-per-AMI-requirements.patch \

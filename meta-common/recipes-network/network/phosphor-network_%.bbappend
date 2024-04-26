@@ -46,6 +46,7 @@ SRC_URI:append = " \
              file://0033-Remain-IP-Address-After-Disabling-Enabling-Interface.patch \
              file://0033-Fix-to-update-static-gateway6-when-ipv6-source-is-static.patch \
              file://0034-Implement-PHY-Control-for-Non-Bond.patch \
+             file://0035-Implement-NCSI-User-Control-Auto-Failover-and-Manual.patch \
           "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
@@ -67,6 +68,9 @@ EXTRA_OEMESON:append = " -Dpersist-mac=true"
 EXTRA_OEMESON:append = " -Ddefault-link-local-autoconf=ipv6"
 
 EXTRA_OEMESON:append = " -Denable-advanced-route=true"
+
+# Uncomment to enable NCSI
+# EXTRA_OEMESON:append = " -Denable-ncsi=true -Ddefault-ncsi-interface=eth3"
 
 SYSTEMD_SERVICE:${PN} += "xyz.openbmc_project.GARPControl.service"
 

@@ -1,0 +1,549 @@
+From 7a5a87cbd23fb0b27d107eaf3f644c71c0ba47f7 Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Thu, 26 Oct 2023 00:21:11 -0700
+Subject: [PATCH] Implement NCSI User Control Auto Failover and Manual Switch 
+ modified:   meson.build 	modified:   meson_options.txt 	modified:  
+ src/ethernet_interface.cpp 	modified:   src/ethernet_interface.hpp 
+ modified:   src/meson.build 	new file:   src/ncsi_configuration.cpp 	new
+ file:   src/ncsi_configuration.hpp 	modified:   src/util.cpp 
+ modified:   src/util.hpp
+
+---
+ meson.build                |  2 +
+ meson_options.txt          |  2 +
+ src/ethernet_interface.cpp | 21 ++++++++++
+ src/ethernet_interface.hpp |  5 +++
+ src/meson.build            |  4 ++
+ src/ncsi_configuration.cpp | 84 ++++++++++++++++++++++++++++++++++++++
+ src/ncsi_configuration.hpp | 79 +++++++++++++++++++++++++++++++++++
+ src/util.cpp               | 12 ++++++
+ src/util.hpp               |  2 +
+ 9 files changed, 211 insertions(+)
+ create mode 100644 src/ncsi_configuration.cpp
+ create mode 100644 src/ncsi_configuration.hpp
+
+diff --git a/meson.build b/meson.build
+index f83721b..8bfef03 100644
+--- a/meson.build
++++ b/meson.build
+@@ -23,6 +23,8 @@ conf_data.set('SYNC_MAC_FROM_INVENTORY', get_option('sync-mac'))
+ conf_data.set('PERSIST_MAC', get_option('persist-mac'))
+ conf_data.set10('FORCE_SYNC_MAC_FROM_INVENTORY', get_option('force-sync-mac'))
+ conf_data.set('AMI_IP_ADVANCED_ROUTING_SUPPORT', get_option('enable-advanced-route'))
++conf_data.set('AMI_NCSI_SUPPORT', get_option('enable-ncsi'))
++conf_data.set_quoted('DEFAULT_NCSI_INTERFACE', get_option('default-ncsi-interface'))
+ 
+ sdbusplus_dep = dependency('sdbusplus')
+ sdbusplusplus_prog = find_program('sdbus++', native: true)
+diff --git a/meson_options.txt b/meson_options.txt
+index d637f00..6cb9803 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -15,3 +15,5 @@ option('persist-mac', type: 'boolean',
+ option('force-sync-mac', type: 'boolean',
+        description: 'Force sync mac address no matter is first boot or not')
+ option('enable-advanced-route', type: 'boolean', description: 'Enable advanced route or not')
++option('enable-ncsi', type: 'boolean', description: 'Enable NCSI Feature or not')
++option('default-ncsi-interface', type: 'string', description: 'Default NCSI interface')
+\ No newline at end of file
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index 709b424..a4a024d 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -160,17 +160,32 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+
+     ipv4IndexUsedList.resize(IPV4_MAX_NUM+1, std::nullopt);
+     ipv6IndexUsedList.resize(IPV6_MAX_NUM+1, std::nullopt);
+-    if (!this->vlan.has_value() && getPHYInfo(ifaceConfig).has_value())
++
++#ifdef AMI_NCSI_SUPPORT
++    if (std::string{DEFAULT_NCSI_INTERFACE} == interfaceName()){
++        auto [mode, package, channel] = getNCSIValue(ifaceConfig);
++        ncsiConfig.emplace(bus, this->objPath.c_str(),*this,
++                            mode == "Auto" ? NCSIIface::Mode::Auto : NCSIIface::Mode::Manual,
++                            mode == "Auto" ? ncsi::MAX_PACKAGE_NUM : package,
++                            mode == "Auto" ? ncsi::MAX_CHANNEL_NUM : channel);
++        EthernetInterfaceIntf::ncsi(true, true);
++    }
++#endif
++
++    if (!ncsi())
+     {
+-        auto [autoNeg, duplex, speed] = getPHYInfo(ifaceConfig).value();
+-        if (!autoNeg && !duplex.empty() || speed > 0)
++        if (!this->vlan.has_value() && getPHYInfo(ifaceConfig).has_value())
+         {
+-            EthernetInterfaceIntf::autoNeg(autoNeg, true);
+-            EthernetInterfaceIntf::duplex(
+-                duplex == "full" ? Duplex::full : Duplex::half, true);
+-            EthernetInterfaceIntf::speed(speed, true);
+-            system::setLink(interfaceName(), speed, duplex == "full" ? 1 : 0,
+-                            autoNeg ? 1 : 0);
++            auto [autoNeg, duplex, speed] = getPHYInfo(ifaceConfig).value();
++            if (!autoNeg && !duplex.empty() || speed > 0)
++            {
++                EthernetInterfaceIntf::autoNeg(autoNeg, true);
++                EthernetInterfaceIntf::duplex(
++                    duplex == "full" ? Duplex::full : Duplex::half, true);
++                EthernetInterfaceIntf::speed(speed, true);
++                system::setLink(interfaceName(), speed, duplex == "full" ? 1 : 0,
++                                autoNeg ? 1 : 0);
++            }
+         }
+     }
+ 
+@@ -1277,6 +1292,18 @@ void EthernetInterface::writeIfaceStateFile(std::string ifname)
+             link["Speed"].emplace_back(std::to_string(it->second->speed()));
+         }
+     }
++#ifdef AMI_NCSI_SUPPORT
++    {
++        {
++            if (std::string{DEFAULT_NCSI_INTERFACE} == interfaceName() && EthernetInterface::ncsiConfig.has_value()){
++                auto& ncsi = IfaceState.map["NCSI"].emplace_back();
++                ncsi["Mode"].emplace_back(EthernetInterface::ncsiConfig.value().mode() == NCSIIface::Mode::Auto ? "Auto" : "Manual");
++                ncsi["Package"].emplace_back(std::to_string(EthernetInterface::ncsiConfig.value().package()));
++                ncsi["Channel"].emplace_back(std::to_string(EthernetInterface::ncsiConfig.value().channel()));
++            }
++        }
++    }
++#endif
+
+     IfaceState.writeFile(fs::path{
+         fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(),
+diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
+index 3f686e8..64bd452 100644
+--- a/src/ethernet_interface.hpp
++++ b/src/ethernet_interface.hpp
+@@ -2,6 +2,7 @@
+ #include "ipaddress.hpp"
+ #include "neighbor.hpp"
+ #include "types.hpp"
++#include "ncsi_configuration.hpp"
+ #include "xyz/openbmc_project/Channel/ChannelAccess/server.hpp"
+ #include "xyz/openbmc_project/Network/IP/Create/server.hpp"
+ #include "xyz/openbmc_project/Network/Neighbor/CreateStatic/server.hpp"
+@@ -18,6 +19,7 @@
+ #include <xyz/openbmc_project/Network/VLAN/server.hpp>
+ #include <xyz/openbmc_project/Object/Delete/server.hpp>
+ #include <xyz/openbmc_project/Network/ARPControl/server.hpp>
++#include <xyz/openbmc_project/Network/NCSIConfiguration/server.hpp>
+ 
+ #include <optional>
+ #include <string>
+@@ -362,6 +364,9 @@ class EthernetInterface : public Ifaces
+     };
+     std::optional<VlanProperties> vlan;
+ 
++    /** @brief NCSI dbus object */
++    std::optional<ncsi::Configuration> ncsiConfig = std::nullopt;
++
+     std::map<std::string, std::unique_ptr<sdbusplus::bus::match_t>> signals ;
+ 
+     friend class TestEthernetInterface;
+diff --git a/src/meson.build b/src/meson.build
+index 18194f8..e594c31 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -36,6 +36,8 @@ networkd_deps = [
+   networkd_dbus_dep,
+   sdbusplus_dep,
+   stdplus_dep,
++  dependency('libnl-3.0'),
++  dependency('libnl-genl-3.0'),
+ ]
+
+ executable(
+@@ -71,6 +73,8 @@ networkd_lib = static_library(
+   'system_queries.cpp',
+   'types.cpp',
+   'firewall_configuration.cpp',
++  'ncsi_configuration.cpp',
++  'ncsi_util.cpp',
+   'util.cpp',
+   'config_parser.cpp',
+   'dhcp_configuration.cpp',
+diff --git a/src/ncsi_configuration.cpp b/src/ncsi_configuration.cpp
+new file mode 100644
+index 0000000..aca08e9
+--- /dev/null
++++ b/src/ncsi_configuration.cpp
+@@ -0,0 +1,84 @@
++#include "ncsi_configuration.hpp"
++#include "ethernet_interface.hpp"
++#include "network_manager.hpp"
++
++
++#include <phosphor-logging/elog-errors.hpp>
++#include <phosphor-logging/elog.hpp>
++#include <phosphor-logging/lg2.hpp>
++#include <phosphor-logging/log.hpp>
++
++
++namespace phosphor
++{
++namespace network
++{
++namespace ncsi
++{
++
++
++using namespace phosphor::logging;
++using phosphor::logging::elog;
++using namespace sdbusplus::xyz::openbmc_project::Common::Error;
++using sdbusplus::xyz::openbmc_project::Common::Error::NotAllowed;
++using REASON = phosphor::logging::xyz::openbmc_project::Common::NotAllowed::REASON;
++using Argument = phosphor::logging::xyz::openbmc_project::Common::InvalidArgument;
++
++Configuration::Configuration(sdbusplus::bus_t& bus, std::string_view path,
++                                EthernetInterface& eth, NCSIIface::Mode mode,
++                                uint8_t package, uint8_t channel) :
++       NCSIObj(bus, std::string{path}.c_str(), NCSIObj::action::defer_emit),
++       bus(bus), eth(eth)
++{
++    NCSIIface::mode(mode, true);
++    NCSIIface::package(package, true);
++    NCSIIface::channel(channel, true);
++    if (NCSIIface::mode() == NCSIIface::Mode::Manual)
++        setChannel(eth.getIfIdx(), package, channel);
++    emit_object_added();
++}
++
++
++/** Set value of Mode */
++NCSIIface::Mode Configuration::mode(Mode value) {
++    if (value != Mode::Auto && value != Mode::Manual) {
++        log<level::INFO>("Invalid Argument: Mode\n");
++        elog<NotAllowed>(REASON("Invalid Argument: Mode"));
++    }
++
++    if (value != NCSIIface::mode()) {
++        NCSIIface::mode(value);
++        if (value == Mode::Auto) {
++            NCSIIface::package(MAX_PACKAGE_NUM);
++            NCSIIface::channel(MAX_CHANNEL_NUM);
++        }
++        eth.manager.get().writeToConfigurationFile();
++
++        if (value == Mode::Auto) {
++            execute("/bin/systemctl", "systemctl", "restart", "systemd-networkd.service");
++        }
++    }
++    return value;
++}
++
++int16_t Configuration::setPackageChannel(uint8_t package, uint8_t channel) {
++    if (NCSIIface::mode() == NCSIIface::Mode::Auto) {
++        log<level::INFO>("Property update is not allowed in current state\n");
++        elog<NotAllowed>(REASON("Property update is not allowed in current state"));
++    }
++
++    if (package != NCSIIface::package() || channel != NCSIIface::channel()) {
++        if (setChannel(eth.getIfIdx(), package, channel) != 0)
++            return -1;
++
++        NCSIIface::package(package);
++        NCSIIface::channel(channel);
++        eth.manager.get().writeToConfigurationFile();
++        execute("/bin/systemctl", "systemctl", "restart", "systemd-networkd.service");
++    }
++
++    return 0;
++}
++} // ncsi
++} // network
++} // phosphor
+diff --git a/src/ncsi_configuration.hpp b/src/ncsi_configuration.hpp
+new file mode 100644
+index 0000000..b513ceb
+--- /dev/null
++++ b/src/ncsi_configuration.hpp
+@@ -0,0 +1,79 @@
++#pragma once
++
++#include "ncsi_util.hpp"
++#include "types.hpp"
++#include <sdbusplus/bus.hpp>
++#include <sdbusplus/server/object.hpp>
++#include <string_view>
++#include <stdplus/zstring.hpp>
++#include <stdplus/pinned.hpp>
++#include <xyz/openbmc_project/Network/NCSIConfiguration/server.hpp>
++#include <xyz/openbmc_project/Object/Delete/server.hpp>
++
++
++namespace phosphor
++{
++namespace network
++{
++class EthernetInterface;  // forward declaration of EthernetInterface
++
++using NCSIIface = sdbusplus::xyz::openbmc_project::Network::server::NCSIConfiguration;
++
++using NCSIObj = sdbusplus::server::object_t<NCSIIface>;
++namespace ncsi
++{
++
++
++constexpr int MAX_PACKAGE_NUM = 8;
++constexpr int MAX_CHANNEL_NUM = 31;
++
++
++class Configuration : NCSIObj {
++    public:
++        Configuration() = delete;
++        Configuration(const Configuration&) = delete;
++        Configuration& operator=(const Configuration&) = delete;
++        Configuration(Configuration&&) = delete;
++        Configuration& operator=(Configuration&&) = delete;
++        virtual ~Configuration() = default;
++
++        /** @brief Constructor to put object onto bus at a dbus path.
++            *  @param[in] bus - Bus to attach to.
++            *  @param[in] path - Path to attach at.
++            *  @param[in] eth - Ethernet Interface to attach at.
++            *  @param[in] mode - NCSI mode
++            *  @param[in] package - Package
++            *  @param[in] channel - Channel
++            */
++        // Configuration(sdbusplus::bus_t& bus, std::string_view path, EthernetInterface& eth);
++        Configuration(sdbusplus::bus_t& bus, std::string_view path,
++                        EthernetInterface& eth, NCSIIface::Mode mode,
++                        uint8_t package, uint8_t channel);
++        /** Set value of Mode */
++        Mode mode(Mode value) override;
++
++        /** @brief Implementation for SetPackageChannel
++         *  Set preferred package and channel
++         *
++         *  @param[in] package - Preferred package
++         *  @param[in] channel - Preferred channel
++         *
++         *  @return result[int16_t] -
++         */
++        int16_t setPackageChannel(uint8_t package, uint8_t channel) override;
++
++        using NCSIIface::mode;
++        using NCSIIface::channel;
++        using NCSIIface::package;
++    private:
++        /** @brief sdbusplus DBus bus connection. */
++        sdbusplus::bus_t& bus;
++
++        /** @brief Parent Object. */
++        EthernetInterface& eth;
++
++};
++
++} // ncsi
++} // network
++} // phosphor
+\ No newline at end of file
+diff --git a/src/util.cpp b/src/util.cpp
+index 3591f45..a7f53d3 100644
+--- a/src/util.cpp
++++ b/src/util.cpp
+@@ -214,6 +214,18 @@ bool getIP6StaticRtr(const config::Parser& config) {
+     return systemdParseLast(config, "IPv6Router", "IPv6EnableStaticRtr", config::parseBool).value_or(false);
+ }
+ 
++std::tuple<std::string, uint8_t, uint8_t> getNCSIValue(const config::Parser& config) {
++    uint8_t channel = systemdParseLast(config, "NCSI", "Channel", config::parseInt).value_or(31);
++    uint8_t package = systemdParseLast(config, "NCSI", "Package", config::parseInt).value_or(8);
++    std::string mode = "Auto";
++    if (auto str = config.map.getLastValueString("NCSI","Mode"); str != nullptr)
++    {
++        mode = *str;
++    }
++
++    return std::make_tuple(mode, package, channel);
++}
++
+ std::string getIP6StaticRtrAddr(const config::Parser& config) {
+     if (auto str = config.map.getLastValueString("IPv6Router","IPv6StaticRtrAddr"); str == nullptr)
+     {
+diff --git a/src/util.hpp b/src/util.hpp
+index a8277cc..967bcbd 100644
+--- a/src/util.hpp
++++ b/src/util.hpp
+@@ -127,6 +127,8 @@ bool getIPv6AcceptRA(const config::Parser& config);
+  */
+ bool getIP6StaticRtr(const config::Parser& config);
+ 
++std::tuple<std::string, uint8_t, uint8_t> getNCSIValue(const config::Parser& config);
++
+ std::string getIP6StaticRtrAddr(const config::Parser& config);
+ 
+ int getIP6StaticRtrPrefix(const config::Parser& config);
+diff --git a/src/ncsi_configuration.cpp b/src/ncsi_configuration.cpp
+index aca08e9..9062229 100644
+--- a/src/ncsi_configuration.cpp
++++ b/src/ncsi_configuration.cpp
+@@ -16,7 +16,7 @@ namespace network
+ namespace ncsi
+ {
+ 
+-
++extern std::vector<std::tuple<uint16_t, std::vector<uint16_t>>> pakckageChannel;
+ using namespace phosphor::logging;
+ using phosphor::logging::elog;
+ using namespace sdbusplus::xyz::openbmc_project::Common::Error;
+@@ -51,11 +51,7 @@ NCSIIface::Mode Configuration::mode(Mode value) {
+         if (value == Mode::Auto) {
+             NCSIIface::package(MAX_PACKAGE_NUM);
+             NCSIIface::channel(MAX_CHANNEL_NUM);
+-        }
+-        eth.manager.get().writeToConfigurationFile();
+-
+-        if (value == Mode::Auto) {
+-            execute("/bin/systemctl", "systemctl", "restart", "systemd-networkd.service");
++            clearInterface(eth.getIfIdx());
+         }
+     }
+     return value;
+@@ -79,6 +75,16 @@ int16_t Configuration::setPackageChannel(uint8_t package, uint8_t channel) {
+ 
+     return 0;
+ }
++
++std::vector<std::tuple<uint16_t, std::vector<uint16_t>>>
++    Configuration::channelList() const
++{
++    // Update NCSI Package and Channel list
++    std::vector<std::tuple<uint16_t, std::vector<uint16_t>>> pakckageChannel;
++    getInfo(eth.getIfIdx(), -1, pakckageChannel);
++    return std::move(pakckageChannel);
++    // return {};
++}
+ } // ncsi
+ } // network
+ } // phosphor
+diff --git a/src/ncsi_configuration.hpp b/src/ncsi_configuration.hpp
+index b513ceb..976faa3 100644
+--- a/src/ncsi_configuration.hpp
++++ b/src/ncsi_configuration.hpp
+@@ -23,11 +23,9 @@ using NCSIObj = sdbusplus::server::object_t<NCSIIface>;
+ namespace ncsi
+ {
+ 
+-
+-constexpr int MAX_PACKAGE_NUM = 8;
++constexpr int MAX_PACKAGE_NUM = 7;
+ constexpr int MAX_CHANNEL_NUM = 31;
+ 
+-
+ class Configuration : NCSIObj {
+     public:
+         Configuration() = delete;
+@@ -62,6 +60,10 @@ class Configuration : NCSIObj {
+          */
+         int16_t setPackageChannel(uint8_t package, uint8_t channel) override;
+ 
++        /** Get value of ChannelList */
++        std::vector<std::tuple<uint16_t, std::vector<uint16_t>>>
++            channelList() const override;
++
+         using NCSIIface::mode;
+         using NCSIIface::channel;
+         using NCSIIface::package;
+diff --git a/src/ncsi_util.cpp b/src/ncsi_util.cpp
+index c739d6f..913cd71 100644
+--- a/src/ncsi_util.cpp
++++ b/src/ncsi_util.cpp
+@@ -121,6 +121,7 @@ CallBack infoCallBack = [](struct nl_msg* msg, void* arg) {
+     auto rem = nla_len(tb[NCSI_ATTR_PACKAGE_LIST]);
+     nla_for_each_nested(attrTgt, tb[NCSI_ATTR_PACKAGE_LIST], rem)
+     {
++        pakckageChannel.clear();
+         ret = nla_parse_nested(packagetb, NCSI_PKG_ATTR_MAX, attrTgt,
+                                packagePolicy);
+         if (ret < 0)
+@@ -129,9 +130,9 @@ CallBack infoCallBack = [](struct nl_msg* msg, void* arg) {
+             return -1;
+         }
+ 
++        auto attrID = nla_get_u32(packagetb[NCSI_PKG_ATTR_ID]);
+         if (packagetb[NCSI_PKG_ATTR_ID])
+         {
+-            auto attrID = nla_get_u32(packagetb[NCSI_PKG_ATTR_ID]);
+             lg2::debug("Package has id : {ATTR_ID}", "ATTR_ID", lg2::hex,
+                        attrID);
+         }
+@@ -149,6 +150,7 @@ CallBack infoCallBack = [](struct nl_msg* msg, void* arg) {
+             nla_data(packagetb[NCSI_PKG_ATTR_CHANNEL_LIST]));
+ 
+         auto channelrem = nla_len(packagetb[NCSI_PKG_ATTR_CHANNEL_LIST]);
++        std::vector<uint16_t> channels;
+         nla_for_each_nested(channelListTarget,
+                             packagetb[NCSI_PKG_ATTR_CHANNEL_LIST], channelrem)
+         {
+@@ -178,6 +180,7 @@ CallBack infoCallBack = [](struct nl_msg* msg, void* arg) {
+                 {
+                     lg2::debug("Channel is forced");
+                 }
++                channels.push_back(channel);
+             }
+             else
+             {
+@@ -226,6 +229,8 @@ CallBack infoCallBack = [](struct nl_msg* msg, void* arg) {
+                 }
+             }
+         }
++
++        pakckageChannel.push_back(std::make_tuple(attrID, std::move(channels)));
+     }
+     return (int)NL_SKIP;
+ };
+@@ -457,6 +462,15 @@ int getInfo(int ifindex, int package)
+     }
+ }
+ 
++int getInfo(
++    int ifindex, int package,
++    std::vector<std::tuple<uint16_t, std::vector<uint16_t>>>& channelList)
++{
++    int ret = getInfo(ifindex, package);
++    channelList.assign(pakckageChannel.begin(), pakckageChannel.end());
++    return ret;
++}
++
+ } // namespace ncsi
+ } // namespace network
+ } // namespace phosphor
+diff --git a/src/ncsi_util.hpp b/src/ncsi_util.hpp
+index eaa076d..c274346 100644
+--- a/src/ncsi_util.hpp
++++ b/src/ncsi_util.hpp
+@@ -1,6 +1,9 @@
+ #pragma once
+ 
++#include <cstdint>
+ #include <span>
++#include <tuple>
++#include <vector>
+ 
+ namespace phosphor
+ {
+@@ -11,7 +14,7 @@ namespace ncsi
+ 
+ constexpr auto DEFAULT_VALUE = -1;
+ constexpr auto NONE = 0;
+-
++static std::vector<std::tuple<uint16_t, std::vector<uint16_t>>> pakckageChannel;
+ /* @brief  This function will ask underlying NCSI driver
+  *         to send an OEM command (command type 0x50) with
+  *         the specified payload as the OEM data.
+@@ -57,6 +60,9 @@ int clearInterface(int ifindex);
+  */
+ int getInfo(int ifindex, int package);
+ 
++int getInfo(
++    int ifindex, int package,
++    std::vector<std::tuple<uint16_t, std::vector<uint16_t>>>& channelList);
+ } // namespace ncsi
+ } // namespace network
+ } // namespace phosphor
+-- 
+2.43.0
+
+

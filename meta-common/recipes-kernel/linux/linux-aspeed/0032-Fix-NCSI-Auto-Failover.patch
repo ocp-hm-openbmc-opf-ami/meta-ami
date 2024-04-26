@@ -1,0 +1,188 @@
+From 4f78b38496f049d4a6dd8c0edc5ae21537b2aab7 Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Wed, 24 Apr 2024 15:27:56 +0800
+Subject: [PATCH] Fix NCSI Auto Failover
+
+---
+ net/ncsi/internal.h     |  3 ++-
+ net/ncsi/ncsi-aen.c     |  1 +
+ net/ncsi/ncsi-manage.c  | 16 +++++++++++++---
+ net/ncsi/ncsi-netlink.c |  7 ++++---
+ net/ncsi/ncsi-rsp.c     | 19 +++++++++++++++----
+ 5 files changed, 35 insertions(+), 11 deletions(-)
+
+diff --git a/net/ncsi/internal.h b/net/ncsi/internal.h
+index 03757e76bb6b..c4ad2552e136 100644
+--- a/net/ncsi/internal.h
++++ b/net/ncsi/internal.h
+@@ -251,6 +251,7 @@ struct ncsi_package {
+ 	bool                 multi_channel; /* Enable multiple channels  */
+ 	u32                  channel_whitelist; /* Channels to configure */
+ 	struct ncsi_channel  *preferred_channel; /* Primary channel      */
++	unsigned char        configured_channel_ID;
+ };
+ 
+ struct ncsi_request {
+@@ -407,5 +408,5 @@ int ncsi_xmit_cmd(struct ncsi_cmd_arg *nca);
+ int ncsi_rcv_rsp(struct sk_buff *skb, struct net_device *dev,
+ 		 struct packet_type *pt, struct net_device *orig_dev);
+ int ncsi_aen_handler(struct ncsi_dev_priv *ndp, struct sk_buff *skb);
+-
++void ncsi_report_link(struct ncsi_dev_priv *ndp, bool force_down);
+ #endif /* __NCSI_INTERNAL_H__ */
+diff --git a/net/ncsi/ncsi-aen.c b/net/ncsi/ncsi-aen.c
+index 2a3954c8bfb6..ba637619ebb4 100644
+--- a/net/ncsi/ncsi-aen.c
++++ b/net/ncsi/ncsi-aen.c
+@@ -141,6 +141,7 @@ static int ncsi_aen_handler_lsc(struct ncsi_dev_priv *ndp,
+ 	/* Leave configured channels active in a multi-channel scenario so
+ 	 * AEN events are still received.
+ 	 */
++	ncsi_report_link(ndp, false);
+ 	return 0;
+ }
+ 
+diff --git a/net/ncsi/ncsi-manage.c b/net/ncsi/ncsi-manage.c
+index e9ac3d8af61b..ad8f548b2c13 100644
+--- a/net/ncsi/ncsi-manage.c
++++ b/net/ncsi/ncsi-manage.c
+@@ -48,7 +48,7 @@ bool ncsi_channel_is_last(struct ncsi_dev_priv *ndp,
+ 	return true;
+ }
+ 
+-static void ncsi_report_link(struct ncsi_dev_priv *ndp, bool force_down)
++void ncsi_report_link(struct ncsi_dev_priv *ndp, bool force_down)
+ {
+ 	struct ncsi_dev *nd = &ndp->ndev;
+ 	struct ncsi_package *np;
+@@ -83,6 +83,12 @@ static void ncsi_report_link(struct ncsi_dev_priv *ndp, bool force_down)
+ 	}
+ 
+ report:
++	if(rtnl_trylock()){
++		call_netdevice_notifiers(NETDEV_CHANGE,nd->dev);
++		rtnl_unlock();
++	}
++	else
++		call_netdevice_notifiers(NETDEV_CHANGE,nd->dev);
+ 	nd->handler(nd);
+ }
+ 
+@@ -121,6 +127,7 @@ static void ncsi_channel_monitor(struct timer_list *t)
+ 		return;
+ 	}
+ 
++	netif_carrier_on(ndp->ndev.dev);
+ 	switch (monitor_state) {
+ 	case NCSI_CHANNEL_MONITOR_START:
+ 	case NCSI_CHANNEL_MONITOR_RETRY:
+@@ -233,6 +240,8 @@ struct ncsi_channel *ncsi_add_channel(struct ncsi_package *np, unsigned char id)
+ 
+ 	list_add_tail_rcu(&nc->node, &np->channels);
+ 	np->channel_num++;
++	np->multi_channel = true;
++	np->configured_channel_ID = 0x1f;
+ 	spin_unlock_irqrestore(&np->lock, flags);
+ 
+ 	return nc;
+@@ -918,9 +927,11 @@ int ncsi_update_tx_channel(struct ncsi_dev_priv *ndp,
+ 	struct ncsi_package *np;
+ 	int ret = 0;
+ 
+-	if (!package->multi_channel && !ndp->multi_package)
++	if (!package->multi_channel && !ndp->multi_package) {
+ 		netdev_warn(ndp->ndev.dev,
+ 			    "NCSI: Trying to update Tx channel in single-channel mode\n");
++				return -1;
++	}
+ 	nca.ndp = ndp;
+ 	nca.req_flags = 0;
+ 
+@@ -1239,7 +1250,6 @@ static int ncsi_choose_active_channel(struct ncsi_dev_priv *ndp)
+ 	unsigned long flags, cflags;
+ 	struct ncsi_package *np;
+ 	bool with_link;
+-
+ 	spin_lock_irqsave(&ndp->lock, flags);
+ 	hot_nc = ndp->hot_channel;
+ 	spin_unlock_irqrestore(&ndp->lock, flags);
+diff --git a/net/ncsi/ncsi-netlink.c b/net/ncsi/ncsi-netlink.c
+index d27f4eccce6d..48378ea779a4 100644
+--- a/net/ncsi/ncsi-netlink.c
++++ b/net/ncsi/ncsi-netlink.c
+@@ -331,6 +331,7 @@ static int ncsi_set_interface_nl(struct sk_buff *msg, struct genl_info *info)
+ 	if (channel) {
+ 		package->channel_whitelist = 0x1 << channel->id;
+ 		package->preferred_channel = channel;
++		package->configured_channel_ID = channel->id;
+ 	} else {
+ 		/* Allow any channel */
+ 		package->channel_whitelist = UINT_MAX;
+@@ -378,16 +379,16 @@ static int ncsi_clear_interface_nl(struct sk_buff *msg, struct genl_info *info)
+ 
+ 	NCSI_FOR_EACH_PACKAGE(ndp, np) {
+ 		spin_lock_irqsave(&np->lock, flags);
+-		np->multi_channel = false;
++		np->multi_channel = true;
+ 		np->channel_whitelist = UINT_MAX;
+ 		np->preferred_channel = NULL;
+ 		spin_unlock_irqrestore(&np->lock, flags);
++		np->configured_channel_ID = 0x1f;
+ 	}
+ 	netdev_info(ndp->ndev.dev, "NCSI: Cleared preferred package/channel\n");
+ 
+ 	/* Update channel configuration */
+-	if (!(ndp->flags & NCSI_DEV_RESET))
+-		ncsi_reset_dev(&ndp->ndev);
++	ncsi_reset_dev(&ndp->ndev);
+ 
+ 	return 0;
+ }
+diff --git a/net/ncsi/ncsi-rsp.c b/net/ncsi/ncsi-rsp.c
+index 30113f208ab2..e30727086c86 100644
+--- a/net/ncsi/ncsi-rsp.c
++++ b/net/ncsi/ncsi-rsp.c
+@@ -316,9 +316,10 @@ static int ncsi_rsp_handler_gls(struct ncsi_request *nr)
+ {
+ 	struct ncsi_rsp_gls_pkt *rsp;
+ 	struct ncsi_dev_priv *ndp = nr->ndp;
+-	struct ncsi_channel *nc;
++	struct ncsi_channel *nc, *channel, *active_channel;
+ 	struct ncsi_channel_mode *ncm;
+ 	unsigned long flags;
++	struct ncsi_package *np;
+ 
+ 	/* Find the package and channel */
+ 	rsp = (struct ncsi_rsp_gls_pkt *)skb_network_header(nr->rsp);
+@@ -332,14 +333,24 @@ static int ncsi_rsp_handler_gls(struct ncsi_request *nr)
+ 	ncm->data[3] = ntohl(rsp->other);
+ 	ncm->data[4] = ntohl(rsp->oem_status);
+ 
+-	if (nr->flags & NCSI_REQ_FLAG_EVENT_DRIVEN)
+-		return 0;
+-
+ 	/* Reset the channel monitor if it has been enabled */
+ 	spin_lock_irqsave(&nc->lock, flags);
+ 	nc->monitor.state = NCSI_CHANNEL_MONITOR_START;
+ 	spin_unlock_irqrestore(&nc->lock, flags);
+ 
++	NCSI_FOR_EACH_PACKAGE(ndp, np) {
++		active_channel = ncsi_find_channel(np, np->configured_channel_ID);
++		if (np->configured_channel_ID == 0x1F || (active_channel != NULL && !ncsi_channel_has_link(active_channel))) {
++			NCSI_FOR_EACH_CHANNEL(np, channel) {
++				if (ncsi_channel_has_link(channel)) {
++					np->configured_channel_ID = channel->id;
++					ncsi_update_tx_channel(ndp, np, NULL, channel);
++					break;
++				}
++			}
++		}
++	}
++
+ 	return 0;
+ }
+ 
+-- 
+2.34.1
+
+
