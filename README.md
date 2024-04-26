@@ -98,6 +98,13 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 - TEMPLATECONF=meta-ami/meta-evb/meta-evb-nuvoton/meta-evb-npcm845/conf/templates/default . openbmc-env 
 - bitbake obmc-phosphor-image
 ```
+
+### 10) OT Core AST2700EVB Build Instruction
+```
+- meta-ami/github-gitlab-url.sh
+- TEMPLATECONF=meta-ami/meta-evb/meta-evb-aspeed/meta-evb-ast2700/meta-ast2700/conf/templates/default . openbmc-env
+- bitbake obmc-phosphor-image
+```
 ### Notes
 - By default root user is disabled in the stack except AST2600EVB
 - uncomment EXTRA_IMAGE_FEATURES += "debug-tweaks" in build/conf/local.conf to enable the root user access
