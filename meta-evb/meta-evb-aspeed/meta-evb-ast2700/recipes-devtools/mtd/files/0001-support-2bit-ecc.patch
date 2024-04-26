@@ -1,0 +1,74 @@
+diff --git a/misc-utils/flash_erase.c b/misc-utils/flash_erase.c
+index 49a880f..a8a3775 100644
+--- a/misc-utils/flash_erase.c
++++ b/misc-utils/flash_erase.c
+@@ -48,9 +48,11 @@ static int jffs2;		/* format for jffs2 usage */
+ static int noskipbad;		/* do not skip bad blocks */
+ static int unlock;		/* unlock sectors before erasing */
+ 
+-static struct jffs2_unknown_node cleanmarker;
++static struct jffs2_unknown_node *cleanmarker;
+ int target_endian = __BYTE_ORDER;
+ 
++static int max(int i1, int i2) { return i1 > i2 ? i1 : i2; }
++
+ static void show_progress(off_t start, int eb, int eb_start, int eb_cnt, int step)
+ {
+ 	bareverbose(!quiet, "\rErasing %d Kibyte @ %llx -- %2i %% complete ",
+@@ -92,16 +94,17 @@ static void clear_marker(libmtd_t mtd_desc, struct mtd_dev_info *mtd, int fd,
+ 			 unsigned int eb, int cmlen, bool isNAND)
+ {
+ 	off_t offset = (off_t)eb * mtd->eb_size;
++	int wlen = max(sizeof(struct jffs2_unknown_node), mtd->min_io_size);
+ 
+ 	/* write cleanmarker */
+ 	if (isNAND) {
+-		if (mtd_write(mtd_desc, mtd, fd, eb, 0, NULL, 0, &cleanmarker, cmlen,
++		if (mtd_write(mtd_desc, mtd, fd, eb, 0, NULL, 0, cleanmarker, cmlen,
+ 				MTD_OPS_AUTO_OOB) != 0) {
+ 			sys_errmsg("%s: MTD writeoob failure", mtd_device);
+ 			return;
+ 		}
+ 	} else {
+-		if (pwrite(fd, &cleanmarker, sizeof(cleanmarker), (loff_t)offset) != sizeof(cleanmarker)) {
++		if (pwrite(fd, cleanmarker, wlen, (loff_t)offset) != wlen) {
+ 			sys_errmsg("%s: MTD write failure", mtd_device);
+ 			return;
+ 		}
+@@ -113,7 +116,7 @@ int main(int argc, char *argv[])
+ {
+ 	libmtd_t mtd_desc;
+ 	struct mtd_dev_info mtd;
+-	int fd, cmlen = 8;
++	int fd, cmlen = 8, wlen = 0;
+ 	unsigned long long start;
+ 	unsigned int eb, eb_start, eb_cnt;
+ 	bool isNAND, erase_chip = false;
+@@ -209,15 +212,22 @@ int main(int argc, char *argv[])
+ 	isNAND = mtd.type == MTD_NANDFLASH || mtd.type == MTD_MLCNANDFLASH;
+ 
+ 	if (jffs2) {
+-		cleanmarker.magic = cpu_to_je16 (JFFS2_MAGIC_BITMASK);
+-		cleanmarker.nodetype = cpu_to_je16 (JFFS2_NODETYPE_CLEANMARKER);
++		wlen = max(sizeof(struct jffs2_unknown_node), mtd.min_io_size);
++		cleanmarker = malloc(wlen);
++		if (!cleanmarker)
++			return errmsg("Unable to allocate cleanmarker");
++		memset(cleanmarker, 0xff, wlen);
++		cleanmarker->magic = cpu_to_je16(JFFS2_MAGIC_BITMASK);
++		cleanmarker->nodetype = cpu_to_je16(JFFS2_NODETYPE_CLEANMARKER);
++
+ 		if (!isNAND) {
+-			cleanmarker.totlen = cpu_to_je32(sizeof(cleanmarker));
++			cleanmarker->totlen = cpu_to_je32(wlen);
+ 		} else {
+-			cleanmarker.totlen = cpu_to_je32(8);
++			cleanmarker->totlen = cpu_to_je32(8);
+ 			cmlen = min(mtd.oobavail, 8);
+ 		}
+-		cleanmarker.hdr_crc = cpu_to_je32(mtd_crc32(0, &cleanmarker, sizeof(cleanmarker) - 4));
++		cleanmarker->hdr_crc = cpu_to_je32(mtd_crc32(0, cleanmarker,
++					sizeof(struct jffs2_unknown_node) - 4));
+ 	}
+ 
+ 	/*

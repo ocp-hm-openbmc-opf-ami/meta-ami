@@ -1,0 +1,91 @@
+From 78808c3a88d5d6d3fa7015d9e1827631651d8122 Mon Sep 17 00:00:00 2001
+From: Troy Lee <troy_lee@aspeedtech.com>
+Date: Wed, 14 Jun 2023 16:46:00 +0800
+Subject: [PATCH] Support mctp i3c slave mqueue with asti3c binding
+
+Signed-off-by: Troy Lee <troy_lee@aspeedtech.com>
+---
+ asti3c.c         | 45 ++++++++++++++++++++++++++++++++++++++++++---
+ libmctp-asti3c.h |  1 +
+ 2 files changed, 43 insertions(+), 3 deletions(-)
+
+diff --git a/asti3c.c b/asti3c.c
+index bc89e10..8e3cd3c 100644
+--- a/asti3c.c
++++ b/asti3c.c
+@@ -9,6 +9,28 @@
+ 
+ #undef pr_fmt
+ #define pr_fmt(x) "asti3c: " x
++#define BMC_I3C_SLAVE_ADDR       0x08
++
++static uint8_t crc8 (uint8_t crc, const uint8_t *data, uint8_t len)
++{
++        int i, j;
++
++        if (data == NULL)
++                return crc;
++
++        for (i = 0; i < len; ++i) {
++                crc ^= data[i];
++
++                for (j = 0; j < 8; ++j) {
++                        if ((crc & 0x80) != 0)
++                                crc = (uint8_t) ((crc << 1) ^ 0x07);
++                        else
++                                crc <<= 1;
++                }
++        }
++
++        return crc;
++}
+ 
+ static int mctp_asti3c_tx(struct mctp_binding *binding, struct mctp_pktbuf *pkt)
+ {
+@@ -23,14 +45,31 @@ static int mctp_asti3c_tx(struct mctp_binding *binding, struct mctp_pktbuf *pkt)
+ 
+ 	len = mctp_pktbuf_size(pkt);
+ 
+-	/* CRC/PECs are appended in hardware, skipping calculation here */
++	/* /dev/i3c-mctp-dev CRC/PECs are appended in hardware, skipping calculation here.
++	 * /sys/bus/i3c/i3c-x/slavemq CRC/PECs are not appended in hardware, manually calculation here */
+ 
+ 	mctp_prdebug("Transmitting packet, len: %zu", len);
+ 	mctp_trace_tx(pkt->data, len);
+ 
+-	write_len = write(pkt_prv->fd, pkt->data, len);
++        if (pkt_prv->append_pec) {
++		uint8_t i3c_addr = (BMC_I3C_SLAVE_ADDR << 1) | 0x01;
++		uint8_t pec;
++		uint8_t *buffer = malloc(len + 1);
++		pec = crc8(0, &i3c_addr, 1);
++		pec = crc8(pec, (uint8_t *)pkt->data, len);
++
++		memcpy(buffer, pkt->data, len);
++		buffer[len] = pec;
++		len+= 1;
++		write_len = write(pkt_prv->fd, buffer, len);
++		mctp_trace_tx(buffer, len);
++		free(buffer);
++        } else {
++		write_len = write(pkt_prv->fd, pkt->data, len);
++	}
++
+ 	if (write_len != len) {
+-		mctp_prerr("TX error");
++		mctp_prerr("TX error write_len=%d len=%d", write_len, len);
+ 		return -1;
+ 	}
+ 
+diff --git a/libmctp-asti3c.h b/libmctp-asti3c.h
+index 7ed7c8c..03599cb 100644
+--- a/libmctp-asti3c.h
++++ b/libmctp-asti3c.h
+@@ -33,6 +33,7 @@ struct mctp_binding_asti3c {
+ struct mctp_asti3c_pkt_private {
+ 	/* Accept the fd into the binding to carry out I/O operations */
+ 	int fd;
++        bool append_pec;
+ } __attribute__((__packed__));
+ 
+ struct mctp_binding_asti3c *mctp_asti3c_init(void);

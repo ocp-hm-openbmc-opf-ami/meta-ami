@@ -186,6 +186,9 @@ SRC_URI_BHS:append = "file://0108-Adding-condition-to-Patch-Min-Value-not-greate
 EVB:append = "file://0179-Fixed-RestoreOptions-in-EVB.patch "  
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb', EVB, '', d)}"
 
+AST2700:append = "file://0236-Fix-for-Compilation-Error-in-AST2700-build.patch"
+SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'aspeed-sdk-layer', AST2700, '', d)}"
+
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'restricted', SRC_URI_NM, '', d)}"
 
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'bhs', "${@bb.utils.contains('BBFILE_COLLECTIONS', 'restricted', SRC_URI_BHS, '', d)}", '', d)}"
