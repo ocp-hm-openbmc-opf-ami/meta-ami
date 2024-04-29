@@ -1,0 +1,404 @@
+From 6f27f4700316e69e515427ca9681ff21c0ed6712 Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Fri, 26 Apr 2024 13:42:27 +0800
+Subject: [PATCH] Gateway
+
+---
+ src/ethernet_interface.cpp |  84 ++++++++++++++++++++++++---
+ src/network_manager.cpp    | 116 +++++++++++++++++++++++++++++++++++++
+ src/network_manager.hpp    |  13 +++++
+ src/util.cpp               |  37 ++++++++++++
+ src/util.hpp               |   7 +++
+ 5 files changed, 250 insertions(+), 7 deletions(-)
+
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index 48bce5a..d25951d 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -7,9 +7,12 @@
+ #include "util.hpp"
+ 
+ #include <fcntl.h>
++#include <linux/if_packet.h> /* struct sockaddr_ll (see man 7 packet) */
+ #include <linux/rtnetlink.h>
+ #include <net/if.h>
+ #include <net/if_arp.h>
++#include <netinet/ether.h>
++#include <sys/ioctl.h> /* macro ioctl is defined */
+ #include <sys/stat.h>
+ 
+ #include <phosphor-logging/elog-errors.hpp>
+@@ -20,17 +23,14 @@
+ #include <xyz/openbmc_project/Common/error.hpp>
+ 
+ #include <algorithm>
++#include <chrono>
+ #include <filesystem>
+ #include <format>
+ #include <fstream>
++#include <sstream>
+ #include <string>
+ #include <unordered_map>
+ #include <variant>
+-#include <chrono>
+-
+-#include <sys/ioctl.h>        /* macro ioctl is defined */
+-#include <linux/if_packet.h>  /* struct sockaddr_ll (see man 7 packet) */
+-#include <netinet/ether.h>
+ 
+ namespace phosphor
+ {
+@@ -135,11 +135,13 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+ 
+     if (info.defgw4)
+     {
+-        EthernetInterface::defaultGateway(stdplus::toStr(*info.defgw4), true);
++        EthernetInterfaceIntf::defaultGateway(stdplus::toStr(*info.defgw4),
++                                              true);
+     }
+     if (info.defgw6)
+     {
+-        EthernetInterface::defaultGateway6(stdplus::toStr(*info.defgw6), true);
++        EthernetInterfaceIntf::defaultGateway6(stdplus::toStr(*info.defgw6),
++                                               true);
+     }
+ 
+     const config::Parser& ifaceConfig(fs::path{fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(),interfaceName()).c_str()});
+@@ -414,6 +416,48 @@ std::tuple<bool, ObjectPath> EthernetInterface::createStaticIP(IP::Protocol prot
+                 if (!EthernetInterface::ipv6Enable()) {
+                     throw NotAllowed();
+                 }
++                if (!ipgateway.empty())
++                {
++                    for (auto& addr6 : addrs)
++                    {
++                        if (addr6.second->type() != IP::Protocol::IPv6 ||
++                            addr6.second->origin() != IP::AddressOrigin::Static)
++                        {
++                            continue;
++                        }
++                        if (ipgateway.compare(addr6.second->address()) == 0)
++                        {
++                            log<level::ERR>(
++                                "IP Address and Gateway are the same\n");
++                            elog<NotAllowed>(NotAllowedArgument::REASON(
++                                "IP Address and Gateway are the same\n"));
++                        }
++                        ip_address::isSameSeries6(addr6.second->address(),
++                                                  ipgateway, prefixLength);
++                    }
++
++                    ip_address::isSameSeries6(ipaddress, ipgateway,
++                                              prefixLength);
++                    if (ipgateway.compare(ipaddress) == 0)
++                    {
++                        log<level::ERR>(
++                            "IP Address and Gateway are the same\n");
++                        elog<NotAllowed>(NotAllowedArgument::REASON(
++                            "IP Address and Gateway are the same\n"));
++                    }
++                }
++                else if (!EthernetInterfaceIntf::defaultGateway6().empty())
++                {
++                    auto gw6 = EthernetInterfaceIntf::defaultGateway6();
++                    if (gw6.compare(ipaddress) == 0)
++                    {
++                        log<level::ERR>(
++                            "IP Address and Gateway are the same\n");
++                        elog<NotAllowed>(NotAllowedArgument::REASON(
++                            "IP Address and Gateway are the same\n"));
++                    }
++                    ip_address::isSameSeries6(ipaddress, gw6, prefixLength);
++                }
+                 addr.emplace(stdplus::fromStr<stdplus::In6Addr>(ipaddress));
+                 ip_address::isValidIPv6Addr((in6_addr*)(&addr.value()), ip_address::Type::IP6_ADDRESS);
+                 if(!ipgateway.empty())
+@@ -1728,6 +1772,32 @@ std::string EthernetInterface::defaultGateway6(std::string gateway)
+         elog<NotAllowed>(NotAllowedArgument::REASON(fmt::format("Not support in current state. IPv4 of {} is not enabled.\n", interfaceName()).c_str()));
+     }
+ 
++    try
++    {
++        for (auto& addr : addrs)
++        {
++            if (addr.second->type() != IP::Protocol::IPv6 ||
++                addr.second->origin() != IP::AddressOrigin::Static)
++            {
++                continue;
++            }
++            if (gateway.compare(addr.second->address()) == 0)
++            {
++                log<level::ERR>("IP Address and Gateway are the same\n");
++                elog<NotAllowed>(NotAllowedArgument::REASON(
++                    "IP Address and Gateway are the same\n"));
++            }
++
++            ip_address::isSameSeries6(addr.second->address(), gateway,
++                                      addr.second->prefixLength());
++        }
++    }
++    catch (const std::exception& e)
++    {
++        log<level::ERR>("Wrong Gateway");
++        elog<NotAllowed>(NotAllowedArgument::REASON("Wrong Gateway"));
++    }
++
+     normalizeGateway<stdplus::In6Addr>(gateway);
+     if (gateway != defaultGateway6())
+     {
+diff --git a/src/network_manager.cpp b/src/network_manager.cpp
+index 94e7478..2ca50c5 100644
+--- a/src/network_manager.cpp
++++ b/src/network_manager.cpp
+@@ -43,6 +43,8 @@ static constexpr const char* userMgrObjBasePath = "/xyz/openbmc_project/user";
+ static constexpr const char* userMgrInterface =
+     "xyz.openbmc_project.User.Manager";
+ static constexpr const char* propNameAllPrivileges = "AllPrivileges";
++constexpr auto BMC_STATE_PROP_INTERFACE = "xyz.openbmc_project.State.BMC";
++constexpr auto BMC_STATE_SERVICE_PATH = "/xyz/openbmc_project/state/bmc0";
+ 
+ std::unique_ptr<sdbusplus::bus::match_t> usrMgmtSignal(nullptr);
+ 
+@@ -180,6 +182,10 @@ Manager::Manager(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+     setConfDir(confDir);
+     initSupportedPrivilges();
+ 
++    initCompleted = false;
++    signals = initSignals();
++    registerSignal(bus);
++
+ #ifdef AMI_IP_ADVANCED_ROUTING_SUPPORT
+     advanced_route_lock = std::unique_lock(advanced_route_mutex);
+     advanced_route_worker = std::thread(&Manager::AdvancedRoute, this);
+@@ -737,6 +743,116 @@ void Manager::handleAdminState(std::string_view state, unsigned ifidx)
+     }
+ }
+ 
++std::map<std::string, std::unique_ptr<sdbusplus::bus::match_t>>
++    Manager::initSignals()
++{
++    std::map<std::string, std::unique_ptr<sdbusplus::bus::match_t>> mp;
++    mp["BMCStateSignal"] = nullptr;
++    return mp;
++}
++
++void Manager::registerSignal(sdbusplus::bus::bus& bus)
++{
++    for (auto& signal : signals)
++    {
++        if (signal.second == nullptr && signal.first == "BMCStateSignal")
++        {
++            signal.second = std::make_unique<sdbusplus::bus::match_t>(
++                bus,
++                sdbusplus::bus::match::rules::propertiesChanged(
++                    BMC_STATE_SERVICE_PATH, BMC_STATE_PROP_INTERFACE),
++                [&](sdbusplus::message::message& msg) {
++                std::map<
++                    std::string,
++                    std::variant<std::string, std::vector<std::string>, bool>>
++                    props;
++                std::string iface;
++                msg.read(iface, props);
++                for (const auto& t : props)
++                {
++                    if (t.first == "CurrentBMCState" && !initCompleted)
++                    {
++                        sdbusplus::common::xyz::openbmc_project::state::BMC::
++                            BMCState state =
++                                sdbusplus::common::xyz::openbmc_project::state::
++                                    BMC::convertBMCStateFromString(
++                                        std::get<std::string>(t.second));
++                        if (state == sdbusplus::common::xyz::openbmc_project::
++                                         state::BMC::BMCState::Ready)
++                        {
++                            auto lists = getGateway6FromFile();
++                            for (auto line : lists)
++                            {
++                                std::stringstream ss(line);
++                                std::string dstIP, dstPrefix, srcIP, srcPrefix,
++                                    nextHop, metric, count, useCount, devName,
++                                    flags;
++                                ss >> dstIP >> dstPrefix >> srcIP >>
++                                    srcPrefix >> nextHop >> flags >> metric >>
++                                    count >> useCount >> devName;
++                                if (devName.find("usb") != std::string::npos)
++                                    continue;
++                                int flagInt = std::stoul(flags, 0, 16);
++                                if (((flagInt & 0x400) == 0x400) &&
++                                    nextHop.compare(
++                                        "00000000000000000000000000000000") !=
++                                        0)
++                                {
++                                    if (auto it = interfaces.find(devName);
++                                        it != interfaces.end())
++                                    {
++                                        if (it->second
++                                                ->EthernetInterfaceIntf::
++                                                    defaultGateway6()
++                                                .empty())
++                                        {
++                                            for (int i = 4; i < nextHop.size();
++                                                 i = i + 4)
++                                            {
++                                                nextHop.insert(i, ":");
++                                                i++;
++                                            }
++                                            in6_addr addr;
++                                            char buf[INET6_ADDRSTRLEN] = {0};
++                                            inet_pton(AF_INET6, nextHop.c_str(),
++                                                      &addr);
++                                            inet_ntop(AF_INET6, &addr, buf,
++                                                      INET6_ADDRSTRLEN);
++                                            it->second->EthernetInterfaceIntf::
++                                                defaultGateway6(
++                                                    std::string{buf}, true);
++                                        }
++                                    }
++                                }
++                            }
++                            initCompleted = true;
++                        }
++                    }
++                }
++            });
++        }
++    }
++}
++
++std::vector<std::string> Manager::getGateway6FromFile()
++{
++    std::ifstream ifs("/proc/net/ipv6_route");
++    std::string line;
++    std::vector<std::string> vec;
++    if (!ifs)
++    {
++        log<level::INFO>("/proc/net/ipv6_route not opened\n");
++        return vec;
++    }
++    while (std::getline(ifs, line))
++    {
++        vec.push_back(line);
++    }
++
++    ifs.close();
++    return vec;
++}
++
+ void Manager::setConfDir(const fs::path& dir)
+ {
+     confDir = dir;
+diff --git a/src/network_manager.hpp b/src/network_manager.hpp
+index 3300df7..a413752 100644
+--- a/src/network_manager.hpp
++++ b/src/network_manager.hpp
+@@ -246,12 +246,25 @@ class Manager : public ManagerIface
+     /** @brief Custom IPTables Rule directory. */
+     fs::path customIPTablesDir;
+ 
++    std::map<std::string, std::unique_ptr<sdbusplus::bus::match_t>> signals;
++
++    std::map<std::string, std::unique_ptr<sdbusplus::bus::match_t>>
++        initSignals();
++
++    void registerSignal(sdbusplus::bus::bus& bus);
++
++    /** @brief get the Default Gateway for File
++     *  @param[in] gateway - Gateway6 address.
++     */
++    std::vector<std::string> getGateway6FromFile();
++
+ #ifdef AMI_IP_ADVANCED_ROUTING_SUPPORT
+   private:
+     std::thread advanced_route_worker;
+     void AdvancedRoute();
+     std::unique_lock<std::mutex> advanced_route_lock;
+     std::mutex advanced_route_mutex;
++    bool initCompleted;
+ #endif
+ };
+ 
+diff --git a/src/util.cpp b/src/util.cpp
+index efae343..2ef3faa 100644
+--- a/src/util.cpp
++++ b/src/util.cpp
+@@ -233,6 +233,19 @@ int getIP6StaticRtrPrefix(const config::Parser& config) {
+     }
+ }
+ 
++std::string getIP6Gateway(const config::Parser& config)
++{
++    if (auto str = config.map.getLastValueString("Network", "Gateway");
++        str == nullptr)
++    {
++        return "";
++    }
++    else
++    {
++        return *str;
++    }
++}
++
+ DHCPVal getDHCPValue(const config::Parser& config)
+ {
+     return systemdParseLast(config, "Network", "DHCP", systemdParseDHCP)
+@@ -383,6 +396,30 @@ void isSameSeries(std::string ipStr, std::string gwStr, uint8_t prefixLength) {
+         throw std::logic_error("Gateway address and IP address aren't in the same subnet.");
+     } // if
+ }
++
++void isSameSeries6(std::string ipStr, std::string gwStr, uint8_t prefixLength)
++{
++    auto ip = stdplus::fromStr<stdplus::In6Addr>(ipStr);
++    auto gw = stdplus::fromStr<stdplus::In6Addr>(gwStr);
++    int loop = prefixLength % 32 == 0 ? prefixLength / 32
++                                      : (prefixLength / 32) + 1;
++
++    for (int i = loop - 1; i >= 0; i--)
++    {
++        auto netmask = prefixLength >= 32
++                           ? ~UINT32_C(0)
++                           : htobe32(~UINT32_C(0) << (32 - prefixLength));
++        prefixLength = prefixLength - 32;
++        if ((ip.__in6_u.__u6_addr32[i] & netmask) !=
++            (gw.__in6_u.__u6_addr32[i] & netmask))
++        {
++            lg2::error(
++                "Gateway address and IP address aren't in the same subnet.");
++            throw std::logic_error(
++                "Gateway address and IP address aren't in the same subnet.");
++        } // if
++    }
++}
+ } // namespace ip_address
+ 
+ 
+diff --git a/src/util.hpp b/src/util.hpp
+index f9cc073..38b292b 100644
+--- a/src/util.hpp
++++ b/src/util.hpp
+@@ -67,6 +67,8 @@ void isValidIPv6Addr(in6_addr* addr, Type Type);
+  */
+ void isSameSeries(std::string ipAddr, std::string gateway, uint8_t prefixLength);
+ 
++void isSameSeries6(std::string ipStr, std::string gwStr, uint8_t prefixLength);
++
+ } // namespace ip_address
+ 
+ /* @brief converts a sockaddr for the specified address family into
+@@ -123,6 +125,11 @@ bool getIP6Enable(const config::Parser& config);
+  */
+ std::tuple<std::vector<std::optional<std::string>>,std::vector<std::optional<std::string>>> getIndexList(const config::Parser& parser);
+ 
++/** @brief read the IPv6 Default Gateway from the configuration file
++ *  @param[in] config - The parsed configuration.
++ */
++std::string getIP6Gateway(const config::Parser& config);
++
+ /** @brief read the DHCP value from the configuration file
+  *  @param[in] config - The parsed configuration.
+  */
+-- 
+2.43.0
+
+
+

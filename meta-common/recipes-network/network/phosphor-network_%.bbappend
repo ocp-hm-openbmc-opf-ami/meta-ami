@@ -47,9 +47,11 @@ SRC_URI:append = " \
              file://0033-Fix-to-update-static-gateway6-when-ipv6-source-is-static.patch \
              file://0034-Implement-PHY-Control-for-Non-Bond.patch \
              file://0035-Implement-NCSI-User-Control-Auto-Failover-and-Manual.patch \
+             file://0035-Fix-Gateway6-issue.patch \
           "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
+
 
 do_install:append() {
     install -d ${D}${bindir}
