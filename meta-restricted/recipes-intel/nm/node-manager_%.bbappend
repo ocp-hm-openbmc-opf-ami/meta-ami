@@ -7,4 +7,5 @@ SRC_URI += " \
     file://0004-Fix-for-NM-Log-level.patch \
     file://0005-Fix-for-Policy-Creation-with-Busctl.patch \
     file://0006-Restricting-policy-than-capabilitiesrange.patch \
+    file://0008-Fix-for-DCMI-Set-Power-Limit.patch \
     "
