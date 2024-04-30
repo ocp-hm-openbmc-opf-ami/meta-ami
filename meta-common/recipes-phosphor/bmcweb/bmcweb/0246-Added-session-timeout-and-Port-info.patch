@@ -1,32 +1,141 @@
-From 6da659a126d863305e3cb8dfe214982c63da4b37 Mon Sep 17 00:00:00 2001
+From eea3115f7d26a6c8919c9ef1f535ca141427b42d Mon Sep 17 00:00:00 2001
 From: Pranoy Goru <gorumanip@ami.com>
-Date: Mon, 15 Apr 2024 14:03:20 +0530
+Date: Tue, 30 Apr 2024 18:03:09 +0530
 Subject: [PATCH 246/246] Added session timeout and Port info
 
+Description
+
+Added session timeout and Port info
+
+Test cases:
+
+1) Get Call https://{{BMCIP}}/redfish/v1/SessionService/
+
+{
+    "@odata.id": "/redfish/v1/SessionService/",
+    "@odata.type": "#SessionService.v1_0_2.SessionService",
+    "Description": "Session Service",
+    "Id": "SessionService",
+    "Name": "Session Service",
+    "Oem": {
+        "OpenBmc": {
+            "BMCwebPort": 443,
+            "KVMSessionTimeout": 30
+        }
+    },
+    "ServiceEnabled": true,
+    "SessionTimeout": 1800,
+    "Sessions": {
+        "@odata.id": "/redfish/v1/SessionService/Sessions"
+    }
+}
+
+2) Patch call https://{{BMCIP}}/redfish/v1/SessionService/
+
+Request Body
+
+{
+    "SessionTimeout": 40,
+    "Oem": {
+        "OpenBmc": {
+            "BMCwebPort": 443,
+            "KVMSessionTimeout": 30
+        }
+    }
+}
+
+Response 200k
+
+{
+    "@Message.ExtendedInfo": [
+        {
+            "@odata.type": "#Message.v1_1_1.Message",
+            "Message": "The request completed successfully.",
+            "MessageArgs": [],
+            "MessageId": "Base.1.16.0.Success",
+            "MessageSeverity": "OK",
+            "Resolution": "None"
+        },
+        {
+            "@odata.type": "#Message.v1_1_1.Message",
+            "Message": "The request completed successfully.",
+            "MessageArgs": [],
+            "MessageId": "Base.1.16.0.Success",
+            "MessageSeverity": "OK",
+            "Resolution": "None"
+        }
+    ],
+    "SessionTimeOut@Message.ExtendedInfo": [
+        {
+            "@odata.type": "#Message.v1_1_1.Message",
+            "Message": "The property SessionTimeOut was assigned the value '\"40\"' due to modification by the service.",
+            "MessageArgs": [
+                "SessionTimeOut",
+                "\"40\""
+            ],
+            "MessageId": "Base.1.16.0.PropertyValueModified",
+            "MessageSeverity": "Warning",
+            "Resolution": "No resolution is required."
+        }
+    ]
+}
+
+3) Get Call https://{{BMCIP}}/redfish/v1/SessionService/
+
+{
+    "@odata.id": "/redfish/v1/SessionService/",
+    "@odata.type": "#SessionService.v1_0_2.SessionService",
+    "Description": "Session Service",
+    "Id": "SessionService",
+    "Name": "Session Service",
+    "Oem": {
+        "OpenBmc": {
+            "BMCwebPort": 443,
+            "KVMSessionTimeout": 30
+        }
+    },
+    "ServiceEnabled": true,
+    "SessionTimeout": 40,
+    "Sessions": {
+        "@odata.id": "/redfish/v1/SessionService/Sessions"
+    }
+}
+
+NOTE :
+Timeout range will be 30 - 86400 for KVM/BMCWEB sessiontimeout
+Port Ranges from (0 - 65535)
 Signed-off-by: Pranoy Goru <gorumanip@ami.com>
 ---
- redfish-core/lib/redfish_sessions.hpp | 132 +++++++++++++++++++++++++-
- 1 file changed, 131 insertions(+), 1 deletion(-)
+ redfish-core/lib/redfish_sessions.hpp | 137 ++++++++++++++++++++++++--
+ 1 file changed, 131 insertions(+), 6 deletions(-)
 
 diff --git a/redfish-core/lib/redfish_sessions.hpp b/redfish-core/lib/redfish_sessions.hpp
-index 32b19daf..c3485b81 100644
+index 601efc55..81d8ec3e 100644
 --- a/redfish-core/lib/redfish_sessions.hpp
 +++ b/redfish-core/lib/redfish_sessions.hpp
-@@ -490,6 +490,54 @@ inline void
+@@ -721,12 +721,60 @@ inline void
+     asyncResp->res.jsonValue["Name"] = "Session Service";
+     asyncResp->res.jsonValue["Id"] = "SessionService";
+     asyncResp->res.jsonValue["Description"] = "Session Service";
+-    asyncResp->res.jsonValue["SessionTimeout"] =
+-        persistent_data::SessionStore::getInstance().getTimeoutInSeconds();
++    // asyncResp->res.jsonValue["SessionTimeout"] =
++    //     persistent_data::SessionStore::getInstance().getTimeoutInSeconds();
+     asyncResp->res.jsonValue["ServiceEnabled"] = true;
  
      asyncResp->res.jsonValue["Sessions"]["@odata.id"] =
          "/redfish/v1/SessionService/Sessions";
 +    crow::connections::systemBus->async_method_call(
 +        [asyncResp](const boost::system::error_code ec,
-+                    const std::variant<uint16_t>& value) {
++                    const std::variant<uint64_t>& value) {
 +        if (ec)
 +        {
 +            BMCWEB_LOG_DEBUG("failed to get property Value  ", ec);
 +            return;
 +        }
 +
-+        const uint16_t* s = std::get_if<uint16_t>(&value);
-+        asyncResp->res.jsonValue["Oem"]["OpenBmc"]["BMCwebSessionTimeout"] = *s;
++        const uint64_t* s = std::get_if<uint64_t>(&value);
++        asyncResp->res.jsonValue["SessionTimeout"] = *s;
 +    },
 +        "xyz.openbmc_project.Control.Service.Manager",
 +        "/xyz/openbmc_project/control/service/bmcweb",
@@ -50,14 +159,14 @@ index 32b19daf..c3485b81 100644
 +        "xyz.openbmc_project.Control.Service.SocketAttributes", "Port");
 +    crow::connections::systemBus->async_method_call(
 +        [asyncResp](const boost::system::error_code ec,
-+                    const std::variant<uint16_t>& value) {
++                    const std::variant<uint64_t>& value) {
 +        if (ec)
 +        {
 +            BMCWEB_LOG_DEBUG("failed to get property Value  ", ec);
 +            return;
 +        }
 +
-+        const uint16_t* s = std::get_if<uint16_t>(&value);
++        const uint64_t* s = std::get_if<uint64_t>(&value);
 +        asyncResp->res.jsonValue["Oem"]["OpenBmc"]["KVMSessionTimeout"] = *s;
 +    },
 +        "xyz.openbmc_project.Control.Service.Manager",
@@ -67,10 +176,12 @@ index 32b19daf..c3485b81 100644
  }
  
  inline void handleSessionServicePatch(
-@@ -501,8 +549,9 @@ inline void handleSessionServicePatch(
+@@ -737,9 +785,10 @@ inline void handleSessionServicePatch(
+     {
          return;
      }
-     std::optional<int64_t> sessionTimeout;
+-    std::optional<int64_t> sessionTimeout;
++    std::optional<uint64_t> sessionTimeout;
 +    std::optional<nlohmann::json> oem;
      if (!json_util::readJsonPatch(req, asyncResp->res, "SessionTimeout",
 -                                  sessionTimeout))
@@ -78,7 +189,34 @@ index 32b19daf..c3485b81 100644
      {
          return;
      }
-@@ -528,6 +577,87 @@ inline void handleSessionServicePatch(
+@@ -756,8 +805,24 @@ inline void handleSessionServicePatch(
+             std::chrono::seconds sessionTimeoutInseconds(*sessionTimeout);
+             persistent_data::SessionStore::getInstance().updateSessionTimeout(
+                 sessionTimeoutInseconds);
+-            messages::propertyValueModified(asyncResp->res, "SessionTimeOut",
+-                                            std::to_string(*sessionTimeout));
++
++            crow::connections::systemBus->async_method_call(
++                [asyncResp,
++                 sessionTimeout](const boost::system::error_code ec) {
++                if (ec)
++                {
++                    messages::internalError(asyncResp->res);
++                    return;
++                }
++                messages::propertyValueModified(
++                    asyncResp->res, "SessionTimeOut",
++                    std::to_string(*sessionTimeout));
++            },
++                "xyz.openbmc_project.Control.Service.Manager",
++                "/xyz/openbmc_project/control/service/bmcweb",
++                "org.freedesktop.DBus.Properties", "Set",
++                "xyz.openbmc_project.Control.Service.Attributes",
++                "SessionTimeOut", std::variant<uint64_t>(*sessionTimeout));
+         }
+         else
+         {
+@@ -765,6 +830,66 @@ inline void handleSessionServicePatch(
                                               "SessionTimeOut");
          }
      }
@@ -93,34 +231,13 @@ index 32b19daf..c3485b81 100644
 +        }
 +        if (openBmc)
 +        {
-+            std::optional<uint16_t> bmcwebSessionTimeout;
-+            std::optional<uint16_t> kvmSessionTimeout;
++            std::optional<uint64_t> kvmSessionTimeout;
 +            std::optional<uint16_t> bmcwebPort;
-+            if (!json_util::readJson(
-+                    *openBmc, asyncResp->res, "BMCwebSessionTimeout",
-+                    bmcwebSessionTimeout, "KVMSessionTimeout",
-+                    kvmSessionTimeout, "BMCwebPort", bmcwebPort))
++            if (!json_util::readJson(*openBmc, asyncResp->res,
++                                     "KVMSessionTimeout", kvmSessionTimeout,
++                                     "BMCwebPort", bmcwebPort))
 +            {
 +                return;
-+            }
-+            if (bmcwebSessionTimeout)
-+            {
-+                crow::connections::systemBus->async_method_call(
-+                    [asyncResp](const boost::system::error_code ec) {
-+                    if (ec)
-+                    {
-+                        BMCWEB_LOG_ERROR("Error patching {}", ec);
-+                        messages::internalError(asyncResp->res);
-+                        return;
-+                    }
-+                    messages::success(asyncResp->res);
-+                },
-+                    "xyz.openbmc_project.Control.Service.Manager",
-+                    "/xyz/openbmc_project/control/service/bmcweb",
-+                    "org.freedesktop.DBus.Properties", "Set",
-+                    "xyz.openbmc_project.Control.Service.Attributes",
-+                    "SessionTimeOut",
-+                    std::variant<uint16_t>(*bmcwebSessionTimeout));
 +            }
 +
 +            if (kvmSessionTimeout)
@@ -140,7 +257,7 @@ index 32b19daf..c3485b81 100644
 +                    "org.freedesktop.DBus.Properties", "Set",
 +                    "xyz.openbmc_project.Control.Service.Attributes",
 +                    "SessionTimeOut",
-+                    std::variant<uint16_t>(*kvmSessionTimeout));
++                    std::variant<uint64_t>(*kvmSessionTimeout));
 +            }
 +
 +            if (bmcwebPort)
