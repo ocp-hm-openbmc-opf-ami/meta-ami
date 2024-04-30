@@ -58,11 +58,6 @@ SRC_URI_NON_PFR_SINGLE_SPI_ABR_EVB:append = "file://0027-add-hw-failsafe-boot-si
 
 SRC_URI:append:evb-ast2600 = " ${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'single-spi-abr', SRC_URI_NON_PFR_SINGLE_SPI_ABR_EVB,'', d)}"
 
-SRC_CPLD_JTAG = "file://jtag-fragment.cfg"
-
-SRC_ASD_JTAG = "file://jtag-asd-fragment.cfg"
-
-SRC_URI += "${@bb.utils.contains('IMAGE_INSTALL', 'at-scale-debug', SRC_ASD_JTAG, SRC_CPLD_JTAG, d)}"
 
 NETWORK_BONDING_SRC_URI += "file://bond.cfg \
                             file://0017-Disable-Default-Network-Bonding.patch \
@@ -91,8 +86,3 @@ SRC_URI:append:intel-ast2600  = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'c
 SRC_CPLD_EVB = "file://0023-Enable-spidev-for-spi2-for-cpld-upgrade-via-spi-evb-dts.patch "
 SRC_URI:append:evb-ast2600  = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'cpld-update', SRC_CPLD_EVB,'', d)}"
 
-SRC_CPLD_JTAG = "file://jtag-fragment.cfg"
-
-SRC_ASD_JTAG = "file://jtag-asd-fragment.cfg"
-
-SRC_URI += "${@bb.utils.contains('IMAGE_INSTALL', 'at-scale-debug', SRC_ASD_JTAG, SRC_CPLD_JTAG, d)}"

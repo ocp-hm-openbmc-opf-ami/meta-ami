@@ -1,0 +1,253 @@
+From b007386b6a07a8f658073b8ffa050f5e6e176a2b Mon Sep 17 00:00:00 2001
+From: hemanthkumarm <sekhar_tmba@outlook.com>
+Date: Tue, 30 Apr 2024 01:32:42 +0530
+Subject: [PATCH] Delete Update image dbus path on success or failure
+
+---
+ activation.cpp   | 74 ++++++++++++++++++++++++++++++++++++++++++++++--
+ activation.hpp   | 19 +++++++++----
+ item_updater.hpp | 12 ++++++--
+ static/flash.cpp | 20 +++++++++++--
+ 4 files changed, 110 insertions(+), 15 deletions(-)
+
+diff --git a/activation.cpp b/activation.cpp
+index 7fd06b1..7ee8d5e 100644
+--- a/activation.cpp
++++ b/activation.cpp
+@@ -116,7 +116,12 @@ auto Activation::activation(Activations value) -> Activations
+                 {
+                     info("Verification failed so cleaning up the uploaded image - {IMAGE}",
+                           "IMAGE",  (uploadDir / versionId).c_str());;
+-                    fs::remove_all(uploadDir / versionId);
++                    parent
++                        .activeUpdatesCount++; // incrementing active update so
++                                               // that the decrement done in
++                                               // onFlashWriteFailure doesn't
++                                               // effect total update count.
++                    onFlashWriteFailure();
+                     return softwareServer::Activation::activation(
+                         softwareServer::Activation::Activations::Failed);
+                 }
+@@ -128,6 +133,18 @@ auto Activation::activation(Activations value) -> Activations
+                 Activation::task->requestedApplyTime() ==
+                     Task::ApplyTime::RequestedApplyTimes::Immediate)
+             {
++                if (!activationBlocksTransition)
++                {
++                    activationBlocksTransition =
++                        std::make_unique<ActivationBlocksTransition>(bus, path);
++                }
++                parent.activeUpdatesCount++;
++                auto purpose =
++                    parent.versions.find(versionId)->second->purpose();
++                if (purpose == VersionPurpose::BMC)
++                {
++                    parent.performReboot = true;
++                }
+                 flashWrite();
+             }
+             else
+@@ -220,16 +237,17 @@ auto Activation::activation(Activations value) -> Activations
+     }
+     else
+     {
+-        activationBlocksTransition.reset(nullptr);
++        // activationBlocksTransition.reset(nullptr);
+     }
+     return softwareServer::Activation::activation(value);
+ }
+ 
+ void Activation::onFlashWriteSuccess()
+ {
++#ifndef FWUPD_SCRIPT
+     activationProgress->progress(100);
+ 
+-    activationBlocksTransition.reset(nullptr);
++    activationBlocksTransition->disableRebootGuard();
+     activationProgress.reset(nullptr);
+ 
+     rwVolumeCreated = false;
+@@ -267,6 +285,56 @@ void Activation::onFlashWriteSuccess()
+     }
+ 
+     activation(softwareServer::Activation::Activations::Active);
++#else
++    activation(softwareServer::Activation::Activations::Active);
++    parent.activeUpdatesCount--;
++    if (!parent.activeUpdatesCount)
++    {
++        activationBlocksTransition->disableRebootGuard();
++        if(parent.performReboot)
++        {
++            Activation::rebootBmc();
++        }
++    }
++    activationProgress.reset(nullptr);
++    Activation::unsubscribeFromSystemdSignals();
++    // Delete the uploaded activation
++    auto it = parent.versions.find(versionId);
++    if (it != parent.versions.end())
++    {
++        boost::asio::post(getIOContext(),
++                          [it]() { it->second->deleteObject->delete_(); });
++    }
++#endif
++
++}
++
++void Activation::onFlashWriteFailure()
++{
++    activation(softwareServer::Activation::Activations::Failed);
++    parent.activeUpdatesCount--;
++    auto purpose = parent.versions.find(versionId)->second->purpose();
++    if (purpose == VersionPurpose::BMC)
++    {
++        parent.performReboot = false;
++    }
++    if (!parent.activeUpdatesCount)
++    {
++        activationBlocksTransition->disableRebootGuard();
++        if(parent.performReboot)
++        {
++            Activation::rebootBmc();
++        }
++    }
++    activationProgress.reset(nullptr);
++    Activation::unsubscribeFromSystemdSignals();
++    // Delete the uploaded activation
++    auto it = parent.versions.find(versionId);
++    if (it != parent.versions.end())
++    {
++        boost::asio::post(getIOContext(),
++                          [it]() { it->second->deleteObject->delete_(); });
++    }
+ }
+ 
+ void Activation::deleteImageManagerObject()
+diff --git a/activation.hpp b/activation.hpp
+index 7ed73af..7e01d9f 100644
+--- a/activation.hpp
++++ b/activation.hpp
+@@ -136,10 +136,9 @@ class ActivationBlocksTransition : public ActivationBlocksTransitionInherit
+         enableRebootGuard();
+     }
+ 
+-    ~ActivationBlocksTransition()
+-    {
+-        disableRebootGuard();
+-    }
++
++    /** @brief Disables any guard that was blocking the BMC reboot */
++    void disableRebootGuard();
+ 
+   private:
+     sdbusplus::bus_t& bus;
+@@ -147,8 +146,7 @@ class ActivationBlocksTransition : public ActivationBlocksTransitionInherit
+     /** @brief Enables a Guard that blocks any BMC reboot commands */
+     void enableRebootGuard();
+ 
+-    /** @brief Disables any guard that was blocking the BMC reboot */
+-    void disableRebootGuard();
++
+ };
+ 
+ class ActivationProgress : public ActivationProgressInherit
+@@ -240,6 +238,15 @@ class Activation : public ActivationInherit, public Flash
+      */
+     void onFlashWriteSuccess();
+ 
++    /**
++     * @brief Handle the Failure of the flashWrite() function
++     *
++     * @details Perform anything that is necessary to mark the activation
++     * failure Sets the Activation
++     * value to Failed.
++     */
++    void onFlashWriteFailure();
++
+ #ifdef HOST_BIOS_UPGRADE
+     /* @brief write to Host flash function */
+     void flashWriteHost();
+diff --git a/item_updater.hpp b/item_updater.hpp
+index a0034d3..c691272 100644
+--- a/item_updater.hpp
++++ b/item_updater.hpp
+@@ -58,8 +58,8 @@ class ItemUpdater : public ItemUpdaterInherit
+                            ItemUpdaterInherit::action::defer_emit),
+         bus(bus), helper(bus),
+         versionMatch(bus,
+-                     MatchRules::interfacesAdded() +
+-                         MatchRules::path("/xyz/openbmc_project/software"),
++                     MatchRules::interfacesAdded() + MatchRules::sender("xyz.openbmc_project.Software.Version") +
++                         MatchRules::path("/xyz/openbmc_project/software") ,
+                      std::bind(std::mem_fn(&ItemUpdater::createActivation),
+                                this, std::placeholders::_1))
+     {
+@@ -173,9 +173,15 @@ class ItemUpdater : public ItemUpdaterInherit
+     /** @brief Vector of needed BMC images in the tarball*/
+     std::vector<std::string> imageUpdateList;
+ 
+-    /** @breif The slot of running BMC image */
++    /** @breif The slo/t of running BMC image */
+     uint32_t runningImageSlot = 0;
+ 
++    /** @breif The active updates running on BMC */
++    uint32_t activeUpdatesCount=0;
++
++    /** @breif whether to perform reboot or not after update sucessful*/
++    bool performReboot = false;
++
+   private:
+     /** @brief Callback function for Software.Version match.
+      *  @details Creates an Activation D-Bus object.
+diff --git a/static/flash.cpp b/static/flash.cpp
+index fdaee67..300b4f4 100644
+--- a/static/flash.cpp
++++ b/static/flash.cpp
+@@ -69,19 +69,19 @@ void Activation::flashWrite()
+ 
+ void Activation::onStateChanges([[maybe_unused]] sdbusplus::message_t& msg)
+ {
+-#ifndef FWUPD_SCRIPT
+-#ifdef BMC_STATIC_DUAL_IMAGE
+     uint32_t newStateID;
+-    auto serviceFile = FLASH_ALT_SERVICE_TMPL + versionId + ".service";
+     sdbusplus::message::object_path newStateObjPath;
+     std::string newStateUnit{};
+     std::string newStateResult{};
+     msg.read(newStateID, newStateObjPath, newStateUnit, newStateResult);
+ 
++#ifndef FWUPD_SCRIPT
++    auto serviceFile = FLASH_ALT_SERVICE_TMPL + versionId + ".service";
+     if (newStateUnit != serviceFile)
+     {
+         return;
+     }
++#ifdef BMC_STATIC_DUAL_IMAGE
+     if (newStateResult == "done")
+     {
+         activationProgress->progress(90);
+@@ -93,6 +93,20 @@ void Activation::onStateChanges([[maybe_unused]] sdbusplus::message_t& msg)
+                                    software::Activation::Activations::Failed);
+     }
+ #endif
++#else
++    auto serviceFile = "fwupd@" + versionId + ".service";
++    if (newStateUnit != serviceFile)
++    {
++        return;
++    }
++    if (newStateResult == "done")
++    {
++        onFlashWriteSuccess();
++    }
++    else
++    {
++        onFlashWriteFailure();
++    }
+ #endif // FWUPD_SCRIPT
+ }
+ 
+-- 
+2.34.1
+

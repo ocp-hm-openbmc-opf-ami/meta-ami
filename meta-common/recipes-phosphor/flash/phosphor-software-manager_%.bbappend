@@ -4,6 +4,8 @@ SRC_URI_NON_PFR:append = "file://0001-Add-Purpose-for-other-components-and-add-i
                    file://0004-Add-write-public-key-in-image-support.patch \
                    file://fwupdinband@.service \
 		             file://0005-Add-support-to-applytime-property.patch \
+                   file://0005-Patch-to-remove-the-image-when-verification-fails-nonpfr.patch \
+                   file://0006-Delete-Update-image-dbus-path-on-success-or-failure.patch \
 		"
 
 SRC_URI:append = " ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
@@ -25,8 +27,7 @@ SRC_URI_NON_PFR_DUAL:append = "file://intel-flash-bmc \
                                 file://ami-flash-bmc \
                                 file://detect-slot-aspeed \
                                 file://reset-cs0-aspeed  \
-                                "
-SRC_URI_NON_PFR_DUAL:append = "${@bb.utils.contains('PACKAGECONFIG', 'verify_signature','file://0005-Patch-to-remove-the-image-when-verification-fails-nonpfr.patch', '', d)}"                              
+                                "                          
 SRC_URI_NON_PFR_DUAL:append:intel-ast2600 = " file://sync-once.sh \
                                              file://synclist "
 

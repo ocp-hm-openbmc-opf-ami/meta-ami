@@ -239,8 +239,7 @@ get_requestedactivation_status() {
     fi
 }
 
-exit_fail() {
-    set_activation_status Failed
+exit_fail() { 
     update_percentage $UPDATE_PERCENT_FAIL
     log "${FWTYPE}:${FWVER} - UPDATE_FAILED"
     DIR_PATH=$(dirname "$LOCAL_PATH")
@@ -274,8 +273,7 @@ ifwi_full_flash() {
     echo "mtdPart=$mtdPart"
     if [ -z "$mtdPart" ]; then
         log "IFWI Full Flash - host mtd patition not found"
-        redfish_log_abort " IFWI Full Flash - Image update failed"
-        set_activation_status Failed
+        redfish_log_abort " IFWI Full Flash - Image update failed"      
         update_percentage $UPDATE_PERCENT_FAIL
         return 1
     fi
@@ -288,13 +286,11 @@ ifwi_full_flash() {
     if [[ "$rc" -eq 0 ]]; then
         log "IFWI Full Flash - Image update successful"
         redfish_log_fw_evt success
-        update_percentage $UPDATE_PERCENT_SUCCESS
-        set_activation_status Active 
+        update_percentage $UPDATE_PERCENT_SUCCESS         
         return 0
     else
         log "IFWI Full Flash - Image update failed"
-        redfish_log_abort " IFWI Full Flash - Image update failed"
-        set_activation_status Failed
+        redfish_log_abort " IFWI Full Flash - Image update failed"        
         update_percentage $UPDATE_PERCENT_FAIL
 	return 1
     fi
@@ -370,16 +366,12 @@ bmc_full_flash() {
             fi
             redfish_log_fw_evt success
             update_percentage $UPDATE_PERCENT_SUCCESS
-            set_activation_status Active
-            reboot
             return 0
         else
             check_preserv_config $NON_INTEL_PLATFORMS_MODE
             cp $LOCAL_PATH /run/initramfs/
             redfish_log_fw_evt success
             update_percentage $UPDATE_PERCENT_SUCCESS
-            set_activation_status Active
-            reboot
             return 0
         fi  # This was missing
     else
@@ -412,7 +404,6 @@ bmc_full_flash() {
                 if [[ "$rc" -ne 0 ]]; then
                     log "BMC Full Flash - Image update failed"
                     redfish_log_abort " BMC Full Flash - Image update failed"
-                    set_activation_status Failed
                     update_percentage $UPDATE_PERCENT_FAIL
                     return 1
                 fi
@@ -436,7 +427,6 @@ bmc_full_flash() {
                 if [ -z "$mtdPart" ]; then
                     log "BMC Full Flash - mtd $mtdPart partition not found"
                     redfish_log_abort " BMC Full Flash - Image update failed"
-                    set_activation_status Failed
                     set_requestedactivation_status None
                     update_percentage $UPDATE_PERCENT_FAIL
                     return 1
@@ -446,7 +436,6 @@ bmc_full_flash() {
                 if [[ "$rc" -ne 0 ]]; then
                     log "BMC Full Flash - Image update failed on backup spi"
                     redfish_log_abort " BMC Full Flash - Image update failed spi"
-                    set_activation_status Failed
                     set_requestedactivation_status None
                     update_percentage $UPDATE_PERCENT_FAIL
                     return 1
@@ -456,9 +445,7 @@ bmc_full_flash() {
                 log "BMC Full Flash - Image updated successful on bkup spi"
                 redfish_log_fw_evt success
                 update_percentage $UPDATE_PERCENT_SUCCESS
-                set_activation_status Active
                 sleep 5
-                reboot -f
             elif [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
                 regval=$(devmem 0x1e620064 )
                 bootmode=$(( ($regval >> 6) & 1 ))
@@ -490,7 +477,6 @@ bmc_full_flash() {
                 if [ -z "$mtdPart" ]; then
                     log "BMC Full Flash - mtd $mtdPart partition not found"
                     redfish_log_abort " BMC Full Flash - Image update failed"
-                    set_activation_status Failed
                     set_requestedactivation_status None
                     update_percentage $UPDATE_PERCENT_FAIL
                     return 1
@@ -500,7 +486,6 @@ bmc_full_flash() {
                 if [[ "$rc" -ne 0 ]]; then
                     log "BMC Full Flash - Image update failed"
                     redfish_log_abort " BMC Full Flash - Image update failed"
-                    set_activation_status Failed
                     set_requestedactivation_status None
                     update_percentage $UPDATE_PERCENT_FAIL
                     return 1
@@ -512,9 +497,7 @@ bmc_full_flash() {
                 log "BMC Full Flash - Image update successful on bkup spi"
                 redfish_log_fw_evt success
                 update_percentage $UPDATE_PERCENT_SUCCESS
-                set_activation_status Active
                 sleep 5
-                reboot -f
             else
                 if [ "$BOOT_SOURCE" -eq 0 ]; then
                     log "BMC Full Flash - Starting the SPI write on active CS0 spi. It will take ~8 minutes...."
@@ -539,7 +522,6 @@ bmc_full_flash() {
                 if [[ "$rc" -ne 0 ]]; then
                     log "BMC Full Flash - Image update failed"
                     redfish_log_abort " BMC Full Flash - Image update failed"
-                    set_activation_status Failed
                     update_percentage $UPDATE_PERCENT_FAIL
                     return 1
                 fi
@@ -555,10 +537,7 @@ bmc_full_flash() {
                 fi
                 redfish_log_fw_evt success
                 update_percentage $UPDATE_PERCENT_SUCCESS
-                set_activation_status Active
-                # reboot
                 sleep 5
-                reboot -f
                 return 0
             fi
         fi
@@ -580,7 +559,6 @@ bmc_full_flash() {
         if [[ "$rc" -ne 0 ]]; then
             log "BMC Full Flash - Image update failed"
             redfish_log_abort " BMC Full Flash - Image update failed"
-            set_activation_status Failed
             update_percentage $UPDATE_PERCENT_FAIL
             return 1
         fi
@@ -588,10 +566,7 @@ bmc_full_flash() {
         check_preserv_config
         redfish_log_fw_evt success
         update_percentage $UPDATE_PERCENT_SUCCESS
-        set_activation_status Active 
-        # reboot
         sleep 5
-        reboot -f
         return 0
     fi
 }
@@ -621,7 +596,6 @@ ping_pong_update() {
     if test -x $update
 	then
         find $(dirname "$METAFILE_PATH") -type f -name "image-*" ! -name "*.sig" -exec cp {} /run/initramfs/ \;
-        reboot 
     fi
     # do a quick sanity check on the image
     if [ $(stat -c "%s" "$LOCAL_PATH") -lt 10000000 ]; then
@@ -656,9 +630,6 @@ ping_pong_update() {
     fi    
     redfish_log_fw_evt success
     update_percentage $UPDATE_PERCENT_SUCCESS
-    set_activation_status Active 
-    # reboot
-    reboot -f
 }
 
 cpld_full_flash()
@@ -684,14 +655,12 @@ cpld_full_flash()
         log "CPLD Flash - Image update failed"
         log "$cpld_output"
         redfish_log_abort " CPLD Flash - Image update failed"
-        set_activation_status Failed
         update_percentage $UPDATE_PERCENT_FAIL
         return 1
     fi
         log "CPLD Flash - Image update successful"
         update_percentage $UPDATE_PERCENT_SUCCESS
         redfish_log_fw_evt success
-        set_activation_status Active
         cmd="cpld-tool $InputParameters -u"
         echo $cmd >&2
         cpld_output=$( $cmd )
@@ -796,7 +765,7 @@ update_fw() {
             COMPONENTNAME="bmc"
             echo "Updating image $LOCAL_PATH"
             ping_pong_update
-            return 0
+            return $?
         elif [ -f "$(dirname "$METAFILE_PATH")/image-bmc" ]; then
             LOCAL_PATH="$(dirname "$METAFILE_PATH")/image-bmc" 
             COMPONENTNAME="bmc"
@@ -825,6 +794,7 @@ update_fw() {
         "bmc")
             log "BMC Full Flash - full SPI update request"
             bmc_full_flash
+            return $?
             ;;
         "bios")
 	        # TODO: Check with BIOS team, is this magic number constant?
@@ -832,12 +802,13 @@ update_fw() {
             if [[ "$magicIFWIImg" = "5aa5f00f" ]]; then
                 log "IFWI Full Flash - 64MB full SPI update request"
                 ifwi_full_flash
-                return 0
+                return $?
             fi
             ;;
         "cpld")
             log "BMC CPLD Flash update request"
             cpld_full_flash
+            return $?
             ;;
         "pldm")
             log "PLDM update request"
@@ -845,7 +816,7 @@ update_fw() {
             if [[ "$magicPLDM" = "f018878ccb7d49439800a02f059aca02" ]]; then
                 log "PLDM magic matched "
                 pldm_update
-                return 0
+                return $?
             else
                 log "Unknown pldm file type Magic ${magicPLDM}"   
                 return 1 
