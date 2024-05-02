@@ -48,6 +48,7 @@ SRC_URI:append = " \
              file://0034-Implement-PHY-Control-for-Non-Bond.patch \
              file://0035-Implement-NCSI-User-Control-Auto-Failover-and-Manual.patch \
              file://0035-Fix-Gateway6-issue.patch \
+             file://0036-Fix-Firewall-not-work-at-icmpv6.patch \             
           "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
