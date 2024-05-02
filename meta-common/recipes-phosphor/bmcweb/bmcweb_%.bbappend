@@ -174,6 +174,7 @@ SRC_URI:append = "   \
             file://0267-Fix-for-PATCH-different-DateTime-and-DateTimeLocalOffset.patch \
 	    file://0265-NVME-Added-SMBIOS-port-info-and-changes-in-property-datatype.patch \
             file://0264-Fixed-SessionManagement-session-unregister-method.patch \
+            file://0262-Get-Networkports-instances.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
