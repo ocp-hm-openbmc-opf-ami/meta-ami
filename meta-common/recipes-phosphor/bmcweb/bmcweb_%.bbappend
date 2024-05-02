@@ -168,6 +168,7 @@ SRC_URI:append = "   \
             file://0231-Session-Management-Implementation-under-Redfish.patch \
             file://0237-oem-sensor-history.patch \
             file://0252-Fixed-IPMI-protocol-in-a-false-state.patch \
+            file://0253-Add-Hostname-and-Domainname-validations-for-FQDN-Att.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
