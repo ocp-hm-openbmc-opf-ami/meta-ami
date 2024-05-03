@@ -191,6 +191,12 @@ SRC_URI_BHS:append = "file://0108-Adding-condition-to-Patch-Min-Value-not-greate
 "
 #SRC_URI:append:evb-ast2600   = "file://0179-Fixed-RestoreOptions-in-EVB.patch "
 
+SRC_URI_AMP:append = "file://0261-Resolving-500-error-form-systems-URI.patch \
+"
+
+SRC_URI_NVIDIA:append = "file://0261-resolving-nvidia-500-error-from-systems.patch \
+"
+
 EVB:append = "file://0179-Fixed-RestoreOptions-in-EVB.patch "  
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb', EVB, '', d)}"
 
@@ -198,6 +204,10 @@ AST2700:append = "file://0236-Fix-for-Compilation-Error-in-AST2700-build.patch"
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'aspeed-sdk-layer', AST2700, '', d)}"
 
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'restricted', SRC_URI_NM, '', d)}"
+
+SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'mtmitchell-layer', SRC_URI_AMP, '', d)}"
+
+SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'meta-mgx', SRC_URI_NVIDIA, '', d)}"
 
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'bhs', "${@bb.utils.contains('BBFILE_COLLECTIONS', 'restricted', SRC_URI_BHS, '', d)}", '', d)}"
 
