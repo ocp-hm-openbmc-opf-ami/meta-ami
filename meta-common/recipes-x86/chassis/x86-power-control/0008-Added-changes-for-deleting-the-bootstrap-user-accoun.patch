@@ -1,0 +1,74 @@
+From 32459edf0e1f8093a7c4a51217a791c8dfc3ea39 Mon Sep 17 00:00:00 2001
+From: dineshsv <dineshsv@ami.com>
+Date: Mon, 29 Apr 2024 20:55:37 +0530
+Subject: [PATCH] Added changes for deleting the bootstrap user accounts, after
+ rebooting host user account will be created and at one time one user account
+ will be available.
+
+Tested:
+
+ - changes working as expected.
+
+Signed-off-by: dineshsv <dineshsv@ami.com>
+---
+ src/power_control.cpp | 30 ++++++++++++++++++++++++++++++
+ 1 file changed, 30 insertions(+)
+
+diff --git a/src/power_control.cpp b/src/power_control.cpp
+index f91d7dd..fb87cc1 100644
+--- a/src/power_control.cpp
++++ b/src/power_control.cpp
+@@ -123,6 +123,12 @@ static std::string buttonDbusName = "xyz.openbmc_project.Chassis.Buttons";
+ static std::string nmiDbusName = "xyz.openbmc_project.Control.Host.NMI";
+ static std::string rstCauseDbusName =
+     "xyz.openbmc_project.Control.Host.RestartCause";
++static constexpr const char* OOBInventoryObjPath =
++    "/xyz/openbmc_project/OOBInventoryConfig";
++static constexpr const char* OOBInventoryIntf =
++    "xyz.openbmc_project.OobBiosConfigInventory.OobBiosConfigInventory";
++static constexpr const char* OOBInventorybusName =
++    "xyz.openbmc_project.OOBInventoryConfig";
+ static std::shared_ptr<sdbusplus::asio::dbus_interface> hostIface;
+ static std::shared_ptr<sdbusplus::asio::dbus_interface> chassisIface;
+ #ifdef CHASSIS_SYSTEM_RESET
+@@ -140,6 +146,7 @@ static std::shared_ptr<sdbusplus::asio::dbus_interface> restartCauseIface;
+ static gpiod::line powerButtonMask;
+ static gpiod::line resetButtonMask;
+ static bool nmiButtonMasked = false;
++static bool HostState = false;
+ #if IGNORE_SOFT_RESETS_DURING_POST
+ static bool ignoreNextSoftReset = false;
+ #endif
+@@ -620,6 +627,29 @@ static void setPowerState(const PowerState state)
+     powerState = state;
+     logStateTransition(state);
+ 
++    if (powerState == power_control::PowerState::off)
++    {
++        HostState = true;
++    }
++    if ((powerState == power_control::PowerState::on) ||
++        (powerState == power_control::PowerState::cycleOff) &&
++            (HostState == true))
++    {
++        try
++        {
++            auto methodCall = conn->new_method_call(
++                OOBInventorybusName, OOBInventoryObjPath, OOBInventoryIntf,
++                "deleteBootStrapAccounts");
++            conn->call(methodCall);
++            HostState = false;
++        }
++        catch (const std::exception& e)
++        {
++            lg2::error("Failed to delete boot Strap accounts: {ERROR_MSG}",
++                       "ERROR_MSG", e.what());
++        }
++    }
++
+     hostIface->set_property("CurrentHostState",
+                             std::string(getHostState(powerState)));
+ 
+-- 
+2.25.1
+

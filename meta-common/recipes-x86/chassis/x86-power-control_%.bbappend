@@ -3,6 +3,7 @@ FILESEXTRAPATHS:append := "${THISDIR}/${PN}:"
 SRC_URI += " \
         file://0001-Apply-power-restore-policy-only-AC-power-loss.patch \
         file://0002-Timer-Support-for-Chassis-Systems-Reset-EGS.patch \
+        file://0008-Added-changes-for-deleting-the-bootstrap-user-accoun.patch \
         "
 SRCREV = "b1e34a11f5c64a7c4225fb4cf15ee7f9368cbef4"
 
