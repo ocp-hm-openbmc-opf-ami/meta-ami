@@ -1,0 +1,187 @@
+From 53ca9092d32407c64f0caaa5ce7c6ead46c9eab3 Mon Sep 17 00:00:00 2001
+From: vipinc <vipinc@ami.com>
+Date: Mon, 29 Apr 2024 21:55:59 +0530
+Subject: [PATCH] Add empty EEPROM Fru Update Support
+
+This commit add support to identify empty EEPROM and assign
+FRU Device ID.
+
+Tested in Intel Archercity:
+
+1. Confirm the EEPROM is empty using i2ctool commands
+
+2. List the FRU and confirm Empty FRU is listing
+
+root@AMIOT-4ecb6735a597:~# ipmitool fru list
+FRU Device Description : Builtin FRU Device (ID 0)
+ Chassis Type          : Rack Mount Chassis
+ Chassis Part Number   : ..................
+ Chassis Serial        : ..................
+ Chassis Extra         : ...............................
+ Chassis Extra         : ...............................
+ Board Mfg Date        : Mon Jan  1 00:00:00 1996
+ Board Mfg             : Intel Corporation
+ Board Product         : ArcherCity
+ Board Serial          : Intel_3245
+ Board Part Number     : ..........
+ Product Manufacturer  : Intel Corporation
+ Product Name          : ArcherCity
+ Product Part Number   : ..........
+ Product Version       : ....................
+ Product Serial        : Intel_3245
+ Product Asset Tag     : ....................
+
+FRU Device Description : UNKNOWN (ID 102)
+ Invalid FRU size 0
+
+3. Now Try to update the FRU using IPMI command
+
+ipmitool raw 0x0a 0x12 0x66 0x00 0x00 0x01 0x00 0x00 0x00 0x01
+0x0d 0x00 0xf1 0x01 0x0c 0x19 0xe1 0x53 0x4f 0x4c 0x55 0x4d 0x20
+0x43 0x4f 0x2e 0x2c 0x20 0x4c 0x54 0x44 0x2e 0x20 0x20 0x20 0x20
+0x20 0x20 0x20 0x20 0x20 0x20 0x20 0x20 0x20 0x20 0x20 0x20 0x20
+0x20 0xc8 0x49 0x53 0x31 0x36 0x32 0x46 0x32 0x32 0xca 0x47 0x33
+0x36 0x32 0x33 0x34 0x2d 0x30 0x31 0x36 0xc3 0x31 0x31 0x41 0xdc
+0x50 0x53 0x53 0x46 0x31 0x36 0x32 0x32 0x30 0x32 0x41 0x43 0x4e
+0x53 0x31 0x36 0x32 0x32 0x41 0x34 0x42 0x4c 0x33 0x50 0x31 0x31
+0x33 0x32 0x00 0x00 0xc1 0x00 0x00 0xc4 0x00 0x02 0x18 0x43 0xa3
+0x40 0x06 0x34 0x08 0x41 0x02 0x28 0x23 0xb0 0x36 0x50 0x46 0x20
+0x67 0x2f 0x3f 0x0c 0x0e 0x34 0xa8 0x00 0x40 0x06 0x00 0x01 0x02
+0x0d 0xe6 0x0a 0x01 0xb0 0x04 0x74 0x04 0xec 0x04 0x78 0x00 0x00
+0x00 0x85 0x00 0x01 0x82 0x0d 0x31 0x3f 0x82 0xb0 0x04 0x74 0x04
+0xec 0x04 0x78 0x00 0x00 0x00 0xac 0x0d
+
+4. Now List the FRU and confirm its updated
+
+root@AMIOT-4ecb6735a597:~# ipmitool fru list
+FRU Device Description : Builtin FRU Device (ID 0)
+ Chassis Type          : Rack Mount Chassis
+ Chassis Part Number   : ..................
+ Chassis Serial        : ..................
+ Chassis Extra         : ...............................
+ Chassis Extra         : ...............................
+ Board Mfg Date        : Mon Jan  1 00:00:00 1996
+ Board Mfg             : Intel Corporation
+ Board Product         : ArcherCity
+ Board Serial          : Intel_3245
+ Board Part Number     : ..........
+ Product Manufacturer  : Intel Corporation
+ Product Name          : ArcherCity
+ Product Part Number   : ..........
+ Product Version       : ....................
+ Product Serial        : Intel_3245
+ Product Asset Tag     : ....................
+
+FRU Device Description : IS162F22 (ID 84)
+ Product Manufacturer  : SOLUM CO., LTD.
+ Product Name          : IS162F22
+ Product Part Number   : G36234-016
+ Product Version       : 11A
+ Product Serial        : PSSF162202ACNS1622A4BL3P1132
+
+root@AMIOT-4ecb6735a597:~#
+
+Signed-off-by: vipinc <vipinc@ami.com>
+
+%% original patch: 0002-Add-empty-EEPROM-Fru-Update-Support.patch
+---
+ src/fru_device.cpp | 55 +++++++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 47 insertions(+), 8 deletions(-)
+
+diff --git a/src/fru_device.cpp b/src/fru_device.cpp
+index 704661f..73209ab 100644
+--- a/src/fru_device.cpp
++++ b/src/fru_device.cpp
+@@ -221,6 +221,44 @@ static void makeProbeInterface(size_t bus, size_t address,
+     it->second->initialize();
+ }
+ 
++static bool isFruConfigured(uint8_t bus, uint8_t adress)
++{
++    std::string configFile = "/usr/share/entity-manager/configurations/eeprom.json";
++    using Json = nlohmann::json;
++    std::ifstream jsonFile(configFile);
++    if (!jsonFile.good())
++    {
++        std::cerr << "JSON file not found " << configFile << "\n";
++        return false;
++    }
++
++    Json data = nullptr;
++    try
++    {
++        data = Json::parse(jsonFile, nullptr, false);
++    }
++    catch (const Json::parse_error& e)
++    {
++        std::cerr << "Faile to parse FRU Json file";
++        return false;
++    }
++
++    if (data.empty())
++    {
++        return false;
++    }
++    for (const auto& fruConfigs : data["FRU_EEPROM"])
++    {
++        uint8_t busConf = static_cast<uint8_t>(fruConfigs["Bus"]);
++        uint8_t addrConf = static_cast<uint8_t>(fruConfigs["Address"]);
++        if ((busConf == bus) && (addrConf == adress))
++        {
++            return true;
++        }
++    }
++    return false;
++}
++
+ static std::optional<bool> isDevice16Bit(int file)
+ {
+     // Set the higher data word address bits to 0. It's safe on 8-bit addressing
+@@ -563,7 +601,7 @@ int getBusFRUs(int file, int first, int last, int bus,
+                 pair = readFRUContents(readerBytewise, errorMessage);
+             }
+ 
+-            if (pair.first.empty())
++            if ((pair.first.empty()) && (!isFruConfigured(bus, ii)))
+             {
+                 continue;
+             }
+@@ -754,9 +792,8 @@ struct FindDevicesWithCallback :
+                             BusMap& busmap, const bool& powerIsOn,
+                             sdbusplus::asio::object_server& objServer,
+                             std::function<void(void)>&& callback) :
+-        _i2cBuses(i2cBuses),
+-        _busMap(busmap), _powerIsOn(powerIsOn), _objServer(objServer),
+-        _callback(std::move(callback))
++        _i2cBuses(i2cBuses), _busMap(busmap), _powerIsOn(powerIsOn),
++        _objServer(objServer), _callback(std::move(callback))
+     {}
+     ~FindDevicesWithCallback()
+     {
+@@ -784,17 +821,19 @@ void addFruObjectToDbus(
+     std::shared_ptr<sdbusplus::asio::connection>& systemBus)
+ {
+     boost::container::flat_map<std::string, std::string> formattedFRU;
++    std::string productName = "/xyz/openbmc_project/FruDevice/";
+ 
+     std::optional<std::string> optionalProductName = getProductName(
+         device, formattedFRU, bus, address, unknownBusObjectCount);
+     if (!optionalProductName)
+     {
+         std::cerr << "getProductName failed. product name is empty.\n";
+-        return;
++        productName += "Unknown";
++    }
++    else
++    {
++        productName += optionalProductName.value();
+     }
+-
+-    std::string productName = "/xyz/openbmc_project/FruDevice/" +
+-                              optionalProductName.value();
+ 
+     std::optional<int> index = findIndexForFRU(dbusInterfaceMap, productName);
+     if (index.has_value())
+-- 
+2.25.1
+
