@@ -110,6 +110,7 @@ dorestore=y
 toram=
 checksize=y
 checkmount=y
+dosave_lic=y
 
 whitelist=/run/initramfs/whitelist
 image=/run/initramfs/image-
@@ -147,6 +148,7 @@ HERE
 		shift ;;
 	--save-files)
 		dosave=y
+        dosave_lic=
 		shift ;;
 	--no-restore-files)
 		dorestore=
@@ -209,6 +211,34 @@ then
 		umount $mounted
 	fi
 fi
+
+if test "$dosave_lic" = "y"
+then
+    if test ! -d $upper -a -n "$rwfs"
+    then
+        mkdir -p $rwdir
+        mount "$rwdev" $rwdir -t "$(probe_fs_type "$rwdev")" -o "$rorwopts"
+        mounted=$rwdir
+    fi
+
+    if  test -e "$upper/etc/license-control"
+    then
+        d="$save/etc/license-control"
+        while test "${d%/}" != "${d%/.}"
+        do
+            d="${d%/.}"
+            d="${d%/}"
+        done
+        mkdir -p "${d%/*}"
+        cp -rp "$upper//etc/license-control" "${d%/*}/"
+    fi
+
+    if test -n "$mounted"
+    then
+        umount $mounted
+    fi
+fi
+
 
 imglist=$(echo $image*)
 if test "$imglist" = "$image*" -a ! -e "$imglist"
