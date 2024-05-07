@@ -14,12 +14,6 @@ SRC_URI += "file://0036-EnhancedPasswordPolicy.patch \
             file://0013-Add-CertificateExists-Cert-Errors.patch \
             file://0016-Add-PrivateKeyNotFound-error.patch \
         "
-SRC_URI_evb_aspeed:append =  " \
-           file://0001-fixing-fpga-error-from-phosphor-invnetory-manager-fo.patch \
-            "
-SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb-aspeed', SRC_URI_evb_aspeed, '', d)}"
-
-
 
 EXTRA_OEMESON += "-Ddata_com_ami=true"
 EXTRA_OEMESON += "-Ddata_org_open_power=true"
