@@ -170,6 +170,7 @@ SRC_URI:append = "   \
             file://0252-Fixed-IPMI-protocol-in-a-false-state.patch \
             file://0253-Add-Hostname-and-Domainname-validations-for-FQDN-Att.patch \
             file://0205-List-missed-sensors-in-redfish-call.patch \
+            file://0268-Change-the-format-of-success-action-response.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
