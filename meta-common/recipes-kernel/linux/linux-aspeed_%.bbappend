@@ -25,6 +25,7 @@ SRC_URI += "file://nfs.cfg \
             file://CVE-2024-1085.patch \
             file://CVE-2024-1086.patch \
             file://0032-Fix-NCSI-Auto-Failover.patch \
+            file://0024-add-fmc-ce0-ce1-acccess-support.patch \
 	    "
 
 NON_PFR_SRC_URI_AMI = "file://0012-Add-new-layout-as-per-AMI-requirements.patch \
@@ -42,7 +43,7 @@ SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr
 
 
 SRC_URI_NON_PFR_DUAL:append:intel-ast2600 = "file://0013-Added-dts-configuration-for-dual-image-support.patch "
-SRC_URI_NON_PFR_DUAL:append = "file://0024-add-fmc-ce0-ce1-acccess-support.patch "
+#SRC_URI_NON_PFR_DUAL:append = "file://0024-add-fmc-ce0-ce1-acccess-support.patch "
 SRC_URI_NON_PFR_DUAL:append:evb-ast2600  = "file://0025-add-dual-image-dts-support-for-evb.patch \
                                             file://0028-fix-dual-image-dts-for-evb.patch \
                                             "
