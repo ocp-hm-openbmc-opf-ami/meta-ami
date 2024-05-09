@@ -171,6 +171,7 @@ SRC_URI:append = "   \
             file://0253-Add-Hostname-and-Domainname-validations-for-FQDN-Att.patch \
             file://0205-List-missed-sensors-in-redfish-call.patch \
             file://0268-Change-the-format-of-success-action-response.patch \
+            file://0256-Added-the-required-properties-for-pef-service.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
