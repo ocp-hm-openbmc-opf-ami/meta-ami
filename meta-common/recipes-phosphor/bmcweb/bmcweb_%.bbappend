@@ -171,6 +171,7 @@ SRC_URI:append = "   \
             file://0205-List-missed-sensors-in-redfish-call.patch \
             file://0268-Change-the-format-of-success-action-response.patch \
             file://0256-Added-the-required-properties-for-pef-service.patch \
+            file://0267-Fix-for-PATCH-different-DateTime-and-DateTimeLocalOffset.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
