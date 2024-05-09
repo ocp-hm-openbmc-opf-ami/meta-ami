@@ -176,6 +176,7 @@ SRC_URI:append = "   \
             file://0264-Fixed-SessionManagement-session-unregister-method.patch \
             file://0262-Get-Networkports-instances.patch \
             file://0263-Added-the-Validation-of-Username-and-Password-for-CIFS-and-HTTPS.patch \
+	    file://0269--powerSaveMode-support-removal-from-BMCWEB-for-KVM.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
