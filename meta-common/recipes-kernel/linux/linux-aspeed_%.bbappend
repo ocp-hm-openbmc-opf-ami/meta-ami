@@ -29,6 +29,7 @@ SRC_URI += "file://nfs.cfg \
 
 NON_PFR_SRC_URI_AMI = "file://0012-Add-new-layout-as-per-AMI-requirements.patch \
                        file://0019-Fix-for-JFFS2-issue-due-to-SPI-tx-bus-width.patch \
+                       file://0024-add-fmc-ce0-ce1-acccess-support.patch \
                       "
 
 SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '',NON_PFR_SRC_URI_AMI, d)}"
@@ -40,9 +41,10 @@ PFR_SRC_URI_AMI = "file://0027-pfr-fix-bhs-jffs2-issue-due-to-spi-tx-bus-width.p
 
 SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', PFR_SRC_URI_AMI, '', d)}"
 
+SRC_URI_NON_PFR_DUAL ?= ""
 
 SRC_URI_NON_PFR_DUAL:append:intel-ast2600 = "file://0013-Added-dts-configuration-for-dual-image-support.patch "
-SRC_URI_NON_PFR_DUAL:append = "file://0024-add-fmc-ce0-ce1-acccess-support.patch "
+# SRC_URI_NON_PFR_DUAL:append = "file://0024-add-fmc-ce0-ce1-acccess-support.patch "
 SRC_URI_NON_PFR_DUAL:append:evb-ast2600  = "file://0025-add-dual-image-dts-support-for-evb.patch \
                                             file://0028-fix-dual-image-dts-for-evb.patch \
                                             "
