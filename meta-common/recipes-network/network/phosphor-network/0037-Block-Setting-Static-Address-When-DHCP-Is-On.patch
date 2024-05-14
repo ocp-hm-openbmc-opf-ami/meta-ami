@@ -1,0 +1,186 @@
+From 91c2f87da6e77557b156b390cbd7ca66098be433 Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Thu, 9 May 2024 23:27:38 +0800
+Subject: [PATCH] Block Setting Static Address when DHCP is On
+
+---
+ src/ethernet_interface.cpp | 83 +++++++++++++++++++++++++++++++++++---
+ src/network_manager.hpp    | 10 ++---
+ 2 files changed, 83 insertions(+), 10 deletions(-)
+
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index ed3ce97..ceb7f3b 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -6,6 +6,7 @@
+ #include "system_queries.hpp"
+ #include "util.hpp"
+ 
++#include <arpa/inet.h>
+ #include <fcntl.h>
+ #include <linux/if_packet.h> /* struct sockaddr_ll (see man 7 packet) */
+ #include <linux/rtnetlink.h>
+@@ -31,7 +32,6 @@
+ #include <string>
+ #include <unordered_map>
+ #include <variant>
+-
+ namespace phosphor
+ {
+ namespace network
+@@ -52,6 +52,9 @@ constexpr auto DHCP_PROP_INTERFACE = "xyz.openbmc_project.Network.DHCPConfigurat
+ constexpr auto DHCP_SERVICE_PATH = "/xyz/openbmc_project/network/dhcp";
+ constexpr auto PROPERTY_INTERFACE = "org.freedesktop.DBus.Properties";
+ constexpr auto RESOLVED_SERVICE_PATH = "/org/freedesktop/resolve1/link/";
++constexpr auto NETWORKD_LINK_PATH_PREFIX = "/org/freedesktop/network1/link/";
++constexpr auto NETWORKD_SERVICE = "org.freedesktop.network1";
++constexpr auto NETWORKD_LINK_INTERFACE = "org.freedesktop.network1.Link";
+ 
+ constexpr auto TIMESYNCD_SERVICE = "org.freedesktop.timesync1";
+ constexpr auto TIMESYNCD_INTERFACE = "org.freedesktop.timesync1.Manager";
+@@ -443,7 +446,9 @@ std::tuple<bool, ObjectPath> EthernetInterface::createStaticIP(IP::Protocol prot
+         switch (protType)
+         {
+             case IP::Protocol::IPv4:
+-                if (!EthernetInterface::ipv4Enable()) {
++                if (!EthernetInterface::ipv4Enable() ||
++                    EthernetInterface::dhcp4())
++                {
+                     throw NotAllowed();
+                 }
+                 addr.emplace(stdplus::fromStr<stdplus::In4Addr>(ipaddress));
+@@ -456,7 +461,9 @@ std::tuple<bool, ObjectPath> EthernetInterface::createStaticIP(IP::Protocol prot
+                 }
+                 break;
+             case IP::Protocol::IPv6:
+-                if (!EthernetInterface::ipv6Enable()) {
++                if (!EthernetInterface::ipv6Enable() ||
++                    EthernetInterface::dhcp6())
++                {
+                     throw NotAllowed();
+                 }
+                 if (!ipgateway.empty())
+@@ -489,9 +496,10 @@ std::tuple<bool, ObjectPath> EthernetInterface::createStaticIP(IP::Protocol prot
+                             "IP Address and Gateway are the same\n"));
+                     }
+                 }
+-                else if (!EthernetInterfaceIntf::defaultGateway6().empty())
++                else if (auto gw6 = EthernetInterfaceIntf::defaultGateway6();
++                         !gw6.empty() &&
++                         gw6.find("fe80::") == std::string::npos)
+                 {
+-                    auto gw6 = EthernetInterfaceIntf::defaultGateway6();
+                     if (gw6.compare(ipaddress) == 0)
+                     {
+                         log<level::ERR>(
+@@ -2654,6 +2662,7 @@ std::map<std::string, std::unique_ptr<sdbusplus::bus::match_t>> EthernetInterfac
+     std::map<std::string, std::unique_ptr<sdbusplus::bus::match_t>> mp;
+     mp["DHCPSignal"] = nullptr;
+     mp["ResolvdSignal"] = nullptr;
++    mp["LinkSignal"] = nullptr;
+     return mp;
+ }
+ 
+@@ -2698,6 +2707,70 @@ void EthernetInterface::registerSignal(sdbusplus::bus::bus& bus) {
+                 }
+             );
+         }
++        else if (signal.second == nullptr && signal.first == "LinkSignal")
++        {
++            signal.second = std::make_unique<sdbusplus::bus::match_t>(
++                bus,
++                sdbusplus::bus::match::rules::propertiesChanged(
++                    fmt::format("{}_3{}", NETWORKD_LINK_PATH_PREFIX,
++                                std::to_string(ifIdx))
++                        .c_str(),
++                    NETWORKD_LINK_INTERFACE),
++                [&](sdbusplus::message::message& msg) {
++                std::map<
++                    std::string,
++                    std::variant<std::string, std::tuple<uint64_t, uint64_t>>>
++                    props;
++                std::string iface;
++                std::vector<std::tuple<std::string, bool>> value;
++                msg.read(iface, props);
++                for (const auto& t : props)
++                {
++                    if (t.first == "IPv6AddressState")
++                    {
++                        if (std::get<std::string>(t.second) == "routable" &&
++                            dhcp6())
++                        {
++                            // std::this_thread::sleep_for(std::chrono::seconds(5));
++                            auto lists = manager.get().getGateway6FromFile();
++                            for (auto line : lists)
++                            {
++                                std::stringstream ss(line);
++                                std::string dstIP, dstPrefix, srcIP, srcPrefix,
++                                    nextHop, metric, count, useCount, devName,
++                                    flags;
++                                ss >> dstIP >> dstPrefix >> srcIP >>
++                                    srcPrefix >> nextHop >> flags >> metric >>
++                                    count >> useCount >> devName;
++                                if (devName.compare(interfaceName()) != 0)
++                                    continue;
++                                int flagInt = std::stoul(flags, 0, 16);
++                                if (((flagInt & 0x400) == 0x400) &&
++                                    nextHop.compare(
++                                        "00000000000000000000000000000000") !=
++                                        0)
++                                {
++                                    for (int i = 4; i < nextHop.size();
++                                         i = i + 4)
++                                    {
++                                        nextHop.insert(i, ":");
++                                        i++;
++                                    }
++                                    in6_addr addr;
++                                    char buf[INET6_ADDRSTRLEN] = {0};
++                                    inet_pton(AF_INET6, nextHop.c_str(), &addr);
++                                    inet_ntop(AF_INET6, &addr, buf,
++                                              INET6_ADDRSTRLEN);
++                                    EthernetInterfaceIntf::defaultGateway6(
++                                        std::string{buf}, true);
++                                    break;
++                                }
++                            }
++                        }
++                    }
++                }
++            });
++        }
+     }
+ }
+ 
+diff --git a/src/network_manager.hpp b/src/network_manager.hpp
+index a413752..4b53dd4 100644
+--- a/src/network_manager.hpp
++++ b/src/network_manager.hpp
+@@ -182,6 +182,11 @@ class Manager : public ManagerIface
+     /** @brief initializes the supportedPrivilege List */
+     void initSupportedPrivilges();
+ 
++    /** @brief get the Default Gateway for File
++     *  @param[in] gateway - Gateway6 address.
++     */
++    std::vector<std::string> getGateway6FromFile();
++
+ #ifdef AMI_IP_ADVANCED_ROUTING_SUPPORT
+     /** @brief Used to notify/wait to exexute advanced-route */
+     std::condition_variable advanced_route_cond_var;
+@@ -253,11 +258,6 @@ class Manager : public ManagerIface
+ 
+     void registerSignal(sdbusplus::bus::bus& bus);
+ 
+-    /** @brief get the Default Gateway for File
+-     *  @param[in] gateway - Gateway6 address.
+-     */
+-    std::vector<std::string> getGateway6FromFile();
+-
+ #ifdef AMI_IP_ADVANCED_ROUTING_SUPPORT
+   private:
+     std::thread advanced_route_worker;
+-- 
+2.43.0
+
+
