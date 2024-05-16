@@ -7,6 +7,7 @@ SRC_URI += " \
            file://0016-Postpone-To-Wait-Network-Service.patch \
            file://0017-EIP-761466-Return-If-ReservedBit-used.patch \
            file://0001-Fixed-the-coredump-issue-in-rmcpping.patch \
+           file://0018-Support-IPv4-and-IPv6-Header-Parameters.patch \
            "
 ALT_RMCPP_IFACE = "usb0"
 SYSTEMD_SERVICE:${PN} += " \
