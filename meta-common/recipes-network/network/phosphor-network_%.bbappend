@@ -50,6 +50,7 @@ SRC_URI:append = " \
              file://0035-Fix-Gateway6-issue.patch \
              file://0036-Fix-Firewall-not-work-at-icmpv6.patch \             
              file://0037-Block-Setting-Static-Address-When-DHCP-Is-On.patch \
+             file://0037-Enhancement-For-PHY-Control.patch \
           "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
