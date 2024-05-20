@@ -4,6 +4,6 @@ SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/intel-ipmi-oem.git;branc
 SRCREV_FORMAT = "override"
 SRCREV_override = "03285ce4ec120099ea5ef7beea905e067e24cfdd"
 
-EXTRA_OECMAKE +=" if-non-intel-disable=OFF"
+PACKAGECONFIG:append = " non-intel-platforms"
 
 EXTRA_OEMESON += " -Dipmi-firewall=true"
