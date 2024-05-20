@@ -8,7 +8,8 @@ SRC_URI += " \
            file://0003-Enable-the-SOL-by-default.patch \
            file://0004-USB-Register-USB-DBus-Methods.patch \
            file://0005-Adding-systemlock-object-path-interface-and-systemlo.patch \
-	       file://0006-Add-support-to-applytime-property.patch \
+	   file://0006-Add-support-to-applytime-property.patch \
+	   file://Add-pre-check-for-enable-power-saving-mode.patch \
 "
 
 
