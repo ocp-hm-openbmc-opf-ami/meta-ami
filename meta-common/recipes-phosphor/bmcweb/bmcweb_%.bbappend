@@ -177,6 +177,7 @@ SRC_URI:append = "   \
             file://0262-Get-Networkports-instances.patch \
             file://0263-Added-the-Validation-of-Username-and-Password-for-CIFS-and-HTTPS.patch \
 	    file://0269--powerSaveMode-support-removal-from-BMCWEB-for-KVM.patch \
+            file://0257-Written-schema-for-LicenseControl-feature.patch \
         "
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
