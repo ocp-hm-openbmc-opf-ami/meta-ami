@@ -1,0 +1,56 @@
+From 8662b4f2c3d3653aec0647ab31d153329a9d2b13 Mon Sep 17 00:00:00 2001
+From: Amlana Bhuyan <amlanab@ami.com>
+Date: Fri, 10 May 2024 20:15:15 +0530
+Subject: [PATCH]   systemd socket activation Support
+
+ libvncserver: Adds fix for proper working of the systemd socket activation
+support.
+
+Signed-off-by: Amlana Bhuyan <amlanab@ami.com>
+---
+ src/libvncserver/sockets.c | 23 ++++++++++++++++++++++-
+ 1 file changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/src/libvncserver/sockets.c b/src/libvncserver/sockets.c
+index c18493cb..ddaa9b0a 100644
+--- a/src/libvncserver/sockets.c
++++ b/src/libvncserver/sockets.c
+@@ -178,13 +178,34 @@ rfbInitSockets(rfbScreenInfoPtr rfbScreen)
+     rfbScreen->socketState = RFB_SOCKET_READY;
+
+ #ifdef LIBVNCSERVER_WITH_SYSTEMD
++    rfbLog("sytemd socket activation support is enabled\n");
+     if (sd_listen_fds(0) == 1)
+     {
+         rfbSocket sock = SD_LISTEN_FDS_START + 0;
+         if (sd_is_socket(sock, AF_UNSPEC, 0, 0))
+             rfbNewConnectionFromSock(rfbScreen, sock);
+-        else if (sd_is_socket(sock, AF_UNSPEC, 0, 1))
++        else if (sd_is_socket(sock, AF_UNSPEC, 0, 1)) {
++            struct sockaddr_storage sa;
++            int sa_len = sizeof(sa);
++            char hoststr[NI_MAXHOST];
++            char portstr[NI_MAXSERV];
++            /* Retrieve the Local address asociated with socket */
++            if (getsockname(sock, (struct sockaddr *)&sa, &sa_len) == 0 &&
++                getnameinfo((struct sockaddr *)&sa, sa_len, hoststr, sizeof(hoststr),
++                            portstr, sizeof(portstr), NI_NUMERICHOST | NI_NUMERICSERV) == 0) {
++                rfbLog(" Listening for VNC connections at address %s:%s\n", hoststr, portstr);
++                rfbScreen->port = atoi(portstr);
++            }else{
++                rfbLogPerror("Error retrieving nameinfo of socket received from systemd\n");
++            }
++
++            FD_ZERO(&(rfbScreen->allFds));
++            rfbScreen->listenSock = sock;
++            FD_SET(rfbScreen->listenSock, &(rfbScreen->allFds));
++            rfbScreen->maxFd = rfbScreen->listenSock;
++
+             rfbProcessNewConnection(rfbScreen);
++        }
+         return;
+     }
+     else
+--
+2.25.1
+
