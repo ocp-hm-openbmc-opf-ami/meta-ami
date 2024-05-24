@@ -20,6 +20,7 @@ UPDATE_PERCENT_SUCCESS=100
 UPDATE_PERCENT_FAIL=100
 SECURE_BOOT_STRAP_ENABLED=1
 update=/run/initramfs/update
+SLOT_FILE=/run/media/slot
 whitelist=/run/initramfs/whitelist
 uboot_env_bin_file="uboot_env_data.bin"
 NON_INTEL_PLATFORMS_MODE=1
