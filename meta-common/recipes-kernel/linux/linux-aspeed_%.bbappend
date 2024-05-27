@@ -29,12 +29,15 @@ SRC_URI += "file://nfs.cfg \
             file://CVE-2024-26601.patch \
 	    "
 
-NON_PFR_SRC_URI_AMI = "file://0012-Add-new-layout-as-per-AMI-requirements.patch \
+NON_PFR_SRC_URI_INTEL = "file://0012-Add-new-layout-as-per-AMI-requirements.patch \
                        file://0019-Fix-for-JFFS2-issue-due-to-SPI-tx-bus-width.patch \
-                       file://0024-add-fmc-ce0-ce1-acccess-support.patch \
                       "
 
-SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '',NON_PFR_SRC_URI_AMI, d)}"
+NON_PFR_SRC_URI_AMI = "file://0024-add-fmc-ce0-ce1-acccess-support.patch \ 
+                    "
+
+SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '',NON_PFR_SRC_URI_INTEL, d)}"
+SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '',NON_PFR_SRC_URI_AMI, d)}"
 
 PFR_SRC_URI_AMI = "file://0027-pfr-fix-bhs-jffs2-issue-due-to-spi-tx-bus-width.patch \
                    file://0029-pfr-fix-egs-jffs2-issue-due-to-spi-tx-bus-width.patch \
