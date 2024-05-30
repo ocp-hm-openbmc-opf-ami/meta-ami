@@ -11,7 +11,7 @@ ALLOW_EMPTY:${PN} = "1"
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/jviewer.git;protocol=https;branch=main"
 
 PV = "1.0+git${SRCPV}"
-SRCREV = "0379c8e0261fe4b39dc3f7ad4b6a057dd1f4c7bd"
+SRCREV = "aab89cf8dfa42a0ec7b7df100cd81433c02d286c"
 
 S = "${WORKDIR}/git"
 JDK_DIR = "${RECIPE_SYSROOT_NATIVE}/usr/lib/jvm/openjdk-11-jdk/bin"
