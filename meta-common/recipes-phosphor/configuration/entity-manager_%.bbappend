@@ -6,6 +6,7 @@ SRC_URI:append = " \
     file://cpld.json \
     file://eeprom.json \
     file://0002-Add-empty-EEPROM-Fru-Update-Support.patch \
+    file://0003-Add-Configurable-FRU-ID-Support.patch \
     "
 SRCREV = "6fa0602db8250905808991e5f7206151dd28b346"
 

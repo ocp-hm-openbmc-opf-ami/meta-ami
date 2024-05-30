@@ -1,0 +1,147 @@
+From aa28f24f0946c014759a3c7af5cdc446adbb6384 Mon Sep 17 00:00:00 2001
+From: vipinc <vipinc@ami.com>
+Date: Sun, 26 May 2024 16:44:37 +0530
+Subject: [PATCH] Add Configurable FRU ID Support
+
+This commit add support to expose FRU configuration file to D-Bus
+
+Tested in intel Archercity:
+- Verified the eeprom json configuration is exposed into D-Bus
+Json File:
+root@AMIOT-6ad6c0942882:~# cat /usr/share/entity-manager/configurations/eeprom.json
+    {
+        "FRU_EEPROM": [
+            {
+                "Bus": 7,
+                "Address": 80,
+                "FruId": 7,
+                "Name": "PSU1_FRU"
+            },
+            {
+                "Bus": 15,
+                "Address": 80,
+                "FruId": 15,
+                "Name": "AVC_LRP"
+            },
+            {
+                "Bus": 0,
+                "Address": 0,
+                "FruId": 15,
+                "Name": "AVC_NLRP"
+            }
+        ]
+    }
+
+D-Bus Data:
+    root@AMIOT-6ad6c0942882:~# busctl introspect xyz.openbmc_project.FruDevice /xyz/openbmc_project/FruDevice/PSU1_FRU
+    NAME                                         TYPE      SIGNATURE RESULT/VALUE FLAGS
+    org.freedesktop.DBus.Introspectable          interface -         -            -
+    .Introspect                                  method    -         s            -
+    org.freedesktop.DBus.Peer                    interface -         -            -
+    .GetMachineId                                method    -         s            -
+    .Ping                                        method    -         -            -
+    org.freedesktop.DBus.Properties              interface -         -            -
+    .Get                                         method    ss        v            -
+    .GetAll                                      method    s         a{sv}        -
+    .Set                                         method    ssv       -            -
+    .PropertiesChanged                           signal    sa{sv}as  -            -
+    xyz.openbmc_project.Inventory.Item.FruConfig interface -         -            -
+    .Address                                     property  y         80           emits-change
+    .Bus                                         property  y         7            emits-change
+    .FruId                                       property  y         7            emits-change
+    root@AMIOT-6ad6c0942882:~#
+    CTRL-A Z for help | 115200 8N1 | NOR | Minicom 2.7.1 |
+
+Signed-off-by: vipinc <vipinc@ami.com>
+---
+ src/fru_device.cpp | 53 ++++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 51 insertions(+), 2 deletions(-)
+
+diff --git a/src/fru_device.cpp b/src/fru_device.cpp
+index 73209ab..8145209 100644
+--- a/src/fru_device.cpp
++++ b/src/fru_device.cpp
+@@ -223,7 +223,8 @@ static void makeProbeInterface(size_t bus, size_t address,
+ 
+ static bool isFruConfigured(uint8_t bus, uint8_t adress)
+ {
+-    std::string configFile = "/usr/share/entity-manager/configurations/eeprom.json";
++    std::string configFile =
++        "/usr/share/entity-manager/configurations/eeprom.json";
+     using Json = nlohmann::json;
+     std::ifstream jsonFile(configFile);
+     if (!jsonFile.good())
+@@ -1036,6 +1037,48 @@ bool writeFRU(uint8_t bus, uint8_t address, const std::vector<uint8_t>& fru)
+     return true;
+ }
+ 
++void DoFruConfig(sdbusplus::asio::object_server& objServer)
++{
++    std::string configFile =
++        "/usr/share/entity-manager/configurations/eeprom.json";
++    using Json = nlohmann::json;
++    std::ifstream jsonFile(configFile);
++    if (!jsonFile.good())
++    {
++        std::cerr << "JSON file not found " << configFile << "\n";
++    }
++
++    Json data = nullptr;
++    try
++    {
++        data = Json::parse(jsonFile, nullptr, false);
++    }
++    catch (const Json::parse_error& e)
++    {
++        std::cerr << "Faile to parse FRU Json file";
++    }
++
++    if (data.empty())
++    {
++        std::cerr << "FRU Config data is empty";
++    }
++    for (const auto& fruConfigs : data["FRU_EEPROM"])
++    {
++        uint8_t busConf = static_cast<uint8_t>(fruConfigs["Bus"]);
++        uint8_t addrConf = static_cast<uint8_t>(fruConfigs["Address"]);
++        std::string fruName = static_cast<std::string>(fruConfigs["Name"]);
++        uint8_t fruId = static_cast<uint8_t>(fruConfigs["FruId"]);
++        std::shared_ptr<sdbusplus::asio::dbus_interface> iface =
++            objServer.add_interface(
++                "/xyz/openbmc_project/FruDevice/" + fruName,
++                "xyz.openbmc_project.Inventory.Item.FruConfig");
++
++        iface->register_property("Bus", busConf);
++        iface->register_property("Address", addrConf);
++        iface->register_property("FruId", fruId);
++        iface->initialize();
++    }
++}
+ void rescanOneBus(
+     BusMap& busmap, uint16_t busNum,
+     boost::container::flat_map<
+@@ -1423,6 +1466,12 @@ int main()
+         rescanBusses(busMap, dbusInterfaceMap, unknownBusObjectCount, powerIsOn,
+                      objServer, systemBus);
+     });
++
++    /*TODO: Need to enable support once, D-Bus destruction is supported
++        iface->register_method("DoFruConfig", [&]() {
++            DoFruConfig(objServer);
++        });
++    */
+     iface->initialize();
+ 
+     std::function<void(sdbusplus::message_t & message)> eventHandler =
+@@ -1515,7 +1564,7 @@ int main()
+     // run the initial scan
+     rescanBusses(busMap, dbusInterfaceMap, unknownBusObjectCount, powerIsOn,
+                  objServer, systemBus);
+-
++    DoFruConfig(objServer);
+     io.run();
+     return 0;
+ }
+-- 
+2.25.1
+
