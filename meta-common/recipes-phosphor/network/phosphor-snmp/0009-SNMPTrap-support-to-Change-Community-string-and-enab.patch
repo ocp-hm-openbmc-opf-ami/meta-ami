@@ -1,0 +1,137 @@
+From 51c1b1570649f97e6e000f2a5cf3f48b41300d06 Mon Sep 17 00:00:00 2001
+From: pandiarajt <pandiarajt@ami.com>
+Date: Mon, 13 May 2024 15:14:00 +0530
+Subject: [PATCH 73/73] SNMPTrap support to Change Community string and enable
+ & disable SNMP Version after firmware boot
+
+---
+ snmp_notification.cpp | 77 +++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 71 insertions(+), 6 deletions(-)
+
+diff --git a/snmp_notification.cpp b/snmp_notification.cpp
+index 079b0af..05acb5c 100644
+--- a/snmp_notification.cpp
++++ b/snmp_notification.cpp
+@@ -6,6 +6,8 @@
+ #include <fstream>
+ #include <phosphor-logging/elog-errors.hpp>
+ #include <phosphor-logging/lg2.hpp>
++#include <map>
++#include <iostream>  
+ 
+ namespace phosphor
+ {
+@@ -14,6 +16,10 @@ namespace network
+ namespace snmp
+ {
+ 
++std::string snmpConfFilePath = "/etc/snmp/snmp.conf";
++std::string snmpTrapCommStrFilePath = "/etc/snmp/snmpTrapCommStr";
++std::string snmpTrapStatusFilePath = "/etc/snmp/SnmpTrapStatus";
++
+ using namespace phosphor::logging;
+ using namespace sdbusplus::xyz::openbmc_project::Common::Error;
+ 
+@@ -58,20 +64,60 @@ bool Notification::addPDUVar(netsnmp_pdu& pdu, const OID& objID,
+     return (varList == nullptr ? false : true);
+ }
+ 
++std::map<std::string, bool> getSNMPDisableStatus() {
++
++    std::map<std::string, bool> disableStatus = {{"v1", false}, {"v2c", false}, {"v3",false}};
++    std::string line;
++    std::string key, value;
++
++    std::ifstream snmpConfFileStream(snmpConfFilePath);
++
++    if (!snmpConfFileStream.is_open()) {
++        return disableStatus;
++    }
++
++    while (std::getline(snmpConfFileStream, line)) {
++        std::istringstream lineStream(line);
++
++        if (lineStream >> key >> value) {
++
++            if (key == "disableSNMPv1"){
++                key = "v1";
++            }
++            else if (key == "disableSNMPv2c"){
++                key = "v2c";
++            }
++            else if (key == "disableSNMPv3"){
++                key = "v3";
++            }
++
++            if (key == "v1" || key == "v2c" || key == "v3") {
++                bool disable = (value == "1" || value == "true" || value == "yes");
++                disableStatus[key] = disable;
++            }
++        }
++    }
++
++    snmpConfFileStream.close();
++    return disableStatus;
++}
++
+ void Notification::sendTrap()
+ {
+-    constexpr auto comm = "public";
++    const char* comm = {};
+     netsnmp_session session{};
+     snmp_sess_init(&session);
+-
+     bool snmpTrapStatus;
+-    std::ifstream file("/etc/snmp/SnmpTrapStatus", std::ios::in);
+-    if (!file.is_open()) {
++    std::string commStr;
++    std::map<std::string, bool> snmpDisableStatus = getSNMPDisableStatus(); 
++    
++    std::ifstream snmpTrapStatusFileStream(snmpTrapStatusFilePath, std::ios::in);
++    if (!snmpTrapStatusFileStream.is_open()) {
+         lg2::error("Failed to open /etc/snmp/SnmpTrapStatus file");
+         return;
+     }
+-    file >> std::boolalpha >> snmpTrapStatus;
+-    file.close();
++    snmpTrapStatusFileStream >> std::boolalpha >> snmpTrapStatus;
++    snmpTrapStatusFileStream.close();
+ 
+     if(snmpTrapStatus == false)
+     {
+@@ -79,6 +125,21 @@ void Notification::sendTrap()
+         return;
+     }
+ 
++    std::ifstream snmpTrapCommStrFileStream(snmpTrapCommStrFilePath);
++    if (snmpTrapCommStrFileStream.is_open()) {
++        getline(snmpTrapCommStrFileStream, commStr);
++        snmpTrapCommStrFileStream.close();
++    }
++ 
++    if(commStr != "")
++    {
++        comm = commStr.c_str();
++    }
++    else
++    {
++        comm = "public";
++    }
++
+     init_snmp("snmpapp");
+ 
+     // TODO: https://github.com/openbmc/openbmc/issues/3145
+@@ -88,6 +149,10 @@ void Notification::sendTrap()
+ 
+     for (auto& mgr : mgrs)
+       {
++         if(snmpDisableStatus[mgr.version])
++         {
++            continue;
++         }
+ 
+          if(mgr.version == "v1")
+ 	     {
+-- 
+2.34.1
+

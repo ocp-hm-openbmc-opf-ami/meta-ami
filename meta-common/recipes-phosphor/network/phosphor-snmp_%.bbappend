@@ -9,4 +9,5 @@ SRC_URI += " file://0001-ipv6-fix.patch \
              file://0006-Added-changes-for-SNMPTrap-Bind-variables.patch \
              file://0007-Added-changes-for-SNMP-Address-Port-validation.patch \
              file://0008-Added-Changes-For-User-Validation-While-Sending-Trap.patch \
+             file://0009-SNMPTrap-support-to-Change-Community-string-and-enab.patch \
            "
