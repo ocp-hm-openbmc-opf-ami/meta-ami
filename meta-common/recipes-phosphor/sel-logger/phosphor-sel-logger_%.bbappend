@@ -9,8 +9,20 @@ SRC_URI += "\
         file://0004-Add-DBus-SEL-Logging-support.patch \
         file://0005-Add-Systemd-Unit-crash-logging-support.patch \
 "
+SRC_URI_AST2600:append = " \
+			file://0006-i2cbusfault-logging-AST2600.patch \
+			"
+SRC_URI_AST2700:append = " \
+                        file://0007-i2cbusfault-logging-AST2700.patch \
+                        "
 
 DEPENDS += "intel-ipmi-oem"
 RDEPENDS:${PN} += "intel-ipmi-oem"
 
 PACKAGECONFIG:append = " send-to-logger log-threshold log-crash"
+
+SRC_URI:append = "${@bb.utils.contains('MACHINE', 'evb-ast2600', SRC_URI_AST2600, '', d)}"
+SRC_URI:append = "${@bb.utils.contains('MACHINE', 'ast2700-default', SRC_URI_AST2700, '', d)}"
+
+PACKAGECONFIG[i2c-bus-fault] = "-Di2c-bus-fault=true,-Di2c-bus-fault=false"
+PACKAGECONFIG:append = " i2c-bus-fault"
