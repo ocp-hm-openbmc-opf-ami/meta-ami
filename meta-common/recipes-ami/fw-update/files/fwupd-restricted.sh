@@ -447,6 +447,7 @@ bmc_full_flash() {
                 redfish_log_fw_evt success
                 update_percentage $UPDATE_PERCENT_SUCCESS
                 sleep 5
+                return 0
             elif [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
                 regval=$(devmem 0x1e620064 )
                 bootmode=$(( ($regval >> 6) & 1 ))
@@ -499,6 +500,7 @@ bmc_full_flash() {
                 redfish_log_fw_evt success
                 update_percentage $UPDATE_PERCENT_SUCCESS
                 sleep 5
+                return 0
             else
                 if [ "$BOOT_SOURCE" -eq 0 ]; then
                     log "BMC Full Flash - Starting the SPI write on active CS0 spi. It will take ~8 minutes...."

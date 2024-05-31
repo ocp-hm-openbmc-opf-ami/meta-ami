@@ -1,6 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRCREV = "7b534095425121afd42d669655a902aaaea5716b"
+SRCREV = "426fcab8ba80e9e2f7ec205ac3a97482919d8055"
 
 SRC_URI += " \
            file://0015-Add-to-warm-reset.patch \

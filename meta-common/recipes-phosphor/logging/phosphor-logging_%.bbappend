@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 EXTRA_OEMESON:append = " -Derror_cap=1000 -Derror_info_cap=2639"
 
-SRCREV = "972dd4f62890cf676c80270636ad63a7ca9a590a"
+SRCREV = "e8026679f89642e3336b8c5e495f6ab694988e7a"
 SRC_URI += "\
     file://0001-Add-linear-and-circular-SEL-policy-support.patch \
 "

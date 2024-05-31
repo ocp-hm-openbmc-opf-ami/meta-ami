@@ -2,11 +2,10 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 NETWORK_BONDING_SRC_URI += "file://0023-Support-Network-Bonding.patch \
                             file://0027-Bond_Function_With_Static_IP_Address_Is_Not_Working_Properly.patch \
-			    file://0027-Update-Bond-active-slave-when-all-active-slaves-are-down.patch \
+                            file://0027-Update-Bond-active-slave-when-all-active-slaves-are-down.patch \
                             file://0033-Fix-IPMI-not-works-when-Bond-Enabled.patch \
                             file://0034-Implement-PHY-Control-for-Bond.patch \
                            "
-
 SRC_URI:append = " \
              file://0001-ARP-Control.patch \
              file://0006-keep-IPv6AcceptRA-TRUE-when-enable-ipv6-static.patch \
@@ -17,11 +16,8 @@ SRC_URI:append = " \
              file://0011-Fix-Dynamic-And-Static-Addrs-Shown-When-IPSrc-Is-DHCP.patch \
              file://0013-Add-Prefix-Length-at-Neighbor.patch \
              file://0013-Allow-Empty-Gateway4-When-IPv4-Source-Is-Static.patch \
-             file://nsupdate.sh \
-             file://0015-Implement-DDNS-Nsupdate-With-TSIG.patch \
              file://0014-Fix-No-Default-GW-MAC-Address.patch \
              file://0016-Add-Function-IPv4-IPv6-Enabled-Disabled.patch \
-             file://0017-Fix-property-of-DomainName-in-each-EthernetInterface-Returns-Empty.patch \
              file://0018-Add-VLAN_MAX_NUM-for-not-creating-VLAN-interfaces-over-size.patch \
              file://0019-Fix-Defaultgateway6-Is-Zero-When-Setting-More-Than-One_IPv6.patch \
              file://0020-Fix-Remove-Empty-Gateway-and-Static-Gateway-Missing-and-Add-Gateway-Check-Condition.patch \
@@ -36,22 +32,21 @@ SRC_URI:append = " \
              file://0028-Write-VLAN-Interface-Configuration-File-when-VLAN-Interface-Created.patch \
              file://0027-Add-Interface-Count-in-SystemConfiguration.patch \
              file://0028-Flush-IP-Index-List-when-changing-to-DHCP.patch \
-             file://0029-Synchronize-Default-Hostname-after-Boot-Ready-Signal.patch \
              file://0029-Add-DBus-Control-for-Firewall-Configuration.patch \
-             file://0030-Change-the-Behavior-of-Name-Server.patch \
-             file://0030-Add-A-Delay-to-Avoid-Block_Exception-when-Create-Del-VLAN.patch \
              file://0030-Add-a-minimum-limitation-of-MTU.patch \
-             file://0031-Do-not-allow-invalid-DNS-Server-IP-Address.patch \
              file://0032-Fix-Accepting-Reverse-Range-for-IP-Range.patch \
              file://0033-Remain-IP-Address-After-Disabling-Enabling-Interface.patch \
              file://0033-Fix-to-update-static-gateway6-when-ipv6-source-is-static.patch \
              file://0034-Implement-PHY-Control-for-Non-Bond.patch \
              file://0035-Implement-NCSI-User-Control-Auto-Failover-and-Manual.patch \
              file://0035-Fix-Gateway6-issue.patch \
-             file://0036-Fix-Firewall-not-work-at-icmpv6.patch \             
+             file://0036-Fix-Firewall-not-work-at-icmpv6.patch \
+             file://nsupdate.sh \
+             file://0037-DDNS-Feature.patch \
              file://0037-Block-Setting-Static-Address-When-DHCP-Is-On.patch \
              file://0037-Enhancement-For-PHY-Control.patch \
-          "
+             file://0037-IPv6-Address-and-Gateway6-Checking.patch \
+             "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
 
@@ -68,7 +63,7 @@ do_install:append() {
     echo "net.ipv4.conf.default.arp_ignore=1" >> ${D}/etc/sysctl.d/99-network.conf
 }
 
-EXTRA_OEMESON:append = " -Dpersist-mac=true"
+#EXTRA_OEMESON:append = " -Dpersist-mac=true"
 
 EXTRA_OEMESON:append = " -Ddefault-link-local-autoconf=ipv6"
 
@@ -78,5 +73,3 @@ EXTRA_OEMESON:append = " -Denable-advanced-route=true"
 # EXTRA_OEMESON:append = " -Denable-ncsi=true -Ddefault-ncsi-interface=eth3"
 
 SYSTEMD_SERVICE:${PN} += "xyz.openbmc_project.GARPControl.service"
-
-

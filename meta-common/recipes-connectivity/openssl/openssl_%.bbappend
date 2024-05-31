@@ -1,7 +1,5 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI += "file://CVE-2023-6237.patch"
-
 # EXTRA_OECONF:append = " enable-fips enable-legacy"
 # PACKAGES =+ "${PN}-ossl-module-fips"
 # FILES:fips = "${libdir}/ossl-modules/fips.so"

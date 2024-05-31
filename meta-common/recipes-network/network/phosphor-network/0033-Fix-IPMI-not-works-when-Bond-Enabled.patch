@@ -9,12 +9,21 @@ Subject: [PATCH] Fix IPMI not Working when Bond Enabled
  2 files changed, 90 insertions(+), 11 deletions(-)
 
 diff --git a/src/bond.cpp b/src/bond.cpp
-index b0d47ee..85c97e4 100644
+index 5a0abb8..2f5827b 100644
 --- a/src/bond.cpp
 +++ b/src/bond.cpp
-@@ -27,6 +27,9 @@ using phosphor::logging::elog;
- 
- using Argument = phosphor::logging::xyz::openbmc_project::Common::InvalidArgument;
+@@ -9,7 +9,7 @@
+ #include <phosphor-logging/lg2.hpp>
+ #include <phosphor-logging/log.hpp>
+ #include <xyz/openbmc_project/Common/error.hpp>
+-
++#include <nlohmann/json.hpp>
+ #include <algorithm>
+ #include <cstdlib>
+ #include <fstream>
+@@ -30,6 +30,9 @@ using phosphor::logging::elog;
+ using Argument =
+     phosphor::logging::xyz::openbmc_project::Common::InvalidArgument;
  
 +constexpr auto IPMI_CHANNEL_CONFIG =
 +    "/usr/share/ipmi-providers/channel_config.json";
@@ -22,7 +31,7 @@ index b0d47ee..85c97e4 100644
  static auto makeObjPath(std::string_view root)
  {
      auto ret = sdbusplus::message::object_path(std::string(root));
-@@ -85,26 +88,43 @@ void Bond::delete_()
+@@ -89,16 +92,6 @@ void Bond::delete_()
      auto obj = std::move(it->second);
      eth.manager.get().interfaces.erase(it);
  
@@ -39,8 +48,9 @@ index b0d47ee..85c97e4 100644
      eth.manager.get().writeToConfigurationFile();
      restoreConfiguration(map);
      std::filesystem::remove(config::pathForIntfConf(confDir, intf), ec);
-     std::filesystem::remove(config::pathForIntfDev(confDir, intf), ec);
-     std::filesystem::remove(config::pathForIntfInfo(eth.manager.get().getIfaceConfDir(), intf), ec);
+@@ -106,10 +99,37 @@ void Bond::delete_()
+     std::filesystem::remove(
+         config::pathForIntfInfo(eth.manager.get().getIfaceConfDir(), intf), ec);
  
 -    eth.manager.get().reloadConfigs();
 +    execute("/bin/systemctl", "systemctl", "stop",
@@ -53,8 +63,8 @@ index b0d47ee..85c97e4 100644
 +        eth.manager.get().ignoredIntf.emplace(ifidx);
 +    }
  
-     execute("/bin/systemctl", "systemctl", "restart", "systemd-networkd.service");
- 
+     execute("/bin/systemctl", "systemctl", "restart",
+             "systemd-networkd.service");
 +    eth.manager.get().addReloadPostHook([&]() {
 +        std::this_thread::sleep_for(std::chrono::seconds(3));
 +        for (auto it = eth.manager.get().interfaces.begin();
@@ -77,10 +87,10 @@ index b0d47ee..85c97e4 100644
  }
  
  std::string Bond::activeSlave(std::string activeSlave)
-@@ -225,7 +245,60 @@ void Bond::writeBondConfiguration(bool isActive) {
-     ofs.close();
+@@ -283,6 +303,58 @@ void Bond::writeBondConfiguration(bool isActive)
      ifs.close();
-     std::copy(std::istreambuf_iterator<char>(&infile), {}, std::ostreambuf_iterator<char>(&outfile));
+     std::copy(std::istreambuf_iterator<char>(&infile), {},
+               std::ostreambuf_iterator<char>(&outfile));
 +    infile.close();
 +    outfile.close();
 +
@@ -134,17 +144,15 @@ index b0d47ee..85c97e4 100644
 +        elog<InternalFailure>();
 +    }
  }
-+
- } //namespace network
- } //namespace phosphor
- 
+ } // namespace network
+ } // namespace phosphor
 diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
-index e851250..0cf15d9 100644
+index d161d2b..74282f5 100644
 --- a/src/ethernet_interface.cpp
 +++ b/src/ethernet_interface.cpp
-@@ -1226,6 +1226,12 @@ ObjectPath EthernetInterface::createBond(std::string activeSlave, uint8_t miiMon
- 
-     execute("/bin/systemctl", "systemctl", "restart", "systemd-networkd.service");
+@@ -1471,6 +1471,12 @@ ObjectPath EthernetInterface::createBond(std::string activeSlave,
+     execute("/bin/systemctl", "systemctl", "restart",
+             "systemd-networkd.service");
  
 +    manager.get().addReloadPostHook([&]() {
 +        std::this_thread::sleep_for(std::chrono::seconds(5));

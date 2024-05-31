@@ -3,17 +3,20 @@ From: vipinc <vipinc@ami.com>
 Date: Thu, 18 Jan 2024 12:35:00 +0530
 Subject: [PATCH 2/4] Add Linear SEL Support
 
+Recreated the below patch
 This patch add Support for Linear SEL implementation.
 
 Signed-off-by: Shamim Ali <shamima@ami.com>
 Signed-off-by: vipinc <vipinc@ami.com>
+
+Signed-off-by: nikhilad <nikhilad@ami.com>
 ---
  include/sel_logger.hpp |  11 ++++
- src/sel_logger.cpp     | 135 ++++++++++++++++++++++++++++++++---------
- 2 files changed, 119 insertions(+), 27 deletions(-)
+ src/sel_logger.cpp     | 136 +++++++++++++++++++++++++++++++++--------
+ 2 files changed, 121 insertions(+), 26 deletions(-)
 
 diff --git a/include/sel_logger.hpp b/include/sel_logger.hpp
-index 2d23f29..85e8078 100644
+index 27a8cc4..a398392 100644
 --- a/include/sel_logger.hpp
 +++ b/include/sel_logger.hpp
 @@ -31,6 +31,17 @@ constexpr static const char* pefObjPath = "/xyz/openbmc_project/pef/alerting";
@@ -22,10 +25,10 @@ index 2d23f29..85e8078 100644
  
 +#ifndef SEL_LOGGER_SEND_TO_LOGGING_SERVICE
 +// SEL policy in dbus
-+static constexpr char const* selLogObj = "xyz.openbmc_project.Settings";
-+static constexpr char const* selLogPath =
++static constexpr const char* selLogObj = "xyz.openbmc_project.Settings";
++static constexpr const char* selLogPath =
 +    "/xyz/openbmc_project/logging/settings";
-+static constexpr char const* selLogIntf =
++static constexpr const char* selLogIntf =
 +    "xyz.openbmc_project.Logging.Settings";
 +static constexpr int maxSELEntries = 2000;
 +static bool maxSELEntriesReached = false;
@@ -35,12 +38,12 @@ index 2d23f29..85e8078 100644
  // SEL entries.  Helps with filtering SEL entries in the journal.
  static constexpr const char* selMessageId = "b370836ccf2f4850ac5bee185b77893a";
 diff --git a/src/sel_logger.cpp b/src/sel_logger.cpp
-index 7effd66..9dce8f1 100644
+index 735dbda..eac1744 100644
 --- a/src/sel_logger.cpp
 +++ b/src/sel_logger.cpp
-@@ -168,6 +168,15 @@ void clearSelLogFiles()
+@@ -304,6 +304,15 @@ static unsigned int recordId = initializeRecordId();
  
- static unsigned int getNewRecordId(void)
+ static unsigned int getNewRecordId()
  {
 +    static unsigned int recordId = initializeRecordId();
 +
@@ -53,11 +56,12 @@ index 7effd66..9dce8f1 100644
 +
      if (++recordId >= selInvalidRecID)
      {
-         recordId = 1;
-@@ -176,6 +185,76 @@ static unsigned int getNewRecordId(void)
+         recordId = selInvalidRecID;
+@@ -345,6 +354,76 @@ void clearSelLogFiles()
+     }
  }
  #endif
- 
++
 +#ifndef SEL_LOGGER_SEND_TO_LOGGING_SERVICE
 +static bool isLinearSELPolicy()
 +{
@@ -127,75 +131,73 @@ index 7effd66..9dce8f1 100644
 +    return entryCount;
 +}
 +#endif
-+
- static void toHexStr(const std::vector<uint8_t>& data, std::string& hexStr)
- {
-     std::stringstream stream;
-@@ -224,35 +303,37 @@ static void selAddSystemRecord(
-     conn->call(AddToLog);
- #else
-     unsigned int recordId = getNewRecordId();
--    sd_journal_send("MESSAGE=%s", message.c_str(), "PRIORITY=%i", selPriority,
--                    "MESSAGE_ID=%s", selMessageId, "IPMI_SEL_RECORD_ID=%d",
--                    recordId, "IPMI_SEL_RECORD_TYPE=%x", selSystemType,
--                    "IPMI_SEL_GENERATOR_ID=%x", genId,
--                    "IPMI_SEL_SENSOR_PATH=%s", path.c_str(),
--                    "IPMI_SEL_EVENT_DIR=%x", assert, "IPMI_SEL_DATA=%s",
--                    selDataStr.c_str(), std::forward<T>(metadata)..., NULL);
--    // Do PEF Action
--    uint8_t sentype = getSensorTypeFromPath(path);
--    uint8_t senNum = getSensorNumberFromPath(path);
--    uint8_t evtype = getSensorEventTypeFromPath(path);
--
--    evtype |= assert ? 0x00 : 0x80;
--
--    std::chrono::microseconds timeout = DBUS_TIMEOUT;
--    auto startPefTask =
--        conn->new_method_call(pefService, pefObjPath, pefIface, pefTaskMethod);
--    startPefTask.append(static_cast<uint16_t>(recordId), sentype, senNum,
--                        evtype, selData[0], selData[1], selData[2],
--                        static_cast<uint16_t>(genId), message.c_str());
--    try
--    {
--        conn->call(startPefTask, timeout.count());
--    }
--    catch (sdbusplus::exception_t&)
-+    if (recordId != 0)
-     {
--        std::cerr << "Failed to call doPefTask\n";
-+        sd_journal_send(
-+            "MESSAGE=%s", message.c_str(), "PRIORITY=%i", selPriority,
-+            "MESSAGE_ID=%s", selMessageId, "IPMI_SEL_RECORD_ID=%d", recordId,
-+            "IPMI_SEL_RECORD_TYPE=%x", selSystemType,
-+            "IPMI_SEL_GENERATOR_ID=%x", genId, "IPMI_SEL_SENSOR_PATH=%s",
-+            path.c_str(), "IPMI_SEL_EVENT_DIR=%x", assert, "IPMI_SEL_DATA=%s",
-+            selDataStr.c_str(), std::forward<T>(metadata)..., NULL);
-+        // Do PEF Action
-+        uint8_t sentype = getSensorTypeFromPath(path);
-+        uint8_t senNum = getSensorNumberFromPath(path);
-+        uint8_t evtype = getSensorEventTypeFromPath(path);
-+
-+        evtype |= assert ? 0x00 : 0x80;
-+
-+        std::chrono::microseconds timeout = DBUS_TIMEOUT;
-+        auto startPefTask = conn->new_method_call(pefService, pefObjPath,
-+                                                  pefIface, pefTaskMethod);
-+        startPefTask.append(static_cast<uint16_t>(recordId), sentype, senNum,
-+                            evtype, selData[0], selData[1], selData[2],
-+                            static_cast<uint16_t>(genId), message.c_str());
-+        try
-+        {
-+            conn->call(startPefTask, timeout.count());
-+        }
-+        catch (sdbusplus::exception_t&)
-+        {
-+            std::cerr << "Failed to call doPefTask\n";
-+        }
-     }
--
  #endif
- }
  
+ static void toHexStr(const std::vector<uint8_t>& data, std::string& hexStr)
+@@ -398,33 +477,38 @@ static uint16_t selAddSystemRecord(
+     unsigned int recordId = getNewRecordId();
+     if (recordId < selInvalidRecID)
+     {
+-        sd_journal_send(
+-            "MESSAGE=%s", message.c_str(), "PRIORITY=%i", selPriority,
+-            "MESSAGE_ID=%s", selMessageId, "IPMI_SEL_RECORD_ID=%d", recordId,
+-            "IPMI_SEL_RECORD_TYPE=%x", selSystemType,
+-            "IPMI_SEL_GENERATOR_ID=%x", genId, "IPMI_SEL_SENSOR_PATH=%s",
+-            path.c_str(), "IPMI_SEL_EVENT_DIR=%x", assert, "IPMI_SEL_DATA=%s",
+-            selDataStr.c_str(), std::forward<T>(metadata)..., NULL);
+-        // Do PEF Action
+-        uint8_t sentype = getSensorTypeFromPath(path);
+-        uint8_t senNum = getSensorNumberFromPath(path);
+-        uint8_t evtype = getSensorEventTypeFromPath(path);
+-
+-        evtype |= assert ? 0x00 : 0x80;
+-
+-        std::chrono::microseconds timeout = DBUS_TIMEOUT;
+-        auto startPefTask = conn->new_method_call(pefService, pefObjPath,
+-                                                  pefIface, pefTaskMethod);
+-        startPefTask.append(static_cast<uint16_t>(recordId), sentype, senNum,
+-                            evtype, selData[0], selData[1], selData[2],
+-                            static_cast<uint16_t>(genId), message.c_str());
+-        try
++        if (recordId != 0)
+         {
+-            conn->call(startPefTask, timeout.count());
+-        }
+-        catch (sdbusplus::exception_t&)
+-        {
+-            std::cerr << "Failed to call doPefTask\n";
++            sd_journal_send(
++                "MESSAGE=%s", message.c_str(), "PRIORITY=%i", selPriority,
++                "MESSAGE_ID=%s", selMessageId, "IPMI_SEL_RECORD_ID=%d",
++                recordId, "IPMI_SEL_RECORD_TYPE=%x", selSystemType,
++                "IPMI_SEL_GENERATOR_ID=%x", genId, "IPMI_SEL_SENSOR_PATH=%s",
++                path.c_str(), "IPMI_SEL_EVENT_DIR=%x", assert,
++                "IPMI_SEL_DATA=%s", selDataStr.c_str(),
++                std::forward<T>(metadata)..., NULL);
++            // Do PEF Action
++            uint8_t sentype = getSensorTypeFromPath(path);
++            uint8_t senNum = getSensorNumberFromPath(path);
++            uint8_t evtype = getSensorEventTypeFromPath(path);
++
++            evtype |= assert ? 0x00 : 0x80;
++
++            std::chrono::microseconds timeout = DBUS_TIMEOUT;
++            auto startPefTask = conn->new_method_call(pefService, pefObjPath,
++                                                      pefIface, pefTaskMethod);
++            startPefTask.append(static_cast<uint16_t>(recordId), sentype,
++                                senNum, evtype, selData[0], selData[1],
++                                selData[2], static_cast<uint16_t>(genId),
++                                message.c_str());
++            try
++            {
++                conn->call(startPefTask, timeout.count());
++            }
++            catch (sdbusplus::exception_t&)
++            {
++                std::cerr << "Failed to call doPefTask\n";
++            }
+         }
+     }
+     return recordId;
 -- 
 2.25.1
-

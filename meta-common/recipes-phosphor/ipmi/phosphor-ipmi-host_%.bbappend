@@ -1,8 +1,9 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-host-ipmid.git;branch=master;protocol=https;name=override;"
+SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-host-ipmid.git;branch=sync-branch-ipmid;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "7933f60881c4fb3ad6b156bf84e804685570f842"
+SRCREV_override = "5ef55b0d15379b5ec9df99e4f8dca63563482ca4"
+
 
 SRC_URI += " \
            file://phosphor-ipmi-host-ami.service \
@@ -12,6 +13,7 @@ SRC_URI += " \
 SRC_URI_EGS:append = " \
     file://0001-Fix-for-sensorlist-timeout.patch"
 
+DEPENDS += "libmapper"
 do_install:append(){
   install -d ${D}${includedir}/phosphor-ipmi-host
   install -m 0644 -D ${S}/sensorhandler.hpp ${D}${includedir}/phosphor-ipmi-host

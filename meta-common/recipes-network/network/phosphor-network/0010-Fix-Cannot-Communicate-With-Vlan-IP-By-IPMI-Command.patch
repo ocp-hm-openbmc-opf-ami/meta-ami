@@ -11,22 +11,22 @@ Subject: [PATCH 04/13]
  create mode 100644 0010-Fix-Cannot-Communicate-With-Vlan-IP-By-IPMI-Command.patch
 
 diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
-index 2510cf3..d0a4ad4 100644
+index 8f59e5f..4c9862a 100644
 --- a/src/ethernet_interface.cpp
 +++ b/src/ethernet_interface.cpp
-@@ -650,6 +650,11 @@ ObjectPath EthernetInterface::createVLAN(uint16_t id)
+@@ -655,6 +655,11 @@ ObjectPath EthernetInterface::createVLAN(uint16_t id)
      config.writeFile(
          config::pathForIntfDev(manager.get().getConfDir(), intfName));
  
-+    manager.get().addReloadPostHook(
-+            [ifname = interfaceName()]() {
-+                execute("/bin/systemctl", "systemctl", "restart", fmt::format("phosphor-ipmi-net@{}.service", ifname).c_str());
-+            }
-+    );
++    manager.get().addReloadPostHook([ifname = interfaceName()]() {
++        execute("/bin/systemctl", "systemctl", "restart",
++                fmt::format("phosphor-ipmi-net@{}.service", ifname).c_str());
++    });
++
      writeConfigurationFile();
      manager.get().reloadConfigs();
  
-@@ -954,6 +959,7 @@ EthernetInterface::VlanProperties::VlanProperties(
+@@ -958,6 +963,7 @@ EthernetInterface::VlanProperties::VlanProperties(
  void EthernetInterface::VlanProperties::delete_()
  {
      auto intf = eth.get().interfaceName();
@@ -34,7 +34,7 @@ index 2510cf3..d0a4ad4 100644
  
      // Remove all configs for the current interface
      const auto& confDir = eth.get().manager.get().getConfDir();
-@@ -974,6 +980,7 @@ void EthernetInterface::VlanProperties::delete_()
+@@ -978,6 +984,7 @@ void EthernetInterface::VlanProperties::delete_()
      {
          if (intf->ifIdx == parentIdx)
          {
@@ -42,23 +42,24 @@ index 2510cf3..d0a4ad4 100644
              intf->writeConfigurationFile();
          }
      }
-@@ -984,6 +991,11 @@ void EthernetInterface::VlanProperties::delete_()
+@@ -988,6 +995,12 @@ void EthernetInterface::VlanProperties::delete_()
          eth.get().manager.get().addReloadPostHook(
              [idx = eth.get().ifIdx]() { system::deleteIntf(idx); });
  
-+        eth.get().manager.get().addReloadPostHook(
-+                    [parentIfName]() {
-+                        execute("/bin/systemctl", "systemctl", "restart", fmt::format("phosphor-ipmi-net@{}.service", parentIfName).c_str());
-+                    }
-+        );
++        eth.get().manager.get().addReloadPostHook([parentIfName]() {
++            execute("/bin/systemctl", "systemctl", "restart",
++                    fmt::format("phosphor-ipmi-net@{}.service", parentIfName)
++                        .c_str());
++        });
++
          // Ignore the interface so the reload doesn't re-query it
          eth.get().manager.get().ignoredIntf.emplace(eth.get().ifIdx);
      }
 diff --git a/src/network_manager.cpp b/src/network_manager.cpp
-index b0abee4..a808837 100644
+index 9b5c0ff..1419da0 100644
 --- a/src/network_manager.cpp
 +++ b/src/network_manager.cpp
-@@ -393,8 +393,8 @@ void Manager::addAddress(const AddressInfo& info)
+@@ -400,8 +400,8 @@ void Manager::addAddress(const AddressInfo& info)
      if (auto it = intfInfo.find(info.ifidx); it != intfInfo.end())
      {
          it->second.addrs.insert_or_assign(info.ifaddr, info);
@@ -69,18 +70,15 @@ index b0abee4..a808837 100644
          {
              it->second->addAddr(info);
          }
-@@ -408,12 +408,13 @@ void Manager::addAddress(const AddressInfo& info)
- 
- void Manager::removeAddress(const AddressInfo& info)
+@@ -417,10 +417,11 @@ void Manager::removeAddress(const AddressInfo& info)
  {
--    if (auto it = interfacesByIdx.find(info.ifidx); it != interfacesByIdx.end())
-+    if (auto it = intfInfo.find(info.ifidx); it != intfInfo.end())
+     if (auto it = interfacesByIdx.find(info.ifidx); it != interfacesByIdx.end())
      {
 -        it->second->addrs.erase(info.ifaddr);
 -        if (auto it = intfInfo.find(info.ifidx); it != intfInfo.end())
-+        it->second.addrs.erase(info.ifaddr);
-+        auto name = it->second.intf.name;
-+        if (auto it = interfaces.find(name.value()); it != interfaces.end())
++        it->second->addrs.erase(info.ifaddr);
++        auto name = it->second->interfaceName();
++        if (auto it = interfaces.find(name); it != interfaces.end())
          {
 -            it->second.addrs.erase(info.ifaddr);
 +            it->second->addrs.erase(info.ifaddr);
@@ -88,5 +86,5 @@ index b0abee4..a808837 100644
      }
  }
 -- 
-2.25.1
+2.43.0
 

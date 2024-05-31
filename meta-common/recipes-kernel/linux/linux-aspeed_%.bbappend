@@ -8,7 +8,6 @@ SRC_URI += "file://nfs.cfg \
             file://0001-Fix-virtual-USB-hub-not-working-for-evb-ast2600.patch \
 	    file://0003-Fix-incorrect-MAC-address-in-RNDIS-driver.patch \
             file://0016-legacy-driver-support-for-pwm-driver.patch \
-            file://0002-i3c-mctp-workaround-for-wrong-DCR-value.patch \
             file://0017-Add-write-public-key-in-image-support.patch \
             file://0018-Nm-sensor-Threshold-Support.patch \
             file://0018-USB-Support-Power-Save-Mode.patch \

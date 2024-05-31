@@ -1,15 +1,5 @@
 inherit obmc-phosphor-signining
 
+ROOTFS_POSTPROCESS_COMMAND:remove = "set_user_groupdo_populate_static_lic;"
+ROOTFS_POSTPROCESS_COMMAND:append = " set_user_group do_populate_static_lic "
 
-python() {
-    types = d.getVar('IMAGE_FSTYPES', True).split()
-    d.setVar('UBOOT_SEC_SIZE', str(1024*1024))
-
-    if not 'intel-pfr' in types:
-        d.setVar('FIT_SECTOR_SIZE', str(0x2C00000))
-        DTB_FULL_FIT_IMAGE_OFFSETS = [0x100000]
-        d.setVar('FLASH_RUNTIME_OFFSETS', ' '.join(
-            [str(int(x/1024)) for x in DTB_FULL_FIT_IMAGE_OFFSETS])
-            )
-
-}
