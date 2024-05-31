@@ -6,7 +6,7 @@ LICENSE = "CLOSED"
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/two-factor-authentication.git;protocol=https;branch=two_factor_authentication"
-SRCREV = "f6897868f9fd106a84bb5a6897cad073600b422e"
+SRCREV = "3ca95c8b7b5ce7783d833c74c7253ade823cd9f8"
 
 S = "${WORKDIR}/git"
 PV = "1.0+git${SRCPV}"
