@@ -24,7 +24,7 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 ```
 ### 2) Common Repository for all the OneTree Build
 ```
-- git clone https://git.ami.com/core/ami-bmc/base-tech/firmware.bmc.openbmc.yocto.openbmc onetree; cd onetree
+- git clone https://git.ami.com/core/ami-bmc/base-tech/openbmc onetree; cd onetree
 - git clone https://git.ami.com/core/ami-bmc/one-tree/core/openbmc-meta-intel
 - git clone  https://git.ami.com/core/ami-bmc/one-tree/core/meta-ami
 ```
