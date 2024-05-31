@@ -1,0 +1,169 @@
+From d6787d3110257585e22a26548642474a91c4b6f9 Mon Sep 17 00:00:00 2001
+From: madhankumars <madhankumars@ami.com>
+Date: Fri, 10 May 2024 20:14:16 +0530
+Subject: [PATCH 229/229] Adding AMI Functionality
+
+---
+ src/pam_google_authenticator.c |  95 +++++++++----
+ 1 files changed, 316 insertions(+), 30 deletions(-)
+
+diff --git a/src/pam_google_authenticator.c b/src/pam_google_authenticator.c
+index 80f3641..70ff7ff 100644
+--- a/src/pam_google_authenticator.c
++++ b/src/pam_google_authenticator.c
+@@ -200,7 +200,7 @@ getpwnam_buf_max_size()
+ }
+ 
+ static char *get_secret_filename(pam_handle_t *pamh, const Params *params,
+-                                 const char *username, uid_t *uid) {
++                                 char *channel, const char *username, int *uid) {
+   if (!username) {
+     return NULL;
+   }
+@@ -278,6 +278,10 @@ static char *get_secret_filename(pam_handle_t *pamh, const Params *params,
+         }
+         subst = pw->pw_dir;
+         var = cur;
++            } else if (!memcmp(cur, "${CHANNEL}", 10)) {
++                var_len = 10;
++                subst = channel;
++                var = cur;
+       } else if (!memcmp(cur, "${USER}", 7)) {
+         var_len = 7;
+         subst = username;
+@@ -290,23 +294,22 @@ static char *get_secret_filename(pam_handle_t *pamh, const Params *params,
+         log_message(LOG_ERR, pamh, "Unexpectedly large path name: %d", subst_len);
+         goto errout;
+       }
+-      const int varidx = var - secret_filename;
+-      char *resized = realloc(secret_filename,
+-                              strlen(secret_filename) + subst_len + 1);
+-      if (!resized) {
+-        log_message(LOG_ERR, pamh, "Short mem allocation failed");
+-        goto errout;
+-      }
+-      var = resized + varidx;
+-      secret_filename = resized;
+-      memmove(var + subst_len, var + var_len, strlen(var + var_len) + 1);
+-      memmove(var, subst, subst_len);
+-      offset = var + subst_len - resized;
+-      allow_tilde = 0;
+-    } else {
+-      allow_tilde = *cur == '/';
+-      ++offset;
+-    }
++            char *resized =
++                realloc(secret_filename, strlen(secret_filename) + subst_len + 1);
++            if (!resized) {
++                log_message(LOG_ERR, pamh, "Short mem allocation failed");
++                goto errout;
++            }
++            var += resized - secret_filename;
++            secret_filename = resized;
++            memmove(var + subst_len, var + var_len, strlen(var + var_len) + 1);
++            memmove(var, subst, subst_len);
++            offset = var + subst_len - resized;
++            allow_tilde = 0;
++        } else {
++            allow_tilde = *cur == '/';
++            ++offset;
++        }
+   }
+ 
+   *uid = params->fixed_uid ? params->uid : pw->pw_uid;
+@@ -1092,7 +1095,7 @@ static char *request_pass(pam_handle_t *pamh, int echocode,
+                                    .msg       = prompt };
+   PAM_CONST struct pam_message *msgs = &msg;
+   struct pam_response *resp = NULL;
+-  int retval = converse(pamh, 1, &msgs, &resp);
++  int retval = converse(pamh, 2, &msgs, &resp);
+   char *ret = NULL;
+   if (retval != PAM_SUCCESS || resp == NULL || resp->resp == NULL ||
+       *resp->resp == '\000') {
+@@ -1104,15 +1107,43 @@ static char *request_pass(pam_handle_t *pamh, int echocode,
+     ret = resp->resp;
+   }
+ 
+-  // Deallocate temporary storage
+-  if (resp) {
+-    if (!ret) {
+-      free(resp->resp);
++    // Deallocate temporary storage
++    if (resp) {
++        if (!ret) {
++            free(resp->resp);
++        }
++        free(resp);
+     }
+-    free(resp);
+-  }
+ 
+-  return ret;
++    return ret;
++}
++
++static char *request_channel(pam_handle_t *pamh, int echocode, PAM_CONST char *prompt) {
++    // Query user for verification code
++    PAM_CONST struct pam_message msg = {.msg_style = echocode, .msg = prompt};
++    PAM_CONST struct pam_message *msgs = &msg;
++    struct pam_response *resp = NULL;
++    int retval = converse(pamh, 2, &msgs, &resp);
++    char *ret = NULL;
++    if (retval != PAM_SUCCESS || resp == NULL || resp->resp == NULL ||
++        *resp->resp == '\000') {
++        log_message(LOG_ERR, pamh, "Did not receive verification code and channel from user");
++        if (retval == PAM_SUCCESS && resp && resp->resp) {
++            ret = (resp+1)->resp; // get channel number
++        }
++    } else {
++        ret = (resp+1)->resp; // get channel number
++    }
++
++    // Deallocate temporary storage
++    if (resp) {
++        if (!ret) {
++            free(resp->resp);
++        }
++        free(resp);
++    }
++
++    return ret;
+ }
+ 
+ /* Checks for possible use of scratch codes. Returns -1 on error, 0 on success,
+@@ -1853,8 +1884,10 @@ static int google_authenticator(pam_handle_t *pamh,
+   int early_updated = 0, updated = 0;
+ 
+   const char* const username = get_user_name(pamh, &params);
+-  char* const secret_filename = get_secret_filename(pamh, &params,
+-                                                    username, &uid);
++    char *saved_channel = request_channel(pamh, params.echocode, prompt);
++
++    char * secret_filename = get_secret_filename(pamh, &params, saved_channel, username, &uid);
++
+   int stopped_by_rate_limit = 0;
+ 
+   // Drop privileges.
+@@ -1864,7 +1897,8 @@ static int google_authenticator(pam_handle_t *pamh,
+     // If user doesn't exist, use 'nobody'.
+     if (uid == -1) {
+       drop_username = nobody;
+-      if (parse_user(pamh, drop_username, &uid)) {
++            secret_filename = get_secret_filename(pamh, &params, saved_channel, drop_username, &uid);
++            if (!secret_filename) {
+         // If 'nobody' doesn't exist, bail. We need to drop privs to *someone*.
+         goto out;
+       }
+@@ -2109,7 +2143,8 @@ static int google_authenticator(pam_handle_t *pamh,
+   // case the PAM config considers this module "sufficient".
+   // (or more complex equivalents)
+   if (params.nullok == SECRETNOTFOUND) {
+-    rc = PAM_IGNORE;
++        // rc = PAM_IGNORE;
++        rc = PAM_SUCCESS;
+   }
+ 
+   // Persist the new state.
+-- 
+2.43.2
+
