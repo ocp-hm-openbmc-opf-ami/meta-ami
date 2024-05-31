@@ -45,55 +45,55 @@ bool sessionUnregister(uint8_t sessionId, uint8_t sessionType, int reason)
 
     switch (sessionType)
     {
-        case sessionType::KVM:
-            if (findAndRemove(kvmSessionInfo, sessionId))
+    case sessionType::KVM:
+        if (findAndRemove(kvmSessionInfo, sessionId))
+        {
+            if (kvmIface &&
+                !(kvmIface->set_property("KvmSessionInfo", kvmSessionInfo)))
             {
-                if (kvmIface &&
-                    !(kvmIface->set_property("KvmSessionInfo", kvmSessionInfo)))
-                {
-                    std::cerr << "error kvm setting State \n";
-                    return false;
-                }
-            }
-            else
-            {
-                std::cerr << "Couldn't find specfifed Session Id info \n";
+                std::cerr << "error kvm setting State \n";
                 return false;
             }
-            break;
-        case sessionType::WEB:
-            if (findAndRemove(webSessionInfo, sessionId))
+        }
+        else
+        {
+            std::cerr << "Couldn't find specfifed Session Id info \n";
+            return false;
+        }
+        break;
+    case sessionType::WEB:
+        if (findAndRemove(webSessionInfo, sessionId))
+        {
+            if (webIface &&
+                !(webIface->set_property("WebSessionInfo", webSessionInfo)))
             {
-                if (webIface &&
-                    !(webIface->set_property("WebSessionInfo", webSessionInfo)))
-                {
-                    std::cerr << "error setting web State \n";
-                    return false;
-                }
-            }
-            else
-            {
-                std::cerr << "Couldn't find specfifed Session Id info \n";
+                std::cerr << "error setting web State \n";
                 return false;
             }
+        }
+        else
+        {
+            std::cerr << "Couldn't find specfifed Session Id info \n";
+            return false;
+        }
 
-            break;
-        case sessionType::VMEDIA:
-            if (findAndRemove(vmediaSessionInfo, sessionId))
+        break;
+    case sessionType::VMEDIA:
+        if (findAndRemove(vmediaSessionInfo, sessionId))
+        {
+            if (vmediaIface && !(vmediaIface->set_property(
+                                   "VmediaSessionInfo", vmediaSessionInfo)))
             {
-                if (vmediaIface && !(vmediaIface->set_property(
-                                       "VmediaSessionInfo", vmediaSessionInfo)))
-                {
-                    std::cerr << "error setting vmedia State \n";
-                    return false;
-                }
-            }
-            else
-            {
-                std::cerr << "Couldn't find specfifed Session Id info \n";
+                std::cerr << "error setting vmedia State \n";
                 return false;
             }
-            break;
+        }
+        else
+        {
+            std::cerr << "Couldn't find specfifed Session Id info \n";
+            return false;
+        }
+        break;
     }
     return true;
 }
@@ -131,36 +131,36 @@ bool sessionRegister(uint8_t sessionId, std::string ipAdress,
     }
     switch (sessionType)
     {
-        case sessionType::KVM:
-            kvmSessionInfo.push_back(temp);
-            if (kvmIface &&
-                !(kvmIface->set_property("KvmSessionInfo", kvmSessionInfo)))
-            {
-                Id--;
-                std::cerr << "error kvm setting State \n";
-                return false;
-            }
-            break;
-        case sessionType::WEB:
-            webSessionInfo.push_back(temp);
-            if (webIface &&
-                !(webIface->set_property("WebSessionInfo", webSessionInfo)))
-            {
-                Id--;
-                std::cerr << "error setting web State \n";
-                return false;
-            }
-            break;
-        case sessionType::VMEDIA:
-            vmediaSessionInfo.push_back(temp);
-            if (vmediaIface && !(vmediaIface->set_property("VmediaSessionInfo",
-                                                           vmediaSessionInfo)))
-            {
-                Id--;
-                std::cerr << "error setting VMEDIA State \n";
-                return false;
-            }
-            break;
+    case sessionType::KVM:
+        kvmSessionInfo.push_back(temp);
+        if (kvmIface &&
+            !(kvmIface->set_property("KvmSessionInfo", kvmSessionInfo)))
+        {
+            Id--;
+            std::cerr << "error kvm setting State \n";
+            return false;
+        }
+        break;
+    case sessionType::WEB:
+        webSessionInfo.push_back(temp);
+        if (webIface &&
+            !(webIface->set_property("WebSessionInfo", webSessionInfo)))
+        {
+            Id--;
+            std::cerr << "error setting web State \n";
+            return false;
+        }
+        break;
+    case sessionType::VMEDIA:
+        vmediaSessionInfo.push_back(temp);
+        if (vmediaIface && !(vmediaIface->set_property("VmediaSessionInfo",
+                                                       vmediaSessionInfo)))
+        {
+            Id--;
+            std::cerr << "error setting VMEDIA State \n";
+            return false;
+        }
+        break;
     }
     return true;
 }
@@ -170,10 +170,11 @@ bool sessionRegister(uint8_t sessionId, std::string ipAdress,
  */
 
 inline static sdbusplus::bus::match_t
-    crashErrorEventMonitor(std::shared_ptr<sdbusplus::asio::connection> conn)
+crashErrorEventMonitor(std::shared_ptr<sdbusplus::asio::connection> conn)
 {
 
-    auto crashEventMatcherCallback = [conn](sdbusplus::message_t& msg) {
+    auto crashEventMatcherCallback = [conn](sdbusplus::message_t &msg)
+    {
         uint32_t jobID{};
         sdbusplus::message::object_path jobPath;
         std::string jobUnit{};
@@ -214,12 +215,27 @@ inline static sdbusplus::bus::match_t
     };
 
     sdbusplus::bus::match_t crashEventMatcher(
-        static_cast<sdbusplus::bus_t&>(*conn),
+        static_cast<sdbusplus::bus_t &>(*conn),
         "type='signal',interface='org.freedesktop.systemd1.Manager',"
         "member='JobRemoved'",
         std::move(crashEventMatcherCallback));
 
     return crashEventMatcher;
+}
+
+/*
+ * Clear all KVM Session Information
+ */
+bool clearSessionInfo()
+{
+    kvmSessionInfo.clear();
+    if (kvmIface && !(kvmIface->set_property("KvmSessionInfo", kvmSessionInfo)))
+    {
+        std::cerr << "error KVM setting State \n";
+        return false;
+    }
+
+    return true;
 }
 
 int main()
@@ -239,7 +255,8 @@ int main()
     iface->register_method(
         "SessionRegister",
         [](uint8_t sessionId, std::string ipAdress, std::string userName,
-           uint8_t sessionType, uint8_t previlage, uint8_t userId) {
+           uint8_t sessionType, uint8_t previlage, uint8_t userId)
+        {
             bool response = sessionRegister(sessionId, ipAdress, userName,
                                             sessionType, previlage, userId);
             return response;
@@ -247,10 +264,18 @@ int main()
 
     iface->register_method(
         "SessionUnregister",
-        [](uint8_t sessionId, uint8_t sessionType, int reason) {
+        [](uint8_t sessionId, uint8_t sessionType, int reason)
+        {
             bool response = sessionUnregister(sessionId, sessionType, reason);
             return response;
         });
+
+    // Clear Session information
+    iface->register_method("Clear", []()
+                           {
+      bool response = clearSessionInfo();
+      return response; });
+
     SessionMgr obj(server);
     iface->initialize();
 
