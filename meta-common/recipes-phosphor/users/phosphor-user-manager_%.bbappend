@@ -16,10 +16,10 @@ SRC_URI += " \
              file://0017-SSH-Active-User-Delete-Fix.patch \
              file://0019-manual-lockout-fix.patch \
              file://0016-Restricting-the-asd-user-under-redfish.patch \
+	     file://0018-Added-group-user-for-host-interface.patch \
+	     file://0020-add-media-group.patch \
+             file://0021-add-snmp-group.patch \
            "
-#file://0018-Added-group-user-for-host-interface.patch
-#file://0020-add-media-group.patch
-#file://0021-add-snmp-group.patch
 #OEM Privilege
 SRC_URI_OEM_PRIV:append = "file://upgrade_media_group.sh \
                            file://xyz.openbmc_project.User.Manager-ami.service \
