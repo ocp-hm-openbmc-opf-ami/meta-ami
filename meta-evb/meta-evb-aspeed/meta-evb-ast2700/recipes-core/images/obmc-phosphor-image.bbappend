@@ -62,4 +62,5 @@ do_generate_rwfs_static:static-rwfs-jffs2() {
     ${JFFS2_RWFS_CMD}  ${OVERLAY_MKFS_OPTS} --squash-uids
 }
 
-inherit image_types_phosphor_aspeed
+# defer the inheritance of image_types_phosphor_aspeed to ensure it overrides image_types_phosphor
+inherit_defer image_types_phosphor_aspeed
