@@ -54,7 +54,7 @@ if [ -d "openbmc-meta-intel/meta-restricted" ]; then
 
 	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.spdmd.git;protocol=ssh;branch=main/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.spdmd.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/fw-security/spdmd.bb
 
-	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.libraries.spdmapplib.git;protocol=ssh;branch=main/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.spdmapplib.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/fw-security/spdmapplib.bb
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.libraries.spdmapplib.git;protocol=ssh;branch=main/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.spdmapplib.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-common/recipes-intel/spdm/spdmapplib.bb
 
 	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.ras-manager.git;protocol=ssh;branch=main/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.ras-manager.git;protocol=ssh;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/ras-offload/ras-manager_git.bb
 
