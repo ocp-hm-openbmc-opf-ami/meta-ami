@@ -329,16 +329,19 @@ bmc_full_flash() {
     update_percentage $UPDATE_PERCENT_PRESTAGE_VERIFY_START
     # Use update script to update Firmware for non-intel platforms
     if test -x $update; then
-        if test -x $SLOT_FILE; then
+        if [ -f $SLOT_FILE ]; then
             SLOT_FILE="/run/media/slot"
             BOOT_SOURCE=$(cat "$SLOT_FILE")
             check_preserv_config $NON_INTEL_PLATFORMS_MODE
             local requestedactivationstate=$(get_requestedactivation_status bmc_bkup)
             local bmc_active_requestedactivationstate=$(get_requestedactivation_status bmc_active)
             if [[ "$bmc_active_requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" && "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
+                log "Start Update Both BMC Active and Backup  images. It will take ~20 minutes...."
                 regval=$(devmem 0x1e620064 )
                 bootmode=$(( ($regval >> 6) & 1 ))
+                log "BMC Full Flash - Starting the SPI write on active CS0 spi...."
                 cp $LOCAL_PATH /run/initramfs/
+                log "BMC Full Flash - Starting the SPI write on bkup CS1 spi...."
                 if [ "$bootmode" -eq 1 ]; then
                     cp $LOCAL_PATH /run/initramfs/image-alt-singleabr
                 else
@@ -346,6 +349,7 @@ bmc_full_flash() {
                     /usr/bin/reset-cs0-aspeed
                 fi
             elif [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
+                log "BMC Full Flash - Starting the SPI write on bkup CS1 spi...."
 		        regval=$(devmem 0x1e620064 )
                 bootmode=$(( ($regval >> 6) & 1 ))
                 if [ "$BOOT_SOURCE" -eq 0 ]; then
@@ -359,8 +363,10 @@ bmc_full_flash() {
                 fi
             else
                 if [ "$BOOT_SOURCE" -eq 0 ]; then
+                    log "BMC Full Flash - Starting the SPI write on active CS0 spi...."
                     cp $LOCAL_PATH /run/initramfs/
                 else
+                    log "BMC Full Flash - Starting the SPI write on bkup CS1 spi...."
                     cp $LOCAL_PATH /run/initramfs/image-alt-bmc
                     /usr/bin/reset-cs0-aspeed
                 fi
@@ -369,6 +375,7 @@ bmc_full_flash() {
             update_percentage $UPDATE_PERCENT_SUCCESS
             return 0
         else
+            log "BMC Full Flash - Starting the SPI write. It will take ~8 minutes...."
             check_preserv_config $NON_INTEL_PLATFORMS_MODE
             cp $LOCAL_PATH /run/initramfs/
             redfish_log_fw_evt success
@@ -376,7 +383,7 @@ bmc_full_flash() {
             return 0
         fi  # This was missing
     else
-        if test -x $SLOT_FILE; then
+        if [ -f $SLOT_FILE ]; then
             SLOT_FILE="/run/media/slot"
             BOOT_SOURCE=$(cat "$SLOT_FILE")
             log "BMC Full Flash - Booted from CS$BOOT_SOURCE"
