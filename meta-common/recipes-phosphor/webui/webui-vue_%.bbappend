@@ -9,7 +9,7 @@ SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/webui-vue.git;branch=mai
 
 # Use AUTOREV to get the latest revision from the repository
 # SRCREV = "${AUTOREV}"
-SRCREV = "0a9486ea34c7f219c6056aa69e9d46bebda4284c"
+SRCREV = "ff1c08787b206741fc3ecf9076f29972dfc41ac3"
 
 SRC_URI += " \
     file://login-company-logo.svg \
