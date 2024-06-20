@@ -10,7 +10,7 @@ GROUPADD_PARAM:${PN}:append = ";redfish-hostiface"
 
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/bmcweb;branch=latest;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "c7bb06bb9f1e425964c8225dfb7d3697a623cff6"
+SRCREV_override = "55b8b542cecb08cc9e7ca00817631e17c838c175"
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
                     file://0242-Add-support-to-applytime-property.patch \
