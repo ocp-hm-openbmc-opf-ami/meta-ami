@@ -6,6 +6,8 @@ SRC_URI:append = " \
     file://solum_pssf162202_psu.json \
     file://cpld.json \
     file://eeprom.json \
+    file://0007-Add-empty-EEPROM-Fru-Update-Support.patch \
+    file://0008-Add-Configurable-FRU-ID-Support.patch \
     "
 #SRCREV = "6fa0602db8250905808991e5f7206151dd28b346"
 SRCREV = "513976bed89432f4c24a40c7ba768f023dc280cd"
