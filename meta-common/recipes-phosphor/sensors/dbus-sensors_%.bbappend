@@ -1,8 +1,8 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/dbus-sensors.git;branch=master;protocol=https;name=override;"
+SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/dbus-sensors.git;branch=BMCFirmwareHealth-discrete-sensor-dbussensors;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "3bceeebfd337197aa4df015b02cd9d02b46a62fb"
+SRCREV_override = "118b8348c0a321f60f71252f39738f09d63d6ccc"
 
 SRC_URI_ast2600:append =  " \
             file://0001-ADCSensor-Fix-for-P3V3-sensor.patch \
@@ -26,6 +26,7 @@ PACKAGECONFIG[osstatus] = "-Dosstatus=enabled, -Dosstatus=disabled"
 PACKAGECONFIG[batterystatus] = "-Dbatterystatus=enabled, -Dbatterystatus=disabled"
 PACKAGECONFIG[acpidevicestatus] = "-Dacpidevice=enabled, -Dacpidevice=disabled"
 PACKAGECONFIG[digital] = "-Ddigital=enabled, -Ddigital=disabled"
+PACKAGECONFIG[bmcfirmwarehealth] = "-Dbmc-firmware-health=enabled, -Dbmc-firmware-health=disabled"
 
 PACKAGECONFIG:append = " processorstatus \
             systemsensor \
@@ -36,6 +37,7 @@ PACKAGECONFIG:append = " processorstatus \
             batterystatus \
             acpidevicestatus \
             digital \
+            bmcfirmwarehealth \
 "
 
 SYSTEMD_SERVICE:${PN}:append = " ${@bb.utils.contains('PACKAGECONFIG', 'processorstatus', \
@@ -72,6 +74,10 @@ SYSTEMD_SERVICE:${PN} += "${@bb.utils.contains('PACKAGECONFIG', 'acpidevicestatu
 
 SYSTEMD_SERVICE:${PN}:append = " ${@bb.utils.contains('PACKAGECONFIG', 'digital', \
                                                'xyz.openbmc_project.digitaldiscrete.service', \
+                                               '', d)}"
+
+SYSTEMD_SERVICE:${PN} += "${@bb.utils.contains('PACKAGECONFIG', 'bmcfirmwarehealth', \
+                                               'xyz.openbmc_project.bmcfirmwarehealth.service', \
                                                '', d)}"
 
 
