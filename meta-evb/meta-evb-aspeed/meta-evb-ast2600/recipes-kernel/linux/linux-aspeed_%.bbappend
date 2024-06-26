@@ -8,4 +8,5 @@ SRC_URI:append:evb-ast2600 = " file://ast2600evb.config \
 			       file://0002-added-pinctrl-lpc-reset.patch \
 			       file://0003-Enabling-UART-in-dts_ast2600evb.patch \
                                file://0004-I2C-bus-error-message-for-fault-alarm-support.patch \
+                               file://0005-Added-gpios-in-dts-for-sensor-interrupt.patch \
                              "
