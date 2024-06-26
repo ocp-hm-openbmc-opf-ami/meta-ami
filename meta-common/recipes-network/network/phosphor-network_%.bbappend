@@ -46,7 +46,8 @@ SRC_URI:append = " \
              file://0037-Block-Setting-Static-Address-When-DHCP-Is-On.patch \
              file://0037-Enhancement-For-PHY-Control.patch \
              file://0037-IPv6-Address-and-Gateway6-Checking.patch \
-             "
+             file://0037-Support-IPv6-Dynamic-and-Static-Router-Commands.patch \
+          "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
 

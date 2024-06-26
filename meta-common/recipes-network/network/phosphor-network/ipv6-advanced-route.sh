@@ -32,6 +32,10 @@ if [ "$STATE" == "UP" ]; then
         staticRtr1=`grep "IPv6StaticRtrAddr" "/etc/interface/$IFACE"  | cut -d"=" -f2`
         staticRtr1Prefix=`grep "IPv6StaticRtrPrefix" "/etc/interface/$IFACE" | cut -d"=" -f2`
         ip -6 route add "$staticRtr1""/""$staticRtr1Prefix" dev $IFACE > /dev/null 2>&1
+
+        staticRtr2=`grep "IPv6StaticRtr2Addr" "/etc/interface/$IFACE"  | cut -d"=" -f2`
+        staticRtr2Prefix=`grep "IPv6StaticRtr2Prefix" "/etc/interface/$IFACE" | cut -d"=" -f2`
+        ip -6 route add "$staticRtr2""/""$staticRtr2Prefix" dev $IFACE > /dev/null 2>&1
     fi
 
     ip -6 route | grep "$IFACE" >> $ROUTE_RULE.$IFACE"_tmp"

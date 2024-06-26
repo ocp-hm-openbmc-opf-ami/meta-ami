@@ -16,7 +16,7 @@ SRC_URI += "file://nfs.cfg \
             file://CVE-2023-6531.patch \
             file://CVE-2023-6606.patch \
             file://CVE-2023-6817.patch \
-  	    file://0029-ip_address_update_ncsi_interface.patch \
+	    file://0029-ip_address_update_ncsi_interface.patch \
             file://0030-Fix-USB-gadget-hid-driver-for-kernel-upgrade.patch \
             file://0030-Add-SSIF-support.patch \
 	    file://CVE-2023-6622.patch \
@@ -31,6 +31,7 @@ SRC_URI += "file://nfs.cfg \
             file://CVE-2023-52451.patch \
             file://CVE-2024-26588.patch \
             file://CVE-2023-52447.patch \
+            file://0033-Support-IPv6-Dynamic-and-Static-Router-Commands.patch \
 	    "
 
 NON_PFR_SRC_URI_INTEL = "file://0012-Add-new-layout-as-per-AMI-requirements.patch \
