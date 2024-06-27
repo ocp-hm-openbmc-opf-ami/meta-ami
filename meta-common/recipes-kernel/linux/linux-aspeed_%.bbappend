@@ -35,7 +35,8 @@ SRC_URI += "file://nfs.cfg \
 	    "
 
 NON_PFR_SRC_URI_INTEL = "file://0012-Add-new-layout-as-per-AMI-requirements.patch \
-                       file://0019-Fix-for-JFFS2-issue-due-to-SPI-tx-bus-width.patch \
+                         file://0019-Fix-for-JFFS2-issue-due-to-SPI-tx-bus-width.patch \
+                         file://0034-Fix-for-JFFS2-issue-due-to-SPI-rx-tx-bus-width.patch \
                       "
 
 NON_PFR_SRC_URI_AMI = "file://0024-add-fmc-ce0-ce1-acccess-support.patch \ 
@@ -47,6 +48,7 @@ SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '',NON_PFR_
 PFR_SRC_URI_AMI = "file://0027-pfr-fix-bhs-jffs2-issue-due-to-spi-tx-bus-width.patch \
                    file://0029-pfr-fix-egs-jffs2-issue-due-to-spi-tx-bus-width.patch \
                    file://0030-pfr256-add-winbond-w25q02jv-support.patch \
+                   file://0035-PFR-fix-for-JFFS2-issue-due-to-SPI-rx-tx-bus-width.patch \
                   "
 
 SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', PFR_SRC_URI_AMI, '', d)}"
