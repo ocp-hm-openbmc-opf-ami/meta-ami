@@ -27,6 +27,7 @@ PACKAGECONFIG[batterystatus] = "-Dbatterystatus=enabled, -Dbatterystatus=disable
 PACKAGECONFIG[acpidevicestatus] = "-Dacpidevice=enabled, -Dacpidevice=disabled"
 PACKAGECONFIG[digital] = "-Ddigital=enabled, -Ddigital=disabled"
 PACKAGECONFIG[bmcfirmwarehealth] = "-Dbmc-firmware-health=enabled, -Dbmc-firmware-health=disabled"
+PACKAGECONFIG[damagedsensor] = "-Ddamaged-sensor=enabled, -Ddamaged-sensor=disabled"
 
 PACKAGECONFIG:append = " processorstatus \
             systemsensor \
@@ -38,6 +39,7 @@ PACKAGECONFIG:append = " processorstatus \
             acpidevicestatus \
             digital \
             bmcfirmwarehealth \
+            damagedsensor \
 "
 
 SYSTEMD_SERVICE:${PN}:append = " ${@bb.utils.contains('PACKAGECONFIG', 'processorstatus', \
@@ -80,5 +82,6 @@ SYSTEMD_SERVICE:${PN} += "${@bb.utils.contains('PACKAGECONFIG', 'bmcfirmwareheal
                                                'xyz.openbmc_project.bmcfirmwarehealth.service', \
                                                '', d)}"
 
-
-
+SYSTEMD_SERVICE:${PN} += "${@bb.utils.contains('PACKAGECONFIG', 'damagedsensor', \
+                                               'xyz.openbmc_project.damagedsensor.service', \
+                                               '', d)}"
