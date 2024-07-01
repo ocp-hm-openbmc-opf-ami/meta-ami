@@ -22,7 +22,7 @@ SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI
 #                      file://0110-Fix-For-Pmt-Sensor-Not-listed-in-Redfish.patch \
 #                      file://0118-removing-the-created-policy-get-calls-after-post.patch \
 #                      file://0134-StaticLoadfactor-patch-in-Dynamic-mode-issue.patch \
-#                     file://0136-support-domain-Capabilities-reset.patch \
+#		      file://0136-support-domain-Capabilities-reset.patch \
 #"
 ##SRC_URI:append:evb-ast2600   = "file://0179-Fixed-RestoreOptions-in-EVB.patch "
 #
@@ -32,7 +32,7 @@ SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI
 #SRC_URI_NVIDIA:append = "file://0261-resolving-nvidia-500-error-from-systems.patch \
 #"
 #
-#EVB:append = "file://0179-Fixed-RestoreOptions-in-EVB.patch "
+#EVB:append = "file://0179-Fixed-RestoreOptions-in-EVB.patch "  
 #SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb', EVB, '', d)}"
 #
 #AST2700:append = "file://0236-Fix-for-Compilation-Error-in-AST2700-build.patch"
