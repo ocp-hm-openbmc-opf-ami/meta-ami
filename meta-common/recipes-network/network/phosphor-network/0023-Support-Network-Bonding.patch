@@ -1,4 +1,4 @@
-From 8b36bd1d0dcd435355d4bc281ce33ce64b6bfa08 Mon Sep 17 00:00:00 2001
+From 92e441403cb0d63998b02f30f24f52b4419a4e4b Mon Sep 17 00:00:00 2001
 From: vaibhavs <vaibhavs@ami.com>
 Date: Tue, 19 Sep 2023 03:58:51 +0000
 Subject: [PATCH] Support Network Bonding
@@ -7,18 +7,18 @@ Subject: [PATCH] Support Network Bonding
  .../Network/Bond/Create/meson.build           |  14 ++
  .../openbmc_project/Network/Bond/meson.build  |  15 ++
  gen/xyz/openbmc_project/Network/meson.build   |   1 +
- src/bond.cpp                                  | 125 +++++++++++++++++
- src/bond.hpp                                  |  83 +++++++++++
- src/ethernet_interface.cpp                    | 129 +++++++++++++++++-
+ src/bond.cpp                                  | 128 ++++++++++++++++
+ src/bond.hpp                                  |  84 +++++++++++
+ src/ethernet_interface.cpp                    | 142 +++++++++++++++++-
  src/ethernet_interface.hpp                    |  11 ++
  src/meson.build                               |   1 +
- src/network_manager.cpp                       |  25 ++++
- src/network_manager.hpp                       |   7 +-
- src/rtnetlink.cpp                             |  53 +++++++
- src/rtnetlink.hpp                             |   6 +
- src/types.hpp                                 |  18 ++-
+ src/network_manager.cpp                       |  24 +++
+ src/network_manager.hpp                       |   6 +-
+ src/rtnetlink.cpp                             |  54 +++++++
+ src/rtnetlink.hpp                             |   5 +
+ src/types.hpp                                 |  19 ++-
  .../Network/Bond/Create.interface.yaml        |  22 +++
- 14 files changed, 507 insertions(+), 3 deletions(-)
+ 14 files changed, 522 insertions(+), 4 deletions(-)
  create mode 100644 gen/xyz/openbmc_project/Network/Bond/Create/meson.build
  create mode 100644 gen/xyz/openbmc_project/Network/Bond/meson.build
  create mode 100644 src/bond.cpp
@@ -303,19 +303,19 @@ index 0000000..b0d61cd
 +} // namespace network
 +} // namespace phosphor
 diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
-index 447c829..f17b0ae 100644
+index 295a7f4..71db1da 100644
 --- a/src/ethernet_interface.cpp
 +++ b/src/ethernet_interface.cpp
-@@ -67,6 +67,8 @@ std::string arpResponseEnable = "echo 0 >";
- 
+@@ -69,6 +69,8 @@ std::string arpResponseEnable = "echo 0 >";
+
  constexpr auto VLAN_MAX_NUM = 2;
- 
+
 +const std::string bondIfcName = "bond0";
 +
  template <typename Func>
  inline decltype(std::declval<Func>()())
      ignoreError(std::string_view msg, stdplus::zstring_view intf,
-@@ -213,6 +215,18 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+@@ -222,6 +224,18 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
      }
      dhcp4Conf.emplace(bus, this->objPath + "/dhcp4", *this, DHCPType::v4);
      dhcp6Conf.emplace(bus, this->objPath + "/dhcp6", *this, DHCPType::v6);
@@ -334,7 +334,7 @@ index 447c829..f17b0ae 100644
      for (const auto& [_, addr] : info.addrs)
      {
          addAddr(addr);
-@@ -239,6 +253,15 @@ void EthernetInterface::updateInfo(const InterfaceInfo& info, bool skipSignal)
+@@ -248,6 +262,15 @@ void EthernetInterface::updateInfo(const InterfaceInfo& info, bool skipSignal)
      {
          EthernetInterfaceIntf::mtu(*info.mtu, skipSignal);
      }
@@ -350,10 +350,10 @@ index 447c829..f17b0ae 100644
      if (ifIdx > 0)
      {
          auto ethInfo = ignoreError("GetEthInfo", *info.name, {}, [&] {
-@@ -1331,6 +1354,79 @@ ObjectPath EthernetInterface::createVLAN(uint16_t id)
+@@ -1330,6 +1353,79 @@ ObjectPath EthernetInterface::createVLAN(uint16_t id)
      return ret;
  }
- 
+
 +ObjectPath EthernetInterface::createBond(std::string activeSlave,
 +                                         uint8_t miiMonitor)
 +{
@@ -430,7 +430,7 @@ index 447c829..f17b0ae 100644
  ServerList EthernetInterface::staticNTPServers(ServerList value)
  {
      value = EthernetInterfaceIntf::staticNTPServers(std::move(value));
-@@ -1555,9 +1651,50 @@ static void writeUpdatedTime(const Manager& manager,
+@@ -1554,9 +1650,50 @@ static void writeUpdatedTime(const Manager& manager,
  void EthernetInterface::writeConfigurationFile()
  {
      config::Parser config;
@@ -483,16 +483,16 @@ index 447c829..f17b0ae 100644
  #ifdef PERSIST_MAC
          auto mac = MacAddressIntf::macAddress();
          if (!mac.empty())
-@@ -1726,6 +1863,7 @@ void EthernetInterface::writeConfigurationFile()
-     config.writeFile(path);
-     lg2::info("Wrote networkd file: {CFG_FILE}", "CFG_FILE", path);
-     writeUpdatedTime(manager, path);
+@@ -1720,6 +1857,7 @@ void EthernetInterface::writeConfigurationFile()
+         dhcp6["SendNsupdate"].emplace_back(
+             tfStr(dhcp6Conf->sendHostNameEnabled()));
+     }
 +    }
- }
- 
- void writeARPControlDefault(const std::string& filename)
+     auto path = config::pathForIntfConf(manager.get().getConfDir(),
+                                         interfaceName());
+     config.writeFile(path);
 diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
-index 01aebcf..352352a 100644
+index ae4dc29..5cbbab9 100644
 --- a/src/ethernet_interface.hpp
 +++ b/src/ethernet_interface.hpp
 @@ -1,4 +1,5 @@
@@ -512,17 +512,17 @@ index 01aebcf..352352a 100644
 @@ -103,6 +105,9 @@ class EthernetInterface : public Ifaces
      std::unordered_map<stdplus::InAnyAddr, std::unique_ptr<Neighbor>>
          staticNeighbors;
- 
+
 +    /** @brief Bonding dbus object */
 +    std::optional<Bond> bonding = std::nullopt;
 +
      void addAddr(const AddressInfo& info);
      void addStaticNeigh(const NeighborInfo& info);
- 
+
 @@ -226,6 +231,12 @@ class EthernetInterface : public Ifaces
       */
      ObjectPath createVLAN(uint16_t id);
- 
+
 +    /** @brief create bond interface.
 +     *  @param[in] activeSlave- active slave.
 +     *  @param[in] miiMonitor- MII Monitor.
@@ -545,13 +545,13 @@ index e594c31..f625fde 100644
    include_directories: src_includes,
    dependencies: networkd_deps)
 diff --git a/src/network_manager.cpp b/src/network_manager.cpp
-index 3e0be24..4cb7c96 100644
+index dd57009..7b70f90 100644
 --- a/src/network_manager.cpp
 +++ b/src/network_manager.cpp
-@@ -829,5 +829,29 @@ void Manager::AdvancedRoute()
+@@ -843,5 +843,29 @@ void Manager::AdvancedRoute()
  }
  #endif
- 
+
 +ObjectPath Manager::bond(std::string activeSlave, uint8_t miiMonitor)
 +{
 +    if (miiMonitor == 0 || miiMonitor > 100)
@@ -579,7 +579,7 @@ index 3e0be24..4cb7c96 100644
  } // namespace network
  } // namespace phosphor
 diff --git a/src/network_manager.hpp b/src/network_manager.hpp
-index a363d69..080f2aa 100644
+index e4bbc8a..7c76a63 100644
 --- a/src/network_manager.hpp
 +++ b/src/network_manager.hpp
 @@ -5,6 +5,7 @@
@@ -588,22 +588,22 @@ index a363d69..080f2aa 100644
  #include "types.hpp"
 +#include "xyz/openbmc_project/Network/Bond/Create/server.hpp"
  #include "xyz/openbmc_project/Network/VLAN/Create/server.hpp"
- 
+
  #include <function2/function2.hpp>
 @@ -34,7 +35,8 @@ namespace fs = std::filesystem;
- 
+
  using ManagerIface = sdbusplus::server::object_t<
      sdbusplus::xyz::openbmc_project::Network::VLAN::server::Create,
 -    sdbusplus::xyz::openbmc_project::Common::server::FactoryReset>;
 +    sdbusplus::xyz::openbmc_project::Common::server::FactoryReset,
 +    sdbusplus::xyz::openbmc_project::Network::Bond::server::Create>;
- 
+
  void writeARPControlDefault(const std::string& filename);
- 
+
 @@ -61,6 +63,8 @@ class Manager : public ManagerIface
- 
+
      ObjectPath vlan(std::string interfaceName, uint32_t id) override;
- 
+
 +    ObjectPath bond(std::string activeSlave, uint8_t miiMonitor) override;
 +
      /** @brief write the network conf file with the in-memory objects.
@@ -616,7 +616,7 @@ index 5229c94..109091b 100644
 @@ -28,6 +28,55 @@ static void parseVlanInfo(InterfaceInfo& info, std::string_view msg)
      }
  }
- 
+
 +static void parseBondInfo(InterfaceInfo& info, std::string_view msg)
 +{
 +    uint32_t ifindex = 0;
@@ -679,14 +679,14 @@ index 5229c94..109091b 100644
 +        parseBondInfo(info, submsg);
 +    }
  }
- 
+
  InterfaceInfo intfFromRtm(std::string_view msg)
 diff --git a/src/rtnetlink.hpp b/src/rtnetlink.hpp
 index f35c25f..c6b0667 100644
 --- a/src/rtnetlink.hpp
 +++ b/src/rtnetlink.hpp
 @@ -7,6 +7,11 @@
- 
+
  namespace phosphor::network::netlink
  {
 +/* Define constants for ifindex of interfaces */
@@ -694,9 +694,9 @@ index f35c25f..c6b0667 100644
 +#define IFINDEX_ETH1 3
 +#define IFINDEX_ETH2 4
 +#define IFINDEX_ETH3 5
- 
+
  InterfaceInfo intfFromRtm(std::string_view msg);
- 
+
 diff --git a/src/types.hpp b/src/types.hpp
 index 3bd3607..63cb6d3 100644
 --- a/src/types.hpp
@@ -704,7 +704,7 @@ index 3bd3607..63cb6d3 100644
 @@ -21,6 +21,22 @@ class DelayedExecutor
      virtual void setCallback(fu2::unique_function<void()>&& cb) = 0;
  };
- 
+
 +/*@class BondInfo
 + * @brief Information about a bond from the kernel
 + */
@@ -729,7 +729,7 @@ index 3bd3607..63cb6d3 100644
      std::optional<std::string> kind = std::nullopt;
      std::optional<uint16_t> vlan_id = std::nullopt;
 +    std::optional<BondInfo> bondInfo = std::nullopt;
- 
+
      constexpr bool operator==(const InterfaceInfo& rhs) const noexcept
      {
          return idx == rhs.idx && flags == rhs.flags && name == rhs.name &&
@@ -739,24 +739,6 @@ index 3bd3607..63cb6d3 100644
 +               vlan_id == rhs.vlan_id && bondInfo == rhs.bondInfo;
      }
  };
- 
-diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
-index cee5fb9..a39e01b 100644
---- a/src/ethernet_interface.cpp
-+++ b/src/ethernet_interface.cpp
-@@ -1937,12 +1939,12 @@ void EthernetInterface::writeConfigurationFile()
-         dhcp6["SendNsupdate"].emplace_back(
-             tfStr(dhcp6Conf->sendHostNameEnabled()));
-     }
-+    }
-     auto path = config::pathForIntfConf(manager.get().getConfDir(),
-                                         interfaceName());
-     config.writeFile(path);
-     lg2::info("Wrote networkd file: {CFG_FILE}", "CFG_FILE", path);
-     writeUpdatedTime(manager, path);
--    }
- }
- 
 
 diff --git a/yaml/xyz/openbmc_project/Network/Bond/Create.interface.yaml b/yaml/xyz/openbmc_project/Network/Bond/Create.interface.yaml
 new file mode 100644
@@ -787,6 +769,5 @@ index 0000000..721773b
 +          - xyz.openbmc_project.Common.Error.InvalidArgument
 +          - xyz.openbmc_project.Common.Error.NotAllowed
 \ No newline at end of file
--- 
-2.43.0
-
+--
+2.34.1
