@@ -32,6 +32,10 @@ SRC_URI += "file://nfs.cfg \
             file://CVE-2024-26588.patch \
             file://CVE-2023-52447.patch \
             file://0033-Support-IPv6-Dynamic-and-Static-Router-Commands.patch \
+            file://CVE-2024-0193.patch \
+            file://CVE-2024-26627.patch \
+            file://CVE-2023-52752.patch \
+            file://CVE-2023-52772.patch \
 	    "
 
 NON_PFR_SRC_URI_INTEL = "file://0012-Add-new-layout-as-per-AMI-requirements.patch \
