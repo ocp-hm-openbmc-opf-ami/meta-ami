@@ -1,0 +1,656 @@
+From b99089ec848cf28832f36299ca4292c7606db3bb Mon Sep 17 00:00:00 2001
+From: vaibhavs <vaibhavs@ami.com>
+Date: Fri, 21 Jun 2024 19:08:22 +0530
+Subject: [PATCH] Support DHCPv6 Transmission Retransmission Timing Parameters
+
+---
+ src/ethernet_interface.cpp | 526 +++++++++++++++++++++++++++++++++++++
+ src/ethernet_interface.hpp |  50 ++++
+ 2 files changed, 576 insertions(+)
+
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index 6b1b721..e43d1c3 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -71,6 +71,12 @@ constexpr auto VLAN_MAX_NUM = 2;
+ 
+ const std::string bondIfcName = "bond0";
+ 
++const float DHCPv6_Timing_Param[2 * MAX_SUPPORTED_DHCPv6_TIMING_PARAMS] = {
++    /*Granularity       InitialValue*/
++    0.5, 0.5, 0.5, 0.5, 30, 30, 0.5, 0.5, 0.5, 15,  1,  0,
++    2,   2,   10,  10,  2,  2,  10,  10,  0.5, 0.5, 30, 30,
++};
++
+ template <typename Func>
+ inline decltype(std::declval<Func>()())
+     ignoreError(std::string_view msg, stdplus::zstring_view intf,
+@@ -156,6 +162,8 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+         EthernetInterfaceIntf::ipv6StaticRtrAddr(
+             getIP6StaticRtrAddr(ifaceConfig), true);
+     }
++    EthernetInterfaceIntf::dhcpv6TimingConfParam(
++        dhcpv6TimingParamReadIfaceFile(ifaceConfig), true);
+ 
+     auto [ipv4List, ipv6List] = getIndexList(ifaceConfig);
+     if (!EthernetInterfaceIntf::dhcp4())
+@@ -248,6 +256,9 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+     signals = initSignals();
+     registerSignal(bus);
+     manager.get().getDNSConf().addInterfaceConf(interfaceName());
++
++    writeConfigurationFile();
++    manager.get().reloadConfigs();
+ }
+ 
+ void EthernetInterface::updateInfo(const InterfaceInfo& info, bool skipSignal)
+@@ -1590,6 +1601,47 @@ void EthernetInterface::writeIfaceStateFile(std::string ifname)
+         }
+     }
+ #endif
++    {
++        std::vector<uint8_t> value =
++            EthernetInterfaceIntf::dhcpv6TimingConfParam();
++        if (!value.empty())
++        {
++            auto it = value.begin();
++
++            auto& dhcp6TimingConf =
++                IfaceState.map["DHCPv6TimingConf"].emplace_back();
++
++            dhcp6TimingConf["SOLMaxDelay"].emplace_back(
++                fmt::format("{}", *it++));
++
++            dhcp6TimingConf["SOLTimeout"].emplace_back(
++                fmt::format("{}", *it++));
++
++            dhcp6TimingConf["SOLMaxRt"].emplace_back(fmt::format("{}", *it++));
++
++            dhcp6TimingConf["REQTimeout"].emplace_back(
++                fmt::format("{}", *it++));
++
++            dhcp6TimingConf["REQMaxRt"].emplace_back(fmt::format("{}", *it++));
++
++            dhcp6TimingConf["REQMaxRc"].emplace_back(fmt::format("{}", *it++));
++
++            dhcp6TimingConf["RENTimeout"].emplace_back(
++                fmt::format("{}", *it++));
++
++            dhcp6TimingConf["RENMaxRt"].emplace_back(fmt::format("{}", *it++));
++
++            dhcp6TimingConf["REBTimeout"].emplace_back(
++                fmt::format("{}", *it++));
++
++            dhcp6TimingConf["REBMaxRt"].emplace_back(fmt::format("{}", *it++));
++
++            dhcp6TimingConf["INFTimeout"].emplace_back(
++                fmt::format("{}", *it++));
++
++            dhcp6TimingConf["INFMaxRt"].emplace_back(fmt::format("{}", *it));
++        }
++    }
+ 
+     IfaceState.writeFile(fs::path{
+         fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(),
+@@ -1915,6 +1967,13 @@ void EthernetInterface::writeConfigurationFile()
+             neighbor["MACAddress"].emplace_back(sneighbor.second->macAddress());
+         }
+     }
++    {
++        auto& dhcpv6 = config.map["DHCPv6"].emplace_back();
++        dhcpv6["DUIDType"].emplace_back("link-layer");
++    }
++    {
++        dhcpv6TimingParamWriteConfFile(config);
++    }
+     {
+         auto& dhcp4 = config.map["DHCPv4"].emplace_back();
+         dhcp4["ClientIdentifier"].emplace_back("mac");
+@@ -3020,5 +3079,472 @@ void EthernetInterface::registerSignal(sdbusplus::bus::bus& bus)
+     }
+ }
+ 
++std::string EthernetInterface::dhcpv6DUID() const
++{
++    try
++    {
++        std::string res = "";
++        std::string filename = "/var/run/systemd/netif/links/";
++        std::string delim = "DHCP6_CLIENT_DUID=DUID-LL:";
++        int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
++        if (sockfd < 0)
++        {
++            lg2::error("Failure to create socket");
++            elog<InternalFailure>();
++        }
++        struct ifreq ifr;
++        std::memset(&ifr, 0, sizeof(ifr));
++        std::strncpy(ifr.ifr_name, interfaceName().c_str(), IFNAMSIZ - 1);
++        if (ioctl(sockfd, SIOCGIFINDEX, &ifr) < 0)
++        {
++            close(sockfd);
++            lg2::error("ioctl call failed to get ifindex");
++            elog<InternalFailure>();
++        }
++        close(sockfd);
++        filename += std::to_string(ifr.ifr_ifindex);
++
++        std::ifstream infile;
++        infile.open(filename.c_str(), std::ios::in);
++        if (infile.is_open())
++        {
++            std::string line;
++            while (infile.good())
++            {
++                std::getline(infile, line);
++                size_t pos = line.find(delim);
++                if (pos == std::string::npos)
++                {
++                    line.clear();
++                    continue;
++                }
++                else
++                {
++                    res = line.substr(pos + delim.length(), std::string::npos);
++                    break;
++                }
++            }
++            infile.close();
++        }
++        return res;
++    }
++    catch (const std::exception& e)
++    {
++        lg2::error("Failed with exception : {ERROR}", "ERROR", e);
++    }
++}
++
++std::vector<uint8_t> EthernetInterface::dhcpv6TimingParamReadIfaceFile(
++    const config::Parser& config)
++{
++    std::vector<uint8_t> val;
++    std::string_view Section = "DHCPv6TimingConf";
++
++    const std::string* value;
++    value = config.map.getLastValueString(Section, "SOLMaxDelay");
++    if (value == nullptr)
++    {
++        val.push_back(DHCPv6TimingParamDefault::SOLMaxDelay);
++    }
++    else
++    {
++        val.push_back(static_cast<uint8_t>(std::stoul(*value, nullptr, 10)));
++    }
++
++    value = config.map.getLastValueString(Section, "SOLTimeout");
++    if (value == nullptr)
++    {
++        val.push_back(DHCPv6TimingParamDefault::SOLTimeout);
++    }
++    else
++    {
++        val.push_back(static_cast<uint8_t>(std::stoul(*value, nullptr, 10)));
++    }
++
++    value = config.map.getLastValueString(Section, "SOLMaxRt");
++    if (value == nullptr)
++    {
++        val.push_back(DHCPv6TimingParamDefault::SOLMaxRt);
++    }
++    else
++    {
++        val.push_back(static_cast<uint8_t>(std::stoul(*value, nullptr, 10)));
++    }
++
++    value = config.map.getLastValueString(Section, "REQTimeout");
++    if (value == nullptr)
++    {
++        val.push_back(DHCPv6TimingParamDefault::REQTimeout);
++    }
++    else
++    {
++        val.push_back(static_cast<uint8_t>(std::stoul(*value, nullptr, 10)));
++    }
++
++    value = config.map.getLastValueString(Section, "REQMaxRt");
++    if (value == nullptr)
++    {
++        val.push_back(DHCPv6TimingParamDefault::REQMaxRt);
++    }
++    else
++    {
++        val.push_back(static_cast<uint8_t>(std::stoul(*value, nullptr, 10)));
++    }
++
++    value = config.map.getLastValueString(Section, "REQMaxRc");
++    if (value == nullptr)
++    {
++        val.push_back(DHCPv6TimingParamDefault::REQMaxRc);
++    }
++    else
++    {
++        val.push_back(static_cast<uint8_t>(std::stoul(*value, nullptr, 10)));
++    }
++
++    value = config.map.getLastValueString(Section, "RENTimeout");
++    if (value == nullptr)
++    {
++        val.push_back(DHCPv6TimingParamDefault::RENTimeout);
++    }
++    else
++    {
++        val.push_back(static_cast<uint8_t>(std::stoul(*value, nullptr, 10)));
++    }
++
++    value = config.map.getLastValueString(Section, "RENMaxRt");
++    if (value == nullptr)
++    {
++        val.push_back(DHCPv6TimingParamDefault::RENMaxRt);
++    }
++    else
++    {
++        val.push_back(static_cast<uint8_t>(std::stoul(*value, nullptr, 10)));
++    }
++
++    value = config.map.getLastValueString(Section, "REBTimeout");
++    if (value == nullptr)
++    {
++        val.push_back(DHCPv6TimingParamDefault::REBTimeout);
++    }
++    else
++    {
++        val.push_back(std::stoul(*value, nullptr, 10));
++    }
++
++    value = config.map.getLastValueString(Section, "REBMaxRt");
++    if (value == nullptr)
++    {
++        val.push_back(DHCPv6TimingParamDefault::REBMaxRt);
++    }
++    else
++    {
++        val.push_back(static_cast<uint8_t>(std::stoul(*value, nullptr, 10)));
++    }
++
++    value = config.map.getLastValueString(Section, "INFTimeout");
++    if (value == nullptr)
++    {
++        val.push_back(DHCPv6TimingParamDefault::INFTimeout);
++    }
++    else
++    {
++        val.push_back(static_cast<uint8_t>(std::stoul(*value, nullptr, 10)));
++    }
++
++    value = config.map.getLastValueString(Section, "INFMaxRt");
++    if (value == nullptr)
++    {
++        val.push_back(DHCPv6TimingParamDefault::INFMaxRt);
++    }
++    else
++    {
++        val.push_back(static_cast<uint16_t>(std::stoul(*value, nullptr, 10)));
++    }
++
++    return val;
++}
++
++void EthernetInterface::dhcpv6TimingParamWriteConfFile(config::Parser& config)
++{
++    std::vector<uint8_t> value = EthernetInterfaceIntf::dhcpv6TimingConfParam();
++    if (value.empty())
++    {
++        return;
++    }
++    auto it = value.begin();
++
++    auto& dhcp6TimingConf = config.map["DHCPv6TimingConf"].emplace_back();
++
++    float val = 0;
++
++    if (*it != 0)
++    {
++        val = static_cast<float>((
++            (DHCPv6_Timing_Param[2 * static_cast<int>(
++                                         DHCPv6TimingParamIndex::SOLMaxDelay) +
++                                 1] -
++             DHCPv6_Timing_Param
++                 [2 * static_cast<int>(DHCPv6TimingParamIndex::SOLMaxDelay)]) +
++            (static_cast<float>(*it) *
++             DHCPv6_Timing_Param
++                 [2 * static_cast<int>(DHCPv6TimingParamIndex::SOLMaxDelay)])));
++        dhcp6TimingConf["SOLMaxDelay"].emplace_back(fmt::format("{}", val));
++    }
++    it++;
++    if (*it != 0)
++    {
++        val = static_cast<float>((
++            (DHCPv6_Timing_Param[2 * static_cast<int>(
++                                         DHCPv6TimingParamIndex::SOLTimeout) +
++                                 1] -
++             DHCPv6_Timing_Param[2 * static_cast<int>(
++                                         DHCPv6TimingParamIndex::SOLTimeout)]) +
++            (static_cast<float>(*it) *
++             DHCPv6_Timing_Param
++                 [2 * static_cast<int>(DHCPv6TimingParamIndex::SOLTimeout)])));
++        dhcp6TimingConf["SOLTimeout"].emplace_back(fmt::format("{}", val));
++    }
++    it++;
++    if (*it != 0)
++    {
++        val = static_cast<float>(
++            ((DHCPv6_Timing_Param
++                  [2 * static_cast<int>(DHCPv6TimingParamIndex::SOLMaxRt) + 1] -
++              DHCPv6_Timing_Param[2 * static_cast<int>(
++                                          DHCPv6TimingParamIndex::SOLMaxRt)]) +
++             (static_cast<float>(*it) *
++              DHCPv6_Timing_Param[2 * static_cast<int>(
++                                          DHCPv6TimingParamIndex::SOLMaxRt)])));
++        dhcp6TimingConf["SOLMaxRt"].emplace_back(fmt::format("{}", val));
++    }
++    it++;
++    if (*it != 0)
++    {
++        val = static_cast<float>((
++            (DHCPv6_Timing_Param[2 * static_cast<int>(
++                                         DHCPv6TimingParamIndex::REQTimeout) +
++                                 1] -
++             DHCPv6_Timing_Param[2 * static_cast<int>(
++                                         DHCPv6TimingParamIndex::REQTimeout)]) +
++            (static_cast<float>(*it) *
++             DHCPv6_Timing_Param
++                 [2 * static_cast<int>(DHCPv6TimingParamIndex::REQTimeout)])));
++        dhcp6TimingConf["REQTimeout"].emplace_back(fmt::format("{}", val));
++    }
++    it++;
++    if (*it != 0)
++    {
++        val = static_cast<float>(
++            ((DHCPv6_Timing_Param
++                  [2 * static_cast<int>(DHCPv6TimingParamIndex::REQMaxRt) + 1] -
++              DHCPv6_Timing_Param[2 * static_cast<int>(
++                                          DHCPv6TimingParamIndex::REQMaxRt)]) +
++             (static_cast<float>(*it) *
++              DHCPv6_Timing_Param[2 * static_cast<int>(
++                                          DHCPv6TimingParamIndex::REQMaxRt)])));
++        dhcp6TimingConf["REQMaxRt"].emplace_back(fmt::format("{}", val));
++    }
++    it++;
++    if (*it != 0)
++    {
++        val = static_cast<float>(
++            ((DHCPv6_Timing_Param
++                  [2 * static_cast<int>(DHCPv6TimingParamIndex::REQMaxRc) + 1] -
++              DHCPv6_Timing_Param[2 * static_cast<int>(
++                                          DHCPv6TimingParamIndex::REQMaxRc)]) +
++             (static_cast<float>(*it) *
++              DHCPv6_Timing_Param[2 * static_cast<int>(
++                                          DHCPv6TimingParamIndex::REQMaxRc)])));
++        dhcp6TimingConf["REQMaxRc"].emplace_back(fmt::format("{}", val));
++    }
++    it++;
++    if (*it != 0)
++    {
++        val = static_cast<float>((
++            (DHCPv6_Timing_Param[2 * static_cast<int>(
++                                         DHCPv6TimingParamIndex::RENTimeout) +
++                                 1] -
++             DHCPv6_Timing_Param[2 * static_cast<int>(
++                                         DHCPv6TimingParamIndex::RENTimeout)]) +
++            (static_cast<float>(*it) *
++             DHCPv6_Timing_Param
++                 [2 * static_cast<int>(DHCPv6TimingParamIndex::RENTimeout)])));
++        dhcp6TimingConf["RENTimeout"].emplace_back(fmt::format("{}", val));
++    }
++    it++;
++    if (*it != 0)
++    {
++        val = static_cast<float>(
++            ((DHCPv6_Timing_Param
++                  [2 * static_cast<int>(DHCPv6TimingParamIndex::RENMaxRt) + 1] -
++              DHCPv6_Timing_Param[2 * static_cast<int>(
++                                          DHCPv6TimingParamIndex::RENMaxRt)]) +
++             (static_cast<float>(*it) *
++              DHCPv6_Timing_Param[2 * static_cast<int>(
++                                          DHCPv6TimingParamIndex::RENMaxRt)])));
++        dhcp6TimingConf["RENMaxRt"].emplace_back(fmt::format("{}", val));
++    }
++    it++;
++    if (*it != 0)
++    {
++        val = static_cast<float>((
++            (DHCPv6_Timing_Param[2 * static_cast<int>(
++                                         DHCPv6TimingParamIndex::REBTimeout) +
++                                 1] -
++             DHCPv6_Timing_Param[2 * static_cast<int>(
++                                         DHCPv6TimingParamIndex::REBTimeout)]) +
++            (static_cast<float>(*it) *
++             DHCPv6_Timing_Param
++                 [2 * static_cast<int>(DHCPv6TimingParamIndex::REBTimeout)])));
++        dhcp6TimingConf["REBTimeout"].emplace_back(fmt::format("{}", val));
++    }
++    it++;
++    if (*it != 0)
++    {
++        val = static_cast<float>(
++            ((DHCPv6_Timing_Param
++                  [2 * static_cast<int>(DHCPv6TimingParamIndex::REBMaxRt) + 1] -
++              DHCPv6_Timing_Param[2 * static_cast<int>(
++                                          DHCPv6TimingParamIndex::REBMaxRt)]) +
++             (static_cast<float>(*it) *
++              DHCPv6_Timing_Param[2 * static_cast<int>(
++                                          DHCPv6TimingParamIndex::REBMaxRt)])));
++        dhcp6TimingConf["REBMaxRt"].emplace_back(fmt::format("{}", val));
++    }
++    it++;
++    if (*it != 0)
++    {
++        val = static_cast<float>((
++            (DHCPv6_Timing_Param[2 * static_cast<int>(
++                                         DHCPv6TimingParamIndex::INFTimeout) +
++                                 1] -
++             DHCPv6_Timing_Param[2 * static_cast<int>(
++                                         DHCPv6TimingParamIndex::INFTimeout)]) +
++            (static_cast<float>(*it) *
++             DHCPv6_Timing_Param
++                 [2 * static_cast<int>(DHCPv6TimingParamIndex::INFTimeout)])));
++        dhcp6TimingConf["INFTimeout"].emplace_back(fmt::format("{}", val));
++    }
++    it++;
++    if (*it != 0)
++    {
++        val = static_cast<float>(
++            ((DHCPv6_Timing_Param
++                  [2 * static_cast<int>(DHCPv6TimingParamIndex::INFMaxRt) + 1] -
++              DHCPv6_Timing_Param[2 * static_cast<int>(
++                                          DHCPv6TimingParamIndex::INFMaxRt)]) +
++             (static_cast<float>(*it) *
++              DHCPv6_Timing_Param[2 * static_cast<int>(
++                                          DHCPv6TimingParamIndex::INFMaxRt)])));
++        dhcp6TimingConf["INFMaxRt"].emplace_back(fmt::format("{}", val));
++    }
++}
++
++/** Set value of DHCPv6TimingConfParam */
++std::vector<uint8_t>
++    EthernetInterface::dhcpv6TimingConfParam(std::vector<uint8_t> value)
++{
++    if (value.size() != MAX_SUPPORTED_DHCPv6_TIMING_PARAMS)
++    {
++        log<level::ERR>(
++            fmt::format("Provided arguments data is not 12 bytes for {}.\n",
++                        interfaceName())
++                .c_str());
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("size"),
++            Argument::ARGUMENT_VALUE(std::to_string(value.size()).c_str()));
++    }
++
++    for (auto i : value)
++    {
++        if (i == 0)
++        {
++            log<level::ERR>(
++                fmt::format(
++                    "Provided arguments value zero is not allowed for index {}.\n",
++                    i)
++                    .c_str());
++            elog<InvalidArgument>(
++                Argument::ARGUMENT_NAME("size"),
++                Argument::ARGUMENT_VALUE(std::to_string(value.size()).c_str()));
++        }
++    }
++    if (value[static_cast<int>(DHCPv6TimingParamIndex::SOLMaxDelay)] > 254)
++    {
++        log<level::ERR>(
++            fmt::format("SOLMaxDelay is above max acceptable value for {}.\n",
++                        interfaceName())
++                .c_str());
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("SOLMaxDelay"),
++            Argument::ARGUMENT_VALUE(
++                std::to_string(value[static_cast<int>(
++                                   DHCPv6TimingParamIndex::SOLMaxDelay)])
++                    .c_str()));
++    }
++
++    if (value[static_cast<int>(DHCPv6TimingParamIndex::SOLTimeout)] > 254)
++    {
++        log<level::ERR>(
++            fmt::format("INFTimeout is above max acceptable value for {}.\n",
++                        interfaceName())
++                .c_str());
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("SOLTimeout"),
++            Argument::ARGUMENT_VALUE(
++                std::to_string(
++                    value[static_cast<int>(DHCPv6TimingParamIndex::SOLTimeout)])
++                    .c_str()));
++    }
++
++    if (value[static_cast<int>(DHCPv6TimingParamIndex::REQTimeout)] > 254)
++    {
++        log<level::ERR>(
++            fmt::format("REQTimeout is above max acceptable value for {}.\n",
++                        interfaceName())
++                .c_str());
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("REQTimeout"),
++            Argument::ARGUMENT_VALUE(
++                std::to_string(
++                    value[static_cast<int>(DHCPv6TimingParamIndex::REQTimeout)])
++                    .c_str()));
++    }
++
++    if (value[static_cast<int>(DHCPv6TimingParamIndex::REQMaxRc)] > 101)
++    {
++        log<level::ERR>(
++            fmt::format("REQMaxRc is above max acceptable value for {}.\n",
++                        interfaceName())
++                .c_str());
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("REQMaxRc"),
++            Argument::ARGUMENT_VALUE(
++                std::to_string(
++                    value[static_cast<int>(DHCPv6TimingParamIndex::REQMaxRc)])
++                    .c_str()));
++    }
++
++    if (value[static_cast<int>(DHCPv6TimingParamIndex::INFTimeout)] > 254)
++    {
++        log<level::ERR>(
++            fmt::format("INFTimeout is above max acceptable value for {}.\n",
++                        interfaceName())
++                .c_str());
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("INFTimeout"),
++            Argument::ARGUMENT_VALUE(
++                std::to_string(
++                    value[static_cast<int>(DHCPv6TimingParamIndex::INFTimeout)])
++                    .c_str()));
++    }
++
++    value = EthernetInterfaceIntf::dhcpv6TimingConfParam(value);
++    writeConfigurationFile();
++    writeIfaceStateFile(interfaceName());
++    manager.get().reloadConfigs();
++    return value;
++}
++
+ } // namespace network
+ } // namespace phosphor
+diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
+index 5cbbab9..e2aff55 100644
+--- a/src/ethernet_interface.hpp
++++ b/src/ethernet_interface.hpp
+@@ -70,6 +70,40 @@ namespace config
+ class Parser;
+ }
+ 
++#define MAX_SUPPORTED_DHCPv6_TIMING_PARAMS 12
++
++namespace DHCPv6TimingParamDefault
++{
++constexpr uint8_t SOLMaxDelay = 2;
++constexpr uint8_t SOLTimeout = 2;
++constexpr uint8_t SOLMaxRt = 4;
++constexpr uint8_t REQTimeout = 2;
++constexpr uint8_t REQMaxRt = 211;
++constexpr uint8_t REQMaxRc = 11;
++constexpr uint8_t RENTimeout = 5;
++constexpr uint8_t RENMaxRt = 60;
++constexpr uint8_t REBTimeout = 5;
++constexpr uint8_t REBMaxRt = 60;
++constexpr uint8_t INFTimeout = 2;
++constexpr uint8_t INFMaxRt = 4;
++}; // namespace DHCPv6TimingParamDefault
++
++enum class DHCPv6TimingParamIndex : uint8_t
++{
++    SOLMaxDelay = 0,
++    SOLTimeout = 1,
++    SOLMaxRt = 2,
++    REQTimeout = 3,
++    REQMaxRt = 4,
++    REQMaxRc = 5,
++    RENTimeout = 6,
++    RENMaxRt = 7,
++    REBTimeout = 8,
++    REBMaxRt = 9,
++    INFTimeout = 10,
++    INFMaxRt = 11,
++};
++
+ /** @class EthernetInterface
+  *  @brief OpenBMC Ethernet Interface implementation.
+  *  @details A concrete implementation for the
+@@ -329,6 +363,20 @@ class EthernetInterface : public Ifaces
+      */
+     uint8_t getIfIdx();
+ 
++    /** Get value of DHCPv6DUID */
++    std::string dhcpv6DUID() const override;
++
++    /** Set value of DHCPv6TimingConfParam */
++    std::vector<uint8_t>
++        dhcpv6TimingConfParam(std::vector<uint8_t> value) override;
++
++    /** Parse dhcpv6 timing param to write to network config file */
++    void dhcpv6TimingParamWriteConfFile(config::Parser& config);
++
++    /** Read dhcpv6 timing param from iface config file */
++    std::vector<uint8_t>
++        dhcpv6TimingParamReadIfaceFile(const config::Parser& config);
++
+     using EthernetInterfaceIntf::interfaceName;
+     using EthernetInterfaceIntf::linkUp;
+     using EthernetInterfaceIntf::mtu;
+@@ -341,6 +389,8 @@ class EthernetInterface : public Ifaces
+     using EthernetInterfaceIntf::autoNeg;
+     using EthernetInterfaceIntf::defaultGateway;
+     using EthernetInterfaceIntf::defaultGateway6;
++    using EthernetInterfaceIntf::dhcpv6DUID;
++    using EthernetInterfaceIntf::dhcpv6TimingConfParam;
+     using EthernetInterfaceIntf::domainName;
+     using EthernetInterfaceIntf::ipv4Enable;
+     using EthernetInterfaceIntf::ipv6Enable;
