@@ -8,7 +8,7 @@ EXTRA_OEMESON += "-Dredfish-dbus-log=enabled"
 # add "redfish-hostiface" group
 GROUPADD_PARAM:${PN}:append = ";redfish-hostiface"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/bmcweb;branch=latest;protocol=https;name=override;"
+SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/bmcweb;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
 SRCREV_override = "0bcb66b92057646b6cd90ceedca3d7deb3fc587a"
 
