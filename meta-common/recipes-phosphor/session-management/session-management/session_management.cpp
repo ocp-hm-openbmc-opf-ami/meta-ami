@@ -17,9 +17,9 @@
 #include <tuple>
 #include <vector>
 
-static std::vector<sessionInfo> kvmSessionInfo;
-static std::vector<sessionInfo> webSessionInfo;
-static std::vector<sessionInfo> vmediaSessionInfo;
+static std::vector<SessionInfo> kvmSessionInfo;
+static std::vector<SessionInfo> webSessionInfo;
+static std::vector<SessionInfo> vmediaSessionInfo;
 static uint16_t Id = 0;
 
 /** @brief Implementation for SessionUnregister
@@ -114,15 +114,15 @@ bool sessionUnregister(uint8_t sessionId, uint8_t sessionType, int reason)
 
 bool sessionRegister(uint8_t sessionId, std::string ipAdress,
                      std::string userName, uint8_t sessionType,
-                     uint8_t previlage, uint8_t userId)
+                     uint8_t previlage, uint8_t userId, std::string mountingMethod)
 {
-    sessionInfo temp;
+    SessionInfo temp;
     if (sessionId == 0 && (sessionType <= maxSessionType) &&
         (validPriv.find(previlage) != validPriv.end()))
     {
         Id++;
         temp =
-            make_tuple(Id, ipAdress, userName, sessionType, previlage, userId);
+            make_tuple(Id, ipAdress, userName, sessionType, previlage, userId, mountingMethod);
     }
     else
     {
@@ -255,10 +255,10 @@ int main()
     iface->register_method(
         "SessionRegister",
         [](uint8_t sessionId, std::string ipAdress, std::string userName,
-           uint8_t sessionType, uint8_t previlage, uint8_t userId)
+           uint8_t sessionType, uint8_t previlage, uint8_t userId, std::string additionalConfigValue)
         {
             bool response = sessionRegister(sessionId, ipAdress, userName,
-                                            sessionType, previlage, userId);
+                                            sessionType, previlage, userId, additionalConfigValue);
             return response;
         });
 

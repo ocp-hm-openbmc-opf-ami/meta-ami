@@ -8,6 +8,7 @@ SRC_URI += "file://0001-virtual-media-https-support.patch \
 	    file://0006-VMM-Session-Management-Support.patch \
 	    file://0007-OT-3805-AST2700-Support.patch \
 	    file://0008-OT-3061-Posix-fadvise-cache-drop-for-virtual-media-r.patch \
+            file://0010-OT-5816-Updated-SessionRegister-method-call.patch \
            "
 
 RDEPENDS:${PN} = "nbd-client nbdkit nfs-export-root"
