@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-host-ipmid.git;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "17c0c01c14bd22f75d903489fdd356bd0bff78ab"
+SRCREV_override = "590b8ff9be5495988c9fef86e6e4a30e7edafcef"
 
 
 SRC_URI += " \
