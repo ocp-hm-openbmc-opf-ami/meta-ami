@@ -49,6 +49,7 @@ SRC_URI:append = " \
              file://0038-Clear-IPv6-Static-Router-Address-when-Static-control.patch \
              file://0037-Support-IPv6-Dynamic-and-Static-Router-Commands.patch \
              file://0038-Support-DHCPv6-Transmission-Retransmission-Timing-Parameters.patch \
+             file://0039-Support-SLAAC-Timing-Configuration-Parameters.patch \
              "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
