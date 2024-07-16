@@ -3,7 +3,8 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 SRCREV ="04d12152001437186e7e0e907973d66311466a89"
 
 SRC_URI += " \
-  file://Support-SPDM-1.1-functions.patch \
+  file://0001-Support-SPDM-1.1-functions.patch \
+  file://0002-Migrate-to-libspdm-3.1.1.patch \
   file://sample_keys.tgz;subdir=./git \
 "
 
