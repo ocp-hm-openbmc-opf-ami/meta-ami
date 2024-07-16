@@ -67,7 +67,7 @@ do_install:append() {
     echo "net.ipv4.conf.default.arp_ignore=1" >> ${D}/etc/sysctl.d/99-network.conf
 }
 
-#EXTRA_OEMESON:append = " -Dpersist-mac=true"
+EXTRA_OEMESON:append = " -Dpersist-mac=true"
 
 EXTRA_OEMESON:append = " -Ddefault-link-local-autoconf=ipv6"
 
