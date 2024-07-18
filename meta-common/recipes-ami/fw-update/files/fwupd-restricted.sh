@@ -23,6 +23,7 @@ update=/run/initramfs/update
 SLOT_FILE=/run/media/slot
 whitelist=/run/initramfs/whitelist
 uboot_env_bin_file="uboot_env_data.bin"
+preserve_bios="/tmp/preserveBIOS.json"
 NON_INTEL_PLATFORMS_MODE=1
 immediate="xyz.openbmc_project.Software.ApplyTime.RequestedApplyTimes.Immediate"
 atMaintenanceWindowStart="xyz.openbmc_project.Software.ApplyTime.RequestedApplyTimes.AtMaintenanceWindowStart"
@@ -144,6 +145,96 @@ check_preserv_config() {
     else
         log "ClearConfig is not available"
     fi
+}
+
+check_preserve_bios_config() {
+    value=$(busctl get-property xyz.openbmc_project.Software.BMC.Updater \
+            /xyz/openbmc_project/software \
+            xyz.openbmc_project.Software.ApplyOptions ClearConfig \
+            | awk '{print $2}' )
+    local mtdPart=$( cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"pnor\"" {print $1}')
+
+    if [ ! -f $preserve_bios ]; then
+        log "BIOS Full Flash - Preserve Configuration JSON not present"
+        return
+    fi
+
+    if [ -n "$value" ]; then
+        if [ "$value" = "true" ]; then
+            log "BIOS Full Flash - Not Preserved the Config"
+        else
+            log "BIOS Full Flash - Start Preserve Config"
+
+            json_data=$(cat $preserve_bios)
+
+            config_keys=$(echo "$json_data" | grep -o '"[^"]*": {' | awk -F'"' '{print $2}')
+
+            for key in $config_keys; do
+                block=$(echo "$json_data" | awk -v RS="}" "/\"$key\"/ {print \$0 RS}")
+
+                # Extract start, length value from the block
+                start=$(echo "$block" | grep -o '"start": *"[^"]*"' | awk -F'"' '{print $4}')
+                length=$(echo "$block" | grep -o '"length": *"[^"]*"' | awk -F'"' '{print $4}')
+
+                nanddump -s $start -l $length /dev/$mtdPart > /tmp/preserve_bios_$key
+                if [[ $? -eq 0 ]]; then
+                    log "BIOS $key Configs Preserved successfully"
+                else
+                    log "BIOS $key Configs Preserved failed"
+                fi
+
+            done
+        fi
+    else
+        log "ClearConfig is not available"
+    fi
+}
+
+restore_bios_configs() {
+    value=$(busctl get-property xyz.openbmc_project.Software.BMC.Updater \
+            /xyz/openbmc_project/software \
+            xyz.openbmc_project.Software.ApplyOptions ClearConfig \
+            | awk '{print $2}' )
+
+    if [ "$value" = "true" ]; then
+        # set clear configs to false
+        busctl set-property xyz.openbmc_project.Software.BMC.Updater \
+            /xyz/openbmc_project/software \
+            xyz.openbmc_project.Software.ApplyOptions ClearConfig \
+            b false
+        return
+    fi
+
+    if [ ! -f $preserve_bios ]; then
+        log "BIOS Full Flash - Preserve Configuration JSON not present"
+        return
+    fi
+
+    local mtdPart=$( cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"pnor\"" {print $1}')
+
+    json_data=$(cat $preserve_bios)
+
+    config_keys=$(echo "$json_data" | grep -o '"[^"]*": {' | awk -F'"' '{print $2}')
+
+    for key in $config_keys; do
+        block=$(echo "$json_data" | awk -v RS="}" "/\"$key\"/ {print \$0 RS}")
+
+        # Extract start, length value from the block
+        start=$(echo "$block" | grep -o '"start": *"[^"]*"' | awk -F'"' '{print $4}')
+
+        nandwrite -s $start /dev/${mtdPart} /tmp/preserve_bios_$key
+        if [[ $? -eq 0 ]]; then
+            log "BIOS Full Flash - restore $key Configs Preserved successfully"
+        else
+            log "BIOS Full Flash - restore $key Configs Preserved failed"
+        fi
+
+    done
+
+    for key in $config_keys; do
+        rm -rf /tmp/preserve_bios_$key
+    done
+
 }
 
 redfish_log_fw_evt() {
@@ -280,12 +371,15 @@ ifwi_full_flash() {
     fi
 
     # Flash: writing to BIOS SPI device
+    check_preserve_bios_config
     log "IFWI Full Flash - Starting the SPI write. It will take ~5 minutes...."
-    local rc=$(mtd-util -d /dev/$mtdPart c $LOCAL_PATH 0)
+    # local rc=$(mtd-util -d /dev/$mtdPart c $LOCAL_PATH 0)
+    local rc=$(flashcp $LOCAL_PATH /dev/$mtdPart)
     # Log Event: Update percentage and log event
     update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
     if [[ "$rc" -eq 0 ]]; then
         log "IFWI Full Flash - Image update successful"
+        restore_bios_configs
         redfish_log_fw_evt success
         update_percentage $UPDATE_PERCENT_SUCCESS         
         return 0
@@ -293,7 +387,7 @@ ifwi_full_flash() {
         log "IFWI Full Flash - Image update failed"
         redfish_log_abort " IFWI Full Flash - Image update failed"        
         update_percentage $UPDATE_PERCENT_FAIL
-	return 1
+	    return 1
     fi
 }
 
