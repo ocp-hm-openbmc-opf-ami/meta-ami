@@ -51,6 +51,7 @@ SRC_URI:append = " \
              file://0038-Support-DHCPv6-Transmission-Retransmission-Timing-Parameters.patch \
              file://0039-Support-SLAAC-Timing-Configuration-Parameters.patch \
              file://0040-Fix-Index-of-VLAN-Interface-Not-Got.patch \
+             file://0040-Fix-Static-Router2-IP-When-Static-Router-is-Enabled-or-Disabled.patch \
              "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
