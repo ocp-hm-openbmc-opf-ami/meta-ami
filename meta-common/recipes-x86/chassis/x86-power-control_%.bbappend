@@ -15,10 +15,18 @@ SRC_URI_EGS:append = " \
                       file://0005-Power-operation-for-future-time.patch \
                      "
 
+SRC_URI_AMD:append = " \
+                      file://0004-Add-Task-interface-and-property.patch \
+                      file://0003-egs-Not-able-to-do-power-cycle-if-one-task-is-in-running.patch \
+                      file://0005-Power-operation-for-future-time.patch \
+                      file://0001-AMD-Power-Control.patch \
+                     "
+
 SRC_URI_BHS:append = "file://0003-bhs-Not-able-to-do-power-cycle-if-one-task-is-in-running.patch"
 
 #EVB:append = "file://0003-evb-Not-able-to-do-power-cycle-if-one-task-is-in-running.patch"
 
+SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'amd-chalupa', SRC_URI_AMD, '', d)}"
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'egs', SRC_URI_EGS, '', d)}"
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'bhs', SRC_URI_BHS, '', d)}"
 #SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb-ast2600', EVB, '', d)}"

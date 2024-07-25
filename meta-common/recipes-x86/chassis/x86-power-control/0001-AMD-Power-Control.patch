@@ -1,0 +1,1066 @@
+From 7bc9b09f023565ecaa2829a2a19b55d35ace3147 Mon Sep 17 00:00:00 2001
+From: prasannas <prasannas@ami.com>
+Date: Wed, 24 Jul 2024 23:57:55 +0530
+Subject: [PATCH] AMD Power Control
+
+---
+ src/power_control.cpp | 612 ++++++++++++++++++++++++++++++++++++------
+ 1 file changed, 530 insertions(+), 82 deletions(-)
+
+diff --git a/src/power_control.cpp b/src/power_control.cpp
+index d1218d3..e6d82f8 100644
+--- a/src/power_control.cpp
++++ b/src/power_control.cpp
+@@ -36,6 +36,54 @@
+ #include <iostream>
+ #include <string_view>
+ 
++#define CMD_BUFF_LEN (256)
++#include <cstdio>
++#include <fstream>
++#include <iostream>
++
++void apml_unbind()
++{
++    int rc;
++    // Unbind sbtsi and sbrmi drivers
++    char cmd[CMD_BUFF_LEN];
++
++    sprintf(cmd, "/usr/bin/set-apml.sh unbind");
++    rc = system(cmd);
++    if (rc < 0)
++        sd_journal_print(LOG_ERR, "Failed to run system cmd: %s \n", cmd);
++}
++
++int apml_bind()
++{
++    int rc;
++    // bind sbtsi and sbrmi drivers
++    char cmd[CMD_BUFF_LEN];
++
++    sprintf(cmd, "/usr/bin/set-apml.sh bind");
++    rc = system(cmd);
++    if (rc < 0)
++        sd_journal_print(LOG_ERR, "Failed to run system cmd: %s \n", cmd);
++    return rc;
++}
++
++#define APML_INIT_DONE_FILE "/tmp/apml_init_complete"
++#define APML_BINDED_DEVNODE "/dev/sbrmi0"
++
++int apml_check_complete(void)
++{
++    int rc;
++    struct stat buffer;
++    char cmd[CMD_BUFF_LEN];
++    if (stat(APML_BINDED_DEVNODE, &buffer) == 0)
++        sprintf(cmd, "touch %s", APML_INIT_DONE_FILE);
++    else
++        sprintf(cmd, "rm -f %s", APML_INIT_DONE_FILE);
++    rc = system(cmd);
++    if (rc < 0)
++        sd_journal_print(LOG_ERR, "Failed to set apml ready\n");
++    return rc;
++}
++
+ static std::shared_ptr<sdbusplus::asio::dbus_interface> taskIface;
+ 
+ namespace power_control
+@@ -98,25 +146,21 @@ static ConfigData resetButtonConfig;
+ static ConfigData idButtonConfig;
+ static ConfigData nmiButtonConfig;
+ static ConfigData slotPowerConfig;
+-static ConfigData hpmStbyEnConfig;
++
++static ConfigData RSMResetOutConfig;
++static ConfigData BMCReadyConfig;
++static ConfigData WARMRSTConfig;
++static ConfigData SOCRSTConfig;
+ 
+ // map for storing list of gpio parameters whose config are to be read from x86
+ // power control json config
+ boost::container::flat_map<std::string, ConfigData*> powerSignalMap = {
+-    {"PowerOut", &powerOutConfig},
+-    {"PowerOk", &powerOkConfig},
+-    {"ResetOut", &resetOutConfig},
+-    {"NMIOut", &nmiOutConfig},
+-    {"SioPowerGood", &sioPwrGoodConfig},
+-    {"SioOnControl", &sioOnControlConfig},
+-    {"SIOS5", &sioS5Config},
+-    {"PostComplete", &postCompleteConfig},
+-    {"PowerButton", &powerButtonConfig},
+-    {"ResetButton", &resetButtonConfig},
+-    {"IdButton", &idButtonConfig},
+-    {"NMIButton", &nmiButtonConfig},
+-    {"SlotPower", &slotPowerConfig},
+-    {"HpmStbyEn", &hpmStbyEnConfig}};
++    {"PowerOut", &powerOutConfig},         {"PowerOk", &powerOkConfig},
++    {"ResetOut", &resetOutConfig},         {"NMIOut", &nmiOutConfig},
++    {"PostComplete", &postCompleteConfig}, {"PowerButton", &powerButtonConfig},
++    {"ResetButton", &resetButtonConfig},   {"NMIButton", &nmiButtonConfig},
++    {"RSMResetOut", &RSMResetOutConfig},   {"BMCReady", &BMCReadyConfig},
++    {"WARMRST", &WARMRSTConfig},           {"SOCRST", &SOCRSTConfig}};
+ 
+ static std::string hostDbusName = "xyz.openbmc_project.State.Host";
+ static std::string chassisDbusName = "xyz.openbmc_project.State.Chassis";
+@@ -155,14 +199,15 @@ static bool ignoreNextSoftReset = false;
+ 
+ // This map contains all timer values that are to be read from json config
+ boost::container::flat_map<std::string, int> TimerMap = {
+-    {"PowerPulseMs", 200},
+-    {"ForceOffPulseMs", 15000},
+-    {"ResetPulseMs", 500},
++    {"PowerPulseMs", 100},
++    {"ForceOffPulseMs", 5000},
++    {"ResetPulseMs", 100},
+     {"PowerCycleMs", 5000},
+     {"SioPowerGoodWatchdogMs", 1000},
+     {"PsPowerOKWatchdogMs", 8000},
+-    {"GracefulPowerOffS", (5 * 60)},
+-    {"WarmResetCheckMs", 500},
++    {"psPowerOKRampDownMs", 8000},
++    {"GracefulPowerOffS", 90000},
++    {"WarmResetCheckMs", 1000},
+     {"PowerOffSaveMs", 7000},
+     {"SlotPowerCycleMs", 200},
+     {"DbusGetPropertyRetry", 1000}};
+@@ -184,6 +229,8 @@ static boost::asio::steady_timer warmResetCheckTimer(io);
+ static boost::asio::steady_timer psPowerOKWatchdogTimer(io);
+ // Time SIO power good assertion on power-on
+ static boost::asio::steady_timer sioPowerGoodWatchdogTimer(io);
++// Time power supply power OK ramp down on force power off
++static boost::asio::steady_timer psPowerOKRampDownTimer(io);
+ // Time power-off state save for power loss tracking
+ static boost::asio::steady_timer powerStateSaveTimer(io);
+ // POH timer
+@@ -217,11 +264,201 @@ static gpiod::line idButtonLine;
+ static boost::asio::posix::stream_descriptor idButtonEvent(io);
+ static gpiod::line postCompleteLine;
+ static boost::asio::posix::stream_descriptor postCompleteEvent(io);
++static gpiod::line P0ThermtripLine;
++static boost::asio::posix::stream_descriptor P0ThermtripEvent(io);
++static gpiod::line P1ThermtripLine;
++static boost::asio::posix::stream_descriptor P1ThermtripEvent(io);
+ static gpiod::line nmiOutLine;
+ static gpiod::line slotPowerLine;
+ 
+ static constexpr uint8_t beepPowerFail = 8;
+ 
++///////////////////////////////////////////////////////////////////////////////////
++#define AST_SCU_REG_BASE 0x1E6E2000
++
++typedef struct
++{
++    int g_mem_fd;
++    void* g_last_map;
++} MMAP_HANDLE;
++
++void* InitMmap(void)
++{
++    MMAP_HANDLE* handle;
++    int g_mem_fd;
++
++    /* Open Memory Driver */
++    g_mem_fd = open("/dev/mem", O_RDWR | O_SYNC);
++    if (g_mem_fd < 0)
++    {
++        lg2::error("ERROR: Unable to open Memory Access Driver");
++        return NULL;
++    }
++
++    handle = (MMAP_HANDLE*)malloc(sizeof(MMAP_HANDLE));
++    if (handle == NULL)
++    {
++        lg2::error("ERROR: Unable to Allocate Memory for Handle");
++        close(g_mem_fd);
++        return NULL;
++    }
++
++    handle->g_mem_fd = g_mem_fd;
++    handle->g_last_map = NULL;
++
++    return (void*)handle;
++}
++
++void UnMapMemory(void* handle)
++{
++    MMAP_HANDLE* g_handle = (MMAP_HANDLE*)handle;
++    int page_size = getpagesize();
++    if (g_handle->g_last_map != NULL)
++    {
++        if (munmap(g_handle->g_last_map, page_size) == -1)
++        {
++            lg2::error("Error in unmapping");
++        }
++        g_handle->g_last_map = NULL;
++    }
++}
++
++void ExitMmap(void* handle)
++{
++    MMAP_HANDLE* g_handle = (MMAP_HANDLE*)handle;
++
++    if (g_handle->g_last_map != NULL)
++        UnMapMemory(handle);
++
++    if (g_handle->g_mem_fd >= 0)
++    {
++        close(g_handle->g_mem_fd);
++        g_handle->g_mem_fd = -1;
++    }
++
++    free(handle);
++
++    return;
++}
++
++void* MapMemory(void* handle, unsigned long addr, unsigned long* len)
++{
++    void* mapaddr;
++    unsigned long offset = 0;
++    MMAP_HANDLE* g_handle = (MMAP_HANDLE*)handle;
++    int page_size = getpagesize();
++
++    if (g_handle->g_last_map != NULL)
++        UnMapMemory(handle);
++
++    if (addr % page_size)
++        offset = (addr % page_size);
++
++    addr -= offset;
++
++    mapaddr = mmap(0, page_size, PROT_READ | PROT_WRITE, MAP_SHARED,
++                   g_handle->g_mem_fd, addr);
++
++    if (mapaddr == MAP_FAILED)
++    {
++        lg2::error("ERROR: Failed to map physical memory");
++        g_handle->g_last_map = NULL;
++        return NULL;
++    }
++    g_handle->g_last_map = mapaddr;
++
++    *len = page_size - offset;
++    return mapaddr + offset;
++}
++
++int mmap_read32(unsigned long addr, unsigned long* data)
++{
++    void *handle, *map;
++    unsigned long len;
++
++    if (addr % 4)
++    {
++        lg2::error("ERROR: Cannot access Unaligned Address");
++        return 1;
++    }
++
++    handle = InitMmap();
++    if (handle == NULL)
++    {
++        return 1;
++    }
++
++    map = MapMemory(handle, addr, &len);
++    if (map == NULL)
++    {
++        ExitMmap(handle);
++        return 1;
++    }
++
++    *data = *(unsigned long*)map;
++
++    ExitMmap(handle);
++    return 0;
++}
++
++int mmap_write32(unsigned long addr, unsigned long data)
++{
++    void *handle, *map;
++    unsigned long len;
++
++    if (addr % 4)
++    {
++        lg2::error("ERROR: Cannot access Unaligned Address");
++        return 1;
++    }
++
++    handle = InitMmap();
++    if (handle == NULL)
++    {
++        return 1;
++    }
++    map = MapMemory(handle, addr, &len);
++    if (map == NULL)
++    {
++        ExitMmap(handle);
++        return 1;
++    }
++
++    *(unsigned long*)map = data;
++
++    ExitMmap(handle);
++    return 0;
++}
++
++int ForceDisablePassThrough(void)
++{
++    unsigned long Value = 0;
++    if (!mmap_read32((AST_SCU_REG_BASE + 0x4BC), &Value))
++    {
++        Value = Value & 0xC0FFFFFF;
++        return mmap_write32((AST_SCU_REG_BASE + 0x4BC), Value);
++    }
++    return 1;
++}
++
++int DbgPassThrough(void)
++{
++    unsigned long Value = 0;
++    char sBuf[256];
++
++    if (mmap_read32((AST_SCU_REG_BASE + 0x4BC), &Value))
++    {
++        lg2::error("DbgPassThrough: mmap_read32 failed");
++        return 1;
++    }
++    sprintf(sBuf, "Reg: 0x4BC: Val: 0x%lx", Value);
++    lg2::error("DbgPassThrough: {NAME}", "NAME", std::string(sBuf));
++
++    return 0;
++}
++
++///////////////////////////////////////////////////////////////////////////////////
++
+ static void beep(const uint8_t& beepPriority)
+ {
+     lg2::info("Beep with priority: {BEEP_PRIORITY}", "BEEP_PRIORITY",
+@@ -236,8 +473,7 @@ static void beep(const uint8_t& beepPriority)
+                 "ERROR_MSG", ec.message());
+             return;
+         }
+-    },
+-        "xyz.openbmc_project.BeepCode", "/xyz/openbmc_project/BeepCode",
++    }, "xyz.openbmc_project.BeepCode", "/xyz/openbmc_project/BeepCode",
+         "xyz.openbmc_project.BeepCode", "Beep", uint8_t(beepPriority));
+ }
+ 
+@@ -295,6 +531,42 @@ enum class PowerState
+     checkForWarmReset,
+ };
+ static PowerState powerState;
++
++static int getGPIOValue(const std::string& name)
++{
++    int value;
++    gpiod::line gpioLine;
++    // Find the GPIO line
++    gpioLine = gpiod::find_line(name);
++    if (!gpioLine)
++    {
++        lg2::error("getGPIOValue: can't find line: {NAME}", "NAME", name);
++        return -1;
++    }
++    try
++    {
++        gpioLine.request(
++            {__FUNCTION__, gpiod::line_request::DIRECTION_INPUT, {}});
++    }
++    catch (std::system_error& exc)
++    {
++        lg2::error("getGPIOValue: error set gpio as input: {NAME}", "NAME",
++                   name);
++    }
++
++    try
++    {
++        value = gpioLine.get_value();
++    }
++    catch (std::system_error& exc)
++    {
++        lg2::error("getGPIOValue: error get gpio value: {NAME}", "NAME", name);
++        return -1;
++    }
++
++    return value;
++}
++
+ static std::string getPowerStateName(PowerState state)
+ {
+     switch (state)
+@@ -365,6 +637,7 @@ enum class Event
+     gracefulPowerOffRequest,
+     gracefulPowerCycleRequest,
+     warmResetDetected,
++    psPowerOKRampDownTimerExpired,
+ };
+ static std::string getEventName(Event event)
+ {
+@@ -412,6 +685,8 @@ static std::string getEventName(Event event)
+         case Event::psPowerOKWatchdogTimerExpired:
+             return "power supply power OK watchdog timer expired";
+             break;
++        case Event::psPowerOKRampDownTimerExpired:
++            return "power supply power OK RampDown timer expired";
+         case Event::sioPowerGoodWatchdogTimerExpired:
+             return "SIO power good watchdog timer expired";
+             break;
+@@ -533,15 +808,15 @@ static constexpr std::string_view getHostState(const PowerState state)
+     switch (state)
+     {
+         case PowerState::on:
++        case PowerState::transitionToOff:
+         case PowerState::gracefulTransitionToOff:
++        case PowerState::transitionToCycleOff:
+         case PowerState::gracefulTransitionToCycleOff:
+             return "xyz.openbmc_project.State.Host.HostState.Running";
+             break;
+         case PowerState::waitForPSPowerOK:
+         case PowerState::waitForSIOPowerGood:
+         case PowerState::off:
+-        case PowerState::transitionToOff:
+-        case PowerState::transitionToCycleOff:
+         case PowerState::cycleOff:
+         case PowerState::checkForWarmReset:
+             return "xyz.openbmc_project.State.Host.HostState.Off";
+@@ -732,8 +1007,7 @@ static void resetACBootProperty()
+             {
+                 lg2::error("failed to reset ACBoot property");
+             }
+-        },
+-            "xyz.openbmc_project.Settings",
++        }, "xyz.openbmc_project.Settings",
+             "/xyz/openbmc_project/control/host0/ac_boot",
+             "org.freedesktop.DBus.Properties", "Set",
+             "xyz.openbmc_project.Common.ACBoot", "ACBoot",
+@@ -804,6 +1078,15 @@ static void psPowerOKFailedLog()
+         TimerMap["PsPowerOKWatchdogMs"], NULL);
+ }
+ 
++static void psPowerOKRampDownFailedLog()
++{
++    sd_journal_send(
++        "MESSAGE=PowerControl: power supply power good failed to rampdown",
++        "PRIORITY=%i", LOG_INFO, "REDFISH_MESSAGE_ID=%s",
++        "OpenBMC.0.1.PowerSupplyPowerGoodRampDownFailed",
++        "REDFISH_MESSAGE_ARGS=%d", TimerMap["psPowerOKRampDownMs"], NULL);
++}
++
+ static void powerRestorePolicyLog()
+ {
+     sd_journal_send("MESSAGE=PowerControl: power restore policy applied",
+@@ -811,6 +1094,14 @@ static void powerRestorePolicyLog()
+                     "OpenBMC.0.1.PowerRestorePolicyApplied", NULL);
+ }
+ 
++static void RSMresetLog()
++{
++    std::string ras_err_msg = "Request to issue SOC Reset (RSMRST)";
++    sd_journal_send("MESSAGE=%s", ras_err_msg.c_str(), "PRIORITY=%i", LOG_ERR,
++                    "REDFISH_MESSAGE_ID=%s", "OpenBMC.0.1.CPUError",
++                    "REDFISH_MESSAGE_ARGS=%s", ras_err_msg.c_str(), NULL);
++}
++
+ static void powerButtonPressLog()
+ {
+     sd_journal_send("MESSAGE=PowerControl: power button pressed", "PRIORITY=%i",
+@@ -1201,9 +1492,14 @@ static void waitForGPIOEvent(const std::string& name,
+             // restart?
+             return;
+         }
++        lg2::error("Dbg: waitForGPIOEvent: {NAME}: Get Event", "NAME", name);
+         gpiod::line_event line_event = line.event_read();
++        ForceDisablePassThrough();
+         eventHandler(line_event.event_type == gpiod::line_event::RISING_EDGE);
++        lg2::error("Dbg: waitForGPIOEvent: {NAME}: Event handle done", "NAME",
++                   name);
+         waitForGPIOEvent(name, eventHandler, line, event);
++        ForceDisablePassThrough();
+     });
+ }
+ 
+@@ -1239,8 +1535,10 @@ static bool requestGPIOEvents(
+     }
+ 
+     gpioEventDescriptor.assign(gpioLineFd);
++    ForceDisablePassThrough();
+ 
+     waitForGPIOEvent(name, handler, gpioLine, gpioEventDescriptor);
++    ForceDisablePassThrough();
+     return true;
+ }
+ 
+@@ -1267,7 +1565,7 @@ static bool setGPIOOutput(const std::string& name, const int value,
+                    name, "ERROR", e);
+         return false;
+     }
+-
++    ForceDisablePassThrough();
+     lg2::info("{GPIO_NAME} set to {GPIO_VALUE}", "GPIO_NAME", name,
+               "GPIO_VALUE", value);
+     return true;
+@@ -1340,7 +1638,9 @@ static int setGPIOOutputForMs(const ConfigData& config, const int value,
+                            "GPIO_NAME", name, "ERROR_MSG", ec.message());
+             }
+         }
++        ForceDisablePassThrough();
+     });
++    ForceDisablePassThrough();
+     return 0;
+ }
+ 
+@@ -1460,6 +1760,15 @@ static void reset()
+     assertGPIOForMs(resetOutConfig, TimerMap["ResetPulseMs"]);
+ }
+ 
++static void RSMreset()
++{
++    assertGPIOForMs(RSMResetOutConfig, TimerMap["ResetPulseMs"]);
++
++    // log to redfish
++    RSMresetLog();
++    lg2::error("RSM Reset action completed");
++}
++
+ static void gracefulPowerOffTimerStart()
+ {
+     lg2::info("Graceful power-off timer started");
+@@ -1530,6 +1839,30 @@ static void psPowerOKWatchdogTimerStart()
+     });
+ }
+ 
++static void psPowerOKRampDownTimerStart()
++{
++    lg2::info("power supply power OK RampDown timer started");
++    psPowerOKRampDownTimer.expires_after(
++        std::chrono::milliseconds(TimerMap["psPowerOKRampDownMs"]));
++    psPowerOKRampDownTimer.async_wait([](const boost::system::error_code ec) {
++        if (ec)
++        {
++            // operation_aborted is expected if timer is canceled before
++            // completion.
++            if (ec != boost::asio::error::operation_aborted)
++            {
++                lg2::error(
++                    "power supply power OK RampDown async_wait failed: {ERROR_MSG}",
++                    "ERROR_MSG", ec.message());
++            }
++            lg2::info("power supply power OK RampDown timer canceled");
++            return;
++        }
++        lg2::info("power supply power OK RampDown timer expired");
++        sendPowerControlEvent(Event::psPowerOKRampDownTimerExpired);
++    });
++}
++
+ static void warmResetCheckTimerStart()
+ {
+     lg2::info("Warm reset check timer started");
+@@ -1600,8 +1933,7 @@ static void pohCounterTimerStart()
+                 {
+                     lg2::error("failed to set poh counter");
+                 }
+-            },
+-                "xyz.openbmc_project.Settings",
++            }, "xyz.openbmc_project.Settings",
+                 "/xyz/openbmc_project/state/chassis0",
+                 "org.freedesktop.DBus.Properties", "Set",
+                 "xyz.openbmc_project.State.PowerOnHours", "POHCounter",
+@@ -1614,7 +1946,7 @@ static void pohCounterTimerStart()
+ 
+         pohCounterTimerStart();
+     });
+-}
++} // namespace power_control
+ 
+ static void currentHostStateMonitor()
+ {
+@@ -1640,7 +1972,6 @@ static void currentHostStateMonitor()
+                                 [](sdbusplus::message_t& message) {
+         std::string intfName;
+         std::map<std::string, std::variant<std::string>> properties;
+-
+         try
+         {
+             message.read(intfName, properties);
+@@ -1679,6 +2010,7 @@ static void currentHostStateMonitor()
+             sd_journal_send("MESSAGE=Host system DC power is on", "PRIORITY=%i",
+                             LOG_INFO, "REDFISH_MESSAGE_ID=%s",
+                             "OpenBMC.0.1.DCPowerOn", NULL);
++            ForceDisablePassThrough();
+         }
+         else
+         {
+@@ -1698,6 +2030,7 @@ static void currentHostStateMonitor()
+             sd_journal_send("MESSAGE=Host system DC power is off",
+                             "PRIORITY=%i", LOG_INFO, "REDFISH_MESSAGE_ID=%s",
+                             "OpenBMC.0.1.DCPowerOff", NULL);
++            ForceDisablePassThrough();
+         }
+     });
+ }
+@@ -1768,7 +2101,12 @@ static void powerStateOn(const Event event)
+             setPowerState(PowerState::gracefulTransitionToOff);
+             gracefulPowerOffTimerStart();
+             break;
++        case Event::resetButtonPressed:
++            setPowerState(PowerState::gracefulTransitionToOff);
++            gracefulPowerOffTimerStart();
++            break;
+         case Event::powerOffRequest:
++            psPowerOKRampDownTimerStart();
+             setPowerState(PowerState::transitionToOff);
+             forcePowerOff();
+             break;
+@@ -1786,11 +2124,8 @@ static void powerStateOn(const Event event)
+             gracefulPowerOffTimerStart();
+             gracefulPowerOff();
+             break;
+-        case Event::resetButtonPressed:
+-            setPowerState(PowerState::checkForWarmReset);
+-            warmResetCheckTimerStart();
+-            break;
+         case Event::resetRequest:
++            setPowerState(PowerState::transitionToCycleOff);
+             reset();
+             break;
+         default:
+@@ -1875,18 +2210,29 @@ static void powerStateOff(const Event event)
+             psPowerOKWatchdogTimerStart();
+             setPowerState(PowerState::waitForPSPowerOK);
+             break;
+-        case Event::sioPowerGoodAssert:
+-            setPowerState(PowerState::on);
+-            break;
+         case Event::powerButtonPressed:
+             psPowerOKWatchdogTimerStart();
+             setPowerState(PowerState::waitForPSPowerOK);
+             break;
++        case Event::resetButtonPressed:
++            psPowerOKWatchdogTimerStart();
++            setPowerState(PowerState::waitForPSPowerOK);
++            break;
+         case Event::powerOnRequest:
+             psPowerOKWatchdogTimerStart();
+             setPowerState(PowerState::waitForPSPowerOK);
+             powerOn();
+             break;
++        case Event::powerCycleRequest:
++            psPowerOKWatchdogTimerStart();
++            setPowerState(PowerState::waitForPSPowerOK);
++            powerOn();
++            break;
++        case Event::resetRequest:
++            psPowerOKWatchdogTimerStart();
++            setPowerState(PowerState::waitForPSPowerOK);
++            powerOn();
++            break;
+         default:
+             lg2::info("No action taken.");
+             break;
+@@ -1933,7 +2279,7 @@ static void powerStateGracefulTransitionToOff(const Event event)
+             break;
+         case Event::resetRequest:
+             gracefulPowerOffTimer.cancel();
+-            setPowerState(PowerState::on);
++            setPowerState(PowerState::transitionToCycleOff);
+             reset();
+             break;
+         default:
+@@ -1961,6 +2307,10 @@ static void powerStateCycleOff(const Event event)
+             }
+             break;
+         }
++        case Event::psPowerOKDeAssert:
++            powerCycleTimer.cancel();
++            setPowerState(PowerState::off);
++            break;
+         case Event::sioS5DeAssert:
+             powerCycleTimer.cancel();
+             psPowerOKWatchdogTimerStart();
+@@ -1990,9 +2340,17 @@ static void powerStateTransitionToCycleOff(const Event event)
+         case Event::psPowerOKDeAssert:
+             // Cancel any GPIO assertions held during the transition
+             gpioAssertTimer.cancel();
++            psPowerOKRampDownTimer.cancel();
+             setPowerState(PowerState::cycleOff);
+             powerCycleTimerStart();
+             break;
++        case Event::resetButtonPressed:
++            setPowerState(PowerState::on);
++            break;
++        case Event::psPowerOKRampDownTimerExpired:
++            psPowerOKRampDownFailedLog();
++            setPowerState(PowerState::on);
++            break;
+         default:
+             lg2::info("No action taken.");
+             break;
+@@ -2024,7 +2382,7 @@ static void powerStateGracefulTransitionToCycleOff(const Event event)
+             break;
+         case Event::resetRequest:
+             gracefulPowerOffTimer.cancel();
+-            setPowerState(PowerState::on);
++            setPowerState(PowerState::transitionToCycleOff);
+             reset();
+             break;
+         default:
+@@ -2061,6 +2419,9 @@ static void psPowerOKHandler(bool state)
+ {
+     Event powerControlEvent = state ? Event::psPowerOKAssert
+                                     : Event::psPowerOKDeAssert;
++
++    ForceDisablePassThrough();
++
+     sendPowerControlEvent(powerControlEvent);
+ }
+ 
+@@ -2068,6 +2429,7 @@ static void sioPowerGoodHandler(bool state)
+ {
+     Event powerControlEvent = state ? Event::sioPowerGoodAssert
+                                     : Event::sioPowerGoodDeAssert;
++
+     sendPowerControlEvent(powerControlEvent);
+ }
+ 
+@@ -2089,34 +2451,83 @@ static void powerButtonHandler(bool state)
+     if (!state)
+     {
+         powerButtonPressLog();
+-        if (!powerButtonMask)
+-        {
+-            sendPowerControlEvent(Event::powerButtonPressed);
+-            addRestartCause(RestartCause::powerButton);
+-        }
+-        else
+-        {
+-            lg2::info("power button press masked");
+-        }
++        powerButtonIface->set_property("ButtonPressed", true);
++        sendPowerControlEvent(Event::powerButtonPressed);
++        addRestartCause(RestartCause::powerButton);
++    }
++    else
++    { // Rising edge
++        powerButtonIface->set_property("ButtonPressed", false);
+     }
+ }
+ 
+ static void resetButtonHandler(bool state)
+ {
+-    resetButtonIface->set_property("ButtonPressed", !state);
+     if (!state)
+-    {
++    { // Falling edge
+         resetButtonPressLog();
+-        if (!resetButtonMask)
++        resetButtonIface->set_property("ButtonPressed", true);
++        addRestartCause(RestartCause::resetButton);
++        ForceDisablePassThrough();
++    }
++    else
++    { // Rising edge
++        resetButtonIface->set_property("ButtonPressed", false);
++        ForceDisablePassThrough();
++        sendPowerControlEvent(Event::resetButtonPressed);
++    }
++}
++
++static void P0ThermtripHandler(bool state)
++{
++    if (!state)
++    { // Falling edge
++        std::string ras_err_msg =
++            "P0 Thermtrip detected. BMC will issue RSMRST";
++        sd_journal_send("MESSAGE=%s", ras_err_msg.c_str(), "PRIORITY=%i",
++                        LOG_ERR, "REDFISH_MESSAGE_ID=%s",
++                        "OpenBMC.0.1.CPUError", "REDFISH_MESSAGE_ARGS=%s",
++                        ras_err_msg.c_str(), NULL);
++        RSMreset();
++    }
++
++    P0ThermtripEvent.async_wait(
++        boost::asio::posix::stream_descriptor::wait_read,
++        [state](const boost::system::error_code ec) {
++        if (ec)
+         {
+-            sendPowerControlEvent(Event::resetButtonPressed);
+-            addRestartCause(RestartCause::resetButton);
++            lg2::error("P0 Thermtrip handler error: {ERROR_MSG}", "ERROR_MSG",
++                       ec.message());
++            return;
+         }
+-        else
++        P0ThermtripHandler(state);
++    });
++}
++
++static void P1ThermtripHandler(bool state)
++{
++    if (!state)
++    { // Falling edge
++        std::string ras_err_msg =
++            "P1 Thermtrip detected. BMC will issue RSMRST";
++        sd_journal_send("MESSAGE=%s", ras_err_msg.c_str(), "PRIORITY=%i",
++                        LOG_ERR, "REDFISH_MESSAGE_ID=%s",
++                        "OpenBMC.0.1.CPUError", "REDFISH_MESSAGE_ARGS=%s",
++                        ras_err_msg.c_str(), NULL);
++        RSMreset();
++    }
++
++    P1ThermtripEvent.async_wait(
++        boost::asio::posix::stream_descriptor::wait_read,
++        [state](const boost::system::error_code ec) {
++        if (ec)
+         {
+-            lg2::info("reset button press masked");
++            lg2::error("P1 Thermtrip handler error: {ERROR_MSG}", "ERROR_MSG",
++                       ec.message());
++            return;
+         }
+-    }
++        P1ThermtripHandler(state);
++    });
+ }
+ 
+ #ifdef CHASSIS_SYSTEM_RESET
+@@ -2134,8 +2545,7 @@ void systemReset()
+             lg2::error("Failed to call chassis system reset: {ERR}", "ERR",
+                        ec.message());
+         }
+-    },
+-        systemdBusname, systemdPath, systemdInterface, "StartUnit",
++    }, systemdBusname, systemdPath, systemdInterface, "StartUnit",
+         systemTargetName, "replace");
+ }
+ #endif
+@@ -2148,8 +2558,7 @@ static void nmiSetEnableProperty(bool value)
+         {
+             lg2::error("failed to set NMI source");
+         }
+-    },
+-        "xyz.openbmc_project.Settings",
++    }, "xyz.openbmc_project.Settings",
+         "/xyz/openbmc_project/Chassis/Control/NMISource",
+         "org.freedesktop.DBus.Properties", "Set",
+         "xyz.openbmc_project.Chassis.Control.NMISource", "Enabled",
+@@ -2235,8 +2644,7 @@ static void setNmiSource()
+         {
+             lg2::error("failed to set NMI source");
+         }
+-    },
+-        "xyz.openbmc_project.Settings",
++    }, "xyz.openbmc_project.Settings",
+         "/xyz/openbmc_project/Chassis/Control/NMISource",
+         "org.freedesktop.DBus.Properties", "Set",
+         "xyz.openbmc_project.Chassis.Control.NMISource", "BMCSource",
+@@ -2326,14 +2734,21 @@ static void postCompleteHandler(bool state)
+ {
+     if (!state)
+     {
++        apml_unbind();
++#if 0
+         sendPowerControlEvent(Event::postCompleteAssert);
+         setOperatingSystemState(OperatingSystemStateStage::Standby);
++#endif
+     }
+     else
+     {
++        apml_bind();
++#if 0
+         sendPowerControlEvent(Event::postCompleteDeAssert);
+         setOperatingSystemState(OperatingSystemStateStage::Inactive);
++#endif
+     }
++    apml_check_complete();
+ }
+ 
+ static int loadConfigValues()
+@@ -2702,6 +3117,8 @@ int main(int argc, char* argv[])
+ {
+     using namespace power_control;
+ 
++    gpiod::line gpioLine;
++
+     if (argc > 1)
+     {
+         node = argv[1];
+@@ -2914,6 +3331,10 @@ int main(int argc, char* argv[])
+         hostMiscHandler);
+ #endif
+ 
++#if 1
++    apml_bind();
++    apml_check_complete();
++
+     // Request POST_COMPLETE GPIO events
+     if (postCompleteConfig.type == ConfigType::GPIO)
+     {
+@@ -2935,20 +3356,26 @@ int main(int argc, char* argv[])
+             "postComplete name should be configured from json config file");
+         return -1;
+     }
++#endif
++
++    // #endif for USE_PLT_RST
+ 
+     // initialize NMI_OUT GPIO.
+     if (!nmiOutConfig.lineName.empty())
+     {
+-        setGPIOOutput(nmiOutConfig.lineName, !nmiOutConfig.polarity,
+-                      nmiOutLine);
++        if (!setGPIOOutput(nmiOutConfig.lineName, !nmiOutConfig.polarity,
++                           nmiOutLine))
++        {
++            return -1;
++        }
+     }
+ 
+     // Initialize POWER_OUT and RESET_OUT GPIO.
+-    gpiod::line line;
+     if (!powerOutConfig.lineName.empty())
+     {
++        gpioLine = gpiod::find_line(powerOutConfig.lineName);
+         if (!setGPIOOutput(powerOutConfig.lineName, !powerOutConfig.polarity,
+-                           line))
++                           gpioLine))
+         {
+             return -1;
+         }
+@@ -2961,8 +3388,9 @@ int main(int argc, char* argv[])
+ 
+     if (!resetOutConfig.lineName.empty())
+     {
++        gpioLine = gpiod::find_line(resetOutConfig.lineName);
+         if (!setGPIOOutput(resetOutConfig.lineName, !resetOutConfig.polarity,
+-                           line))
++                           gpioLine))
+         {
+             return -1;
+         }
+@@ -2972,8 +3400,9 @@ int main(int argc, char* argv[])
+         lg2::error("ResetOut name should be configured from json config file");
+         return -1;
+     }
++    ForceDisablePassThrough();
+     // Release line
+-    line.reset();
++    // line.reset();
+ 
+     // Initialize the power state and operating system state
+     powerState = PowerState::off;
+@@ -2982,9 +3411,7 @@ int main(int argc, char* argv[])
+ 
+     if (powerOkConfig.type == ConfigType::GPIO)
+     {
+-        if (psPowerOKLine.get_value() > 0 ||
+-            (sioEnabled &&
+-             (sioPowerGoodLine.get_value() == sioPwrGoodConfig.polarity)))
++        if (psPowerOKLine.get_value() > 0)
+         {
+             powerState = PowerState::on;
+         }
+@@ -3003,7 +3430,9 @@ int main(int argc, char* argv[])
+     }
+ 
+     if (nmiOutLine)
++    {
+         nmiSourcePropertyMonitor();
++    }
+ 
+     lg2::info("Initializing power state.");
+     logStateTransition(powerState);
+@@ -3147,6 +3576,7 @@ int main(int argc, char* argv[])
+             {
+                 if (!powerButtonMask)
+                 {
++                    // "ipmitool power on" entrance
+                     sendPowerControlEvent(Event::gracefulPowerOffRequest);
+                     addRestartCause(RestartCause::command);
+                 }
+@@ -3163,6 +3593,7 @@ int main(int argc, char* argv[])
+                 // if power button is masked, ignore this
+                 if (!powerButtonMask)
+                 {
++                    // "ipmitool power on" entrance
+                     sendPowerControlEvent(Event::powerOnRequest);
+                     addRestartCause(RestartCause::command);
+                 }
+@@ -3179,6 +3610,7 @@ int main(int argc, char* argv[])
+                 // if power button is masked, ignore this
+                 if (!powerButtonMask)
+                 {
++                    // "ipmitool power cycle" entrance
+                     sendPowerControlEvent(Event::powerCycleRequest);
+                     addRestartCause(RestartCause::command);
+                 }
+@@ -3196,6 +3628,7 @@ int main(int argc, char* argv[])
+                 // if reset button is masked, ignore this
+                 if (!resetButtonMask)
+                 {
++                    // "ipmitool power reset" entrance
+                     sendPowerControlEvent(Event::gracefulPowerCycleRequest);
+                     addRestartCause(RestartCause::command);
+                 }
+@@ -3298,6 +3731,7 @@ int main(int argc, char* argv[])
+                 // if power button is masked, ignore this
+                 if (!powerButtonMask)
+                 {
++                    // "ipmitool power off" entrance
+                     sendPowerControlEvent(Event::powerOffRequest);
+                     addRestartCause(RestartCause::command);
+                 }
+@@ -3728,7 +4162,7 @@ int main(int argc, char* argv[])
+     OperatingSystemStateStage osState;
+     if (postCompleteConfig.type == ConfigType::GPIO)
+     {
+-        osState = postCompleteLine.get_value() > 0
++        osState = getGPIOValue(postCompleteConfig.lineName) > 0
+                       ? OperatingSystemStateStage::Inactive
+                       : OperatingSystemStateStage::Standby;
+     }
+@@ -3807,18 +4241,32 @@ int main(int argc, char* argv[])
+ 
+     currentHostStateMonitor();
+ 
+-    if (!hpmStbyEnConfig.lineName.empty())
++    // Set BMC_READY to High
++    gpioLine = gpiod::find_line(BMCReadyConfig.lineName);
++    if (!setGPIOOutput(BMCReadyConfig.lineName, 1, gpioLine))
+     {
+-        // Set to indicate BMC's power control module is ready to take
+-        // the inputs [PWR_GOOD] from the HPM FPGA
+-        gpiod::line hpmLine;
+-        if (!setGPIOOutput(hpmStbyEnConfig.lineName, hpmStbyEnConfig.polarity,
+-                           hpmLine))
+-        {
+-            return -1;
+-        }
++        lg2::error("Raise BMC_READY signal failed");
++        return -1;
+     }
+ 
++    // Set ASSERT_WARM_RST_BTN_L to High
++    gpioLine = gpiod::find_line(WARMRSTConfig.lineName);
++    if (!setGPIOOutput(WARMRSTConfig.lineName, 1, gpioLine))
++    {
++        lg2::error("Raise ASSERT_WARM_RST_BTN_L signal failed");
++        return -1;
++    }
++    // Set ASSERT_SOC_RST_BTN_L to High
++    gpioLine = gpiod::find_line(SOCRSTConfig.lineName);
++    if (!setGPIOOutput(SOCRSTConfig.lineName, 1, gpioLine))
++    {
++        lg2::error("Raise ASSERT_SOC_RST_BTN_L signal failed");
++        return -1;
++    }
++
++    // Starting YAAP service
++    system("systemctl start yaapd.service");
++
+     io.run();
+ 
+     return 0;
+-- 
+2.34.1
+
