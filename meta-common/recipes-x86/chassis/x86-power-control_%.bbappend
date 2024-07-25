@@ -13,6 +13,7 @@ SRC_URI_EGS:append = " \
                       file://0004-Add-Task-interface-and-property.patch \
                       file://0003-egs-Not-able-to-do-power-cycle-if-one-task-is-in-running.patch \
                       file://0005-Power-operation-for-future-time.patch \
+                      file://0009-Cancel-Task-Query-support.patch \
                      "
 
 SRC_URI_AMD:append = " \
