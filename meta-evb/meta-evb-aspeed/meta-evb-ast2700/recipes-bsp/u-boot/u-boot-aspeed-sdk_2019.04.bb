@@ -21,3 +21,4 @@ do_compile:append() {
         ${B}/tools/mkenvimage -s ${UBOOT_ENV_SIZE} -o ${WORKDIR}/${UBOOT_ENV_BINARY} ${WORKDIR}/${UBOOT_ENV_TXT}
     fi
 }
+

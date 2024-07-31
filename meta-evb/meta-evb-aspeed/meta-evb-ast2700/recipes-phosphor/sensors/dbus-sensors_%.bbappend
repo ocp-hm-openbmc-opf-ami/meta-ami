@@ -10,9 +10,8 @@ SRC_URI:append:aspeed-g7 = " \
                  file://0003-fansensor-update-regular-expression-to-find-pwm.patch \
                  "
 
-PACKAGECONFIG:remove = " intelcpusensor "
-
-# Disable ipmbsensor service by default
-DISABLE_IPMBSENSOR_SERVICE ?= "1"
-SYSTEMD_SERVICE:${PN}:remove = "${@bb.utils.contains('DISABLE_IPMBSENSOR_SERVICE', '1', 'xyz.openbmc_project.ipmbsensor.service', '', d)}"
-FILES:${PN} += "${systemd_unitdir}"
+# Install only the required dbus-sensors to reduce the size of the image-rofs.
+PACKAGECONFIG = "adcsensor"
+PACKAGECONFIG:append = " fansensor"
+PACKAGECONFIG:append = " hwmontempsensor"
+PACKAGECONFIG:append = " intrusionsensor"

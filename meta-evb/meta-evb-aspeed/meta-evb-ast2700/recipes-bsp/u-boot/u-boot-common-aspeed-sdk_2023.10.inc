@@ -9,20 +9,21 @@ PE = "1"
 BRANCH="aspeed-master-v2023.10"
 SRC_URI = "git://github.com/AspeedTech-BMC/u-boot.git;protocol=https;branch=${BRANCH}"
 
-# Tag for v00.05.00
-SRCREV = "4970770c13aba21c9b4e3745180197d6c7e17b6c"
+# Tag for v00.05.02
+SRCREV = "d577c7e4f8b9f52dcb5867a32a9df59fdc2762e6"
 
 S = "${WORKDIR}/git"
 B = "${WORKDIR}/build"
 do_configure[cleandirs] = "${B}"
 
 # We don't have 'u-boot-initial-env' target in our u-boot version
-UBOOT_INITIAL_ENV=""
+UBOOT_INITIAL_ENV = ""
 
-PV = "v2023.10+git${SRCPV}"
+PV = "v2023.10+git"
 
 python do_set_local_version() {
     import os
+    import re
     s = d.getVar("S")
     b = d.getVar("B")
     try:
@@ -32,6 +33,7 @@ python do_set_local_version() {
         pass
 
     scm_ver = ""
+    sub_ver = "none"
 
     try:
         res=bb.process.run("git -C %s describe --tags --exact-match" %  s)[0].strip("\n")
@@ -49,6 +51,15 @@ python do_set_local_version() {
         f.write(scm_ver)
     with open("%s/.scmversion" % b, "a") as f:
         f.write(scm_ver)
+
+    match = re.search(r'[^-]*$', scm_ver)
+    if match:
+        sub_ver = match.group(0)
+
+    with open("%s/.subversion" % s, "a") as f:
+        f.write(sub_ver)
+    with open("%s/.subversion" % b, "a") as f:
+        f.write(sub_ver)
 }
 
 addtask set_local_version before do_compile after do_configure

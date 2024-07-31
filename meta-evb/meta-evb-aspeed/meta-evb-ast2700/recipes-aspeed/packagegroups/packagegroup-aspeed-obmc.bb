@@ -44,7 +44,6 @@ RDEPENDS:${PN}-flash = " \
 
 SUMMARY:${PN}-system = "AspeedTech System"
 RDEPENDS:${PN}-system = " \
-    phosphor-ipmi-ipmb \
     phosphor-hostlogger \
     phosphor-sel-logger \
     phosphor-post-code-manager \
@@ -54,6 +53,8 @@ RDEPENDS:${PN}-system = " \
 SUMMARY:${PN}-inband = "AspeedTech Inband Test"
 RDEPENDS:${PN}-inband = " \
     phosphor-ipmi-ipmb \
+    phosphor-ipmi-ssif \
+    phosphor-ipmi-bt \
     phosphor-ipmi-kcs \
     "
 
@@ -61,5 +62,10 @@ SUMMARY:${PN}-apps = "Open Source Applications for OpenBMC Image"
 RDEPENDS:${PN}-apps = " \
     ipmitool \
     at-scale-debug \
+    pdbg \
+    "
+
+# Only install in AST26xx and AST27xx series rofs as the free space of AST25xx rofs is not enough.
+RDEPENDS:${PN}-apps:remove:aspeed-g5 = " \
     pdbg \
     "

@@ -52,3 +52,4 @@ python do_set_local_version() {
 }
 
 addtask set_local_version before do_compile after do_configure
+

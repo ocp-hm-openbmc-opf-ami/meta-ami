@@ -2,11 +2,11 @@ SUMMARY = "BootMCU firmware and execute SPL"
 DESCRIPTION = "BootMCU is designated to load the first, verified image for the main processor"
 PACKAGE_ARCH = "${MACHINE_ARCH}"
 
-DEPENDS = "ast2700-riscv-linux-gnu-native kern-tools-native swig-native"
+DEPENDS = "ast2700-riscv-linux-gnu-native kern-tools-native swig-native ${PYTHON_PN}-setuptools-native"
 
 do_install[noexec] = "1"
 
-inherit deploy cml1
+inherit deploy cml1 python3native
 
 RISCV_PREBUILT_TOOLCHAIN = "${STAGING_DIR_NATIVE}${datadir}/ast2700-riscv-linux-gnu/bin/riscv32-unknown-linux-gnu-"
 
@@ -39,8 +39,7 @@ def find_cfgs(d):
 do_configure () {
     oe_runmake -C ${S} O=${B} ${BOOTMCU_MACHINE}
     merge_config.sh -m .config ${@" ".join(find_cfgs(d))}
-    unset CFLAGS CPPFLAGS CXXFLAGS LDFLAGS
-    yes '' | oe_runmake oldconfig
+    cml1_do_configure
 }
 
 do_compile() {
@@ -58,6 +57,7 @@ do_compile() {
 }
 
 do_deploy() {
+    sub_ver=$(cat ${B}/.subversion)
     install -d ${DEPLOYDIR}
 
     # spl
@@ -67,6 +67,7 @@ do_deploy() {
 
     # spl binman
     install -m 644 ${BOOTMCU_FW_BINARY} ${DEPLOYDIR}
+    install -m 644 ${BOOTMCU_FW_BINARY} ${DEPLOYDIR}/${BOOTMCU_FW_BINARY}-${sub_ver}
 }
 
 addtask deploy before do_build after do_compile

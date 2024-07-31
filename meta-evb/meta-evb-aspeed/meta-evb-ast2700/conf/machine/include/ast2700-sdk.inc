@@ -7,6 +7,7 @@ DEFAULTTUNE = "cortexa35"
 require conf/machine/include/arm/armv8a/tune-cortexa35.inc
 require conf/machine/include/ast-arm-trusted-firmware-a.inc
 require conf/machine/include/ast-bootmcu.inc
+require conf/machine/include/ast-optee-os.inc
 
 SERIAL_CONSOLES ?= "115200;ttyS12"
 

@@ -1,4 +1,4 @@
-SRCREV = "83f153aedecfec7c02566029ecf59025e7cf1a67"
+SRCREV = "e89ae2ca5335814b3f32629cd9a2b4b51980f8ef"
 
 # Enable for debugging
 #EXTRA_OEMAKE += " \

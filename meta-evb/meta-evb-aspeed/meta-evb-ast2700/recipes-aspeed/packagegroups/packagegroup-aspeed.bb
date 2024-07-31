@@ -19,6 +19,11 @@ PACKAGES = " \
     ${PN}-usbtools \
     "
 
+SUMMARY:${PN}-apps = "AspeedTech Test App"
+RDEPENDS:${PN}-apps = " \
+    aspeed-app \
+    "
+
 SUMMARY:${PN}-ssp = "AspeedTech Secondary Service Processor"
 RDEPENDS:${PN}-ssp = " \
     ssp \

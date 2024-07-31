@@ -31,3 +31,7 @@ require oldest-kernel-54.inc
 # Installs static development packages, which are static libraries (i.e. *.a files), for all packages installed in a given SDK
 SDKIMAGE_FEATURES += "staticdev-pkgs"
 
+# Set VIRTUAL-RUNTIME for obmc-fan-control and obmc-sensors-hwmon.
+VIRTUAL-RUNTIME_obmc-fan-control = "phosphor-pid-control"
+VIRTUAL-RUNTIME_obmc-fan-presence = "phosphor-pid-control"
+VIRTUAL-RUNTIME_obmc-sensors-hwmon = "dbus-sensors"

@@ -1,5 +1,4 @@
 FILESEXTRAPATHS:append := ":${THISDIR}/${PN}"
-SRCREV = "3453084b579970cd368357bf091f173924ecba5e"
 
 # Declare port spcific config files
 OBMC_CONSOLE_TTYS = "ttyS2"

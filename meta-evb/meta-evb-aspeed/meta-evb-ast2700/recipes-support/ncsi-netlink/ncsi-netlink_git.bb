@@ -10,7 +10,7 @@ SRCREV = "333ffc4caef79017a9d5d56d69df457b4fb4fcc0"
 DEPENDS = "libnl"
 RDEPENDS:${PN} = "libnl libnl-genl"
 
-PV = "1.0+git${SRCPV}"
+PV = "1.0+git"
 S = "${WORKDIR}/git"
 
 TARGET_CC_ARCH += "${LDFLAGS}"
