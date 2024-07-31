@@ -36,6 +36,7 @@ SRC_URI += "file://nfs.cfg \
             file://CVE-2024-26627.patch \
             file://CVE-2023-52752.patch \
             file://CVE-2023-52772.patch \
+            file://0038-Increased-rofs-openbmc-flash-layout-64-dtsi.patch \
 	    "
 
 NON_PFR_SRC_URI_INTEL = "file://0012-Add-new-layout-as-per-AMI-requirements.patch \
@@ -63,6 +64,7 @@ SRC_URI_NON_PFR_DUAL:append:intel-ast2600 = "file://0013-Added-dts-configuration
 # SRC_URI_NON_PFR_DUAL:append = "file://0024-add-fmc-ce0-ce1-acccess-support.patch "
 SRC_URI_NON_PFR_DUAL:append:evb-ast2600  = "file://0025-add-dual-image-dts-support-for-evb.patch \
                                             file://0028-fix-dual-image-dts-for-evb.patch \
+                                            file://0037-Increased-rofs-openbmc-flash-layout-64-alt-dtsi.patch \
                                             "
 SRC_URI:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'dual-image', SRC_URI_NON_PFR_DUAL,'', d)}"
 
@@ -72,6 +74,7 @@ SRC_URI_NON_PFR_SINGLE_SPI_ABR:append = "file://0026-add-hw-failsafe-boot-single
 SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'single-spi-abr', SRC_URI_NON_PFR_SINGLE_SPI_ABR,'', d)}"
 
 SRC_URI_NON_PFR_SINGLE_SPI_ABR_EVB:append = "file://0027-add-hw-failsafe-boot-single-spi-abr-support-for-evb.patch \
+                                             file://0036-Increased-rofs-openbmc-flash-layout-128-singlespiabr.patch \
                                             "
 
 SRC_URI:append:evb-ast2600 = " ${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'single-spi-abr', SRC_URI_NON_PFR_SINGLE_SPI_ABR_EVB,'', d)}"
