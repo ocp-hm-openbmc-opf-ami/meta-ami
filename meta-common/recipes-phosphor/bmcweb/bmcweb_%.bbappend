@@ -15,6 +15,7 @@ SRCREV_override = "11c77e024275ddb966129562a7844ba7914b8880"
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
                     file://0242-Add-support-to-applytime-property.patch \
                     file://0180-Fixed-500-Internal-server-error-while-update-cpld-fw.patch \
+                    file://0259-Fix-for-time-out-issue-in-FW-update.patch \
 "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
 #SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
