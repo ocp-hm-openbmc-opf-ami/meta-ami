@@ -3,6 +3,7 @@ FILESEXTRAPATHS:append:= "${THISDIR}/files:"
 SRC_URI:append = " \
     file://ast2600_a3.json \
     file://Fix-for-tftp-flashing-conflicts.patch \
+    file://0005-Fix-NCSI-in-UBoot.patch \
     "
 
 EVB_SRC_URI = " file://spl.cfg"
