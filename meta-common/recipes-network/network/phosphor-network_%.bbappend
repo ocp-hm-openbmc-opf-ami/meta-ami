@@ -54,6 +54,7 @@ SRC_URI:append = " \
              file://0040-Fix-Static-Router2-IP-When-Static-Router-is-Enabled-or-Disabled.patch \
              file://0041-Fix-Array-of-Domain-Name-String.patch \
              file://0042-Remove-Number-Check-When-Deleting-Firewall-Rules.patch \
+             file://0040-Fix-IP-Gateway-Missing-in-Static-Source.patch \
              "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
