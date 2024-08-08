@@ -7,9 +7,9 @@ LIC_FILES_CHKSUM = "file://LICENSE;md5=8929d33c051277ca2294fe0f5b062f38"
 inherit cmake pkgconfig useradd obmc-phosphor-systemd
 DEPENDS = "sdbusplus openssl libpam libgpiod safec linux-libc-headers"
 
-SRC_URI = "git://github.com/Intel-BMC/asd;protocol=https;branch=master"
-# 1.5.1
-SRCREV = "5f6d69696bd1114c38041faad120b3fb6f661b78"
+SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/intel/firmware.bmc.openbmc.applications.at-scale-debug.git;protocol=https;branch=master"
+
+SRCREV = "37e22acb6256dc168dfc467ebafd5368daa0c1bf"
 
 USERADD_PACKAGES = "${PN}"
 
