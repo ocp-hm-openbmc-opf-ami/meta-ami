@@ -58,6 +58,7 @@ SRC_URI:append = " \
              file://0040-Fix-IP-Gateway-Missing-in-Static-Source.patch \
              file://0042-Block-ICMPv6-With-MAC-Address-Not-Work.patch \
              file://0043-Fix-Interface-Count-Issue.patch \
+             file://0044-Support-Backup-Gateway.patch \
              "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"

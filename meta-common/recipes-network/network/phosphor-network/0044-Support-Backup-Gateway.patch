@@ -1,0 +1,394 @@
+From 432895a06765b41ad7f3a055750eb1818f358fff Mon Sep 17 00:00:00 2001
+From: vaibhavs <vaibhavs@ami.com>
+Date: Tue, 13 Aug 2024 07:59:07 +0530
+Subject: [PATCH] Support Backup Gateway
+
+---
+ src/ethernet_interface.cpp | 190 +++++++++++++++++++++++++++++++++++--
+ src/ethernet_interface.hpp |  10 ++
+ src/network_manager.cpp    |  36 ++++++-
+ src/util.cpp               |  26 +++++
+ src/util.hpp               |   4 +
+ 5 files changed, 256 insertions(+), 10 deletions(-)
+
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index be066ed..25e775c 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -26,6 +26,7 @@
+ #include <algorithm>
+ #include <filesystem>
+ #include <format>
++#include <regex>
+ #include <sstream>
+ #include <string>
+ #include <unordered_map>
+@@ -145,21 +146,32 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+ 
+     updateInfo(info.intf, true);
+ 
+-    if (info.defgw4)
++    const config::Parser& ifaceConfig(fs::path{
++        fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(),
++                    interfaceName())
++            .c_str()});
++
++    if (!EthernetInterfaceIntf::dhcp4())
+     {
+-        EthernetInterfaceIntf::defaultGateway(stdplus::toStr(*info.defgw4),
+-                                              true);
++        EthernetInterfaceIntf::backupGateway(getIPv4BackupGateway(ifaceConfig));
++        EthernetInterfaceIntf::defaultGateway(
++            getIPv4DefaultGateway(ifaceConfig));
+     }
++    else
++    {
++        if (info.defgw4)
++        {
++            EthernetInterfaceIntf::defaultGateway(stdplus::toStr(*info.defgw4),
++                                                  true);
++        }
++    }
++
+     if (info.defgw6)
+     {
+         EthernetInterfaceIntf::defaultGateway6(stdplus::toStr(*info.defgw6),
+                                                true);
+     }
+ 
+-    const config::Parser& ifaceConfig(fs::path{
+-        fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(),
+-                    interfaceName())
+-            .c_str()});
+     EthernetInterfaceIntf::ipv4Enable(getIP4Enable(ifaceConfig), true);
+     EthernetInterfaceIntf::ipv6Enable(getIP6Enable(ifaceConfig), true);
+     EthernetInterfaceIntf::ipv6EnableStaticRtr(getIP6StaticRtr(ifaceConfig),
+@@ -980,10 +992,12 @@ bool EthernetInterface::dhcp4(bool value)
+ 
+             ipv4IndexUsedList.clear();
+             ipv4IndexUsedList.assign(IPV4_MAX_NUM + 1, std::nullopt);
++            EthernetInterfaceIntf::backupGateway({});
+         }
+ 
+         EthernetInterfaceIntf::dhcp4(value);
+         writeConfigurationFile();
++        writeIfaceStateFile(interfaceName());
+         manager.get().reloadConfigs();
+     }
+     return value;
+@@ -1597,6 +1611,21 @@ void EthernetInterface::writeIfaceStateFile(std::string ifname)
+                             it->second->ipv4IndexUsedList.at(i).value(), i));
+                     }
+                 } // for
++
++                auto& gateway4route = IfaceState.map["Route"].emplace_back();
++
++                auto backupgateway4 = EthernetInterfaceIntf::backupGateway();
++                if (!backupgateway4.empty())
++                {
++                    gateway4route["BackupGateway"].emplace_back(backupgateway4);
++                }
++
++                auto defaultgateway4 = EthernetInterfaceIntf::defaultGateway();
++                if (!defaultgateway4.empty())
++                {
++                    gateway4route["DefaultGateway"].emplace_back(
++                        defaultgateway4);
++                }
+             }     // if
+ 
+             if (!it->second->dhcp6() &&
+@@ -2026,6 +2055,17 @@ void EthernetInterface::writeConfigurationFile()
+                     gateway4route["Gateway"].emplace_back(gateway4);
+                     gateway4route["GatewayOnLink"].emplace_back("true");
+                 }
++
++                auto backupgateway4 = EthernetInterfaceIntf::backupGateway();
++                if (!backupgateway4.empty())
++                {
++                    auto& gateway4route = config.map["Route"].emplace_back();
++                    gateway4route["Gateway"].emplace_back(backupgateway4);
++                    gateway4route["Metric"].emplace_back(fmt::format(
++                        "{}", getMetricValueDefaultGateway(
++                                  EthernetInterfaceIntf::defaultGateway()) +
++                                  1));
++                }
+             }
+ 
+             if (!dhcp6() && EthernetInterfaceIntf::ipv6Enable())
+@@ -4063,5 +4103,141 @@ std::vector<uint8_t>
+     return value;
+ }
+ 
++/** Get Metric value of Default Gateway */
++uint16_t EthernetInterface::getMetricValueDefaultGateway(std::string value)
++{
++    uint16_t Metric = 1024;
++    auto lists = manager.get().getGatewayFromFile();
++    for (auto line : lists)
++    {
++        std::stringstream ss(line);
++        std::string Iface, dst, gateway, flags, cnt, use, metric, mask, mtu,
++            window, irtt;
++        ss >> Iface >> dst >> gateway >> flags >> cnt >> use >> metric >>
++            mask >> mtu >> window >> irtt;
++        if (Iface.compare(interfaceName()) != 0)
++            continue;
++        int flagInt = std::stoul(flags, 0, 16);
++        if (((flagInt & 0x2) == 0x2) && (gateway.compare("00000000") != 0) &&
++            (dst.compare("00000000") == 0))
++        {
++            auto gwInt = std::stoul(gateway, 0, 16);
++            auto gwStr = fmt::format(
++                "{}.{}.{}.{}", (gwInt & 0x000000FF), (gwInt & 0x0000FF00) >> 8,
++                (gwInt & 0x00FF0000) >> 16, (gwInt & 0xFF000000) >> 24);
++            if (gwStr.compare(EthernetInterfaceIntf::defaultGateway()) == 0)
++            {
++                Metric = static_cast<uint16_t>(std::stoul(metric, 0, 10));
++            }
++            break;
++        }
++    }
++    return Metric;
++}
++
++/** Set value of BackupGateway */
++std::string EthernetInterface::backupGateway(std::string value)
++{
++    if (!EthernetInterfaceIntf::ipv4Enable())
++    {
++        log<level::ERR>(
++            fmt::format("Not support in current state. IPv4 is not enabled.\n",
++                        interfaceName())
++                .c_str());
++        elog<NotAllowed>(NotAllowedArgument::REASON(
++            fmt::format("Not support in current state. IPv4 is not enabled.\n",
++                        interfaceName())
++                .c_str()));
++    }
++
++    if (EthernetInterfaceIntf::dhcp4())
++    {
++        log<level::ERR>(
++            fmt::format("Not support in current state. IPv4 Source is dhcp.\n",
++                        interfaceName())
++                .c_str());
++        elog<NotAllowed>(NotAllowedArgument::REASON(
++            fmt::format("Not support in current state. IPv4 Source is dhcp.\n",
++                        interfaceName())
++                .c_str()));
++    }
++
++    normalizeGateway<stdplus::In4Addr>(value);
++
++    if (value == EthernetInterfaceIntf::defaultGateway())
++    {
++        log<level::ERR>(
++            fmt::format("backup gateway provided is same as default gateway.\n",
++                        interfaceName())
++                .c_str());
++        elog<NotAllowed>(NotAllowedArgument::REASON(
++            fmt::format("backup gateway provided is same as default gateway.\n",
++                        interfaceName())
++                .c_str()));
++    }
++
++    EthernetInterfaceIntf::backupGateway(value);
++    writeConfigurationFile();
++    writeIfaceStateFile(interfaceName());
++    manager.get().reloadConfigs();
++
++    return value;
++}
++
++/** Get value of BackupGatewayMACAddress */
++std::string EthernetInterface::backupGatewayMACAddress() const
++{
++    if (!EthernetInterfaceIntf::ipv4Enable())
++    {
++        return {};
++    }
++
++    if (EthernetInterfaceIntf::dhcp4())
++    {
++        return {};
++    }
++
++    if (EthernetInterfaceIntf::backupGateway().empty())
++    {
++        return {};
++    }
++
++    std::string command = std::string("ip neigh get ") +
++                          EthernetInterfaceIntf::backupGateway().c_str() +
++                          std::string(" dev ") + interfaceName().c_str() +
++                          std::string(" 2>/dev/null");
++
++    char data[80] = {0};
++
++    FILE* fp = NULL;
++    fp = popen(command.c_str(), "r");
++    if (fp == NULL)
++    {
++        return {"00:00:00:00:00:00"};
++    }
++
++    if (fgets(data, sizeof(data), fp) == NULL)
++    {
++        pclose(fp);
++        return {"00:00:00:00:00:00"};
++    }
++    pclose(fp);
++
++    std::stringstream ss(data);
++
++    std::string ip, dev, devname, addrtype, mac, state;
++
++    ss >> ip >> dev >> devname >> addrtype >> mac >> state;
++
++    std::regex mac_regex("^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$");
++
++    if (std::regex_match(mac, mac_regex) == false)
++    {
++        return {"00:00:00:00:00:00"};
++    }
++
++    return mac;
++}
++
+ } // namespace network
+ } // namespace phosphor
+diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
+index 32a564c..c8efaf8 100644
+--- a/src/ethernet_interface.hpp
++++ b/src/ethernet_interface.hpp
+@@ -429,6 +429,15 @@ class EthernetInterface : public Ifaces
+     std::vector<uint8_t>
+         slaacTimingParamReadIfaceFile(const config::Parser& config);
+ 
++    /** Set value of BackupGateway */
++    std::string backupGateway(std::string value) override;
++
++    /** Get value of BackupGatewayMACAddress */
++    std::string backupGatewayMACAddress() const override;
++
++    /** Get Metric value of Default Gateway */
++    uint16_t getMetricValueDefaultGateway(std::string value);
++
+     using EthernetInterfaceIntf::interfaceName;
+     using EthernetInterfaceIntf::linkUp;
+     using EthernetInterfaceIntf::mtu;
+@@ -439,6 +448,7 @@ class EthernetInterface : public Ifaces
+     using ARPControlIface::gratuitousARP;
+     using ARPControlIface::gratuitousARPInterval;
+     using EthernetInterfaceIntf::autoNeg;
++    using EthernetInterfaceIntf::backupGateway;
+     using EthernetInterfaceIntf::defaultGateway;
+     using EthernetInterfaceIntf::defaultGateway6;
+     using EthernetInterfaceIntf::dhcpv6DUID;
+diff --git a/src/network_manager.cpp b/src/network_manager.cpp
+index d4cdebd..d483fbf 100644
+--- a/src/network_manager.cpp
++++ b/src/network_manager.cpp
+@@ -399,7 +399,25 @@ void Manager::addDefGw(unsigned ifidx, stdplus::InAnyAddr addr)
+             [&](auto addr) {
+             if constexpr (std::is_same_v<stdplus::In4Addr, decltype(addr)>)
+             {
+-                it->second.defgw4.emplace(addr);
++
++                if (auto it1 = interfacesByIdx.find(ifidx);
++                    it1 != interfacesByIdx.end())
++                {
++                    if (!it1->second->EthernetInterfaceIntf::dhcp4())
++                    {
++                        const config::Parser& ifaceConfig(
++                            fs::path{fmt::format("{}/{}", INTERFACE_CONF_DIR,
++                                                 it1->second->interfaceName())
++                                         .c_str()});
++                        auto gw4 = stdplus::fromStr<stdplus::In4Addr>(
++                            getIPv4DefaultGateway(ifaceConfig));
++                        it->second.defgw4.emplace(gw4);
++                    }
++                    else
++                    {
++                        it->second.defgw4.emplace(addr);
++                    }
++                }
+             }
+             else
+             {
+@@ -414,8 +432,20 @@ void Manager::addDefGw(unsigned ifidx, stdplus::InAnyAddr addr)
+                 [&](auto addr) {
+                 if constexpr (std::is_same_v<stdplus::In4Addr, decltype(addr)>)
+                 {
+-                    it->second->EthernetInterfaceIntf::defaultGateway(
+-                        stdplus::toStr(addr));
++                    if (!it->second->EthernetInterfaceIntf::dhcp4())
++                    {
++                        const config::Parser& ifaceConfig(
++                            fs::path{fmt::format("{}/{}", INTERFACE_CONF_DIR,
++                                                 it->second->interfaceName())
++                                         .c_str()});
++                        it->second->EthernetInterfaceIntf::defaultGateway(
++                            getIPv4DefaultGateway(ifaceConfig));
++                    }
++                    else
++                    {
++                        it->second->EthernetInterfaceIntf::defaultGateway(
++                            stdplus::toStr(addr));
++                    }
+                     auto [mac, prefixLength] =
+                         it->second->getDwMacAddrByIP(stdplus::toStr(addr));
+                     addNeighbor(NeighborInfo{
+diff --git a/src/util.cpp b/src/util.cpp
+index 5fa8ca0..c9e7bde 100644
+--- a/src/util.cpp
++++ b/src/util.cpp
+@@ -425,6 +425,32 @@ std::vector<std::string> splitStr(std::string line, std::string delimiter)
+     return vec;
+ }
+ 
++std::string getIPv4BackupGateway(const config::Parser& config)
++{
++    if (auto str = config.map.getLastValueString("Route", "BackupGateway");
++        str == nullptr)
++    {
++        return "";
++    }
++    else
++    {
++        return *str;
++    }
++}
++
++std::string getIPv4DefaultGateway(const config::Parser& config)
++{
++    if (auto str = config.map.getLastValueString("Route", "DefaultGateway");
++        str == nullptr)
++    {
++        return "";
++    }
++    else
++    {
++        return *str;
++    }
++}
++
+ namespace ip_address
+ {
+ 
+diff --git a/src/util.hpp b/src/util.hpp
+index 9ca667c..ef44ba5 100644
+--- a/src/util.hpp
++++ b/src/util.hpp
+@@ -165,6 +165,10 @@ std::string getGarpInterval(const config::Parser& config);
+ 
+ bool getArpEnabled(const config::Parser& config, std::string_view section);
+ 
++std::string getIPv4BackupGateway(const config::Parser& config);
++
++std::string getIPv4DefaultGateway(const config::Parser& config);
++
+ /** @brief Get all the interfaces from the system.
+  *  @returns list of interface names.
+  */
