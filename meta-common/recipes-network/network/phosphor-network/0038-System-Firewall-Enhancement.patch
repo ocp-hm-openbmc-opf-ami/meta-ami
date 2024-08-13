@@ -1,0 +1,234 @@
+From 6be8f15ba3c6763891a9cdcae7515c2d2a6a8f29 Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Mon, 24 Jun 2024 17:04:01 +0800
+Subject: [PATCH] Support System Firewall Enhancements
+
+---
+ meson.build                    |  1 +
+ meson_options.txt              |  1 +
+ src/firewall_configuration.cpp | 97 +++++++++++++++++++++++++++-------
+ src/firewall_configuration.hpp |  5 +-
+ 4 files changed, 85 insertions(+), 19 deletions(-)
+
+diff --git a/meson.build b/meson.build
+index 5f11462..333266c 100644
+--- a/meson.build
++++ b/meson.build
+@@ -25,6 +25,7 @@ conf_data.set10('FORCE_SYNC_MAC_FROM_INVENTORY', get_option('force-sync-mac'))
+ conf_data.set('AMI_IP_ADVANCED_ROUTING_SUPPORT', get_option('enable-advanced-route'))
+ conf_data.set('AMI_NCSI_SUPPORT', get_option('enable-ncsi'))
+ conf_data.set_quoted('DEFAULT_NCSI_INTERFACE', get_option('default-ncsi-interface'))
++conf_data.set10('SYSTEM_FIREWALL_SUPPORT', get_option('enable-system-firewall'))
+  
+ sdbusplus_dep = dependency('sdbusplus')
+ sdbusplusplus_prog = find_program('sdbus++', native: true)
+diff --git a/meson_options.txt b/meson_options.txt
+index 331d166..d2bb35f 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -17,3 +17,4 @@ option('force-sync-mac', type: 'boolean',
+ option('enable-advanced-route', type: 'boolean', description: 'Enable advanced route or not')
+ option('enable-ncsi', type: 'boolean', description: 'Enable NCSI Feature or not')
+ option('default-ncsi-interface', type: 'string', description: 'Default NCSI interface')
++option('enable-system-firewall', type: 'boolean', description: 'Enable system firewall rules or not')
+\ No newline at end of file
+diff --git a/src/firewall_configuration.cpp b/src/firewall_configuration.cpp
+index a46b22b..2f48b00 100644
+--- a/src/firewall_configuration.cpp
++++ b/src/firewall_configuration.cpp
+@@ -35,6 +35,10 @@ Configuration::Configuration(sdbusplus::bus_t& bus, stdplus::const_zstring path,
+     bus(bus), manager(parent)
+ {
+     // Initial Rules File Path
++    execute("/usr/sbin/iptables", "iptables", "-F");
++    execute("/usr/sbin/ip6tables", "ip6tables", "-F");
++    appendPreloadRules<in_addr>();
++    appendPreloadRules<in6_addr>();
+     rulesLists.push_back(
+         fmt::format("{}/{}", AMI_IPTABLES_DIR, IPTABLES_RULES));
+     rulesLists.push_back(
+@@ -44,6 +48,10 @@ Configuration::Configuration(sdbusplus::bus_t& bus, stdplus::const_zstring path,
+     rulesLists.push_back(
+         fmt::format("{}/{}", CUSTOM_IPTABLES_DIR, IP6TABLES_RULES));
+
++    // Write preload rules into files
++    writeConfigurationFile<in_addr>(true);
++    writeConfigurationFile<in6_addr>(true);
++
+     // Restore Custom Rules
+     restoreConfigurationFile<in_addr>();
+     restoreConfigurationFile<in6_addr>();
+@@ -241,8 +249,8 @@ int16_t Configuration::addRule(FirewallIface::Target target, uint8_t control,
+         }
+     } // else
+
+-    writeConfigurationFile<in_addr>();
+-    writeConfigurationFile<in6_addr>();
++    writeConfigurationFile<in_addr>(false);
++    writeConfigurationFile<in6_addr>(false);
+
+     return ret;
+ }
+@@ -437,8 +445,8 @@ int16_t Configuration::delRule(FirewallIface::Target target, uint8_t control,
+         }
+     } // else
+
+-    writeConfigurationFile<in_addr>();
+-    writeConfigurationFile<in6_addr>();
++    writeConfigurationFile<in_addr>(false);
++    writeConfigurationFile<in6_addr>(false);
+     return ret;
+ }
+
+@@ -451,17 +459,21 @@ int16_t Configuration::flushAll(FirewallIface::IP ip)
+     {
+         case FirewallIface::IP::IPV4:
+             execute("/usr/sbin/iptables", "iptables", "-F");
+-            writeConfigurationFile<in_addr>();
++            appendPreloadRules<in_addr>();
++            writeConfigurationFile<in_addr>(false);
+             break;
+         case FirewallIface::IP::IPV6:
+             execute("/usr/sbin/ip6tables", "ip6tables", "-F");
+-            writeConfigurationFile<in6_addr>();
++            appendPreloadRules<in6_addr>();
++            writeConfigurationFile<in6_addr>(false);
+             break;
+         case FirewallIface::IP::BOTH:
+             execute("/usr/sbin/iptables", "iptables", "-F");
+             execute("/usr/sbin/ip6tables", "ip6tables", "-F");
+-            writeConfigurationFile<in_addr>();
+-            writeConfigurationFile<in6_addr>();
++            appendPreloadRules<in_addr>();
++            appendPreloadRules<in6_addr>();
++            writeConfigurationFile<in_addr>(false);
++            writeConfigurationFile<in6_addr>(false);
+             break;
+         default:
+             log<level::INFO>("Error input.");
+@@ -480,9 +492,9 @@ std::vector<IPTableElementTuple> Configuration::getRules(FirewallIface::IP ip)
+     std::vector<IPTableElementTuple> returnVec;
+ #if 1
+     if (ip == FirewallIface::IP::IPV4)
+-        writeConfigurationFile<in_addr>();
++        writeConfigurationFile<in_addr>(false);
+     else if (ip == FirewallIface::IP::IPV6)
+-        writeConfigurationFile<in6_addr>();
++        writeConfigurationFile<in6_addr>(false);
+
+     for (auto elememt : rulesLists)
+     {
+@@ -528,7 +540,7 @@ std::vector<IPTableElementTuple> Configuration::getRules(FirewallIface::IP ip)
+                         std::get<3>(element) =
+                             vec.at(i) == "tcp"   ? FirewallIface::Protocol::TCP
+                             : vec.at(i) == "udp" ? FirewallIface::Protocol::UDP
+-                            : vec.at(i) == "icmp"
++                            : (vec.at(i) == "icmp" || vec.at(i) == "ipv6-icmp")
+                                 ? FirewallIface::Protocol::ICMP
+                                 : FirewallIface::Protocol::ALL;
+                         std::get<2>(element) |= (uint8_t)ControlBit::PROTOCOL;
+@@ -593,19 +605,37 @@ std::vector<IPTableElementTuple> Configuration::getRules(FirewallIface::IP ip)
+ }
+
+ template <typename T>
+-void Configuration::writeConfigurationFile()
++void Configuration::writeConfigurationFile(bool isInit)
+ {
+     if (typeid(T) == typeid(in6_addr))
+     {
+-        std::system(fmt::format("ip6tables-save | grep -iv AMI > {}/{}",
+-                                CUSTOM_IPTABLES_DIR, IP6TABLES_RULES)
+-                        .c_str());
++        if (isInit)
++        {
++            std::system(fmt::format("ip6tables-save | grep Preload > {}/{}",
++                                    AMI_IPTABLES_DIR, IP6TABLES_RULES)
++                            .c_str());
++        }
++        else
++        {
++            std::system(fmt::format("ip6tables-save | grep -v Preload > {}/{}",
++                                    CUSTOM_IPTABLES_DIR, IP6TABLES_RULES)
++                            .c_str());
++        }
+     } // if
+     else
+     {
+-        std::system(fmt::format("iptables-save | grep -iv AMI > {}/{}",
+-                                CUSTOM_IPTABLES_DIR, IPTABLES_RULES)
+-                        .c_str());
++        if (isInit)
++        {
++            std::system(fmt::format("iptables-save | grep Preload > {}/{}",
++                                    AMI_IPTABLES_DIR, IPTABLES_RULES)
++                            .c_str());
++        }
++        else
++        {
++            std::system(fmt::format("iptables-save | grep -v Preload > {}/{}",
++                                    CUSTOM_IPTABLES_DIR, IPTABLES_RULES)
++                            .c_str());
++        }
+     } // else
+ }
+
+@@ -632,6 +662,37 @@ void Configuration::restoreConfigurationFile()
+     } // else
+ }
+
++template <typename T>
++void Configuration::appendPreloadRules()
++{
++#if SYSTEM_FIREWALL_SUPPORT
++    if (typeid(T) == typeid(in_addr))
++    {
++        // Add IPv4 Preload Rules here
++        std::system(
++            "iptables -A INPUT -p icmp --icmp-type 8 -j DROP -m comment --comment \"Preload\"");
++
++        std::system(
++            "iptables -A INPUT -p icmp --icmp-type 13 -j DROP -m comment --comment \"Preload\"");
++
++        std::system(
++            "iptables -A INPUT -p icmp --icmp-type 14 -j DROP -m comment --comment \"Preload\"");
++
++        std::system(
++            "iptables -A INPUT -p icmp --icmp-type 11 -j DROP -m comment --comment \"Preload\"");
++
++        std::system(
++            "iptables -A OUTPUT -p icmp --icmp-type 11 -j DROP -m comment --comment \"Preload\"");
++    } // if
++    else
++    {
++        // Add IPv6 Preload Rules here
++        std::system(
++            "ip6tables -A INPUT -p icmpv6 --icmpv6-type 128 -j DROP -m comment --comment \"Preload\"");
++    } // else
++#endif
++}
++
+ } // namespace firewall
+ } // namespace network
+ } // namespace phosphor
+diff --git a/src/firewall_configuration.hpp b/src/firewall_configuration.hpp
+index 90ba2e7..654ab5c 100644
+--- a/src/firewall_configuration.hpp
++++ b/src/firewall_configuration.hpp
+@@ -131,11 +131,14 @@ class Configuration : Iface
+     std::vector<IPTableElementTuple> getRules(IP ip) override;
+
+     template <typename T>
+-    void writeConfigurationFile();
++    void writeConfigurationFile(bool isInit);
+
+     template <typename T>
+     void restoreConfigurationFile();
+
++    template <typename T>
++    void appendPreloadRules();
++
+   private:
+     /** @brief sdbusplus DBus bus connection. */
+     sdbusplus::bus_t& bus;
+--
+2.43.0

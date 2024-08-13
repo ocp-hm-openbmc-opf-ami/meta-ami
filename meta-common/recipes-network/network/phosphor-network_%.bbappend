@@ -53,6 +53,7 @@ SRC_URI:append = " \
              file://0040-Fix-Index-of-VLAN-Interface-Not-Got.patch \
              file://0040-Fix-Static-Router2-IP-When-Static-Router-is-Enabled-or-Disabled.patch \
              file://0041-Fix-Array-of-Domain-Name-String.patch \
+             file://0038-System-Firewall-Enhancement.patch \
              file://0042-Remove-Number-Check-When-Deleting-Firewall-Rules.patch \
              file://0040-Fix-IP-Gateway-Missing-in-Static-Source.patch \
              file://0042-Block-ICMPv6-With-MAC-Address-Not-Work.patch \
@@ -72,6 +73,8 @@ do_install:append() {
     install -d -m 0755 ${D}/etc/sysctl.d
     echo "net.ipv4.conf.all.arp_ignore=1" >> ${D}/etc/sysctl.d/99-network.conf
     echo "net.ipv4.conf.default.arp_ignore=1" >> ${D}/etc/sysctl.d/99-network.conf
+
+    echo "net.ipv4.tcp_timestamps=0" >> ${D}/etc/sysctl.d/99-network.conf
 }
 
 EXTRA_OEMESON:append = " -Dpersist-mac=true"
@@ -79,6 +82,8 @@ EXTRA_OEMESON:append = " -Dpersist-mac=true"
 EXTRA_OEMESON:append = " -Ddefault-link-local-autoconf=ipv6"
 
 EXTRA_OEMESON:append = " -Denable-advanced-route=true"
+
+EXTRA_OEMESON:append = " -Denable-system-firewall=true"
 
 # Uncomment to enable NCSI
 # EXTRA_OEMESON:append = " -Denable-ncsi=true -Ddefault-ncsi-interface=eth3"
