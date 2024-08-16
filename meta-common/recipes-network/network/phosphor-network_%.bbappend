@@ -60,6 +60,7 @@ SRC_URI:append = " \
              file://0043-Fix-Interface-Count-Issue.patch \
              file://0044-Support-Backup-Gateway.patch \
              file://0042-Flush-Static-Nameserver-Addresses-when-Changing-to-Dynamic.patch \
+             file://0045-Clear-NCSI-Settings-before-Changing-Package-and-Channel.patch \
              "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
