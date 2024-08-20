@@ -14,6 +14,8 @@ SRC_URI += "file://0036-EnhancedPasswordPolicy.patch \
             file://0016-Add-PrivateKeyNotFound-error.patch \
         "
 
+include ${@bb.utils.contains('BBFILE_COLLECTIONS', 'nvidia-layer', 'phosphor-dbus-interfaces_nv.inc', '', d)}
+
 EXTRA_OEMESON += "-Ddata_com_ami=true"
 EXTRA_OEMESON += "-Ddata_org_open_power=true"
 
