@@ -18,6 +18,10 @@ SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
                     file://0259-Fix-for-time-out-issue-in-FW-update.patch \
 "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
+
+# Remove the patches if 'meta-mgx' is in BBFILE_COLLECTIONS
+SRC_URI:remove = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'meta-mgx', SRC_URI_NON_PFR, '', d)}"
+
 #SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
 #"
 #SRC_URI_BHS:append = "file://0108-Adding-condition-to-Patch-Min-Value-not-greater-than.patch \
@@ -54,6 +58,9 @@ SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI
 #EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '',' -Dhttp-body-limit=68 ', d)}"
 #EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'nvme-mgmt', ' -Dnvme-enable-path=/xyz/openbmc_project/Nvme','', d)}"
 #EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'nvmebasic-mgmt', ' -Dnvme-enable-path=/xyz/openbmc_project/NvmeBasic','', d)}"
+
+EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'meta-mgx','-Dredfish-intel-feature=enabled','', d)}"
+EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'mtmitchell-layer', '-Dredfish-intel-feature=enabled', '', d)}"
 
 DEPENDS += "phosphor-snmp"
 
