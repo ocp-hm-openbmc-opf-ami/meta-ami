@@ -19,6 +19,7 @@ SRC_URI += " \
 	     file://0018-Added-group-user-for-host-interface.patch \
 	     file://0020-add-media-group.patch \
              file://0021-add-snmp-group.patch \
+             file://0022-Added-chaanges-for-Pam-Reorder.patch \
            "
 #OEM Privilege
 SRC_URI_OEM_PRIV:append = "file://upgrade_media_group.sh \
