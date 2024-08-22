@@ -12,7 +12,7 @@ setup_routing() {
     echo "Enabling UART routing"
 
     route uart1 uart3
-    route uart3 io1
+    route uart4 io1
 }
 
 setup() {
@@ -35,8 +35,6 @@ setup() {
 	local-tty = ttyS3
 	local-tty-baud = $baud
 	console-id = default
-	logfile= /var/log/obmc-console.log
-	logsize = 256k
 	EOF
 }
 
@@ -44,7 +42,7 @@ teardown() {
     echo "Disabling UART routing"
     route uart1 io1
     route uart3 io3
-    route uart3 io4
+    route uart4 io4
 }
 
 $1
