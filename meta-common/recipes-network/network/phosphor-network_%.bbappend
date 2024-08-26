@@ -61,7 +61,8 @@ SRC_URI:append = " \
              file://0044-Support-Backup-Gateway.patch \
              file://0042-Flush-Static-Nameserver-Addresses-when-Changing-to-Dynamic.patch \
              file://0045-Clear-NCSI-Settings-before-Changing-Package-and-Channel.patch \
-	     file://0003-Adding-channel-specific-privilege-to-network.patch \
+             file://0003-Adding-channel-specific-privilege-to-network.patch \
+             file://0046-Change-The-Range-VLAN-ID.patch \
              "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
