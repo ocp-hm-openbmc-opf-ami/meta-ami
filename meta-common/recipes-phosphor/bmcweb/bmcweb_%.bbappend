@@ -16,6 +16,7 @@ SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
                     file://0242-Add-support-to-applytime-property.patch \
                     file://0180-Fixed-500-Internal-server-error-while-update-cpld-fw.patch \
                     file://0259-Fix-for-time-out-issue-in-FW-update.patch \
+		    file://0260-Clear-cache-before-firmware-update-start-to-fix-out-.patch \
 "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
 
