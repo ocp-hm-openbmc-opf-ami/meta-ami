@@ -10,4 +10,5 @@ SRC_URI += " file://0001-ipv6-fix.patch \
              file://0008-Added-Changes-For-User-Validation-While-Sending-Trap.patch \
              file://0009-SNMPTrap-support-to-Change-Community-string-and-enab.patch \
              file://0010-Fixed-error-while-using-snmp_notification-header-fil.patch \
+             file://0076-Added_AES_Encryption_and_Properties.patch \
            "
