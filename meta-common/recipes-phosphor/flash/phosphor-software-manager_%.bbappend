@@ -8,6 +8,7 @@ SRC_URI_NON_PFR:append = "file://0001-Add-Purpose-for-other-components-and-add-i
                    file://0005-Patch-to-remove-the-image-when-verification-fails-nonpfr.patch \
                    file://0006-Delete-Update-image-dbus-path-on-success-or-failure.patch \
 		   file://0007-fixed-core-dump-issue-while-verifying-unsigned-image.patch \
+		   file://0008-Clear-tmp-and-firmware-inventory-while-cancel-task.patch \
 		"
 
 SRC_URI:append = " ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
