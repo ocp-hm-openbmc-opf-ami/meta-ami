@@ -2,9 +2,8 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 # The list of source files — local or remote
-#SRC_URI:append 
 SRC_URI_EXT:append= " \
-	file://0001-Added-Routing-tables-for-MSCC-BRCM-NVME.patch \
+	file://0001-Added-routing-table-for-NVME-BRCM-MSCC-PCIESW.patch \
 	file://collection_ext.hpp;subdir=git/redfish-core/lib/ext \
 	file://storage_ext.hpp;subdir=git/redfish-core/lib/ext \
 "
@@ -15,3 +14,4 @@ EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'raid-mscc', ' -Dami-rai
 EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'raid-mgmt', ' -Dami-raidbrcm=enabled','', d)}"
 EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'nic-mgmt', ' -Dami-nic=enabled','', d)}"
 EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'redfish-core', ' -Dami-rep=enabled','', d)}"
+EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'pciesw-service', ' -Dami-pciesw=enabled','', d)}"
