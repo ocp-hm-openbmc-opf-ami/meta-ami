@@ -4,7 +4,7 @@ DESCRIPTION = "collecting of all the sensor values every given interval"
 LICENSE = "CLOSED"
 
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/sensor-history-reader.git;protocol=https;branch=master"
-SRCREV = "bef04e510a7d88c8b1527d332684c47120636805"
+SRCREV = "aea185136a9fd9a52b7c3fcab5ab86cad60611ef"
 
 PV = "0.0+git${SRCPV}"
 
