@@ -959,11 +959,14 @@ if [ $# -eq 0 ]; then
     URI="$DEFURI"
 else
     echo "path=$1"
+    # clear cache before start firmware update
+    echo 3 > /proc/sys/vm/drop_caches
     if [[ "$1" == *"/"* ]]; then
         URI=$1 # local file
         local_file=1 ;
         mkdir -p /tmp/updateImage;
         tar -xvf $1 -C "/tmp/updateImage";
+        rm -rf $1 #clear tar file after untar it
         URI="file:///tmp/updateImage/MANIFEST";
     else
         path=$(find / -name "$1")
