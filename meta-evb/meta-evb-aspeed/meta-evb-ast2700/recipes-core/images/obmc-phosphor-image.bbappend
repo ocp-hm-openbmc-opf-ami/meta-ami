@@ -3,6 +3,7 @@ IMAGE_INSTALL:append = " \
         libmctp \
         entity-manager \
         virtual-media \
+        default-fru \
         "
 
 IMAGE_INSTALL:append = " \
