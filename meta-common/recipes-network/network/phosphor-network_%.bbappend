@@ -63,6 +63,7 @@ SRC_URI:append = " \
              file://0045-Clear-NCSI-Settings-before-Changing-Package-and-Channel.patch \
              file://0003-Adding-channel-specific-privilege-to-network.patch \
              file://0046-Change-The-Range-VLAN-ID.patch \
+             file://0042-Enable-NSUpdate-and-Reconfig-Link-When-Changing-Host.patch \
              "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"

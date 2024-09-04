@@ -1,0 +1,167 @@
+From 6b2d458cfbfe8798ecd704b6d43edc6193be04bd Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Tue, 6 Aug 2024 18:10:58 +0800
+Subject: [PATCH] Enable NSUpdate and Reconfig Link When Changing Hostname
+
+---
+ src/dns_updater.cpp          | 33 +++++++++++++++++++++++++++------
+ src/network_manager.cpp      | 18 ++++++++++++++++++
+ src/network_manager.hpp      |  2 ++
+ src/system_configuration.cpp |  9 +++++++++
+ 4 files changed, 56 insertions(+), 6 deletions(-)
+
+diff --git a/src/dns_updater.cpp b/src/dns_updater.cpp
+index 456f5db..0515416 100644
+--- a/src/dns_updater.cpp
++++ b/src/dns_updater.cpp
+@@ -279,6 +279,16 @@ void Configuration::registerSignal(sdbusplus::bus_t& bus)
+                         if (state == sdbusplus::common::xyz::openbmc_project::
+                                          state::BMC::BMCState::Ready)
+                         {
++                            // Reload Configuration for HOSTNAME chagend during BOOT
++                            // If not, DDNS may not work
++                            manager.get().addReloadPreHook(
++                            [&]() {
++                                // Wait for the information of interface ready
++                                // Since reloadConfig is async
++                                std::this_thread::sleep_for(std::chrono::seconds(5));
++                                toRegister();
++                            });
++                            manager.get().reloadConfigs();
+                             if (!std::filesystem::exists(DEFAULT_HOSTNAME_PATH))
+                             {
+                                 std::ofstream ofs;
+@@ -479,7 +489,7 @@ int16_t Configuration::toDeregister()
+ int16_t Configuration::toRegister()
+ {
+     std::ofstream ofs;
+-
++    int ret = 0;
+     std::string info;
+ 
+     if (!sendNsupdateEnabled())
+@@ -501,7 +511,7 @@ int16_t Configuration::toRegister()
+         if (iface == manager.get().interfaces.end())
+         {
+             lg2::info("Interface not found: {INAME} \n", "INAME", iName);
+-            return -1;
++            continue;
+         } //
+ 
+         for (int i = 1; true; i++)
+@@ -526,7 +536,7 @@ int16_t Configuration::toRegister()
+         if (domainNames.empty())
+         {
+             lg2::info("Domain Name isn't set.\n");
+-            return -1;
++            continue;
+         }
+ 
+         auto i = 1;
+@@ -536,7 +546,7 @@ int16_t Configuration::toRegister()
+             if (dnsServers.empty())
+             {
+                 lg2::info("DNS Server isn't set.\n");
+-                return -1;
++                continue;
+             }
+ 
+             for (auto& dns : dnsServers)
+@@ -642,12 +652,23 @@ int16_t Configuration::setHostConf(bool hostSetting, std::string hostName)
+ 
+     if (different)
+     {
++        toDeregister();
+         manager.get().getSystemConf().hostName(hostname, true);
+         hostConf(std::make_tuple(hostSetting, hostname));
+         auto method = bus.new_method_call(HOSTNAMED_SVC, HOSTNAMED_OBJ,
+                                           HOSTNAMED_INTF, "SetStaticHostname");
+         method.append(hostname, /*interactive=*/false);
+-        bus.call_noreply(method);
++        bus.call(method);
++        for (auto it = manager.get().interfaces.begin();
++             it != manager.get().interfaces.end(); it++)
++        {
++            if (it->second->interfaceName().find(".") == std::string::npos &&
++                it->second->interfaceName().find_first_of("eth") !=
++                    std::string::npos)
++                manager.get().reconfigLink(it->second->getIfIdx());
++                std::this_thread::sleep_for(std::chrono::seconds(1));
++        }
++        toRegister();
+     }
+ 
+     if (ddnsIface::useMDNS())
+@@ -1007,7 +1028,7 @@ void Configuration::addInterfaceConf(std::string interface)
+     if (found == false)
+     {
+         tmpIface.push_back(
+-            std::tuple(interface, false, false, ddnsIface::Method::Deregister));
++            std::tuple(interface, true, false, ddnsIface::Method::Register));
+         ddnsIface::interfacesConf(std::move(tmpIface));
+     }
+ }
+diff --git a/src/network_manager.cpp b/src/network_manager.cpp
+index e09f9fe..cf8c391 100644
+--- a/src/network_manager.cpp
++++ b/src/network_manager.cpp
+@@ -897,6 +897,24 @@ std::vector<std::string> Manager::getGatewayFromFile()
+     return vec;
+ }
+ 
++void Manager::reconfigLink(int ifidx)
++{
++    try
++    {
++        auto method = bus.get()
++            .new_method_call("org.freedesktop.network1",
++                                "/org/freedesktop/network1",
++                                "org.freedesktop.network1.Manager", "ReconfigureLink");
++        method.append(ifidx);
++        bus.get().call(method);
++        lg2::info("Re configured Link #{LINK}", "LINK", ifidx);
++    }
++    catch (const sdbusplus::exception_t& ex)
++    {
++        lg2::error("Failed to reconfigure: {ERROR}", "ERROR", ex);
++    }
++}
++
+ void Manager::setConfDir(const fs::path& dir)
+ {
+     confDir = dir;
+diff --git a/src/network_manager.hpp b/src/network_manager.hpp
+index e249e0d..14aa4a7 100644
+--- a/src/network_manager.hpp
++++ b/src/network_manager.hpp
+@@ -81,6 +81,8 @@ class Manager : public ManagerIface
+     void addDefGw(unsigned ifidx, stdplus::InAnyAddr addr);
+     void removeDefGw(unsigned ifidx, stdplus::InAnyAddr addr);
+ 
++    void reconfigLink(int ifidx);
++
+     /** @brief gets the network conf directory.
+      */
+     inline const auto& getConfDir() const
+diff --git a/src/system_configuration.cpp b/src/system_configuration.cpp
+index 4893319..2141bd9 100644
+--- a/src/system_configuration.cpp
++++ b/src/system_configuration.cpp
+@@ -101,6 +101,15 @@ std::string SystemConfiguration::hostName(std::string name)
+                                   Argument::ARGUMENT_VALUE(name.c_str()));
+         }
+     }
++
++    for (auto it = manager.get().interfaces.begin();
++         it != manager.get().interfaces.end(); it++)
++    {
++        if (it->second->interfaceName().find(".") == std::string::npos &&
++            it->second->interfaceName().find_first_of("eth") !=
++                std::string::npos)
++             manager.get().reconfigLink(it->second->getIfIdx());
++    }
+     return SystemConfigIntf::hostName();
+ }
+ 
+-- 
+2.34.1
