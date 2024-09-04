@@ -5,3 +5,4 @@ SRCREV = "720b996278ab27764f6c93fdc4238661b7a824a7"
 
 SYSTEMD_SERVICE:${PN} += "start-ipkvm.socket"
 
+FILES:${PN} += "${systemd_system_unitdir}/start-ipkvm.service.d"
