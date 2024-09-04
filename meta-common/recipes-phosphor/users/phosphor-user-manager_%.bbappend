@@ -19,6 +19,7 @@ SRC_URI += " \
 	     file://0018-Added-group-user-for-host-interface.patch \
 	     file://0020-add-media-group.patch \
              file://0021-add-snmp-group.patch \
+             file://0022-Fix-to-add-support-to-include-dot-.-in-username.patch \
              file://0022-Added-chaanges-for-Pam-Reorder.patch \
            "
 #OEM Privilege
