@@ -45,6 +45,7 @@ SRC_URI += "file://nfs.cfg \
             file://0001-aspeed-video-enable-partial-jpeg-capture-support.patch \
             file://CVE-2024-35984.patch \
             file://CVE-2024-36008.patch \
+            file://0038-Fix-probe-regression-for-ASPEED-UDC.patch \
 	    "
 
 NON_PFR_SRC_URI_INTEL = "file://0012-Add-new-layout-as-per-AMI-requirements.patch \
@@ -120,3 +121,8 @@ SRC_ASPEED_MCTP_DRV = "file://0037-Clean-Intel-MCTP-over-PCIe-driver.patch \
 SRC_URI:append= "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'use-lfmctp', SRC_ASPEED_MCTP_DRV,'', d)}"
 SRC_URI:append:evb-ast2600  = "file://0040-Add-dma-pool-for-EVB-MCTP-over-PCIe-driver.patch"
 
+SRC_USB_Gadget_Device = " file://0037-Enable-USB-Port-B-as-gadget-device.patch \
+                          file://USB-Port-B-as-Gadget-Device.cfg \
+                        "
+SRC_USB_HOST_Controller = " file://USB-Port-B-as-HOST-Controller.cfg"
+SRC_URI:append = "${@bb.utils.contains('USB_Port_B_Function', 'Gadget-Device', SRC_USB_Gadget_Device, SRC_USB_HOST_Controller, d)}"
