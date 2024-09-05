@@ -3,7 +3,6 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 # The list of source files — local or remote
 SRC_URI_EXT:append= " \
-	file://0001-Added-routing-table-for-NVME-BRCM-MSCC-PCIESW.patch \
 	file://collection_ext.hpp;subdir=git/redfish-core/lib/ext \
 	file://storage_ext.hpp;subdir=git/redfish-core/lib/ext \
 "
