@@ -43,6 +43,8 @@ SRC_URI += "file://nfs.cfg \
             file://CVE-2024-36971.patch \
             file://CVE-2024-27397.patch \
             file://0001-aspeed-video-enable-partial-jpeg-capture-support.patch \
+            file://CVE-2024-35984.patch \
+            file://CVE-2024-36008.patch \
 	    "
 
 NON_PFR_SRC_URI_INTEL = "file://0012-Add-new-layout-as-per-AMI-requirements.patch \
