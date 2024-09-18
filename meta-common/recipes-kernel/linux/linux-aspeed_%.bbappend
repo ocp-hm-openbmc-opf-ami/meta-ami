@@ -126,3 +126,8 @@ SRC_USB_Gadget_Device = " file://0037-Enable-USB-Port-B-as-gadget-device.patch \
                         "
 SRC_USB_HOST_Controller = " file://USB-Port-B-as-HOST-Controller.cfg"
 SRC_URI:append = "${@bb.utils.contains('USB_Port_B_Function', 'Gadget-Device', SRC_USB_Gadget_Device, SRC_USB_HOST_Controller, d)}"
+
+SRC_URI_IPMI_BT = "file://ipmi_bt.cfg \
+                   file://0037-IPMI-BT-Driver-Enable.patch \
+                   "
+SRC_URI:append:evb-ast2600 = "${@bb.utils.contains('IPMI_BT_SUPPORT', 'ipmi-bt-enable', SRC_URI_IPMI_BT, '', d)}"
