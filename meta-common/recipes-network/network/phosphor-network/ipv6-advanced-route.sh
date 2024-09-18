@@ -91,6 +91,13 @@ if [ "$STATE" == "UP" ]; then
     do
         IPV6_ADDR=`ifconfig $IFACE | grep "inet6 addr" | grep -v "Link" | awk '{print $3}' | cut -d"/" -f1 | awk 'NR=='$i''`
         ip -6 rule add from $IPV6_ADDR table $IFACE > /dev/null 2>&1
+	IFINDEX=$(cat /sys/class/net/"$IFACE"/ifindex)
+	FILE="/run/systemd/netif/links/"$IFINDEX""
+        while IFS= read -r line; do
+            DHCPv6_ADDR=$(echo "$line" | grep "DHCP6_ADDRESS" | cut -d"=" -f2)
+            ip -6 route add "$DHCPv6_ADDR" dev $IFACE table $IFACE > /dev/null 2>&1
+            ip -6 route add "$DHCPv6_ADDR" dev $IFACE table main > /dev/null 2>&1
+        done < "$FILE"
         i=$((i + 1))
         count=$((count - 1))
     done
