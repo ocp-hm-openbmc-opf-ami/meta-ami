@@ -1,12 +1,14 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/intel-ipmi-oem.git;branch=master;protocol=https;name=override;"
+
+SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/intel-ipmi-oem.git;branch=core-sync_Intel_LF-bhs-24.29-0;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "dbb5dfa5c9891302dca7dacf026f48a7a5137389"
+SRCREV_override = "b3595acd32cedb2caf2fb384c3bdd8679f6996db"
 
 EXTRA_OECMAKE +=" if-non-intel-disable=OFF"
 
 EXTRA_OEMESON += " -Dipmi-firewall=true"
 
+#To Enable Configurable fru 
 #EXTRA_OEMESON += " -Dconfigurable-fru=true"
 

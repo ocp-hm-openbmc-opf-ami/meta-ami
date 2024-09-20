@@ -9,7 +9,7 @@ SRC_URI:append:emmc-sw-ami = " \
 SRC_URI:append:evb-ast2600 = " \
     file://fw_env_evb.config \
     "
-do_install:prepend () {
+do_install:prepend:evb-aspeed () {
 	if [ -e ${WORKDIR}/fw_env.config ] ; then
 		cp ${WORKDIR}/fw_env_evb.config ${WORKDIR}/fw_env.config
 	fi

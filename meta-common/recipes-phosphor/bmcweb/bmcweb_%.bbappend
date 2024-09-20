@@ -8,9 +8,9 @@ EXTRA_OEMESON += "-Dredfish-dbus-log=enabled"
 # add "redfish-hostiface" group
 GROUPADD_PARAM:${PN}:append = ";redfish-hostiface"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/bmcweb;branch=master;protocol=https;name=override;"
+SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/bmcweb;branch=sync_Intel_LF-bhs-24.29-0;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "afe8e56e3bed421f5ceb49634f9c5e3d18731313"
+SRCREV_override = "d3800e42fc0f6c5ced74fb84a6a7fde612917e84"
 
 SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
                     file://0242-Add-support-to-applytime-property.patch \

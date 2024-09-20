@@ -3,8 +3,9 @@ SOL_PATH = "${@'${THISDIR}/${PN}/multi-sol' if d.getVar('MULTI_SOL_ENABLED') == 
 FILESEXTRAPATHS:prepend := "${SOL_PATH}:"
 RDEPENDS:${PN} += "bash"
 
+SRCREV = "b965c2201a52ed66efe06ee4ec6c2c51a16b453e"
+
 Single_SOL_SRC_URI = "file://single_sol_conf.ttyS2.conf \
-		      file://001-stored-SOL-log-data-permanently.patch \
 		     "
 
 Single_SOL_SRC_URI:append:ast2700-default = "file://ast2700-sol-configure.sh "

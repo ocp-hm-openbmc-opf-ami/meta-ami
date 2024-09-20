@@ -7,6 +7,8 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 #        ${@bb.utils.contains('PACKAGECONFIG', 'asd', 'phosphor-certificate-manager@asd.service', '', d)} \
 #        "
 
+PACKAGECONFIG:remove = "authority-cert"
+
 SRC_URI += " \
 	    file://0001-renew-rekey.patch \
 	    file://0002-asd-certificate.patch \

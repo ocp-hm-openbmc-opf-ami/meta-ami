@@ -68,4 +68,4 @@ do_install:append:evb-ast2600() {
    fi
 }
 
-
+PACKAGECONFIG[software-update-dbus-interface] = ""

@@ -1,8 +1,8 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/dbus-sensors.git;branch=master;protocol=https;name=override;"
+SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/dbus-sensors.git;branch=core-sync_Intel_LF-bhs-24.29-0;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "f3223a2c701914dce0d65a4522f5ae450219e4d7"
+SRCREV_override = "76f0352789a595e52f94b9c9d66946e2032e5960"
 
 SRC_URI_ast2600:append =  " \
             file://0001-ADCSensor-Fix-for-P3V3-sensor.patch \
@@ -85,3 +85,4 @@ SYSTEMD_SERVICE:${PN} += "${@bb.utils.contains('PACKAGECONFIG', 'bmcfirmwareheal
 SYSTEMD_SERVICE:${PN} += "${@bb.utils.contains('PACKAGECONFIG', 'damagedsensor', \
                                                'xyz.openbmc_project.damagedsensor.service', \
                                                '', d)}"
+

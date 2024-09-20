@@ -1,63 +1,34 @@
-From 57880f36cab978b2e8130ad093e5a12fe7dd1381 Mon Sep 17 00:00:00 2001
-From: thrishalig <thrishalig@ami.com>
-Date: Wed, 13 Mar 2024 19:53:44 +0530
-Subject: [PATCH] Entity-manager: Add support to update assetTag Asset tag is
- an updateable property from User level interface like dcmi. User-level
- interface will update Asset tag in entity-manager, which will further update
- the needed FRU interface property exposed.
+From e92be20556ce7acabb06eb3e88a5b5bd183bd955 Mon Sep 17 00:00:00 2001
+From: vipinc <vipinc@ami.com>
+Date: Thu, 12 Sep 2024 10:47:33 +0530
+Subject: [PATCH 1/2] Entity-manager: Add support to update assetTag
+
+[Recreated Intel Patch]
+Asset tag is an updateable property from User level interface like
+Redfish. User-level interface will update Asset tag in entity-manager,
+which will further update the needed FRU interface property exposed.
 
 Tested:
 Successfully updated in assetTag interface as well as in fru interface
-using dcmi set asset tag
+while using set-property and using redfish as well.
+The new value is preserved after BMC resets.
 
-root@AMIOT-a6909df7d56e:~# ipmitool raw 0x2c 0x08 0xdc 0x00 0x10 0x31 0x32 0x33 0x34 0x35 0x36 0x40 0x61 0x62 0x63 0x64 0x65 0x66 0x67 0x68 0x31
- dc 10
-root@AMIOT-a6909df7d56e:~# ipmitool raw 0x2c 0x06 0xdc 0x00 0x10
- dc 10 31 32 33 34 35 36 40 61 62 63 64 65 66 67
- 68 31
+Ref:
+Patch: https://git.ami.com/core/ami-bmc/one-tree/intel/meta-intel/-/blob/main/recipes-phosphor/configuration/entity-manager/0002-Entity-manager-Add-support-to-update-assetTag.patch?ref_type=heads
+[OT1.2] - https://git.ami.com/core/ami-bmc/one-tree/core/meta-ami/-/merge_requests/942
 
-root@AMIOT-a6909df7d56e:~# busctl introspect  xyz.openbmc_project.EntityManager /xyz/openbmc_project/inventory/system/board/AC_Baseboard
-NAME                                                 TYPE      SIGNATURE RESULT/VALUE                             FLAGS
-org.freedesktop.DBus.Introspectable                  interface -         -                                        -
-.Introspect                                          method    -         s                                        -
-org.freedesktop.DBus.Peer                            interface -         -                                        -
-.GetMachineId                                        method    -         s                                        -
-.Ping                                                method    -         -                                        -
-org.freedesktop.DBus.Properties                      interface -         -                                        -
-.Get                                                 method    ss        v                                        -
-.GetAll                                              method    s         a{sv}                                    -
-.Set                                                 method    ssv       -                                        -
-.PropertiesChanged                                   signal    sa{sv}as  -                                        -
-xyz.openbmc_project.AddObject                        interface -         -                                        -
-.AddObject                                           method    a{sv}     -                                        -
-xyz.openbmc_project.Inventory.Decorator.Asset        interface -         -                                        -
-.Manufacturer                                        property  s         "Intel Corporation"                      emits-change
-.Model                                               property  s         "ArcherCity"                             emits-change
-.PartNumber                                          property  s         ".........."                             emits-change
-.SerialNumber                                        property  s         "Intel_3245"                             emits-change
-xyz.openbmc_project.Inventory.Decorator.AssetTag     interface -         -                                        -
-.Delete                                              method    -         -                                        -
-.AssetTag                                            property  s         "123456@abcdefgh1"                       emits-change writable
-xyz.openbmc_project.Inventory.Item.Board             interface -         -                                        -
-.FoundProbePath                                      property  s         "/xyz/openbmc_project/FruDevice/Arche... emits-change
-.Name                                                property  s         "AC Baseboard"                           emits-change
-.Probe                                               property  as        3 "xyz.openbmc_project.FruDevice({\'P... emits-change
-.Type                                                property  s         "Board"                                  emits-change
-xyz.openbmc_project.Inventory.Item.Board.Motherboard interface -         -                                        -
-.ProductId                                           property  t         156                                      emits-change
-xyz.openbmc_project.Inventory.Item.System            interface -         -                                        -
-
-Signed-off-by: thrishalig <thrishalig@ami.com>
+Signed-off-by: mansijos <mansi.joshi@intel.com>
+Signed-off-by: vipinc <vipinc@ami.com>
 ---
- src/entity_manager.cpp | 98 +++++++++++++++++++++++++++++++++++-------
+ src/entity_manager.cpp | 69 ++++++++++++++++++++++++++++++++++++++++--
  src/perform_scan.cpp   |  3 ++
- 2 files changed, 86 insertions(+), 15 deletions(-)
+ 2 files changed, 69 insertions(+), 3 deletions(-)
 
 diff --git a/src/entity_manager.cpp b/src/entity_manager.cpp
-index af229d3..31b6da7 100644
+index 655cb2d..3325016 100644
 --- a/src/entity_manager.cpp
 +++ b/src/entity_manager.cpp
-@@ -53,6 +53,13 @@ constexpr const char* lastConfiguration = "/tmp/configuration/last.json";
+@@ -54,6 +54,13 @@ constexpr const char* lastConfiguration = "/tmp/configuration/last.json";
  constexpr const char* currentConfiguration = "/var/configuration/system.json";
  constexpr const char* globalSchema = "global.json";
  
@@ -71,7 +42,7 @@ index af229d3..31b6da7 100644
  const boost::container::flat_map<const char*, probe_type_codes, CmpStr>
      probeTypes{{{"FALSE", probe_type_codes::FALSE_T},
                  {"TRUE", probe_type_codes::TRUE_T},
-@@ -217,6 +224,43 @@ void addArrayToDbus(const std::string& name, const nlohmann::json& array,
+@@ -219,6 +226,42 @@ void addArrayToDbus(const std::string& name, const nlohmann::json& array,
      }
  }
  
@@ -85,8 +56,7 @@ index af229d3..31b6da7 100644
 +    auto it = mapFoundData.find(jsonPointerPath);
 +    if (it == mapFoundData.end())
 +    {
-+        std::cerr << "Error in finding jsonPointerPath in mapFoundData"
-+                  << "\n";
++        std::cerr << "Error in finding jsonPointerPath in mapFoundData" << "\n";
 +        return false;
 +    }
 +
@@ -115,7 +85,7 @@ index af229d3..31b6da7 100644
  template <typename PropertyType>
  void addProperty(const std::string& name, const PropertyType& value,
                   sdbusplus::asio::dbus_interface* iface,
-@@ -231,22 +275,32 @@ void addProperty(const std::string& name, const PropertyType& value,
+@@ -233,9 +276,17 @@ void addProperty(const std::string& name, const PropertyType& value,
      }
      iface->register_property(
          name, value,
@@ -123,19 +93,6 @@ index af229d3..31b6da7 100644
 +        [name, &systemConfiguration,
           jsonPointerString{std::string(jsonPointerString)}](
              const PropertyType& newVal, PropertyType& val) {
--        val = newVal;
--        if (!setJsonFromPointer(jsonPointerString, val, systemConfiguration))
--        {
--            std::cerr << "error setting json field\n";
--            return -1;
--        }
--        if (!writeJsonFiles(systemConfiguration))
--        {
--            std::cerr << "error setting json file\n";
--            return -1;
--        }
--        return 1;
--    });
 +            if (name == "AssetTag")
 +            {
 +                if (!persistAssetTag(newVal, jsonPointerString))
@@ -144,25 +101,10 @@ index af229d3..31b6da7 100644
 +                    return -1;
 +                }
 +            }
-+
-+            val = newVal;
-+            if (!setJsonFromPointer(jsonPointerString, val,
-+                                    systemConfiguration))
-+            {
-+                std::cerr << "error setting json field\n";
-+                return -1;
-+            }
-+            if (!writeJsonFiles(systemConfiguration))
-+            {
-+                std::cerr << "error setting json file\n";
-+                return -1;
-+            }
-+            return 1;
-+        });
- }
- 
- void createDeleteObjectMethod(
-@@ -632,18 +686,32 @@ void postToDbus(const nlohmann::json& newConfiguration,
+             val = newVal;
+             if (!setJsonFromPointer(jsonPointerString, val,
+                                     systemConfiguration))
+@@ -644,18 +695,30 @@ void postToDbus(const nlohmann::json& newConfiguration,
          populateInterfaceFromJson(systemConfiguration, jsonPointerPath,
                                    boardIface, boardValues, objServer);
          jsonPointerPath += "/";
@@ -174,12 +116,12 @@ index af229d3..31b6da7 100644
 +            {
 +                foundPath = propValue;
 +            }
-+
              if (propValue.type() == nlohmann::json::value_t::object)
              {
                  std::shared_ptr<sdbusplus::asio::dbus_interface> iface =
                      createInterface(objServer, boardPath, propName,
                                      boardNameOrig);
+-
 +                auto perm = sdbusplus::asio::PropertyPermission::readOnly;
 +                if (propName ==
 +                    "xyz.openbmc_project.Inventory.Decorator.AssetTag")
@@ -188,7 +130,6 @@ index af229d3..31b6da7 100644
 +                    mapFoundData[jsonPointerPath + propName] = foundData;
 +                    perm = sdbusplus::asio::PropertyPermission::readWrite;
 +                }
- 
                  populateInterfaceFromJson(systemConfiguration,
                                            jsonPointerPath + propName, iface,
 -                                          propValue, objServer);
@@ -197,7 +138,7 @@ index af229d3..31b6da7 100644
          }
  
 diff --git a/src/perform_scan.cpp b/src/perform_scan.cpp
-index 5e5b715..319fd9a 100644
+index e787360..e807a0f 100644
 --- a/src/perform_scan.cpp
 +++ b/src/perform_scan.cpp
 @@ -539,6 +539,9 @@ void PerformScan::updateSystemConfiguration(const nlohmann::json& recordRef,

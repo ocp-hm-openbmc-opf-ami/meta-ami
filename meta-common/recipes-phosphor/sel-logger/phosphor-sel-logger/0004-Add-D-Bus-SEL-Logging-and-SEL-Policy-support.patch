@@ -1,7 +1,7 @@
-From 9e8c0a7e0bc0c9a7ddb4bc97c2c13a779dd9fc33 Mon Sep 17 00:00:00 2001
-From: vipinc <vipinc@ami.com>
-Date: Fri, 19 Jan 2024 10:47:51 +0530
-Subject: [PATCH 4/4] Add D-Bus SEL Logging and SEL Policy support
+From 9ed4663d6abb24604882d3553fe063d22e76c299 Mon Sep 17 00:00:00 2001
+From: dineshsv <dineshsv@ami.com>
+Date: Thu, 12 Sep 2024 12:45:06 +0530
+Subject: [PATCH] Add D-Bus SEL Logging and SEL Policy support
 
 Recreated the below patch
 
@@ -208,19 +208,19 @@ RF URL: https://10.0.136.250/redfish/v1/Systems/system/LogServices/EventLog/Entr
 
 Signed-off-by: vipinc <vipinc@ami.com>
 
-Signed-off-by: nikhilad <nikhilad@ami.com>
+Signed-off-by: dineshsv <dineshsv@ami.com>
 ---
- include/sel_logger.hpp              |  61 ++++++++++++
- include/threshold_event_monitor.hpp |  10 ++
- include/watchdog_event_monitor.hpp  |  14 +++
- src/sel_logger.cpp                  | 148 +++++++++++++---------------
- 4 files changed, 155 insertions(+), 78 deletions(-)
+ include/sel_logger.hpp              |  59 +++++++++++
+ include/threshold_event_monitor.hpp |  24 +++--
+ include/watchdog_event_monitor.hpp  |  15 +++
+ src/sel_logger.cpp                  | 150 +++++++++++++---------------
+ 4 files changed, 163 insertions(+), 85 deletions(-)
 
 diff --git a/include/sel_logger.hpp b/include/sel_logger.hpp
-index 1bd981b..f642fee 100644
+index 1bd981b..1d47837 100644
 --- a/include/sel_logger.hpp
 +++ b/include/sel_logger.hpp
-@@ -62,9 +62,70 @@ static const std::string selLogFilename = "ipmi_sel";
+@@ -62,9 +62,68 @@ static const std::string selLogFilename = "ipmi_sel";
  static const std::string nextRecordFilename = "next_records";
  #endif
  
@@ -235,12 +235,10 @@ index 1bd981b..f642fee 100644
 +    hexStr = stream.str();
 +}
 +
-+static void doPefTask(std::shared_ptr<sdbusplus::asio::connection> conn,
-+                      const std::string& path, bool assert,
-+                      const uint16_t& recordId,
-+                      const std::vector<uint8_t>& selData,
-+                      const std::string& message,
-+                      const std::optional<uint8_t> addSenType)
++static void doPefTask(
++    std::shared_ptr<sdbusplus::asio::connection> conn, const std::string& path,
++    bool assert, const uint16_t& recordId, const std::vector<uint8_t>& selData,
++    const std::string& message, const std::optional<uint8_t> addSenType)
 +{
 +    // Assign default values if none are provided
 +    uint8_t senNum = 0xff;
@@ -260,8 +258,8 @@ index 1bd981b..f642fee 100644
 +    }
 +    evtype |= assert ? 0x00 : 0x80;
 +    std::chrono::microseconds timeout = DBUS_TIMEOUT;
-+    auto startPefTask = conn->new_method_call(pefService, pefObjPath, pefIface,
-+                                              pefTaskMethod);
++    auto startPefTask =
++        conn->new_method_call(pefService, pefObjPath, pefIface, pefTaskMethod);
 +    startPefTask.append(static_cast<uint16_t>(recordId), sentype, senNum,
 +                        evtype, selData[0], selData[1], selData[2], selBMCGenID,
 +                        message.c_str());
@@ -277,13 +275,13 @@ index 1bd981b..f642fee 100644
 +
 +#ifdef SEL_LOGGER_SEND_TO_LOGGING_SERVICE
 +using AdditionalData = std::map<std::string, std::string>;
-+static void
-+    selAddSystemRecord(std::shared_ptr<sdbusplus::asio::connection> conn,
-+                       const std::string& message, const std::string& path,
-+                       const std::vector<uint8_t>& selData, const bool& assert,
-+                       const uint16_t& genId,
-+                       const std::optional<AdditionalData>& addData);
++static void selAddSystemRecord(
++    std::shared_ptr<sdbusplus::asio::connection> conn,
++    const std::string& message, const std::string& path,
++    const std::vector<uint8_t>& selData, const bool& assert,
++    const uint16_t& genId, const std::optional<AdditionalData>& addData);
 +#else
++
  template <typename... T>
  static uint16_t
      selAddSystemRecord(std::shared_ptr<sdbusplus::asio::connection> conn,
@@ -292,31 +290,38 @@ index 1bd981b..f642fee 100644
                         const uint16_t& genId, T&&... metadata);
 +#endif
 diff --git a/include/threshold_event_monitor.hpp b/include/threshold_event_monitor.hpp
-index c380c30..dc838e0 100644
+index 0882385..0fb07b0 100644
 --- a/include/threshold_event_monitor.hpp
 +++ b/include/threshold_event_monitor.hpp
-@@ -311,6 +311,10 @@ inline static sdbusplus::bus::match_t startThresholdAssertMonitor(
+@@ -311,17 +311,27 @@ inline static sdbusplus::bus::match_t startThresholdAssertMonitor(
          }
          if (eventType != eventNone)
          {
 +            unsigned int recordId;
 +            std::string selDataStr;
 +            toHexStr(eventData, selDataStr);
-+
              sdbusplus::message_t AddToLog = conn->new_method_call(
                  "xyz.openbmc_project.Logging", "/xyz/openbmc_project/logging",
                  "xyz.openbmc_project.Logging.Create", "Create");
-@@ -318,10 +322,16 @@ inline static sdbusplus::bus::match_t startThresholdAssertMonitor(
-                             std::map<std::string, std::string>(
-                                 {{"SENSOR_PATH", std::string(msg.get_path())},
-                                  {"EVENT", threshold},
-+                                 {"SENSOR_DATA", selDataStr},
-+                                 {"GENERATOR_ID", std::to_string(selBMCGenID)},
-+                                 {"RECORD_TYPE", std::to_string(selSystemType)},
-+                                 {"EVENT_DIR", std::to_string(assert)},
-                                  {"DIRECTION", direction},
-                                  {"THRESHOLD", std::to_string(thresholdVal)},
-                                  {"READING", std::to_string(assertValue)}}));
+-            AddToLog.append(journalMsg, LogLevel,
+-                            std::map<std::string, std::string>(
+-                                {{"SENSOR_PATH", std::string(msg.get_path())},
+-                                 {"EVENT", threshold},
+-                                 {"DIRECTION", direction},
+-                                 {"THRESHOLD", std::to_string(thresholdVal)},
+-                                 {"READING", std::to_string(assertValue)}}));
++            AddToLog.append(
++                journalMsg, LogLevel,
++                std::map<std::string, std::string>(
++                    {{"SENSOR_PATH", std::string(msg.get_path())},
++                     {"EVENT", threshold},
++                     {"SENSOR_DATA", selDataStr},
++                     {"GENERATOR_ID", std::to_string(selBMCGenID)},
++                     {"RECORD_TYPE", std::to_string(selSystemType)},
++                     {"EVENT_DIR", std::to_string(assert)},
++                     {"DIRECTION", direction},
++                     {"THRESHOLD", std::to_string(thresholdVal)},
++                     {"READING", std::to_string(assertValue)}}));
              conn->call(AddToLog);
 +            doPefTask(conn, msg.get_path(), assert, recordId, eventData,
 +                      journalMsg, std::nullopt);
@@ -324,10 +329,10 @@ index c380c30..dc838e0 100644
  #else
          selAddSystemRecord(
 diff --git a/include/watchdog_event_monitor.hpp b/include/watchdog_event_monitor.hpp
-index 777ac16..1a81ffb 100644
+index 777ac16..84f5f8f 100644
 --- a/include/watchdog_event_monitor.hpp
 +++ b/include/watchdog_event_monitor.hpp
-@@ -225,12 +225,26 @@ inline static void sendWatchdogEventLog(
+@@ -225,12 +225,27 @@ inline static void sendWatchdogEventLog(
              "watchdog countdown " + std::to_string(watchdogInterval / 1000) +
              " seconds " + std::string(*expireAction) + " action");
  
@@ -344,6 +349,7 @@ index 777ac16..1a81ffb 100644
 +                                 std::move(std::string(*expireAction))}}));
 +        conn->call(newLogEntry);
 +#else
++
          std::string redfishMessageID = "OpenBMC.0.1.IPMIWatchdog";
  
          selAddSystemRecord(
@@ -355,10 +361,10 @@ index 777ac16..1a81ffb 100644
  }
  
 diff --git a/src/sel_logger.cpp b/src/sel_logger.cpp
-index a47c6ed..4a5d9fc 100644
+index fca3233..636b7bd 100644
 --- a/src/sel_logger.cpp
 +++ b/src/sel_logger.cpp
-@@ -426,29 +426,28 @@ static uint16_t getEntryCount()
+@@ -429,16 +429,13 @@ static uint16_t getEntryCount()
  #endif
  #endif
  
@@ -372,7 +378,6 @@ index a47c6ed..4a5d9fc 100644
 -    }
 -    hexStr = stream.str();
 -}
--
 +#ifdef SEL_LOGGER_SEND_TO_LOGGING_SERVICE
 +static void selAddSystemRecord(
 +    [[maybe_unused]] std::shared_ptr<sdbusplus::asio::connection> conn,
@@ -380,9 +385,10 @@ index a47c6ed..4a5d9fc 100644
 +    const std::vector<uint8_t>& selData, const bool& assert,
 +    const uint16_t& genId, const std::optional<AdditionalData>& additionalData)
 +#else
+ 
  template <typename... T>
  static uint16_t selAddSystemRecord(
-     [[maybe_unused]] std::shared_ptr<sdbusplus::asio::connection> conn,
+@@ -446,12 +443,15 @@ static uint16_t selAddSystemRecord(
      [[maybe_unused]] const std::string& message, const std::string& path,
      const std::vector<uint8_t>& selData, const bool& assert,
      const uint16_t& genId, [[maybe_unused]] T&&... metadata)
@@ -398,18 +404,23 @@ index a47c6ed..4a5d9fc 100644
      std::string selDataStr;
      toHexStr(selData, selDataStr);
  
-@@ -456,46 +455,63 @@ static uint16_t selAddSystemRecord(
-     sdbusplus::message_t AddToLog = conn->new_method_call(
+@@ -460,45 +460,63 @@ static uint16_t selAddSystemRecord(
          "xyz.openbmc_project.Logging", "/xyz/openbmc_project/logging",
          "xyz.openbmc_project.Logging.Create", "Create");
+ 
+-    std::string journalMsg(
+-        message + " from " + path + ": " +
+-        " RecordType=" + std::to_string(selSystemType) +
+-        ", GeneratorID=" + std::to_string(genId) +
+-        ", EventDir=" + std::to_string(assert) + ", EventData=" + selDataStr);
 +    std::string journalMsg = message;
 +    if (journalMsg.empty())
 +    {
-+        std::string journalMsg(message + " from " + path + ": " +
-+                               " RecordType=" + std::to_string(selSystemType) +
-+                               ", GeneratorID=" + std::to_string(genId) +
-+                               ", EventDir=" + std::to_string(assert) +
-+                               ", EventData=" + selDataStr);
++        std::string journalMsg(
++            message + " from " + path + ": " +
++            " RecordType=" + std::to_string(selSystemType) + ", GeneratorID=" +
++            std::to_string(genId) + ", EventDir=" + std::to_string(assert) +
++            ", EventData=" + selDataStr);
 +    }
 +    auto initialize = [&]() -> std::map<std::string, std::string> {
 +        std::map<std::string, std::string> response{
@@ -418,7 +429,15 @@ index a47c6ed..4a5d9fc 100644
 +            {"RECORD_TYPE", std::to_string(selSystemType)},
 +            {"EVENT_DIR", std::to_string(assert)},
 +            {"SENSOR_DATA", selDataStr}};
-+
+ 
+-    AddToLog.append(
+-        journalMsg, "xyz.openbmc_project.Logging.Entry.Level.Informational",
+-        std::map<std::string, std::string>(
+-            {{"SENSOR_PATH", path},
+-             {"GENERATOR_ID", std::to_string(genId)},
+-             {"RECORD_TYPE", std::to_string(selSystemType)},
+-             {"EVENT_DIR", std::to_string(assert)},
+-             {"SENSOR_DATA", selDataStr}}));
 +        if (additionalData.has_value())
 +        {
 +            auto addData = additionalData.value();
@@ -437,22 +456,10 @@ index a47c6ed..4a5d9fc 100644
 +        }
 +        return response;
 +    };
- 
--    std::string journalMsg(message + " from " + path + ": " +
--                           " RecordType=" + std::to_string(selSystemType) +
--                           ", GeneratorID=" + std::to_string(genId) +
--                           ", EventDir=" + std::to_string(assert) +
--                           ", EventData=" + selDataStr);
--
++
 +    // TODO: based on the event only the the severity should be defined
-     AddToLog.append(journalMsg,
-                     "xyz.openbmc_project.Logging.Entry.Level.Informational",
--                    std::map<std::string, std::string>(
--                        {{"SENSOR_PATH", path},
--                         {"GENERATOR_ID", std::to_string(genId)},
--                         {"RECORD_TYPE", std::to_string(selSystemType)},
--                         {"EVENT_DIR", std::to_string(assert)},
--                         {"SENSOR_DATA", selDataStr}}));
++    AddToLog.append(journalMsg,
++                    "xyz.openbmc_project.Logging.Entry.Level.Informational",
 +                    initialize());
      conn->call(AddToLog);
 -    return 0;
@@ -493,7 +500,7 @@ index a47c6ed..4a5d9fc 100644
      {
          auto bus = sdbusplus::bus::new_default();
          ipmi::Value event = static_cast<uint16_t>(1 << selData[0]);
-@@ -509,42 +525,7 @@ static uint16_t selAddSystemRecord(
+@@ -512,42 +530,7 @@ static uint16_t selAddSystemRecord(
          }
      }
  
@@ -537,7 +544,7 @@ index a47c6ed..4a5d9fc 100644
  }
  
  static uint16_t selAddOemRecord(
-@@ -614,6 +595,16 @@ int main(int, char*[])
+@@ -617,6 +600,16 @@ int main(int, char*[])
          server.add_interface(ipmiSelPath, ipmiSelAddInterface);
  
      // Add a new SEL entry
@@ -547,20 +554,21 @@ index a47c6ed..4a5d9fc 100644
 +        [conn](const std::string& message, const std::string& path,
 +               const std::vector<uint8_t>& selData, const bool& assert,
 +               const uint16_t& genId, const AdditionalData& addData) {
-+        return selAddSystemRecord(conn, message, path, selData, assert, genId,
-+                                  addData);
-+    });
++            return selAddSystemRecord(conn, message, path, selData, assert,
++                                      genId, addData);
++        });
 +#else
      ifaceAddSel->register_method(
          "IpmiSelAdd",
          [conn](const std::string& message, const std::string& path,
-@@ -621,6 +612,7 @@ int main(int, char*[])
-                const uint16_t& genId) {
-         return selAddSystemRecord(conn, message, path, selData, assert, genId);
-     });
+@@ -625,6 +618,7 @@ int main(int, char*[])
+             return selAddSystemRecord(conn, message, path, selData, assert,
+                                       genId);
+         });
 +#endif
      // Add a new OEM SEL entry
-     ifaceAddSel->register_method("IpmiSelAddOem",
-                                  [conn](const std::string& message,
+     ifaceAddSel->register_method(
+         "IpmiSelAddOem",
 -- 
 2.25.1
+

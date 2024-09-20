@@ -1,18 +1,17 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-dbus-interfaces.git;branch=main;protocol=https;name=override;"
+SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-dbus-interfaces.git;branch=core-sync_Intel_LF-bhs-24.29-0;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "a750f29a272758eb71d9c7dcf62525c9e2d215ac"
+SRCREV_override = "1d324b2fe8eab2381583d22824c5c5439fd0cb5d"
 SRC_URI += "file://0005-Add-Bootstrap-credential-support.patch \
             file://0006-Add-Diag-Arugment-in-Boot-Mode-Interface.patch \
             file://0010-Added-TimeOut-for-managers.patch \
             file://0012-Certificate-dbus-renew-rekey.patch \
-            file://0015-USB-Add-USB-DBus-Interface.patch \
             file://0012-passwordChangeRequired.patch \
             file://0013-Add-CertificateExists-Cert-Errors.patch \
+            file://0015-USB-Add-USB-DBus-Interface.patch \
             file://0016-Add-PrivateKeyNotFound-error.patch \
-            file://0675-Added-AES-encryption-support-properties.patch \
-        "
+           "
 
 include ${@bb.utils.contains('BBFILE_COLLECTIONS', 'nvidia-layer', 'phosphor-dbus-interfaces_nv.inc', '', d)}
 

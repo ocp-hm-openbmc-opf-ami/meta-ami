@@ -1,664 +1,587 @@
-From 02ae476881cf9ea37664aaaec02e5c7ec722313b Mon Sep 17 00:00:00 2001
-From: ramadevip <ramadevip@ami.com>
-Date: Thu, 18 Jan 2024 18:10:10 +0530
-Subject: [PATCH] Recreated
- 0003-Not-able-to-do-power-cycle-if-one-task-is-in-running.patch for bhs
+From 9696308cbd71ca1a17603913046b2ff39c12369b Mon Sep 17 00:00:00 2001
+From: prasannas <prasannas@ami.com>
+Date: Mon, 16 Sep 2024 20:04:10 +0530
+Subject: [PATCH 3/3] Not able to do power cycle if one task is in running
 
 Signed-off-by: ramadevip <ramadevip@ami.com>
 ---
- src/power_control.cpp | 540 +++++++++++++++++++++++++++---------------
- 1 file changed, 353 insertions(+), 187 deletions(-)
+ src/power_control.cpp | 338 ++++++++++++++++++++++++++++--------------
+ 2 files changed, 286 insertions(+), 133 deletions(-)
+ create mode 100644 .vscode/settings.json
 
 diff --git a/src/power_control.cpp b/src/power_control.cpp
-index 1c9a1a5..ad8a085 100644
+index 75b1317..96c11f0 100644
 --- a/src/power_control.cpp
 +++ b/src/power_control.cpp
-@@ -15,6 +15,7 @@
- */
- #include "power_control.hpp"
+@@ -50,9 +50,12 @@ PowerRestoreController powerRestore(io);
+ static std::string node = "0";
+ static const std::string appName = "power-control";
  
-+#include <stdio.h>
- #include <sys/sysinfo.h>
- #include <systemd/sd-journal.h>
- 
-@@ -28,13 +29,12 @@
- #include <phosphor-logging/lg2.hpp>
- #include <sdbusplus/asio/object_server.hpp>
- 
-+#include <chrono>
-+#include <cstdint>
- #include <filesystem>
- #include <fstream>
--#include <string_view>
--#include <stdio.h>
- #include <iostream>
--#include <chrono>
--#include <cstdint>
-+#include <string_view>
- 
- namespace power_control
- {
-@@ -49,6 +49,9 @@ static const std::string appName = "power-control";
- uint16_t powerTimeOut;
- uint16_t timeOut = 0;
- uint16_t prop = 0;
+-uint16_t powerTimeOut;
+-uint16_t timeOut = 0;
+-uint16_t prop = 0;
++uint64_t powerTimeOut;
++uint64_t timeOut = 0;
++uint64_t prop = 0;
 +bool timerStarted_system = false;
 +bool timerStarted = false;
 +bool timerStarted_chassis = false;
  
  enum class DbusConfigType
  {
-@@ -2957,122 +2960,218 @@ int main(int argc, char* argv[])
+@@ -2747,24 +2750,23 @@ bool bmcBootCheck()
+ } // namespace power_control
+ 
+ void createInterface(sdbusplus::asio::object_server& objectServer,
+-                      std::string objectPath)
+- {
+-     uint16_t defaultId = 0;
+-     std::string TaskName;
+-     std::string defaultStatus =
+-         "xyz.openbmc_project.Common.Task.OperationStatus.Completed";
+-     taskIface = objectServer.add_interface(objectPath.c_str(),
+-                                            "xyz.openbmc_project.Common.Task");
+-     taskIface->register_property(
+-         "Status", defaultStatus,
+-         sdbusplus::asio::PropertyPermission::readWrite);
+-     taskIface->register_property(
+-         "TaskId", defaultId, sdbusplus::asio::PropertyPermission::readWrite);
+-     taskIface->register_property(
+-         "TaskName", TaskName, sdbusplus::asio::PropertyPermission::readWrite);
+-     taskIface->initialize();
+- }
+-
++                     std::string objectPath)
++{
++    uint16_t defaultId = 0;
++    std::string TaskName;
++    std::string defaultStatus =
++        "xyz.openbmc_project.Common.Task.OperationStatus.Completed";
++    taskIface = objectServer.add_interface(objectPath.c_str(),
++                                           "xyz.openbmc_project.Common.Task");
++    taskIface->register_property(
++        "Status", defaultStatus,
++        sdbusplus::asio::PropertyPermission::readWrite);
++    taskIface->register_property(
++        "TaskId", defaultId, sdbusplus::asio::PropertyPermission::readWrite);
++    taskIface->register_property(
++        "TaskName", TaskName, sdbusplus::asio::PropertyPermission::readWrite);
++    taskIface->initialize();
++}
+ 
+ int main(int argc, char* argv[])
+ {
+@@ -3085,14 +3087,6 @@ int main(int argc, char* argv[])
          hostServer.add_interface("/xyz/openbmc_project/state/host" + node,
                                   "xyz.openbmc_project.State.Host");
  
--    hostIface->register_property("HostTransitionTimeOut",  timeOut,
--                    [](const uint16_t& requested,  uint16_t& propertyValue) {
--
--                    propertyValue = requested;
--                    powerTimeOut = propertyValue;
--                    return true;
--                    });
--
+-    hostIface->register_property(
+-        "HostTransitionTimeOut", timeOut,
+-        [](const uint16_t& requested, uint16_t& propertyValue) {
+-            propertyValue = requested;
+-            powerTimeOut = propertyValue;
+-            return true;
+-        });
+-    
+     createInterface(hostServer, "/xyz/openbmc_project/state/host" + node);
+ 
      // Interface for IPMI/Redfish initiated host state transitions
-     hostIface->register_property(
+@@ -3100,29 +3094,134 @@ int main(int argc, char* argv[])
          "RequestedHostTransition",
          std::string("xyz.openbmc_project.State.Host.Transition.Off"),
          [](const std::string& requested, std::string& resp) {
--
--	auto interval = std::chrono::seconds(powerTimeOut);
--                    powerTransitionTimer.expires_after(std::chrono::seconds(interval));
--                    powerTransitionTimer.async_wait([requested](const boost::system::error_code ec) {
--
--                                    if (ec)
--                                    {
--
--                                            // operation_aborted is expected if timer is canceled beforecompletion.
--                                            if (ec != boost::asio::error::operation_aborted)
--                                             {
--                                                   lg2::error("Host Transition TimeOut async_wait failed: {ERROR_MSG}",
--                                                             "ERROR_MSG", ec.message());
--                                                    return;
--                                             }
--                                    }
--                                    hostIface->set_property("HostTransitionTimeOut", prop);
--
--        if (requested == "xyz.openbmc_project.State.Host.Transition.Off")
-+        if (timerStarted_system == false)
-         {
--            // if power button is masked, ignore this
--            if (!powerButtonMask)
--            {
--                sendPowerControlEvent(Event::gracefulPowerOffRequest);
--                addRestartCause(RestartCause::command);
--            }
--            else
--            {
--                lg2::info("Power Button Masked.");
--                throw std::invalid_argument("Transition Request Masked");
--                return;
--            }
--        }
--        else if (requested == "xyz.openbmc_project.State.Host.Transition.On")
--        {
--            // if power button is masked, ignore this
--            if (!powerButtonMask)
--            {
--                sendPowerControlEvent(Event::powerOnRequest);
--                addRestartCause(RestartCause::command);
--            }
--            else
--            {
--                lg2::info("Power Button Masked.");
--                throw std::invalid_argument("Transition Request Masked");
--                return;
--            }
-+            timerStarted_system = true;
-+            auto interval = std::chrono::seconds(powerTimeOut);
-+            powerTransitionTimer.expires_after(std::chrono::seconds(interval));
-+            powerTransitionTimer.async_wait(
-+                [requested](const boost::system::error_code ec) {
-+                if (ec)
-+                {
-+                    // operation_aborted is expected if timer is canceled
-+                    // beforecompletion.
-+                    if (ec != boost::asio::error::operation_aborted)
+-            auto interval = std::chrono::seconds(powerTimeOut);
+-            powerTransitionTimer.expires_after(std::chrono::seconds(interval));
+-            powerTransitionTimer.async_wait([requested](
+-                                                const boost::system::error_code
+-                                                    ec) {
+-                if (ec)
+-                {
+-                    // operation_aborted is expected if timer is canceled
+-                    // beforecompletion.
+-                    if (ec != boost::asio::error::operation_aborted)
++            if (timerStarted_system == false)
++            {
++                timerStarted_system = true;
++                auto interval = std::chrono::seconds(powerTimeOut);
++                powerTransitionTimer.expires_after(
++                    std::chrono::seconds(interval));
++                powerTransitionTimer.async_wait([requested](
++                                                    const boost::system::
++                                                        error_code ec) {
++                    if (ec)
 +                    {
-+                        lg2::error(
-+                            "Host Transition TimeOut async_wait failed: {ERROR_MSG}",
-+                            "ERROR_MSG", ec.message());
-+                        return;
++                        // operation_aborted is expected if timer is canceled
++                        // beforecompletion.
++                        if (ec != boost::asio::error::operation_aborted)
++                        {
++                            lg2::error(
++                                "Host Transition TimeOut async_wait failed: {ERROR_MSG}",
++                                "ERROR_MSG", ec.message());
++                            return;
++                        }
 +                    }
-+                }
-+                osIface->set_property("HostTransitionTimeOut", prop);
-+                timerStarted_system = false;
++                    osIface->set_property("HostTransitionTimeOut", prop);
++                    timerStarted_system = false;
 +
-+                if (requested ==
-+                    "xyz.openbmc_project.State.Host.Transition.Off")
-+                {
-+                    // if power button is masked, ignore this
-+                    if (!powerButtonMask)
++                    if (requested ==
++                        "xyz.openbmc_project.State.Host.Transition.Off")
 +                    {
-+                        sendPowerControlEvent(Event::gracefulPowerOffRequest);
-+                        addRestartCause(RestartCause::command);
++                        // if power button is masked, ignore this
++                        if (!powerButtonMask)
++                        {
++                            sendPowerControlEvent(
++                                Event::gracefulPowerOffRequest);
++                            addRestartCause(RestartCause::command);
++                        }
++                        else
++                        {
++                            lg2::info("Power Button Masked.");
++                            throw std::invalid_argument(
++                                "Transition Request Masked");
++                            return;
++                        }
++                    }
++                    else if (requested ==
++                             "xyz.openbmc_project.State.Host.Transition.On")
++                    {
++                        // if power button is masked, ignore this
++                        if (!powerButtonMask)
++                        {
++                            sendPowerControlEvent(Event::powerOnRequest);
++                            addRestartCause(RestartCause::command);
++                        }
++                        else
++                        {
++                            lg2::info("Power Button Masked.");
++                            throw std::invalid_argument(
++                                "Transition Request Masked");
++                            return;
++                        }
++                    }
++                    else if (requested ==
++                             "xyz.openbmc_project.State.Host.Transition.Reboot")
++                    {
++                        // if power button is masked, ignore this
++                        if (!powerButtonMask)
++                        {
++                            sendPowerControlEvent(Event::powerCycleRequest);
++                            addRestartCause(RestartCause::command);
++                        }
++                        else
++                        {
++                            lg2::info("Power Button Masked.");
++                            throw std::invalid_argument(
++                                "Transition Request Masked");
++                            return;
++                        }
++                    }
++                    else if (
++                        requested ==
++                        "xyz.openbmc_project.State.Host.Transition.GracefulWarmReboot")
++                    {
++                        // if reset button is masked, ignore this
++                        if (!resetButtonMask)
++                        {
++                            sendPowerControlEvent(
++                                Event::gracefulPowerCycleRequest);
++                            addRestartCause(RestartCause::command);
++                        }
++                        else
++                        {
++                            lg2::info("Reset Button Masked.");
++                            throw std::invalid_argument(
++                                "Transition Request Masked");
++                            return;
++                        }
++                    }
++                    else if (
++                        requested ==
++                        "xyz.openbmc_project.State.Host.Transition.ForceWarmReboot")
++                    {
++                        // if reset button is masked, ignore this
++                        if (!resetButtonMask)
++                        {
++                            sendPowerControlEvent(Event::resetRequest);
++                            addRestartCause(RestartCause::command);
++                        }
++                        else
++                        {
++                            lg2::info("Reset Button Masked.");
++                            throw std::invalid_argument(
++                                "Transition Request Masked");
++                            return;
++                        }
 +                    }
 +                    else
-+                    {
-+                        lg2::info("Power Button Masked.");
+                     {
+                         lg2::error(
+-                            "Host Transition TimeOut async_wait failed: {ERROR_MSG}",
+-                            "ERROR_MSG", ec.message());
++                            "Unrecognized host state transition request.");
 +                        throw std::invalid_argument(
-+                            "Transition Request Masked");
-+                        return;
-+                    }
-+                }
-+                else if (requested ==
-+                         "xyz.openbmc_project.State.Host.Transition.On")
-+                {
-+                    // if power button is masked, ignore this
-+                    if (!powerButtonMask)
-+                    {
-+                        sendPowerControlEvent(Event::powerOnRequest);
-+                        addRestartCause(RestartCause::command);
-+                    }
-+                    else
-+                    {
-+                        lg2::info("Power Button Masked.");
-+                        throw std::invalid_argument(
-+                            "Transition Request Masked");
-+                        return;
-+                    }
-+                }
-+                else if (requested ==
-+                         "xyz.openbmc_project.State.Host.Transition.Reboot")
-+                {
-+                    // if power button is masked, ignore this
-+                    if (!powerButtonMask)
-+                    {
-+                        sendPowerControlEvent(Event::powerCycleRequest);
-+                        addRestartCause(RestartCause::command);
-+                    }
-+                    else
-+                    {
-+                        lg2::info("Power Button Masked.");
-+                        throw std::invalid_argument(
-+                            "Transition Request Masked");
-+                        return;
-+                    }
-+                }
-+                else if (
-+                    requested ==
-+                    "xyz.openbmc_project.State.Host.Transition.GracefulWarmReboot")
-+                {
-+                    // if reset button is masked, ignore this
-+                    if (!resetButtonMask)
-+                    {
-+                        sendPowerControlEvent(Event::gracefulPowerCycleRequest);
-+                        addRestartCause(RestartCause::command);
-+                    }
-+                    else
-+                    {
-+                        lg2::info("Reset Button Masked.");
-+                        throw std::invalid_argument(
-+                            "Transition Request Masked");
-+                        return;
-+                    }
-+                }
-+                else if (
-+                    requested ==
-+                    "xyz.openbmc_project.State.Host.Transition.ForceWarmReboot")
-+                {
-+                    // if reset button is masked, ignore this
-+                    if (!resetButtonMask)
-+                    {
-+                        sendPowerControlEvent(Event::resetRequest);
-+                        addRestartCause(RestartCause::command);
-+                    }
-+                    else
-+                    {
-+                        lg2::info("Reset Button Masked.");
-+                        throw std::invalid_argument(
-+                            "Transition Request Masked");
-+                        return;
-+                    }
-+                }
-+                else
-+                {
-+                    lg2::error("Unrecognized host state transition request.");
-+                    throw std::invalid_argument(
-+                        "Unrecognized Transition Request");
-+                    return;
-+                }
-+            });
-         }
--        else if (requested ==
--                 "xyz.openbmc_project.State.Host.Transition.Reboot")
-+        else
-         {
--            // if power button is masked, ignore this
--            if (!powerButtonMask)
-+            if (requested == "xyz.openbmc_project.State.Host.Transition.Off")
-             {
--                sendPowerControlEvent(Event::powerCycleRequest);
--                addRestartCause(RestartCause::command);
-+                if (!powerButtonMask)
-+                {
-+                    sendPowerControlEvent(Event::gracefulPowerOffRequest);
-+                    addRestartCause(RestartCause::command);
-+                }
-+                else
-+                {
-+                    lg2::info("Power Button Masked.");
-+                    throw std::invalid_argument("Transition Request Masked");
++                            "Unrecognized Transition Request");
+                         return;
+                     }
+-                }
+-                hostIface->set_property("HostTransitionTimeOut", prop);
+-
++                });
++            }
++            else
++            {
+                 if (requested ==
+                     "xyz.openbmc_project.State.Host.Transition.Off")
+                 {
+-                    // if power button is masked, ignore this
+                     if (!powerButtonMask)
+                     {
+                         sendPowerControlEvent(Event::gracefulPowerOffRequest);
+@@ -3133,7 +3232,7 @@ int main(int argc, char* argv[])
+                         lg2::info("Power Button Masked.");
+                         throw std::invalid_argument(
+                             "Transition Request Masked");
+-                        return;
++                        return 0;
+                     }
+                 }
+                 else if (requested ==
+@@ -3150,7 +3249,7 @@ int main(int argc, char* argv[])
+                         lg2::info("Power Button Masked.");
+                         throw std::invalid_argument(
+                             "Transition Request Masked");
+-                        return;
++                        return 0;
+                     }
+                 }
+                 else if (requested ==
+@@ -3167,7 +3266,7 @@ int main(int argc, char* argv[])
+                         lg2::info("Power Button Masked.");
+                         throw std::invalid_argument(
+                             "Transition Request Masked");
+-                        return;
++                        return 0;
+                     }
+                 }
+                 else if (
+@@ -3185,7 +3284,7 @@ int main(int argc, char* argv[])
+                         lg2::info("Reset Button Masked.");
+                         throw std::invalid_argument(
+                             "Transition Request Masked");
+-                        return;
++                        return 0;
+                     }
+                 }
+                 else if (
+@@ -3203,7 +3302,7 @@ int main(int argc, char* argv[])
+                         lg2::info("Reset Button Masked.");
+                         throw std::invalid_argument(
+                             "Transition Request Masked");
+-                        return;
++                        return 0;
+                     }
+                 }
+                 else
+@@ -3211,9 +3310,9 @@ int main(int argc, char* argv[])
+                     lg2::error("Unrecognized host state transition request.");
+                     throw std::invalid_argument(
+                         "Unrecognized Transition Request");
+-                    return;
 +                    return 0;
-+                }
-             }
--            else
-+            else if (requested ==
-+                     "xyz.openbmc_project.State.Host.Transition.On")
-             {
--                lg2::info("Power Button Masked.");
--                throw std::invalid_argument("Transition Request Masked");
--                return;
-+                // if power button is masked, ignore this
-+                if (!powerButtonMask)
-+                {
-+                    sendPowerControlEvent(Event::powerOnRequest);
-+                    addRestartCause(RestartCause::command);
-+                }
-+                else
-+                {
-+                    lg2::info("Power Button Masked.");
-+                    throw std::invalid_argument("Transition Request Masked");
-+                    return 0;
-+                }
-             }
--        }
--        else if (requested ==
--                 "xyz.openbmc_project.State.Host.Transition.GracefulWarmReboot")
--        {
--            // if reset button is masked, ignore this
--            if (!resetButtonMask)
-+            else if (requested ==
-+                     "xyz.openbmc_project.State.Host.Transition.Reboot")
-             {
--                sendPowerControlEvent(Event::gracefulPowerCycleRequest);
--                addRestartCause(RestartCause::command);
-+                // if power button is masked, ignore this
-+                if (!powerButtonMask)
-+                {
-+                    sendPowerControlEvent(Event::powerCycleRequest);
-+                    addRestartCause(RestartCause::command);
-+                }
-+                else
-+                {
-+                    lg2::info("Power Button Masked.");
-+                    throw std::invalid_argument("Transition Request Masked");
-+                    return 0;
-+                }
-             }
--            else
-+            else if (
-+                requested ==
-+                "xyz.openbmc_project.State.Host.Transition.GracefulWarmReboot")
-             {
--                lg2::info("Reset Button Masked.");
--                throw std::invalid_argument("Transition Request Masked");
--                return;
-+                // if reset button is masked, ignore this
-+                if (!resetButtonMask)
-+                {
-+                    sendPowerControlEvent(Event::gracefulPowerCycleRequest);
-+                    addRestartCause(RestartCause::command);
-+                }
-+                else
-+                {
-+                    lg2::info("Reset Button Masked.");
-+                    throw std::invalid_argument("Transition Request Masked");
-+                    return 0;
-+                }
-             }
--        }
--        else if (requested ==
--                 "xyz.openbmc_project.State.Host.Transition.ForceWarmReboot")
--        {
--            // if reset button is masked, ignore this
--            if (!resetButtonMask)
-+            else if (
-+                requested ==
-+                "xyz.openbmc_project.State.Host.Transition.ForceWarmReboot")
-             {
--                sendPowerControlEvent(Event::resetRequest);
--                addRestartCause(RestartCause::command);
-+                // if reset button is masked, ignore this
-+                if (!resetButtonMask)
-+                {
-+                    sendPowerControlEvent(Event::resetRequest);
-+                    addRestartCause(RestartCause::command);
-+                }
-+                else
-+                {
-+                    lg2::info("Reset Button Masked.");
-+                    throw std::invalid_argument("Transition Request Masked");
-+                    return 0;
-+                }
-             }
-             else
-             {
--                lg2::info("Reset Button Masked.");
--                throw std::invalid_argument("Transition Request Masked");
--                return;
-+                lg2::error("Unrecognized host state transition request.");
-+                throw std::invalid_argument("Unrecognized Transition Request");
-+                return 0;
-             }
-         }
--        else
--        {
--            lg2::error("Unrecognized host state transition request.");
--            throw std::invalid_argument("Unrecognized Transition Request");
--            return;
--	}
--		    });
-         resp = requested;
-         return 1;
-     });
-@@ -3090,57 +3189,66 @@ int main(int argc, char* argv[])
+                 }
+-            });
++            }
+             resp = requested;
+             return 1;
+         });
+@@ -3229,51 +3328,56 @@ int main(int argc, char* argv[])
+     // Chassis Control Interface
+     chassisIface =
          chassisServer.add_interface("/xyz/openbmc_project/state/chassis" + node,
-                                     "xyz.openbmc_project.State.Chassis");
+-                                    "xyz.openbmc_project.State.Chassis");  
++                                    "xyz.openbmc_project.State.Chassis");
  
--    chassisIface->register_property("ChassisHostTransitionTimeOut",  timeOut,
--                    [](const uint16_t& requested,  uint16_t& propertyValue) {
+     createInterface(chassisServer, "/xyz/openbmc_project/state/chassis" + node);
+ 
+-    chassisIface->register_property(
+-        "ChassisHostTransitionTimeOut", timeOut,
+-        [](const uint16_t& requested, uint16_t& propertyValue) {
+-            propertyValue = requested;
+-            powerTimeOut = propertyValue;
+-            return true;
+-        });
 -
--                    propertyValue = requested;
--                    powerTimeOut = propertyValue;
--                    return true;
--                    });
--
--     chassisIface->register_property("PowerTransitionTimeOut",  timeOut,
--                    [](const uint16_t& requested,  uint16_t& propertyValue) {
--
--                    propertyValue = requested;
--                    powerTimeOut = propertyValue;
--                    return true;
--                    });
+-    chassisIface->register_property(
+-        "PowerTransitionTimeOut", timeOut,
+-        [](const uint16_t& requested, uint16_t& propertyValue) {
+-            propertyValue = requested;
+-            powerTimeOut = propertyValue;
+-            return true;
+-        });
 -
      chassisIface->register_property(
          "RequestedPowerTransition",
          std::string("xyz.openbmc_project.State.Chassis.Transition.Off"),
          [](const std::string& requested, std::string& resp) {
-         if (requested == "xyz.openbmc_project.State.Chassis.Transition.Off")
-         {
--	            auto interval = std::chrono::seconds(powerTimeOut);
--                    powerTransitionTimer.expires_after(std::chrono::seconds(interval));
--                    powerTransitionTimer.async_wait([](const boost::system::error_code ec) {
--
--                                   if (ec)
--                                    {
--                                             // operation_aborted is expected if timer is canceled beforecompletion.
--                                             if (ec != boost::asio::error::operation_aborted)
--                                             {
--                                                     lg2::error("Power Transition TimeOut async_wait failed: {ERROR_MSG}",
--                                                                "ERROR_MSG", ec.message());
--                                                      return;
--                                              }
--                                    }
--                                    chassisIface->set_property("PowerTransitionTimeOut", prop);
--
--            // if power button is masked, ignore this
--            if (!powerButtonMask)
-+            if (timerStarted_system == false)
+             if (requested == "xyz.openbmc_project.State.Chassis.Transition.Off")
              {
--                sendPowerControlEvent(Event::powerOffRequest);
--                addRestartCause(RestartCause::command);
-+                timerStarted_system = true;
-+
-+                auto interval = std::chrono::seconds(powerTimeOut);
-+                powerTransitionTimer.expires_after(
-+                    std::chrono::seconds(interval));
-+                powerTransitionTimer.async_wait(
-+                    [](const boost::system::error_code ec) {
-+                    if (ec)
-+                    {
-+                        // operation_aborted is expected if timer is canceled
-+                        // beforecompletion.
-+                        if (ec != boost::asio::error::operation_aborted)
+-                auto interval = std::chrono::seconds(powerTimeOut);
+-                powerTransitionTimer.expires_after(
+-                    std::chrono::seconds(interval));
+-                powerTransitionTimer.async_wait([](const boost::system::
+-                                                       error_code ec) {
+-                    if (ec)
+-                    {
+-                        // operation_aborted is expected if timer is canceled
+-                        // beforecompletion.
+-                        if (ec != boost::asio::error::operation_aborted)
++                if (timerStarted_system == false)
++                {
++                    timerStarted_system = true;
++                    auto interval = std::chrono::seconds(powerTimeOut);
++                    powerTransitionTimer.expires_after(
++                        std::chrono::seconds(interval));
++                    powerTransitionTimer.async_wait([](const boost::system::
++                                                           error_code ec) {
++                        if (ec)
+                         {
+-                            lg2::error(
+-                                "Power Transition TimeOut async_wait failed: {ERROR_MSG}",
+-                                "ERROR_MSG", ec.message());
+-                            return;
++                            // operation_aborted is expected if timer is
++                            // canceled beforecompletion.
++                            if (ec != boost::asio::error::operation_aborted)
++                            {
++                                lg2::error(
++                                    "Power Transition TimeOut async_wait failed: {ERROR_MSG}",
++                                    "ERROR_MSG", ec.message());
++                                return;
++                            }
+                         }
+-                    }
+-                    chassisIface->set_property("PowerTransitionTimeOut", prop);
++                        osIface->set_property("PowerTransitionTimeOut", prop);
++                        timerStarted_system = false;
+ 
++                        // if power button is masked, ignore this
++                        if (!powerButtonMask)
 +                        {
-+                            lg2::error(
-+                                "Power Transition TimeOut async_wait failed: {ERROR_MSG}",
-+                                "ERROR_MSG", ec.message());
++                            sendPowerControlEvent(Event::powerOffRequest);
++                            addRestartCause(RestartCause::command);
++                        }
++                        else
++                        {
++                            lg2::info("Power Button Masked.");
++                            throw std::invalid_argument(
++                                "Transition Request Masked");
 +                            return;
 +                        }
-+                    }
-+                    osIface->set_property("PowerTransitionTimeOut", prop);
-+                    timerStarted_system = false;
-+
-+                    // if power button is masked, ignore this
-+                    if (!powerButtonMask)
-+                    {
-+                        sendPowerControlEvent(Event::powerOffRequest);
-+                        addRestartCause(RestartCause::command);
-+                    }
-+                    else
-+                    {
-+                        lg2::info("Power Button Masked.");
-+                        throw std::invalid_argument(
-+                            "Transition Request Masked");
-+                        return;
-+                    }
-+                });
-             }
-             else
-             {
--                lg2::info("Power Button Masked.");
--                throw std::invalid_argument("Transition Request Masked");
--                return;
-+                // if power button is masked, ignore this
-+                if (!powerButtonMask)
-+                {
-+                    sendPowerControlEvent(Event::powerOffRequest);
-+                    addRestartCause(RestartCause::command);
++                    });
 +                }
 +                else
 +                {
-+                    lg2::info("Power Button Masked.");
-+                    throw std::invalid_argument("Transition Request Masked");
-+                    return 0;
+                     // if power button is masked, ignore this
+                     if (!powerButtonMask)
+                     {
+@@ -3285,9 +3389,9 @@ int main(int argc, char* argv[])
+                         lg2::info("Power Button Masked.");
+                         throw std::invalid_argument(
+                             "Transition Request Masked");
+-                        return;
++                        return 0;
+                     }
+-                });
 +                }
              }
--		    });
-         }
-         else if (requested == "xyz.openbmc_project.State.Chassis.Transition.On")
-         {
-@@ -3160,36 +3268,63 @@ int main(int argc, char* argv[])
-         else if (requested ==
-                  "xyz.openbmc_project.State.Chassis.Transition.PowerCycle")
-         {
--		auto interval = std::chrono::seconds(powerTimeOut);
--                    powerTransitionTimer.expires_after(std::chrono::seconds(interval));
--                    powerTransitionTimer.async_wait([](const boost::system::error_code ec) {
--                                    if (ec)
--                                    {
-+            if (timerStarted == false)
-+            {
-+                timerStarted = true;
+             else if (requested ==
+                      "xyz.openbmc_project.State.Chassis.Transition.On")
+@@ -3308,28 +3412,51 @@ int main(int argc, char* argv[])
+             else if (requested ==
+                      "xyz.openbmc_project.State.Chassis.Transition.PowerCycle")
+             {
+-                auto interval = std::chrono::seconds(powerTimeOut);
+-                powerTransitionTimer.expires_after(
+-                    std::chrono::seconds(interval));
+-                powerTransitionTimer.async_wait([](const boost::system::
+-                                                       error_code ec) {
+-                    if (ec)
+-                    {
+-                        // operation_aborted is expected if timer is canceled
+-                        // beforecompletion.
+-                        if (ec != boost::asio::error::operation_aborted)
++                if (timerStarted == false)
++                {
++                    timerStarted = true;
++                    auto interval = std::chrono::seconds(powerTimeOut);
++                    powerTransitionTimer.expires_after(
++                        std::chrono::seconds(interval));
++                    powerTransitionTimer.async_wait([](const boost::system::
++                                                           error_code ec) {
++                        if (ec)
+                         {
+-                            lg2::error(
+-                                "Power Transition TimeOut async_wait failed: {ERROR_MSG}",
+-                                "ERROR_MSG", ec.message());
+-                            return;
++                            // operation_aborted is expected if timer is
++                            // canceled beforecompletion.
++                            if (ec != boost::asio::error::operation_aborted)
++                            {
++                                lg2::error(
++                                    "Power Transition TimeOut async_wait failed: {ERROR_MSG}",
++                                    "ERROR_MSG", ec.message());
++                                return;
++                            }
+                         }
+-                    }
  
--                                           // operation_aborted is expected if timer is canceled beforecompletion.
--                                           if (ec != boost::asio::error::operation_aborted)
--                                           {
--                                                    lg2::error("Power Transition TimeOut async_wait failed: {ERROR_MSG}",
--                                                    "ERROR_MSG", ec.message());
--                                                     return;
--                                           }
--                                    }
-+                auto interval = std::chrono::seconds(powerTimeOut);
-+                powerTransitionTimer.expires_after(
-+                    std::chrono::seconds(interval));
-+                powerTransitionTimer.async_wait(
-+                    [](const boost::system::error_code ec) {
-+                    if (ec)
-+                    {
-+                        // operation_aborted is expected if timer is canceled
-+                        // beforecompletion.
-+                        if (ec != boost::asio::error::operation_aborted)
+-                    chassisIface->set_property("ChassisHostTransitionTimeOut",
+-                                               prop);
++                        osIface->set_property("ChassisHostTransitionTimeOut",
++                                              prop);
++                        timerStarted = false;
+ 
+-                    // if power button is masked, ignore this
++                        // if power button is masked, ignore this
++                        if (!powerButtonMask)
 +                        {
-+                            lg2::error(
-+                                "Power Transition TimeOut async_wait failed: {ERROR_MSG}",
-+                                "ERROR_MSG", ec.message());
++                            sendPowerControlEvent(Event::powerCycleRequest);
++                            addRestartCause(RestartCause::command);
++                        }
++                        else
++                        {
++                            lg2::info("Power Button Masked.");
++                            throw std::invalid_argument(
++                                "Transition Request Masked");
 +                            return;
 +                        }
-+                    }
- 
--                                    chassisIface->set_property("ChassisHostTransitionTimeOut", prop);
-+                    osIface->set_property("ChassisHostTransitionTimeOut", prop);
-+                    timerStarted = false;
- 
--            // if power button is masked, ignore this
--            if (!powerButtonMask)
--            {
--                sendPowerControlEvent(Event::powerCycleRequest);
--                addRestartCause(RestartCause::command);
-+                    // if power button is masked, ignore this
-+                    if (!powerButtonMask)
-+                    {
-+                        sendPowerControlEvent(Event::powerCycleRequest);
-+                        addRestartCause(RestartCause::command);
-+                    }
-+                    else
-+                    {
-+                        lg2::info("Power Button Masked.");
-+                        throw std::invalid_argument(
-+                            "Transition Request Masked");
-+                        return;
-+                    }
-+                });
-             }
-             else
-             {
--                lg2::info("Power Button Masked.");
--                throw std::invalid_argument("Transition Request Masked");
--                return;
-+                lg2::info("without timer");
-+                // Handle normal power cycle operation when a timer is already
-+                // running
-+                if (!powerButtonMask)
-+                {
-+                    sendPowerControlEvent(Event::powerCycleRequest);
-+                    addRestartCause(RestartCause::command);
++                    });
 +                }
 +                else
 +                {
-+                    lg2::info("Power Button Masked.");
-+                    throw std::invalid_argument("Transition Request Masked");
-+                    return 0;
++                    lg2::info("without timer");
++                    // Handle normal power cycle operation when a timer is
++                    // already running
+                     if (!powerButtonMask)
+                     {
+                         sendPowerControlEvent(Event::powerCycleRequest);
+@@ -3340,9 +3467,9 @@ int main(int argc, char* argv[])
+                         lg2::info("Power Button Masked.");
+                         throw std::invalid_argument(
+                             "Transition Request Masked");
+-                        return;
++                        return 0;
+                     }
+-                });
 +                }
              }
--		    });
-         }
-         else
-         {
-@@ -3216,14 +3351,6 @@ int main(int argc, char* argv[])
+             else
+             {
+@@ -3369,14 +3496,6 @@ int main(int argc, char* argv[])
          "/xyz/openbmc_project/state/chassis_system0",
          "xyz.openbmc_project.State.Chassis");
  
--    chassisSysIface->register_property("ChassisHostTransitionTimeOut",  timeOut,
--                    [](const uint16_t& requested,  uint16_t& propertyValue) {
--
--                    propertyValue = requested;
--                    powerTimeOut = propertyValue;
--                    return true;
--                    });
+-    chassisSysIface->register_property(
+-        "ChassisHostTransitionTimeOut", timeOut,
+-        [](const uint16_t& requested, uint16_t& propertyValue) {
+-            propertyValue = requested;
+-            powerTimeOut = propertyValue;
+-            return true;
+-        });
 -
      chassisSysIface->register_property(
          "RequestedPowerTransition",
          std::string("xyz.openbmc_project.State.Chassis.Transition.On"),
-@@ -3231,24 +3358,39 @@ int main(int argc, char* argv[])
-         if (requested ==
-             "xyz.openbmc_project.State.Chassis.Transition.PowerCycle")
-         {
--	    auto interval = std::chrono::seconds(powerTimeOut);
--            powerTransitionTimer.expires_after(std::chrono::seconds(interval));
--            powerTransitionTimer.async_wait([](const boost::system::error_code ec) {
--                            if (ec)
--                            {
--                                   // operation_aborted is expected if timer is canceled beforecompletion.
--                                   if (ec != boost::asio::error::operation_aborted)
--                                   {
--                                         lg2::error("Power Transition TimeOut async_wait failed: {ERROR_MSG}",
--                                                   "ERROR_MSG", ec.message());
--                                         return;
--                                    }
--                           }
--                            chassisSysIface->set_property("ChassisHostTransitionTimeOut", prop);
--
--                           systemReset();
--                           addRestartCause(RestartCause::command);
--			   });
-+            if (timerStarted_chassis == false)
-+            {
-+                timerStarted_chassis = true;
+@@ -3384,29 +3503,39 @@ int main(int argc, char* argv[])
+             if (requested ==
+                 "xyz.openbmc_project.State.Chassis.Transition.PowerCycle")
+             {
+-                auto interval = std::chrono::seconds(powerTimeOut);
+-                powerTransitionTimer.expires_after(
+-                    std::chrono::seconds(interval));
+-                powerTransitionTimer.async_wait([](const boost::system::
+-                                                       error_code ec) {
+-                    if (ec)
+-                    {
+-                        // operation_aborted is expected if timer is canceled
+-                        // beforecompletion.
+-                        if (ec != boost::asio::error::operation_aborted)
++                if (timerStarted_chassis == false)
++                {
++                    timerStarted_chassis = true;
 +
-+                auto interval = std::chrono::seconds(powerTimeOut);
-+                powerTransitionTimer.expires_after(
-+                    std::chrono::seconds(interval));
-+                powerTransitionTimer.async_wait(
-+                    [](const boost::system::error_code ec) {
-+                    if (ec)
-+                    {
-+                        // operation_aborted is expected if timer is canceled
-+                        // beforecompletion.
-+                        if (ec != boost::asio::error::operation_aborted)
-+                        {
-+                            lg2::error(
-+                                "Power Transition TimeOut async_wait failed: {ERROR_MSG}",
-+                                "ERROR_MSG", ec.message());
-+                            return;
-+                        }
-+                    }
-+                    osSysIface->set_property("ChassisHostTransitionTimeOut",
-+                                             prop);
-+
-+                    systemReset();
-+                    addRestartCause(RestartCause::command);
-+                });
-+            }
-+            else
-+            {
-+                systemReset();
-+                addRestartCause(RestartCause::command);
-+            }
-         }
-         else
-         {
-@@ -3542,6 +3684,30 @@ int main(int argc, char* argv[])
++                    auto interval = std::chrono::seconds(powerTimeOut);
++                    powerTransitionTimer.expires_after(
++                        std::chrono::seconds(interval));
++                    powerTransitionTimer.async_wait([](const boost::system::
++                                                           error_code ec) {
++                        if (ec)
+                         {
+-                            lg2::error(
+-                                "Power Transition TimeOut async_wait failed: {ERROR_MSG}",
+-                                "ERROR_MSG", ec.message());
+-                            return;
++                            // operation_aborted is expected if timer is
++                            // canceled beforecompletion.
++                            if (ec != boost::asio::error::operation_aborted)
++                            {
++                                lg2::error(
++                                    "Power Transition TimeOut async_wait failed: {ERROR_MSG}",
++                                    "ERROR_MSG", ec.message());
++                                return;
++                            }
+                         }
+-                    }
+-                    chassisSysIface->set_property(
+-                        "ChassisHostTransitionTimeOut", prop);
++                        osSysIface->set_property("ChassisHostTransitionTimeOut",
++                                                 prop);
+ 
++                        systemReset();
++                        addRestartCause(RestartCause::command);
++                    });
++                }
++                else
++                {
+                     systemReset();
+                     addRestartCause(RestartCause::command);
+-                });
++                }
+             }
+             else
+             {
+@@ -3707,6 +3836,30 @@ int main(int argc, char* argv[])
          "OperatingSystemState",
          std::string(getOperatingSystemStateStage(osState)));
  
 +    osIface->register_property(
 +        "ChassisHostTransitionTimeOut", timeOut,
-+        [](const uint16_t& requested, uint16_t& propertyValue) {
-+        propertyValue = requested;
-+        powerTimeOut = propertyValue;
-+        return true;
-+    });
++        [](const uint16_t& requested, uint64_t& propertyValue) {
++            propertyValue = requested;
++            powerTimeOut = propertyValue;
++            return true;
++        });
 +
 +    osIface->register_property(
 +        "PowerTransitionTimeOut", timeOut,
-+        [](const uint16_t& requested, uint16_t& propertyValue) {
-+        propertyValue = requested;
-+        powerTimeOut = propertyValue;
-+        return true;
-+    });
++        [](const uint16_t& requested, uint64_t& propertyValue) {
++            propertyValue = requested;
++            powerTimeOut = propertyValue;
++            return true;
++        });
 +
 +    osIface->register_property(
 +        "HostTransitionTimeOut", timeOut,
-+        [](const uint16_t& requested, uint16_t& propertyValue) {
-+        propertyValue = requested;
-+        powerTimeOut = propertyValue;
-+        return true;
-+    });
++        [](const uint16_t& requested, uint64_t& propertyValue) {
++            propertyValue = requested;
++            powerTimeOut = propertyValue;
++            return true;
++        });
 +
      osIface->initialize();
  
      // Restart Cause Service
 -- 
-2.25.1
+2.34.1
 

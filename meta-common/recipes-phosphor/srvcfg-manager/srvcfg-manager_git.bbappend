@@ -3,11 +3,10 @@ FILESEXTRAPATHS:append := "${THISDIR}/${PN}:"
 SRC_URI:append = " file://0001-Added-Virtualmedia-service-to-service-Config-Manager.patch \
                    file://0002-Added-ipmb-service-to-service-Config-Manager.patch \
                    file://srvcfg.json                                                     \
-                   file://0002-Added-changes-to-add-MaxSess-and-SessTimeOut-dbus-pr.patch \
-                   file://0003-Added-support-to-Dropbear-for-Maximum-session-count-.patch \
+                   file://0003-Added-changes-to-add-MaxSess-and-SessTimeOut-dbus-pr.patch \
                  "
 
-SRCREV = "d8effd63e885cb755aa44665d833b20f187c0e53"
+SRCREV = "de87972682912d5f50dc31d313aa7505e7325070"
 
 DEPENDS += "nlohmann-json"
 

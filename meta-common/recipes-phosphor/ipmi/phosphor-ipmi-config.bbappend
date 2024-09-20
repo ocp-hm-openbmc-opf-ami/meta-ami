@@ -3,6 +3,8 @@ SRC_URI += " \
 	   file://dcmi_cap.json \
            file://dev_id.json \
            "
+SRCREV = "e7ef94d350cd156c54a5789ce7d53eb1a55f7da9"
+
 FILES:${PN} += " \
                ${sysconfdir}/ipmi \
                ${sysconfdir}/ipmi/channel_access.json \

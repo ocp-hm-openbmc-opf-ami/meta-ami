@@ -8,7 +8,8 @@ EXTRA_OECONF += "${@bb.utils.contains_any("IMAGE_FEATURES", [ 'debug-tweaks', 'a
 PACKAGECONFIG:append ="${@bb.utils.contains('FEATURE_OEM_PRIV', '1', ' oem-privilege', ' ', d)}"
 PACKAGECONFIG[oem-privilege] = "-Doem-privilege=enabled,-Doem-privilege=disabled"
 
-SRCREV = "af1594c90627b78d1a92bb16a0d826b12a0d182c"
+#SRCREV = "af1594c90627b78d1a92bb16a0d826b12a0d182c"
+SRCREV = "e7d4559b0173596f29ceb5ba7da653b023067783"
 SRC_URI += " \
              file://0003-Add-Host-Interface-User-Support.patch \
              file://0012-passwordpolicy.patch \
@@ -16,9 +17,7 @@ SRC_URI += " \
              file://0017-SSH-Active-User-Delete-Fix.patch \
              file://0019-manual-lockout-fix.patch \
              file://0016-Restricting-the-asd-user-under-redfish.patch \
-	     file://0018-Added-group-user-for-host-interface.patch \
-	     file://0020-add-media-group.patch \
-             file://0021-add-snmp-group.patch \
+             file://0018-add-snmp-media-group.patch \
              file://0022-Fix-to-add-support-to-include-dot-.-in-username.patch \
              file://0022-Added-chaanges-for-Pam-Reorder.patch \
            "
