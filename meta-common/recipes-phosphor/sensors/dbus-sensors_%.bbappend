@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/dbus-sensors.git;branch=core-sync_Intel_LF-bhs-24.29-0;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "76f0352789a595e52f94b9c9d66946e2032e5960"
+SRCREV_override = "c5ea80b33f7c7aecb39bc9e010f8ba2bc1fd086a"
 
 SRC_URI_ast2600:append =  " \
             file://0001-ADCSensor-Fix-for-P3V3-sensor.patch \
