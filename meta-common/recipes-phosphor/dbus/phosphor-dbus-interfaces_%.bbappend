@@ -1,6 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-dbus-interfaces.git;branch=core-sync_Intel_LF-bhs-24.29-0;protocol=https;name=override;"
+SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-dbus-interfaces.git;branch=main;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
 SRCREV_override = "3c9417bf376ed5ed82494eaedfcb5c471fda39e7"
 SRC_URI += "file://0005-Add-Bootstrap-credential-support.patch \
