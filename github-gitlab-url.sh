@@ -82,9 +82,9 @@ if [ -d "openbmc-meta-intel/meta-restricted" ]; then
 
 	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=egs/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.cups-service.git;protocol=https;branch=egs/g' openbmc-meta-intel/meta-restricted/recipes-intel/telemetry/cups-service.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.cups-service.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/telemetry/cups-ut-native.bb
+	sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.cups-service.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/telemetry/cups-ut-native.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=egs/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.cups-service.git;protocol=https;branch=egs/g' openbmc-meta-intel/meta-restricted/recipes-intel/telemetry/cups-ut-native.bb
+	sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=egs/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.cups-service.git;protocol=https;branch=egs/g' openbmc-meta-intel/meta-restricted/recipes-intel/telemetry/cups-ut-native.bb
 
 	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.platform-monitoring-technology.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.platform-monitoring-technology.git;protocol=https;branch=bhs-common/g' openbmc-meta-intel/meta-restricted/recipes-intel/telemetry/pmt_git.bb
 
