@@ -1,0 +1,140 @@
+From 1fe67365a010acbfddc7946ae645b0d182c821f4 Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Thu, 26 Sep 2024 10:06:35 +0800
+Subject: [PATCH] Add Timeout for Retrieving NCSI Info
+
+---
+ src/ethernet_interface.cpp |  8 ++++----
+ src/ncsi_configuration.cpp | 14 +++++++++++++-
+ src/ncsi_util.cpp          | 25 +++++++++++++++++++++++--
+ src/ncsi_util.hpp          |  4 +++-
+ 4 files changed, 43 insertions(+), 8 deletions(-)
+
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index d2a5595..731f4c0 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -214,10 +214,10 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+     {
+         auto [mode, package, channel] = getNCSIValue(ifaceConfig);
+         ncsiConfig.emplace(bus, this->objPath.c_str(), *this,
+-                           mode == "Auto" ? NCSIIface::Mode::Auto
+-                                          : NCSIIface::Mode::Manual,
+-                           mode == "Auto" ? ncsi::MAX_PACKAGE_NUM : package,
+-                           mode == "Auto" ? ncsi::MAX_CHANNEL_NUM : channel);
++                           mode == "Manual" ? NCSIIface::Mode::Manual
++                                            : NCSIIface::Mode::Auto,
++                           mode == "Manual" ? package : ncsi::MAX_PACKAGE_NUM,
++                           mode == "Manual" ? channel : ncsi::MAX_CHANNEL_NUM);
+         EthernetInterfaceIntf::ncsi(true, true);
+     }
+ #endif
+diff --git a/src/ncsi_configuration.cpp b/src/ncsi_configuration.cpp
+index b13b6fd..749ad53 100644
+--- a/src/ncsi_configuration.cpp
++++ b/src/ncsi_configuration.cpp
+@@ -42,6 +42,12 @@ Configuration::Configuration(sdbusplus::bus_t& bus, std::string_view path,
+ /** Set value of Mode */
+ NCSIIface::Mode Configuration::mode(Mode value)
+ {
++    if (!deviceAvailable(eth.getIfIdx()))
++    {
++        log<level::INFO>("NCSI Interface is not available\n");
++        elog<NotAllowed>(REASON("NCSI Interface is not available"));
++    }
++
+     if (value != Mode::Auto && value != Mode::Manual)
+     {
+         log<level::INFO>("Invalid Argument: Mode\n");
+@@ -63,6 +69,12 @@ NCSIIface::Mode Configuration::mode(Mode value)
+ 
+ int16_t Configuration::setPackageChannel(uint8_t package, uint8_t channel)
+ {
++    if (!deviceAvailable(eth.getIfIdx()))
++    {
++        log<level::INFO>("NCSI Interface is not available\n");
++        elog<NotAllowed>(REASON("NCSI Interface is not available"));
++    }
++
+     if (NCSIIface::mode() == NCSIIface::Mode::Auto)
+     {
+         log<level::INFO>("Property update is not allowed in current state\n");
+@@ -92,7 +104,7 @@ std::vector<std::tuple<uint16_t, std::vector<uint16_t>>>
+ {
+     // Update NCSI Package and Channel list
+     std::vector<std::tuple<uint16_t, std::vector<uint16_t>>> pakckageChannel;
+-    getInfo(eth.getIfIdx(), -1, pakckageChannel);
++    getChannelList(eth.getIfIdx(), -1, pakckageChannel);
+     return std::move(pakckageChannel);
+     // return {};
+ }
+diff --git a/src/ncsi_util.cpp b/src/ncsi_util.cpp
+index 344706b..3e3e879 100644
+--- a/src/ncsi_util.cpp
++++ b/src/ncsi_util.cpp
+@@ -388,6 +388,13 @@ int applyCmd(int ifindex, const Command& cmd, int package = DEFAULT_VALUE,
+         return ret;
+     }
+ 
++    struct timeval timeout;
++    timeout.tv_sec = 1;
++    timeout.tv_usec = 500;
++    if (setsockopt(nl_socket_get_fd(socket.get()), SOL_SOCKET, SO_RCVTIMEO,
++                   &timeout, sizeof(timeout)) < 0)
++        lg2::debug("Unable to set socket timeout...\n");
++
+     do
+     {
+         ret = nl_recvmsgs_default(socket.get());
+@@ -462,14 +469,28 @@ int getInfo(int ifindex, int package)
+     }
+ }
+ 
+-int getInfo(
++int getChannelList(
+     int ifindex, int package,
+     std::vector<std::tuple<uint16_t, std::vector<uint16_t>>>& channelList)
+ {
+     int ret = getInfo(ifindex, package);
+-    channelList.assign(pakckageChannel.begin(), pakckageChannel.end());
++    if (ret < 0)
++    {
++        lg2::debug(
++            "getChannelList. Unable to get the information fo NCSI interface.");
++    }
++    else
++    {
++        channelList.assign(pakckageChannel.begin(), pakckageChannel.end());
++    }
+     return ret;
+ }
++
++bool deviceAvailable(int ifindex)
++{
++    int ret = getInfo(ifindex, -1);
++    return (ret < 0) ? false : true;
++}
+ } // namespace ncsi
+ } // namespace network
+ } // namespace phosphor
+diff --git a/src/ncsi_util.hpp b/src/ncsi_util.hpp
+index 444122f..a41f446 100644
+--- a/src/ncsi_util.hpp
++++ b/src/ncsi_util.hpp
+@@ -60,9 +60,11 @@ int clearInterface(int ifindex);
+  */
+ int getInfo(int ifindex, int package);
+ 
+-int getInfo(
++int getChannelList(
+     int ifindex, int package,
+     std::vector<std::tuple<uint16_t, std::vector<uint16_t>>>& channelList);
++
++bool deviceAvailable(int ifindex);
+ } // namespace ncsi
+ } // namespace network
+ } // namespace phosphor
+-- 
+2.43.0
+
+
