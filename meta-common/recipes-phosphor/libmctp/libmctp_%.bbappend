@@ -1,8 +1,8 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/libmctp.git;protocol=https;branch=LF-MCTP \
+SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/libmctp.git;protocol=https;branch=develop \
            file://default"
-SRCREV = "b902035ad40ce28df390b139f1801babb6b3af29"
+SRCREV = "7683752b4ff32dd7703efa5a9e1f43701a208881"
 
 inherit obmc-phosphor-dbus-service obmc-phosphor-systemd
 inherit meson

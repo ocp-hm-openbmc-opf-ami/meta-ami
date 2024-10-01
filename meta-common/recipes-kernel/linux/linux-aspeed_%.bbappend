@@ -113,3 +113,10 @@ SRC_URI:append:intel-ast2600  = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'c
 SRC_CPLD_EVB = "file://0023-Enable-spidev-for-spi2-for-cpld-upgrade-via-spi-evb-dts.patch "
 SRC_URI:append:evb-ast2600  = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'cpld-update', SRC_CPLD_EVB,'', d)}"
 
+SRC_ASPEED_MCTP_DRV = "file://0037-Clean-Intel-MCTP-over-PCIe-driver.patch \
+            file://0038-Add-ASPEED-MCTP-over-PCIe-driver.patch \
+            file://0039-Fix-peci-for-ASPEED-MCTP-over-PCIe-driver.patch \
+           "
+SRC_URI:append= "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'use-lfmctp', SRC_ASPEED_MCTP_DRV,'', d)}"
+SRC_URI:append:evb-ast2600  = "file://0040-Add-dma-pool-for-EVB-MCTP-over-PCIe-driver.patch"
+
