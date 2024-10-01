@@ -73,6 +73,7 @@ SRC_URI:append = " \
              file://0050-Implement-DHCP-Vendor-Option.patch \
              file://0050-Implement-Netlink-for-NCSI-Flow-Control.patch \
              file://0049-Fix-for-the-default-NTP-Server.patch \
+	     file://0049-Replace-System-call.patch \
              "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
