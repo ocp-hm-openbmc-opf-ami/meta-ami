@@ -1,0 +1,170 @@
+From 88dccd27794c55ef1f4c4f5c934346cf44539bf6 Mon Sep 17 00:00:00 2001
+From: Kane-Chen-AS <kane_chen@aspeedtech.com>
+Date: Tue, 2 Jul 2024 11:22:49 +0800
+Subject: [PATCH] to support openssl 3.0 library code
+
+In original hash-sigs code, it uses some deprecated functioins in openssl 1.1.X. To adjust the code for openssl 3.0 library.
+
+Signed-off-by: Kane-Chen-AS <kane_chen@aspeedtech.com>
+---
+ hash.c   | 75 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ hash.h   |  4 +++
+ sha256.h |  5 +++-
+ 3 files changed, 83 insertions(+), 1 deletion(-)
+
+diff --git a/hash.c b/hash.c
+index ea5b376..7ca3f25 100644
+--- a/hash.c
++++ b/hash.c
+@@ -1,3 +1,4 @@
++#include <stdio.h>
+ #include <string.h>
+ #include "hash.h"
+ #include "sha256.h"
+@@ -31,6 +32,11 @@ bool hss_verbose = false;
+  */
+ void hss_hash_ctx(void *result, int hash_type, union hash_context *ctx,
+           const void *message, size_t message_len) {
++#if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
++    EVP_MD_CTX *mdctx;
++    const EVP_MD *md;
++    unsigned int md_len;
++#endif
+ #if ALLOW_VERBOSE
+     if (hss_verbose) {
+         int i; for (i=0; i< message_len; i++) printf( " %02x%s", ((unsigned char*)message)[i], (i%16 == 15) ? "\n" : "" );
+@@ -39,9 +45,38 @@ void hss_hash_ctx(void *result, int hash_type, union hash_context *ctx,
+ 
+     switch (hash_type) {
+     case HASH_SHA256: {
++#if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
++        if ((mdctx = EVP_MD_CTX_new()) == NULL) {
++            ERR_print_errors_fp(stderr);
++            return;
++        }
++        if ((md = EVP_get_digestbyname("SHA256")) == NULL) {
++            ERR_print_errors_fp(stderr);
++            EVP_MD_CTX_free(mdctx);
++            return;
++        }
++        if (1 != EVP_DigestInit_ex(mdctx, md, NULL)) {
++            ERR_print_errors_fp(stderr);
++            EVP_MD_CTX_free(mdctx);
++            return;
++        }
++        if (1 != EVP_DigestUpdate(mdctx, message, message_len)) {
++            ERR_print_errors_fp(stderr);
++            EVP_MD_CTX_free(mdctx);
++            return;
++        }
++        if (1 != EVP_DigestFinal_ex(mdctx, result, &md_len)) {
++            ERR_print_errors_fp(stderr);
++            EVP_MD_CTX_free(mdctx);
++            return;
++        }
++        // Clean up
++        EVP_MD_CTX_free(mdctx);
++#else
+         SHA256_Init(&ctx->sha256);
+         SHA256_Update(&ctx->sha256, message, message_len);
+         SHA256_Final(result, &ctx->sha256);
++#endif
+ #if ALLOW_VERBOSE
+         if (hss_verbose) {
+             printf( " ->" );
+@@ -69,7 +104,28 @@ void hss_hash(void *result, int hash_type,
+ void hss_init_hash_context(int h, union hash_context *ctx) {
+     switch (h) {
+     case HASH_SHA256:
++#if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
++    {
++        const EVP_MD *md;
++
++        if ((ctx->sha256 = EVP_MD_CTX_new()) == NULL) {
++            ERR_print_errors_fp(stderr);
++            return;
++        }
++        if ((md = EVP_get_digestbyname("SHA256")) == NULL) {
++            ERR_print_errors_fp(stderr);
++            EVP_MD_CTX_free(ctx->sha256);
++            return;
++        }
++        if (1 != EVP_DigestInit_ex(ctx->sha256, md, NULL)) {
++            ERR_print_errors_fp(stderr);
++            EVP_MD_CTX_free(ctx->sha256);
++            return;
++        }
++    }
++#else
+         SHA256_Init( &ctx->sha256 );
++#endif
+         break;
+     }
+ }
+@@ -83,15 +139,34 @@ void hss_update_hash_context(int h, union hash_context *ctx,
+ #endif
+     switch (h) {
+     case HASH_SHA256:
++#if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
++        if (1 != EVP_DigestUpdate(ctx->sha256, msg, len_msg)) {
++            ERR_print_errors_fp(stderr);
++            EVP_MD_CTX_free(ctx->sha256);
++            return;
++        }
++#else
+         SHA256_Update(&ctx->sha256, msg, len_msg);
++#endif
+         break;
+     }
+ }
+ 
+ void hss_finalize_hash_context(int h, union hash_context *ctx, void *buffer) {
++    unsigned int md_len;
++
+     switch (h) {
+     case HASH_SHA256:
++#if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
++        if (1 != EVP_DigestFinal_ex(ctx->sha256, buffer, &md_len)) {
++            ERR_print_errors_fp(stderr);
++            EVP_MD_CTX_free(ctx->sha256);
++            return;
++        }
++        EVP_MD_CTX_free(ctx->sha256);
++#else
+         SHA256_Final(buffer, &ctx->sha256);
++#endif
+ #if ALLOW_VERBOSE
+     if (hss_verbose) {
+         printf( " -->" );
+diff --git a/hash.h b/hash.h
+index a61f9f5..5027a59 100644
+--- a/hash.h
++++ b/hash.h
+@@ -18,7 +18,11 @@ enum {
+ };
+ 
+ union hash_context {
++#if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
++    EVP_MD_CTX *sha256;
++#else
+     SHA256_CTX sha256;
++#endif
+     /* Any other hash contexts would go here */
+ };
+ 
+diff --git a/sha256.h b/sha256.h
+index e4c8a9c..51f223c 100644
+--- a/sha256.h
++++ b/sha256.h
+@@ -12,7 +12,10 @@
+ #if USE_OPENSSL
+ 
+ #include <openssl/sha.h>
+-
++#if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
++#include <openssl/evp.h>
++#include <openssl/err.h>
++#endif
+ #else
+ 
+ /* SHA256 context. */
