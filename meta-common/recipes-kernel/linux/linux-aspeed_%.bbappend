@@ -118,8 +118,8 @@ SRC_ASPEED_MCTP_DRV = "file://0037-Clean-Intel-MCTP-over-PCIe-driver.patch \
             file://0038-Add-ASPEED-MCTP-over-PCIe-driver.patch \
             file://0039-Fix-peci-for-ASPEED-MCTP-over-PCIe-driver.patch \
            "
+SRC_ASPEED_MCTP_DRV:append:evb-ast2600  = "file://0040-Add-dma-pool-for-EVB-MCTP-over-PCIe-driver.patch"
 SRC_URI:append= "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'use-lfmctp', SRC_ASPEED_MCTP_DRV,'', d)}"
-SRC_URI:append:evb-ast2600  = "file://0040-Add-dma-pool-for-EVB-MCTP-over-PCIe-driver.patch"
 
 SRC_USB_Gadget_Device = " file://0037-Enable-USB-Port-B-as-gadget-device.patch \
                           file://USB-Port-B-as-Gadget-Device.cfg \
