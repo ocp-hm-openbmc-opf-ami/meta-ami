@@ -1,105 +1,68 @@
 #!/bin/sh
 
-sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.host-misc-comm-manager;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.host-misc-comm-manager;protocol=https;branch=main/g' openbmc-meta-intel/meta-common/recipes-intel/host-misc-comm-manager/host-misc-comm-manager_git.bb
+sed -i 's/openbmc-meta-intel/meta-common/g' meta-common/meta-common/recipes-intel/packagegroups/packagegroup-intel-apps.bb
 
-sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.psu-manager.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.psu-manager.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-common/recipes-intel/psu-manager/psu-manager.bb
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/obmc-ikvm;branch=main;protocol=https/git@github.com\/ocp-hm-openbmc-opf-ami\/obmc-ikvm;protocol=https;branch=main/g' meta-ami/meta-common/recipes-graphics/obmc-ikvm/obmc-ikvm_%.bbappend
 
-sed -i 's/git@github.com\/intel-bmc\/os.linux.kernel.openbmc.linux.git;protocol=ssh;branch=${KBRANCH}/git.ami.com\/core\/ami-bmc\/base-tech\/os.linux.kernel.openbmc.linux.git;protocol=https;branch=${KBRANCH}/g' openbmc-meta-intel/meta-common/recipes-kernel/linux/linux-aspeed_%.bbappend
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-dbus-interfaces.git;branch=main;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-dbus-interfaces;protocol=https;branch=main;name=override/g' meta-ami/meta-common/recipes-phosphor/dbus/phosphor-dbus-interfaces_%.bbappend
 
-sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.node-manager-proxy.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.node-manager-proxy.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/ipmi/phosphor-node-manager-proxy_git.bb
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/intel-ipmi-oem.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/intel-ipmi-oem;protocol=https;branch=master;name=override/g' meta-ami/meta-common/recipes-phosphor/ipmi/intel-ipmi-oem_%.bbappend
 
-sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.libmctp.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.libraries.libmctp.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/pmci/libmctp-intel_git.bb
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-host-ipmid.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-host-ipmid;protocol=https;branch=master;name=override/g' meta-ami/meta-common/recipes-phosphor/ipmi/phosphor-ipmi-host_%.bbappend
 
-sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.libpldm.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.libraries.libpldm.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/pmci/libpldm-intel_git.bb
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/webui-vue.git;branch=main;protocol=https/git@github.com\/ocp-hm-openbmc-opf-ami\/webui-vue;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/webui/webui-vue_%.bbappend
 
-sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.mctp-wrapper.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.libraries.mctp-wrapper.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/pmci/mctp-wrapper.bb
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/dbus-sensors.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/dbus-sensors;protocol=https;branch=master;name=override/g' meta-ami/meta-common/recipes-phosphor/sensors/dbus-sensors_%.bbappend
 
-sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.mctpd.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.mctpd.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/pmci/mctpd.bb
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/snmp-agent.git;branch=main;protocol=https/git@github.com\/ocp-hm-openbmc-opf-ami\/snmp-agent;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/snmp/snmp-agent_%.bb
 
-sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.mctpwplus.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.libraries.mctpwplus.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/pmci/mctpwplus.bb
 
-sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.nvme-mi-daemon.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.nvme-mi-daemon.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/pmci/nvmemi-daemon.bb
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/license-control.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/license-control.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/license-control/license-control.bb
 
-sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.pldmd.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.pldmd.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/pmci/pldmd.bb
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/platform-event-filter.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/platform-event-filter.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/pef/pef-alert-manager.bb
+    
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/sensor-history-reader.git;protocol=https;branch=master/git@github.com\/ocp-hm-openbmc-opf-ami\/sensor-history-reader.git;protocol=https;branch=master/g' meta-ami/meta-common/recipes-intel/sensor-reader/sensor-reader_git.bb
 
-sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.pmci-launcher.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.pmci-launcher.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/pmci/pmci-launcher.bb
 
-sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.provisioning-mode-manager.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.provisioning-mode-manager.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/prov-mode-mgr/prov-mode-mgr_git.bb
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/backup-restore.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/backup-restore.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/backup/backuprestore_git.bb
 
-sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.security-manager.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.security-manager.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/security-manager/security-manager_git.bb
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/email-alert-manager.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/email-alert-manager.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/pef/mail-alert-manager.bb
 
-sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.settings-manager.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.settings-manager.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/settings/settings_git.bb
 
-sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.special-mode-manager.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.special-mode-manager.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/special-mode-mgr/special-mode-mgr_git.bb
+sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.host-misc-comm-manager;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/host-misc-comm-manager;protocol=https;branch=main/g' meta-common/meta-common/recipes-intel/host-misc-comm-manager/host-misc-comm-manager_git.bb
 
-sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.virtual-media.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.virtual-media.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/virtual-media/virtual-media.bb
+sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.psu-manager.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/psu-manager.git;protocol=https;branch=main/g' meta-common/meta-common/recipes-intel/psu-manager/psu-manager.bb
 
-sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.mctp-emulator.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.mctp-emulator.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-common/recipes-phosphor/pmci/mctp-emulator.bb
+sed -i 's/git@github.com\/intel-bmc\/os.linux.kernel.openbmc.linux.git;protocol=ssh;branch=${KBRANCH}/git@github.com\/ocp-hm-openbmc-opf-ami\/linux.git;protocol=https;branch=${KBRANCH}/g' meta-common/meta-common/recipes-kernel/linux/linux-aspeed_%.bbappend
 
-sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.libespi.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.libraries.libespi.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-common/recipes-core/libespi/libespi_git.bb
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.node-manager-proxy.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/node-manager-proxy.git;protocol=https;branch=main/g' meta-common/meta-common/recipes-phosphor/ipmi/phosphor-node-manager-proxy_git.bb
 
-sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.at-scale-debug.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.at-scale-debug.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-common/recipes-core/at-scale-debug/at-scale-debug_git.bb
+sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.libmctp.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/libmctp.git;protocol=https;branch=main/g' meta-common/meta-common/recipes-phosphor/pmci/libmctp-intel_git.bb
 
-if [ -d "openbmc-meta-intel/meta-restricted" ]; then
+sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.libpldm.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/libpldm.git;protocol=https;branch=main/g' meta-common/meta-common/recipes-phosphor/pmci/libpldm-intel_git.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.host-memory.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.host-memory.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/telemetry/host-memory_git.bb
+sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.mctp-wrapper.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/mctp-wrapper.git;protocol=https;branch=main/g' meta-common/meta-common/recipes-phosphor/pmci/mctp-wrapper.bb
 
-	sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.optane-memory.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.optane-memory.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/optane-memory/optane-memory_git.bb
+sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.mctpd.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/mctpd.git;protocol=https;branch=main/g' meta-common/meta-common/recipes-phosphor/pmci/mctpd.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.bmc-assisted-fru-isolation.git;branch=main;protocol=ssh/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.bmc-assisted-fru-isolation.git;branch=main;protocol=https/g' openbmc-meta-intel/meta-restricted/recipes-intel/acd/bafi.bb
+sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.mctpwplus.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/mctpwplus.git;protocol=https;branch=main/g' meta-common/meta-common/recipes-phosphor/pmci/mctpwplus.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.spdmd.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.spdmd.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/fw-security/spdmd.bb
+sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.nvme-mi-daemon.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/nvme-mi-daemon.git;protocol=https;branch=main/g' meta-common/meta-common/recipes-phosphor/pmci/nvmemi-daemon.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.spdmapplib.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.libraries.spdmapplib.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/fw-security/spdmapplib.bb
+sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.pldmd.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/pldmd.git;protocol=https;branch=main/g' meta-common/meta-common/recipes-phosphor/pmci/pldmd.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.ras-manager.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.ras-manager.git;protocol=https;branch=openbmc\/release\/birchstream\/common/g' openbmc-meta-intel/meta-restricted/recipes-intel/ras-offload/ras-manager_git.bb
+sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.pmci-launcher.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/pmci-launcher.git;protocol=https;branch=main/g' meta-common/meta-common/recipes-phosphor/pmci/pmci-launcher.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.crashdump.git;branch=main;protocol=ssh/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.crashdump.git;branch=main;protocol=https/g' openbmc-meta-intel/meta-restricted/recipes-intel/acd/crashdump_git.bb
+sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.provisioning-mode-manager.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/provisioning-mode-manager.git;protocol=https;branch=main/g' meta-common/meta-common/recipes-phosphor/prov-mode-mgr/prov-mode-mgr_git.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.crashdump-add-in-card.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.crashdump-add-in-card.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/aic-crashdump/aic-crashdump.bb
+sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.security-manager.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\security-manager.git;protocol=https;branch=main/g' meta-common/meta-common/recipes-phosphor/security-manager/security-manager_git.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.node-manager.git;protocol=ssh;branch=bhs/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.node-manager.git;protocol=https;branch=bhs/g' openbmc-meta-intel/meta-restricted/recipes-intel/nm/node-manager_git.bb
+sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.settings-manager.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/settings-manager.git;protocol=https;branch=main/g' meta-common/meta-common/recipes-phosphor/settings/settings_git.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.node-manager.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.node-manager.git;protocol=https;branch=bhs/g' openbmc-meta-intel/meta-restricted/recipes-intel/nm/node-manager_git.bb
+sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.special-mode-manager.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/special-mode-manager.git;protocol=https;branch=main/g' meta-common/meta-common/recipes-phosphor/special-mode-mgr/special-mode-mgr_git.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.bmc-collector.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.bmc-collector.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/acd/bmc-collector_git.bb
+sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.virtual-media.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/virtual-media.git;protocol=https;branch=main/g' meta-common/meta-common/recipes-phosphor/virtual-media/virtual-media.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=bhs/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.cups-service.git;protocol=https;branch=bhs/g' openbmc-meta-intel/meta-restricted/recipes-intel/telemetry/cups-service.bb
+sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.mctp-emulator.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/mctp-emulator.git;protocol=https;branch=main/g' meta-common/meta-common/recipes-phosphor/pmci/mctp-emulator.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=egs/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.cups-service.git;protocol=https;branch=egs/g' openbmc-meta-intel/meta-restricted/recipes-intel/telemetry/cups-service.bb
-
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.cups-service.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/telemetry/cups-ut-native.bb
-
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.cups-service.git;protocol=ssh;branch=egs/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.cups-service.git;protocol=https;branch=egs/g' openbmc-meta-intel/meta-restricted/recipes-intel/telemetry/cups-ut-native.bb
-
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.platform-monitoring-technology.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.platform-monitoring-technology.git;protocol=https;branch=bhs-common/g' openbmc-meta-intel/meta-restricted/recipes-intel/telemetry/pmt_git.bb
-
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.mmbi-seamless.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.mmbi-seamless.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/seamless/mmbi-seamless.bb
-
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.trusted-application.git;protocol=ssh;nobranch=1/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.trusted-application.git;protocol=https;nobranch=1/g' openbmc-meta-intel/meta-restricted/recipes-optee/optee-user-ta/optee-user-ta_git.bb
-
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.ondemand.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.ondemand.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-restricted/recipes-intel/oob-config/ondemand_git.bb
-
-else
-	echo "INFO : meta-restricted does not exists."
-fi
-
-if [ -d "openbmc-meta-intel/meta-intel" ]; then
-
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.mtd-util.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.mtd-util.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-intel/recipes-devtools/mtd-util/mtd-util.bb
-
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.intel-pfr-signing-utility.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.intel-pfr-signing-utility.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-intel/recipes-intel/intel-pfr/intel-pfr-signing-utility-native.bb
-
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.secure-control-module-i2c-memory-map.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.secure-control-module-i2c-memory-map.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-intel/recipes-intel/scm-i2c-memory-map/scm-i2c-memory-map.bb
-
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.domain-mapperd.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.domain-mapperd.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-intel/recipes-intel/domain-mapperd/domain-mapperd.bb
-
-	sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.dimm-devices-accessor.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.dimm-devices-accessor.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-intel/recipes-intel/dimm-devices-accessor/dimm-devices-accessor.bb
-
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.libpmt.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.libraries.libpmt.git;protocol=https;branch=bhs-common/g' openbmc-meta-intel/meta-intel/recipes-intel/pmt/libpmt_git.bb
-
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.power-feature-discovery.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.power-feature-discovery.git;protocol=https;branch=main/g' openbmc-meta-intel/meta-intel/recipes-intel/power-feature-discovery/power-feature-discovery_git.bb
-
-else
-	echo "INFO : meta-intel does not exists."
-fi
+sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.libespi.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/libespi.git;protocol=https;branch=main/g' meta-common/meta-common/recipes-core/libespi/libespi_git.bb
