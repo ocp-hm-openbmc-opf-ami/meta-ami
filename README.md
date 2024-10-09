@@ -1,10 +1,13 @@
 # MegaRAC OneTree
-- MegaRAC OneTree (OT) is AMI’s next generation BMC firmware solution following MegaRAC SP-X 13.
-- Based on Intel and Linux Foundation OpenBMC stack
+- MegaRAC OneTree is AMI’s next generation BMC firmware solution following MegaRAC SP-X 13.
+- Based on OpenBMC from linux foundation. All the SDK from SoC and Si vendors are integrated into OneTree as single stack to support multi SoC and multi silicon.
 - Built on pervasive, open-source industry tools, architecture, and standards such as Yocto, BitBake, OpenEmbedded, D-bus etc.. 
 - Enriched with added core feature sets for platform manageability
 - Enhanced by AMI advanced technologies such as Expansion Packs (EP) and Silicon Packs (SiP)
 - Backed by AMI’s premium customer support
+
+### Important Information
+- After Stable release features migrated into the main branch, the tag "OneTree-X.X" is created in the main repositories. The tag is just providing the information "when the milestone New feature/feature enhancement migration Finished" Only. The latest main branch always provides the latest Bug fixed and Feature enhancement. **Please take the latest main Branch for the project development.**
 
 ### 1) Prerequisite
 
@@ -29,7 +32,7 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 - git clone  https://git.ami.com/core/ami-bmc/one-tree/core/meta-ami
 ```
 
-### 3) OT Core EGS Build Instruction
+### 3) OneTree Core EGS Build Instruction
 ```
 - git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/egs openbmc-meta-intel/meta-egs
 - git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-intel openbmc-meta-intel/meta-intel
@@ -37,7 +40,7 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 - TEMPLATECONF=openbmc-meta-intel/meta-egs/conf/templates/default . openbmc-env
 - bitbake intel-platforms
 ```
-### 4) OT Core BHS Build Instruction
+### 4) OneTree Core BHS Build Instruction
  ```
 - git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/bhs openbmc-meta-intel/meta-bhs
 - git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-intel openbmc-meta-intel/meta-intel
@@ -45,7 +48,7 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 - TEMPLATECONF=openbmc-meta-intel/meta-bhs/conf/templates/default . openbmc-env
 - bitbake intel-platforms
 ```
-### 5) OT Core AST2600EVB Build Instruction
+### 5) OneTree Core AST2600EVB Build Instruction
 ```
 - meta-ami/github-gitlab-url.sh
 - Add the other meta layer and features (optional)
@@ -53,7 +56,7 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 - bitbake obmc-phosphor-image
 ```
 
-### 6) OT Intel Silicon and Expansion Pack (EGS)
+### 6) OneTree Intel Silicon and Expansion Pack (EGS)
 ```
 - git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/egs openbmc-meta-intel/meta-egs
 - git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-restricted openbmc-meta-intel/meta-restricted
@@ -64,7 +67,7 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 - TEMPLATECONF=openbmc-meta-intel/meta-egs/conf/templates/default . openbmc-env
 - bitbake intel-platforms
 ```
-### 7) OT Intel Silicon and Expansion Pack (BHS)
+### 7) OneTree Intel Silicon and Expansion Pack (BHS)
 ```
 - git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/bhs openbmc-meta-intel/meta-bhs
 - git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-restricted openbmc-meta-intel/meta-restricted
@@ -76,7 +79,7 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 - bitbake intel-platforms
 ```
 
-### 8) OT AMI Exapnsion Pack
+### 8) OneTree AMI Exapnsion Pack
 ```
 - git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/egs openbmc-meta-intel/meta-egs (For EGS)
 - git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/bhs openbmc-meta-intel/meta-bhs (For BHS)
@@ -92,14 +95,14 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 - bitbake intel-platforms
 ```
 
-### 9) OT Core Arbel Build Instruction
+### 9) OneTree Core Arbel Build Instruction
 ```
 - meta-ami/github-gitlab-url.sh
 - TEMPLATECONF=meta-ami/meta-evb/meta-evb-nuvoton/meta-evb-npcm845/conf/templates/default . openbmc-env 
 - bitbake obmc-phosphor-image
 ```
 
-### 10) OT Core AST2700EVB Build Instruction
+### 10) OneTree Core AST2700EVB Build Instruction
 ```
 - meta-ami/github-gitlab-url.sh
 - TEMPLATECONF=meta-ami/meta-evb/meta-evb-aspeed/meta-evb-ast2700/meta-ast2700/conf/templates/default . openbmc-env
