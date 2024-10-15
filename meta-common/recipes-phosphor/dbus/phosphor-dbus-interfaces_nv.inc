@@ -10,6 +10,9 @@ SRC_URI:append = " \
         file://nv/Value.interface.yaml \
         file://nv/PowerSystemInputs.interface.yaml \
         file://nv/OperationalStatus.interface.yaml \
+	file://nv/PortState.interface.yaml \
+	file://nv/OT-2.0-PLDM-rebase-PortState_yaml_meson_buld_file.patch \
+	file://nv/OT-2.0-PLDM-rebase-PortInfo_yaml.patch \
 "
 
 do_replace_files() {
@@ -19,6 +22,7 @@ do_replace_files() {
     install -m 0644 ${WORKDIR}/nv/Value.interface.yaml ${S}/yaml/xyz/openbmc_project/Sensor/
     install -m 0644 ${WORKDIR}/nv/PowerSystemInputs.interface.yaml ${S}/yaml/xyz/openbmc_project/State/Decorator/
     install -m 0644 ${WORKDIR}/nv/OperationalStatus.interface.yaml ${S}/yaml/xyz/openbmc_project/State/Decorator/
+    install -m 0644 ${WORKDIR}/nv/PortState.interface.yaml ${S}/yaml/xyz/openbmc_project/Inventory/Decorator/
 }
 addtask replace_files after do_patch before do_configure
 
