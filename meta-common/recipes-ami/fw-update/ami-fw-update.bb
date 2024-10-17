@@ -27,7 +27,9 @@ SYSTEMD_SERVICE:${PN} = "apply-onreset.service"
 do_install:append() {
         install -d ${D}${bindir}
         install -m 0755 ${WORKDIR}/fwupd-restricted.sh ${D}${bindir}/fwupd.sh
-	install -m 0755 ${WORKDIR}/usb-ctrl ${D}${bindir}
         install -m 0755 ${WORKDIR}/applyonreset.sh ${D}${bindir}/applyonreset.sh
+	if ${@bb.utils.contains('OBMC_IMAGE_EXTRA_INSTALL','phosphor-misc-usb-ctrl','false','true',d)}; then
+                install -m 0755 ${WORKDIR}/usb-ctrl ${D}${bindir}/
+        fi
 }
 
