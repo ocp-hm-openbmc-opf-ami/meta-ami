@@ -4,7 +4,7 @@ LICENSE = "Proprietary"
 LIC_FILES_CHKSUM = "file://${AMIBASE}/COPYING.AMI;md5=33abf79b43490ccebfe76ef9882fd8de"
 
 # Need x86_64 version of JDK binaries for compilation
-DEPENDS = "openjdk-11-jdk-native"
+DEPENDS = "openjdk-11-jdk-native curl-native"
 
 ALLOW_EMPTY:${PN} = "1"
 
@@ -17,6 +17,11 @@ S = "${WORKDIR}/git"
 JDK_DIR = "${RECIPE_SYSROOT_NATIVE}/usr/lib/jvm/openjdk-11-jdk/bin"
 
 do_configure[noexec] = "1"
+
+do_compile[network] = "1"
+TSA_URL = "http://timestamp.digicert.com"
+TSA_HB_URL = "${TSA_URL}/timestamp/health/heartbeat"
+
 do_compile() {
   echo ">> Compiling using........."
   ${JDK_DIR}/javac -version
@@ -78,7 +83,9 @@ do_compile() {
 
     # Hide displaying sensitive information in log
     {
-      ${JDK_DIR}/jarsigner -keystore ${JAVASIGNING_DIR}/JViewerKey -storepass $(grep storepass ${JAVASIGNING_DIR}/KeyCredentials | cut -d':' -f2) JViewer.jar $(grep aliasname ${JAVASIGNING_DIR}/KeyCredentials | cut -d':' -f2)
+    	response=$(curl -i "${TSA_HB_URL}")
+    	TSA_ARGS=$(echo "$response" | grep -qE "200 OK|204 No Content" && echo "-tsa ${TSA_URL}" || echo "")
+    	${JDK_DIR}/jarsigner -keystore ${JAVASIGNING_DIR}/JViewerKey -storepass $(grep storepass ${JAVASIGNING_DIR}/KeyCredentials | cut -d':' -f2) JViewer.jar $(grep aliasname ${JAVASIGNING_DIR}/KeyCredentials | cut -d':' -f2) ${TSA_ARGS}
     } &> /dev/null
 
     echo ">> Verifying JAR file signature"
