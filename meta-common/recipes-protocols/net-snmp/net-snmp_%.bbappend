@@ -2,6 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI += " \
     file://net-snmp-create-v3-user \
+    file://0001-Added-changes-to-support-system-lock-mode-for-set-SN.patch \
     "
 
 do_install:append(){
@@ -11,3 +12,6 @@ do_install:append(){
 }
 FILES_${PN}-dev += ""
 FILES_${PN} += "${bindir}/AMI-snmp-create-v3-user"
+
+LDFLAGS += "-lsystemd"
+
