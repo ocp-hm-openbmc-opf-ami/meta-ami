@@ -3,7 +3,7 @@ HOMEPAGE = "https://adoptium.net"
 LICENSE = "GPL-2.0-with-classpath-exception"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/GPL-2.0-with-classpath-exception;md5=6133e6794362eff6641708cfcc075b80"
 
-JVM_CHECKSUM = "25cf602cac350ef36067560a4e8042919f3be973d419eac4d839e2e0000b2cc8"
+JVM_CHECKSUM = "191baa2e052627614022171400a917d28f0987dc54da48aaf07b06f552bb9884"
 
 API_RELEASE_NAME = "jdk-${PV}"
 API_OS = "linux"
@@ -16,7 +16,8 @@ API_VENDOR = "eclipse"
 SRC_URI = "https://api.adoptium.net/v3/binary/version/${API_RELEASE_NAME}/${API_OS}/${API_ARCH}/${API_IMAGE_TYPE}/${API_JVM_IMPL}/${API_HEAP_SIZE}/${API_VENDOR};downloadfilename=${BPN}-${API_ARCH}-${PV}.tar.gz;subdir=${BPN}-${PV};striplevel=1"
 SRC_URI[sha256sum] = "${JVM_CHECKSUM}"
 
-libdir_jdk = "${libdir}/jvm/openjdk-11-jdk"
+JDK_VERSION = "11"
+libdir_jdk = "${libdir}/jvm/openjdk-${JDK_VERSION}-jdk"
 
 # Prevent the packaging task from stripping out
 # debugging symbols, since there are none.
@@ -43,6 +44,6 @@ do_install() {
   cp -R --no-dereference --preserve=mode,links -v ${S}/* ${D}${libdir_jdk}
 }
 
-PROVIDES = "openjdk-11-jdk"
+PROVIDES = "openjdk-${JDK_VERSION}-jdk"
 FILES:${PN} = "${libdir_jdk}"
 BBCLASSEXTEND += " native"

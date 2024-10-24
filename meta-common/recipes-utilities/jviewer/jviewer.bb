@@ -3,8 +3,10 @@ HOMEPAGE = "https://www.ami.com/megarac/#onetree"
 LICENSE = "Proprietary"
 LIC_FILES_CHKSUM = "file://${AMIBASE}/COPYING.AMI;md5=33abf79b43490ccebfe76ef9882fd8de"
 
+# Compile using N-1 LTS version to support both N and N-1 versions
+JDK_VERSION = "11"
 # Need x86_64 version of JDK binaries for compilation
-DEPENDS = "openjdk-11-jdk-native curl-native"
+DEPENDS = "openjdk-${JDK_VERSION}-jdk-native curl-native"
 
 ALLOW_EMPTY:${PN} = "1"
 
@@ -14,7 +16,7 @@ PV = "1.0+git${SRCPV}"
 SRCREV = "c90a983404fa17ba6e63f03d0b5f7cc56234208a"
 
 S = "${WORKDIR}/git"
-JDK_DIR = "${RECIPE_SYSROOT_NATIVE}/usr/lib/jvm/openjdk-11-jdk/bin"
+JDK_DIR = "${RECIPE_SYSROOT_NATIVE}/usr/lib/jvm/openjdk-${JDK_VERSION}-jdk/bin"
 
 do_configure[noexec] = "1"
 
