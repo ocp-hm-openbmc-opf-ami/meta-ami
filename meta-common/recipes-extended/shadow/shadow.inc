@@ -111,6 +111,9 @@ do_install() {
 	# See Bug#5359 and Bug#7173
 	sed -i 's:^SU_NAME:#SU_NAME:g' ${D}${sysconfdir}/login.defs
 
+	sed -i 's:^SYSLOG_SU_ENAB:#SYSLOG_SU_ENAB:g' ${D}${sysconfdir}/login.defs
+	sed -i 's:^SYSLOG_SG_ENAB:#SYSLOG_SG_ENAB:g' ${D}${sysconfdir}/login.defs
+
 	# Use proper encryption for passwords
 	sed -i 's/^#ENCRYPT_METHOD.*$/ENCRYPT_METHOD SHA512/' ${D}${sysconfdir}/login.defs
 

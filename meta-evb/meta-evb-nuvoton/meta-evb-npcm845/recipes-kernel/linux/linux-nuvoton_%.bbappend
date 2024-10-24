@@ -32,3 +32,12 @@ SRC_URI:append = " file://0001-dts-add-i3c-hub-node-to-support-two-bic-slave-dev
 
 # for npcm bic
 # SRC_URI:append = " file://0001-i3c-master-svc-add-delay-for-NPCM-BIC.patch"
+#
+SRC_URI:append = " file://0017-Nuvoton-layout-changes.patch "
+SRC_URI:append = " file://0018-Add-IPMB-Support-Nuvoton.patch "
+
+SRC_URI:append = " file://nfs_cifs.cfg \
+                   file://0019-Add-stats-for-usb-gadget-mass-storage.patch \
+                   file://0020-Fix-HID-report-descriptor-allocation.patch \
+		   file://0021-Add-dts-configuration-for-power-operations.patch \
+                 "
