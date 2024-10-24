@@ -3,7 +3,7 @@ DESCRIPTION = "Backup and Restore backend implementing Backup and Restoring Conf
 LICENSE = "CLOSED"
 # Modify these as desired
 PV = "1.0+git${SRCPV}"
-SRCREV = "4ee299073a7164f1b8e7f6b74c86938a89357bea"
+SRCREV = "67160dadaff2715196a7c2e38729af5ec923ee53"
 
 inherit meson pkgconfig
 inherit obmc-phosphor-dbus-service
