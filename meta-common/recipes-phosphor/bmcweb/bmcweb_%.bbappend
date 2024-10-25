@@ -12,15 +12,31 @@ SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/bmcweb;branch=master;pro
 SRCREV_FORMAT = "override"
 SRCREV_override = "4c3a29182b02241c12d20700245c9a4bc2a35c87"
 
-SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
-                    file://0242-Add-support-to-applytime-property.patch \
-                    file://0180-Fixed-500-Internal-server-error-while-update-cpld-fw.patch \
-                    file://0259-Fix-for-time-out-issue-in-FW-update.patch \
-		    file://0260-Clear-cache-before-firmware-update-start-to-fix-out-.patch \
+# Apply the ApplyTime patch only for the MGX platform
+SRC_URI_MGX = "file://0067-adding-support-for-HttpPushUriTargets.patch \
+               file://0242-Add-support-to-applytime-property.patch \
+               file://0180-Fixed-500-Internal-server-error-while-update-cpld-fw.patch \
+               file://0259-Fix-for-time-out-issue-in-FW-update.patch \
 "
-SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
+SRC_URI:append:mgx = "${SRC_URI_MGX}"
 
-# Remove the patches if 'meta-mgx' is in BBFILE_COLLECTIONS
+SRC_URI_NON_PFR_HttpPushUriTargets = "file://0067-adding-support-for-HttpPushUriTargets.patch \
+                                      file://0242-Add-support-to-applytime-property.patch \
+                                      file://0180-Fixed-500-Internal-server-error-while-update-cpld-fw.patch \
+                                      file://0259-Fix-for-time-out-issue-in-FW-update.patch \
+"
+
+SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR_HttpPushUriTargets, d)}"
+ 
+# Define other patches for non-intel-pfr platforms (excluding MGX)
+SRC_URI_NON_PFR = " \
+    file://0260-Clear-cache-before-firmware-update-start-to-fix-out-.patch \
+"
+ 
+# Conditionally append the non-intel-pfr patches for non-MGX platforms
+SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
+ 
+# Ensure non-intel-pfr patches are not applied on MGX platform
 SRC_URI:remove = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'meta-mgx', SRC_URI_NON_PFR, '', d)}"
 
 #SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
