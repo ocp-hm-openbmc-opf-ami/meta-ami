@@ -55,12 +55,6 @@ RDEPENDS:${PN}-extended = " \
     can-utils \
     "
 
-SUMMARY:${PN}-extra = "Open Source Extra Applications"
-RDEPENDS:${PN}-extra = " \
-    freeipmi \
-    freeipmi-ipmi-raw \
-    "
-
 SUMMARY:${PN}-intel-pmci = "Open Source Intel PMCI Applications"
 RDEPENDS:${PN}-intel-pmci = " \
     libmctp-intel-test \
