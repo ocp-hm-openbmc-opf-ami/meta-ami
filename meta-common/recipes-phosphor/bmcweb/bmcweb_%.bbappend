@@ -16,12 +16,12 @@ SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
                     file://0242-Add-support-to-applytime-property.patch \
                     file://0180-Fixed-500-Internal-server-error-while-update-cpld-fw.patch \
                     file://0259-Fix-for-time-out-issue-in-FW-update.patch \
-		    file://0260-Clear-cache-before-firmware-update-start-to-fix-out-.patch \
+		            file://0260-Clear-cache-before-firmware-update-start-to-fix-out-.patch \
 "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
 
 # Remove the patches if 'meta-mgx' is in BBFILE_COLLECTIONS
-SRC_URI:remove = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'meta-mgx', SRC_URI_NON_PFR, '', d)}"
+#SRC_URI:remove = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'meta-mgx', SRC_URI_NON_PFR, '', d)}"
 
 #SRC_URI_NM:append = "file://0083-modifing-the-error-when-initialization-mode-was-chan.patch \
 #"
