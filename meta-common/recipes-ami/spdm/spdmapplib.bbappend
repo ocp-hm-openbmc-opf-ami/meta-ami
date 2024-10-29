@@ -8,6 +8,8 @@ SRC_URI += " \
   file://sample_keys.tgz;subdir=./git \
 "
 
+include ${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'use-lfmctp', 'spdmapplib_lfmctp.inc', '', d)}
+
 FILES:${PN} += " \
   ${datadir}/spdmd \ 
   ${datadir}/spdmd/sample_keys/rsa3072 \
