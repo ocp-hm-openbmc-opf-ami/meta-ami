@@ -12,6 +12,7 @@ SRC_URI += " \
            file://0003-Add-Support-to-handle-OS-Critical-Sensor-Event.patch \
            file://0004-Add-D-Bus-SEL-Logging-and-SEL-Policy-support.patch \
            file://0005-Add-Systemd-Unit-crash-logging-support.patch \
+           file://0006-Add-Logging-event-basaed-on-severity.patch \
            "
 
 

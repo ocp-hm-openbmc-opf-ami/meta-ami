@@ -11,6 +11,7 @@ SRC_URI += " \
 	       file://0006-Add-support-to-applytime-property.patch \
 	       file://Add-pre-check-for-enable-power-saving-mode.patch \
            file://0007-Added-Dbus-object-path-interface-and-property-for-BM.patch \
+           file://0008-Add-SEL-Limit-Flags.patch \
 "
 
 SRC_URI_evb_aspeed:append =  " \

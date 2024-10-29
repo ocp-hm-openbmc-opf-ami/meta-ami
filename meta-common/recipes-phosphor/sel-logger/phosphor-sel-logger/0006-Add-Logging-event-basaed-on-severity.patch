@@ -1,0 +1,82 @@
+From 3f59523c00d6a249565d9d1cf20e1e40b0224ce9 Mon Sep 17 00:00:00 2001
+From: dineshsv <dineshsv@ami.com>
+Date: Tue, 24 Sep 2024 15:39:32 +0530
+Subject: [PATCH] Add Logging event basaed on severity
+
+Signed-off-by: dineshsv <dineshsv@ami.com>
+---
+ include/sel_logger.hpp | 15 +++++++++++++++
+ src/sel_logger.cpp     | 24 ++++++++++++++++++++----
+ 2 files changed, 35 insertions(+), 4 deletions(-)
+
+diff --git a/include/sel_logger.hpp b/include/sel_logger.hpp
+index f642fee..345fc8c 100644
+--- a/include/sel_logger.hpp
++++ b/include/sel_logger.hpp
+@@ -42,6 +42,21 @@ static constexpr const char* selLogIntf =
+     "xyz.openbmc_project.Logging.Settings";
+ static constexpr int maxSELEntries = 2000;
+ static bool maxSELEntriesReached = false;
++#else
++constexpr const char* informationalLevel =
++    "xyz.openbmc_project.Logging.Entry.Level.Informational";
++constexpr const char* warningLevel =
++    "xyz.openbmc_project.Logging.Entry.Level.Warning";
++constexpr const char* errorLevel =
++    "xyz.openbmc_project.Logging.Entry.Level.Critical";
++
++enum class eventReading : uint8_t
++{
++    lowerNonCritGoingLow = 0x00,
++    lowerCritGoingLow = 0x02,
++    upperNonCritGoingHigh = 0x07,
++    upperCritGoingHigh = 0x09
++};
+ #endif
+ 
+ // ID string generated using journalctl to include in the MESSAGE_ID field for
+diff --git a/src/sel_logger.cpp b/src/sel_logger.cpp
+index 98834fe..b156dc2 100644
+--- a/src/sel_logger.cpp
++++ b/src/sel_logger.cpp
+@@ -455,6 +455,25 @@ static uint16_t selAddSystemRecord(
+     toHexStr(selData, selDataStr);
+ 
+ #ifdef SEL_LOGGER_SEND_TO_LOGGING_SERVICE
++    std::string severity;
++    switch (static_cast<eventReading>(selData[0]))
++    {
++        case eventReading::lowerCritGoingLow:
++        case eventReading::upperCritGoingHigh:
++            severity = errorLevel;
++            break;
++        case eventReading::lowerNonCritGoingLow:
++        case eventReading::upperNonCritGoingHigh:
++            severity = warningLevel;
++            break;
++        default:
++            severity = informationalLevel;
++    }
++    if (!assert)
++    {
++        severity = informationalLevel;
++    }
++
+     sdbusplus::message_t AddToLog = conn->new_method_call(
+         "xyz.openbmc_project.Logging", "/xyz/openbmc_project/logging",
+         "xyz.openbmc_project.Logging.Create", "Create");
+@@ -494,10 +513,7 @@ static uint16_t selAddSystemRecord(
+         return response;
+     };
+ 
+-    // TODO: based on the event only the the severity should be defined
+-    AddToLog.append(journalMsg,
+-                    "xyz.openbmc_project.Logging.Entry.Level.Informational",
+-                    initialize());
++    AddToLog.append(journalMsg, severity, initialize());
+     conn->call(AddToLog);
+ #else
+     recordId = getNewRecordId();
+-- 
+2.25.1
+

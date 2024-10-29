@@ -10,4 +10,5 @@ SRC_URI += "\
     file://0001-Add-linear-and-circular-SEL-policy-support.patch \
     file://0002-Added-SEL-Enable-Disable-via-Set-BMC-Global-Enables-.patch \
     file://0003-Add-IPMI-SEL-Clear-Log-Support.patch \
+    file://0004-Add-Error-and-info-limit.patch \
 "
