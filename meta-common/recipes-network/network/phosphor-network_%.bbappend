@@ -67,6 +67,7 @@ SRC_URI:append = " \
              file://0042-Enable-NSUpdate-and-Reconfig-Link-When-Changing-Host.patch \
              file://0047-Fix-MAC-Address-Unable-Changed-after-Reboot.patch \
              file://0048-Add-Timeout-for-Retrieving-NCSI-Info.patch \
+             file://0048-Reconfigure-Interface-after-LinkUp.patch \
              "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
