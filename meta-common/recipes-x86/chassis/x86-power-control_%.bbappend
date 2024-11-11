@@ -23,6 +23,7 @@ SRC_URI_AMD:append = "file://0004-Add-Task-interface-and-property.patch \
 
 SRC_URI_BHS:append = "file://0004-Add-Task-interface-and-property.patch \
                       file://0003-bhs-Not-able-to-do-power-cycle-if-one-task-is-in-running.patch \
+                      file://0009-Cancel-task-enhancement-for-power-operations.patch \
                      "
 
 #EVB:append = "file://0003-evb-Not-able-to-do-power-cycle-if-one-task-is-in-running.patch"
