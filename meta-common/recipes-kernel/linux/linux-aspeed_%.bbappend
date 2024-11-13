@@ -65,6 +65,10 @@ PFR_SRC_URI_AMI = "file://0027-pfr-fix-bhs-jffs2-issue-due-to-spi-tx-bus-width.p
                    file://0035-PFR-fix-for-JFFS2-issue-due-to-SPI-rx-tx-bus-width.patch \
                   "
 
+
+PFR_128_SRC_URI_AMI = " file://0041-PFR-Updated-FIT-image-size.patch "
+SRC_URI:append:intel-ast2600 =  "${@bb.utils.contains('PFR_CONFIG', 'pfr-128', PFR_128_SRC_URI_AMI, '', d)}"
+
 SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', PFR_SRC_URI_AMI, '', d)}"
 
 SRC_URI_NON_PFR_DUAL ?= ""
