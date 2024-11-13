@@ -11,8 +11,11 @@ Single_SOL_SRC_URI = "file://single_sol_conf.ttyS2.conf \
 Single_SOL_SRC_URI:append:ast2700-default = "file://ast2700-sol-configure.sh "
 Single_SOL_SRC_URI:append:ast2700-dcscm = " file://ast2700-sol-configure.sh "
 
-Single_SOL_SRC_URI:append:evb-ast2600 = "file://ast2600-sol-configure.sh "
-Single_SOL_SRC_URI:append:intel-ast2600 = " file://ast2600-sol-configure.sh "
+Single_SOL_SRC_URI:append:evb-ast2600 = "file://ast2600-sol-configure.sh \
+                                         file://0001-fix-for-solssh-issue.patch "
+
+Single_SOL_SRC_URI:append:intel-ast2600 = " file://ast2600-sol-configure.sh \
+                                            file://0001-fix-for-solssh-issue.patch "
 
 Multi_SOL_SRC_URI = " \
 		file://multi_sol-configure.sh \
