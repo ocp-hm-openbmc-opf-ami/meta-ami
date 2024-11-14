@@ -46,6 +46,7 @@ SRC_URI += "file://nfs.cfg \
             file://CVE-2024-35984.patch \
             file://CVE-2024-36008.patch \
             file://0038-Fix-probe-regression-for-ASPEED-UDC.patch \
+            file://0001-rtc-support-date.patch \
 	    "
 
 NON_PFR_SRC_URI_INTEL = "file://0012-Add-new-layout-as-per-AMI-requirements.patch \
