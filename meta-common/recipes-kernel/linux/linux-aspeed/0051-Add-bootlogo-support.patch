@@ -1,0 +1,220 @@
+From 59a59fa5d117ef56715aac5dee02dbff05f6cfc2 Mon Sep 17 00:00:00 2001
+From: Shamim Ali <ashamim@ami.com>
+Date: Tue, 12 Nov 2024 18:48:55 +0530
+Subject: [PATCH] Add bootlogo support
+
+This patch add the boot logo support for ast2600
+
+Add below configs to enable tty0 and FB0
+
+CONFIG_FRAMEBUFFER_CONSOLE=y
+CONFIG_FRAMEBUFFER_CONSOLE_DETECT_PRIMARY=y
+CONFIG_VT=y
+CONFIG_FB=y
+
+psplash will be used to display the boot logo on screen.
+the boot logo can be customizable, new logo can be added
+to psplash during build and that can be displayed on
+screen while bmc boots up.
+
+Refrence Link:
+https://lore.kernel.org/lkml/CACPK8XfA8Mz6tU2r=G+PxuVkvTZ5Nzw0g-V7EAoBhkKO-TOPfQ@mail.gmail.com/T/
+
+Signed-off-by: Shamim Ali <ashamim@ami.com>
+---
+ arch/arm/boot/dts/aspeed/aspeed-g6.dtsi   |  4 +-
+ drivers/gpu/drm/aspeed/aspeed_gfx.h       | 16 +++++++-
+ drivers/gpu/drm/aspeed/aspeed_gfx_crtc.c  | 13 ++++++
+ drivers/gpu/drm/aspeed/aspeed_gfx_drv.c   | 48 +++++++++++++++++++++--
+ include/dt-bindings/clock/ast2600-clock.h |  1 +
+ 5 files changed, 76 insertions(+), 6 deletions(-)
+
+diff --git a/arch/arm/boot/dts/aspeed/aspeed-g6.dtsi b/arch/arm/boot/dts/aspeed/aspeed-g6.dtsi
+index 59be90fc9977..dd59afb90113 100644
+--- a/arch/arm/boot/dts/aspeed/aspeed-g6.dtsi
++++ b/arch/arm/boot/dts/aspeed/aspeed-g6.dtsi
+@@ -407,7 +407,9 @@ gfx: display@1e6e6000 {
+                                 reg = <0x1e6e6000 0x1000>;
+                                 reg-io-width = <4>;
+                                 clocks = <&syscon ASPEED_CLK_GATE_D1CLK>;
+-                                resets = <&syscon ASPEED_RESET_GRAPHICS>;
++                                resets = <&syscon ASPEED_RESET_CRT>,
++					 <&syscon ASPEED_RESET_GRAPHICS>;
++				reset-names = "crt", "engine";
+                                 syscon = <&syscon>;
+                                 status = "disabled";
+                                 interrupts = <GIC_SPI 14 IRQ_TYPE_LEVEL_HIGH>;
+diff --git a/drivers/gpu/drm/aspeed/aspeed_gfx.h b/drivers/gpu/drm/aspeed/aspeed_gfx.h
+index 4e6a442c3886..e54877d8c0ac 100644
+--- a/drivers/gpu/drm/aspeed/aspeed_gfx.h
++++ b/drivers/gpu/drm/aspeed/aspeed_gfx.h
+@@ -8,7 +8,8 @@ struct aspeed_gfx {
+ 	struct drm_device		drm;
+ 	void __iomem			*base;
+ 	struct clk			*clk;
+-	struct reset_control		*rst;
++	struct reset_control		*rst_crt;
++	struct reset_control            *rst_engine;
+ 	struct regmap			*scu;
+ 
+ 	u32				dac_reg;
+@@ -16,6 +17,7 @@ struct aspeed_gfx {
+ 	u32				vga_scratch_reg;
+ 	u32				throd_val;
+ 	u32				scan_line_max;
++	u32                             flags;
+ 
+ 	struct drm_simple_display_pipe	pipe;
+ 	struct drm_connector		connector;
+@@ -106,3 +108,15 @@ int aspeed_gfx_create_output(struct drm_device *drm);
+ /* CRT_THROD */
+ #define CRT_THROD_LOW(x)		(x)
+ #define CRT_THROD_HIGH(x)		((x) << 8)
++
++/* SCU control */
++#define SCU_G6_CLK_COURCE              0x300
++
++/* GFX FLAGS */
++#define RESET_MASK                     BIT(0)
++#define RESET_G6                       BIT(0)
++#define CLK_MASK                       BIT(4)
++#define CLK_G6                         BIT(4)
++
++#define G6_CLK_MASK                    (BIT(8) | BIT(9) | BIT(10))
++#define G6_USB_40_CLK                  BIT(9)
+diff --git a/drivers/gpu/drm/aspeed/aspeed_gfx_crtc.c b/drivers/gpu/drm/aspeed/aspeed_gfx_crtc.c
+index 7877a57b8e26..31bcb0ee3c4b 100644
+--- a/drivers/gpu/drm/aspeed/aspeed_gfx_crtc.c
++++ b/drivers/gpu/drm/aspeed/aspeed_gfx_crtc.c
+@@ -77,6 +77,18 @@ static void aspeed_gfx_disable_controller(struct aspeed_gfx *priv)
+ 	regmap_update_bits(priv->scu, priv->dac_reg, BIT(16), 0);
+ }
+ 
++static void aspeed_gfx_set_clk(struct aspeed_gfx *priv)
++{
++       switch (priv->flags & CLK_MASK) {
++       case CLK_G6:
++               regmap_update_bits(priv->scu, SCU_G6_CLK_COURCE, G6_CLK_MASK, 0x0);
++               regmap_update_bits(priv->scu, SCU_G6_CLK_COURCE, G6_CLK_MASK, G6_USB_40_CLK);
++               break;
++       default:
++               break;
++       }
++}
++
+ static void aspeed_gfx_crtc_mode_set_nofb(struct aspeed_gfx *priv)
+ {
+ 	struct drm_display_mode *m = &priv->pipe.crtc.state->adjusted_mode;
+@@ -87,6 +99,7 @@ static void aspeed_gfx_crtc_mode_set_nofb(struct aspeed_gfx *priv)
+ 	if (err)
+ 		return;
+ 
++	aspeed_gfx_set_clk(priv);
+ #if 0
+ 	/* TODO: we have only been able to test with the 40MHz USB clock. The
+ 	 * clock is fixed, so we cannot adjust it here. */
+diff --git a/drivers/gpu/drm/aspeed/aspeed_gfx_drv.c b/drivers/gpu/drm/aspeed/aspeed_gfx_drv.c
+index 78122b35a0cb..09795f7609ad 100644
+--- a/drivers/gpu/drm/aspeed/aspeed_gfx_drv.c
++++ b/drivers/gpu/drm/aspeed/aspeed_gfx_drv.c
+@@ -63,6 +63,7 @@ struct aspeed_gfx_config {
+ 	u32 vga_scratch_reg;	/* VGA scratch register in SCU */
+ 	u32 throd_val;		/* Default Threshold Seting */
+ 	u32 scan_line_max;	/* Max memory size of one scan line */
++	u32 gfx_flags;          /* Flags for gfx chip caps */
+ };
+ 
+ static const struct aspeed_gfx_config ast2400_config = {
+@@ -87,6 +88,7 @@ static const struct aspeed_gfx_config ast2600_config = {
+ 	.vga_scratch_reg = 0x50,
+ 	.throd_val = CRT_THROD_LOW(0x50) | CRT_THROD_HIGH(0x70),
+ 	.scan_line_max = 128,
++	.gfx_flags = RESET_G6 | CLK_G6,
+ };
+ 
+ static const struct of_device_id aspeed_gfx_match[] = {
+@@ -137,6 +139,44 @@ static irqreturn_t aspeed_gfx_irq_handler(int irq, void *data)
+ 	return IRQ_NONE;
+ }
+ 
++static int aspeed_gfx_reset(struct drm_device *drm)
++{
++       struct platform_device *pdev = to_platform_device(drm->dev);
++       struct aspeed_gfx *priv = to_aspeed_gfx(drm);
++
++       switch (priv->flags & RESET_MASK) {
++       case RESET_G6:
++               priv->rst_crt = devm_reset_control_get(&pdev->dev, "crt");
++               if (IS_ERR(priv->rst_crt)) {
++                       dev_err(&pdev->dev,
++                               "missing or invalid crt reset controller device tree entry");
++                       return PTR_ERR(priv->rst_crt);
++               }
++               reset_control_deassert(priv->rst_crt);
++
++               priv->rst_engine = devm_reset_control_get(&pdev->dev, "engine");
++               if (IS_ERR(priv->rst_engine)) {
++                       dev_err(&pdev->dev,
++                               "missing or invalid engine reset controller device tree entry");
++                       return PTR_ERR(priv->rst_engine);
++               }
++               reset_control_deassert(priv->rst_engine);
++               break;
++
++       default:
++               priv->rst_crt = devm_reset_control_get_exclusive(&pdev->dev, NULL);
++               if (IS_ERR(priv->rst_crt)) {
++                       dev_err(&pdev->dev,
++                               "missing or invalid reset controller device tree entry");
++                       return PTR_ERR(priv->rst_crt);
++               }
++               reset_control_deassert(priv->rst_crt);
++               break;
++       }
++
++       return 0;
++}
++
+ static int aspeed_gfx_load(struct drm_device *drm)
+ {
+ 	struct platform_device *pdev = to_platform_device(drm->dev);
+@@ -162,6 +202,7 @@ static int aspeed_gfx_load(struct drm_device *drm)
+ 	priv->vga_scratch_reg = config->vga_scratch_reg;
+ 	priv->throd_val = config->throd_val;
+ 	priv->scan_line_max = config->scan_line_max;
++	priv->flags = config->gfx_flags;
+ 
+ 	priv->scu = syscon_regmap_lookup_by_phandle(np, "syscon");
+ 	if (IS_ERR(priv->scu)) {
+@@ -185,13 +226,12 @@ static int aspeed_gfx_load(struct drm_device *drm)
+ 		return ret;
+ 	}
+ 
+-	priv->rst = devm_reset_control_get_exclusive(&pdev->dev, NULL);
+-	if (IS_ERR(priv->rst)) {
++	ret = aspeed_gfx_reset(drm);
++	if (ret) {
+ 		dev_err(&pdev->dev,
+ 			"missing or invalid reset controller device tree entry");
+-		return PTR_ERR(priv->rst);
++		return ret;
+ 	}
+-	reset_control_deassert(priv->rst);
+ 
+ 	priv->clk = devm_clk_get(drm->dev, NULL);
+ 	if (IS_ERR(priv->clk)) {
+diff --git a/include/dt-bindings/clock/ast2600-clock.h b/include/dt-bindings/clock/ast2600-clock.h
+index 956aed2f9ce0..30ecaa53055e 100644
+--- a/include/dt-bindings/clock/ast2600-clock.h
++++ b/include/dt-bindings/clock/ast2600-clock.h
+@@ -124,6 +124,7 @@
+ #define ASPEED_RESET_PCIE_DEV_OEN	20
+ #define ASPEED_RESET_PCIE_RC_O		19
+ #define ASPEED_RESET_PCIE_RC_OEN	18
++#define ASPEED_RESET_CRT               13
+ #define ASPEED_RESET_PCI_DP		5
+ #define ASPEED_RESET_HACE		4
+ #define ASPEED_RESET_AHB		1
+-- 
+2.34.1
+
