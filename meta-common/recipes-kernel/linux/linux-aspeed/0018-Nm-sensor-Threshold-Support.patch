@@ -1,0 +1,356 @@
+From 9631f134eab152e8dc9e7011b2e8b562a2b9b713 Mon Sep 17 00:00:00 2001
+From: arjuncr <arjuncr@ami.com>
+Date: Mon, 23 Oct 2023 04:52:51 -0400
+Subject: [PATCH] Nm sensor Threshold Support
+
+Signed-off-by: arjuncr <arjuncr@ami.com>
+---
+ drivers/hwmon/hwmon.c              |  1 +
+ drivers/hwmon/peci-cpupower.c      | 61 +++++++++++++++++++++-
+ drivers/hwmon/peci-dimmpower.c     | 62 +++++++++++++++++++++-
+ drivers/hwmon/peci-platformpower.c | 83 +++++++++++++++++++++++++++++-
+ include/linux/hwmon.h              |  2 +
+ 5 files changed, 203 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/hwmon/hwmon.c b/drivers/hwmon/hwmon.c
+index 9ed34b2e1f49..aca16805d4a8 100644
+--- a/drivers/hwmon/hwmon.c
++++ b/drivers/hwmon/hwmon.c
+@@ -568,6 +568,7 @@ static const char * const hwmon_energy_attr_templates[] = {
+ 	[hwmon_energy_enable] = "energy%d_enable",
+ 	[hwmon_energy_input] = "energy%d_input",
+ 	[hwmon_energy_label] = "energy%d_label",
++	[hwmon_energy_max] = "energy%d_max",
+ };
+ 
+ static const char * const hwmon_humidity_attr_templates[] = {
+diff --git a/drivers/hwmon/peci-cpupower.c b/drivers/hwmon/peci-cpupower.c
+index ee0aac8b3a7c..ac8fb88dcec6 100644
+--- a/drivers/hwmon/peci-cpupower.c
++++ b/drivers/hwmon/peci-cpupower.c
+@@ -21,8 +21,8 @@ enum PECI_CPUPOWER_POWER_SENSOR_TYPES {
+ #define PECI_CPUPOWER_POWER_CHANNEL_COUNT	1 /* Supported channels number */
+ #define PECI_CPUPOWER_ENERGY_CHANNEL_COUNT	1 /* Supported channels number */
+ 
+-#define PECI_CPUPOWER_POWER_SENSOR_COUNT	4 /* Supported sensors number */
+-#define PECI_CPUPOWER_ENERGY_SENSOR_COUNT	1 /* Supported sensors number */
++#define PECI_CPUPOWER_POWER_SENSOR_COUNT	5 /* Supported sensors number */
++#define PECI_CPUPOWER_ENERGY_SENSOR_COUNT	2 /* Supported sensors number */
+ 
+ struct peci_cpupower {
+ 	struct device *dev;
+@@ -372,6 +372,49 @@ peci_cpupower_read_max_power(void *ctx, struct peci_sensor_conf *sensor_conf,
+ 	return ret;
+ }
+ 
++static int
++peci_cpupower_read_max_energy(void *ctx, struct peci_sensor_conf *sensor_conf,
++                             struct peci_sensor_data *sensor_data)
++{
++        struct peci_cpupower *priv = (struct peci_cpupower *)ctx;
++        union peci_package_power_info_low power_info;
++        int ret = 0;
++
++        mutex_lock(&sensor_data->lock);
++        if (!peci_sensor_need_update_with_time(sensor_data,
++                                               sensor_conf->update_interval)) {
++                dev_dbg(priv->dev, "skip reading peci, max power %dmW\n",
++                        sensor_data->value);
++                goto unlock;
++        }
++
++        ret = peci_pcs_get_units(priv->mgr, &priv->units, &priv->units_valid);
++        if (ret) {
++                dev_dbg(priv->dev, "not able to read units\n");
++                goto unlock;
++        }
++
++        ret = peci_cpupower_read_cpu_pkg_pwr_info_low(priv->mgr, &power_info);
++        if (ret) {
++                dev_dbg(priv->dev, "not able to read package power info\n");
++                goto unlock;
++        }
++
++        peci_sensor_mark_updated(sensor_data);
++        sensor_data->value = peci_pcs_xn_to_munits(power_info.bits.pkg_tdp,
++                                                   priv->units.bits.pwr_unit);
++
++	sensor_data->value = sensor_data->value*1000000;
++
++        dev_dbg(priv->dev, "raw max power %u, unit %u, max energy %dmW\n",
++                power_info.bits.pkg_tdp, priv->units.bits.pwr_unit,
++                sensor_data->value);
++
++unlock:
++        mutex_unlock(&sensor_data->lock);
++        return ret;
++}
++
+ static int
+ peci_cpupower_read_min_power(void *ctx, struct peci_sensor_conf *sensor_conf,
+ 			     struct peci_sensor_data *sensor_data)
+@@ -477,6 +520,13 @@ peci_cpupower_power_cfg[PECI_CPUPOWER_POWER_CHANNEL_COUNT]
+ 			.read = peci_cpupower_get_average_power,
+ 			.write = NULL,
+ 		},
++		{
++                        .attribute = hwmon_power_average_max,
++                        .config = HWMON_P_AVERAGE_MAX,
++                        .update_interval = UPDATE_INTERVAL_100MS,
++                        .read = peci_cpupower_read_max_power,
++                        .write = NULL,
++                },
+ 		{
+ 			.attribute = hwmon_power_cap,
+ 			.config = HWMON_P_CAP,
+@@ -513,6 +563,13 @@ peci_cpupower_energy_cfg[PECI_CPUPOWER_ENERGY_CHANNEL_COUNT]
+ 			.read = peci_cpupower_read_energy,
+ 			.write = NULL,
+ 		},
++		{
++                        .attribute = hwmon_energy_max,
++                        .config = HWMON_E_MAX,
++                        .update_interval = UPDATE_INTERVAL_100MS,
++                        .read = peci_cpupower_read_max_energy,
++                        .write = NULL,
++                },
+ 	}
+ };
+ 
+diff --git a/drivers/hwmon/peci-dimmpower.c b/drivers/hwmon/peci-dimmpower.c
+index 9500b5dd5e2d..6261598a081a 100644
+--- a/drivers/hwmon/peci-dimmpower.c
++++ b/drivers/hwmon/peci-dimmpower.c
+@@ -21,8 +21,8 @@ enum PECI_DIMMPOWER_SENSOR_TYPES {
+ #define PECI_DIMMPOWER_POWER_CHANNEL_COUNT	1 /* Supported channels number */
+ #define PECI_DIMMPOWER_ENERGY_CHANNEL_COUNT	1 /* Supported channels number */
+ 
+-#define PECI_DIMMPOWER_POWER_SENSOR_COUNT	4 /* Supported sensors/readings number */
+-#define PECI_DIMMPOWER_ENERGY_SENSOR_COUNT	1 /* Supported sensors/readings number */
++#define PECI_DIMMPOWER_POWER_SENSOR_COUNT	5 /* Supported sensors/readings number */
++#define PECI_DIMMPOWER_ENERGY_SENSOR_COUNT	2 /* Supported sensors/readings number */
+ 
+ struct peci_dimmpower {
+ 	struct device *dev;
+@@ -304,6 +304,50 @@ peci_dimmpower_read_max_power(void *ctx, struct peci_sensor_conf *sensor_conf,
+ 	return ret;
+ }
+ 
++static int
++peci_dimmpower_read_max_energy(void *ctx, struct peci_sensor_conf *sensor_conf,
++                              struct peci_sensor_data *sensor_data)
++{
++        struct peci_dimmpower *priv = (struct peci_dimmpower *)ctx;
++        union peci_dram_power_info_low power_info;
++        int ret = 0;
++
++        mutex_lock(&sensor_data->lock);
++        if (!peci_sensor_need_update_with_time(sensor_data,
++                                               sensor_conf->update_interval)) {
++                dev_dbg(priv->dev, "skip reading peci, max power %dmW\n",
++                        sensor_data->value);
++                goto unlock;
++        }
++
++        ret = peci_pcs_get_units(priv->mgr, &priv->units, &priv->units_valid);
++        if (ret) {
++                dev_dbg(priv->dev, "not able to read units\n");
++                goto unlock;
++        }
++
++        ret = peci_pcs_read(priv->mgr, PECI_MBX_INDEX_DDR_PWR_INFO_LOW,
++                            PECI_PCS_PARAM_ZERO, (u8 *)&power_info.value,
++                            sizeof(power_info.value));
++        if (ret) {
++                dev_dbg(priv->dev, "not able to read power info\n");
++                goto unlock;
++        }
++
++        peci_sensor_mark_updated(sensor_data);
++        sensor_data->value = peci_pcs_xn_to_munits(power_info.bits.tdp,
++                                                   priv->units.bits.pwr_unit);
++	
++	sensor_data->value = sensor_data->value*100000;
++
++        dev_dbg(priv->dev, "raw max power %u, unit %u, max energy %dmW\n",
++                power_info.bits.tdp, priv->units.bits.pwr_unit,
++                sensor_data->value);
++unlock:
++        mutex_unlock(&sensor_data->lock);
++        return ret;
++}
++
+ static int
+ peci_dimmpower_read_min_power(void *ctx, struct peci_sensor_conf *sensor_conf,
+ 			      struct peci_sensor_data *sensor_data)
+@@ -384,6 +428,13 @@ peci_dimmpower_power_cfg[PECI_DIMMPOWER_POWER_CHANNEL_COUNT]
+ 			.read = peci_dimmpower_get_avg_power,
+ 			.write = NULL,
+ 		},
++		{
++                        .attribute = hwmon_power_average_max,
++                        .config = HWMON_P_AVERAGE_MAX,
++                        .update_interval = UPDATE_INTERVAL_100MS,
++                        .read = peci_dimmpower_read_max_power,
++                        .write = NULL,
++                },
+ 		{
+ 			.attribute = hwmon_power_cap,
+ 			.config = HWMON_P_CAP,
+@@ -420,6 +471,13 @@ peci_dimmpower_energy_cfg[PECI_DIMMPOWER_ENERGY_CHANNEL_COUNT]
+ 			.read = peci_dimmpower_read_energy,
+ 			.write = NULL,
+ 		},
++		{
++                        .attribute = hwmon_energy_max,
++                        .config = HWMON_E_MAX,
++                        .update_interval = UPDATE_INTERVAL_100MS,
++                        .read = peci_dimmpower_read_max_energy,
++                        .write = NULL,
++                },
+ 	}
+ };
+ 
+diff --git a/drivers/hwmon/peci-platformpower.c b/drivers/hwmon/peci-platformpower.c
+index 436a6100ada0..eb36f8931c7d 100644
+--- a/drivers/hwmon/peci-platformpower.c
++++ b/drivers/hwmon/peci-platformpower.c
+@@ -21,8 +21,8 @@ enum PECI_PLATFORMPOWER_POWER_SENSOR_TYPES {
+ #define PECI_PLATFORMPOWER_POWER_CHANNEL_COUNT		1 /* Supported channels number. */
+ #define PECI_PLATFORMPOWER_ENERGY_CHANNEL_COUNT	1 /* Supported channels number. */
+ 
+-#define PECI_PLATFORMPOWER_POWER_SENSOR_COUNT	4 /* Supported sensors number. */
+-#define PECI_PLATFORMPOWER_ENERGY_SENSOR_COUNT	1 /* Supported sensors number. */
++#define PECI_PLATFORMPOWER_POWER_SENSOR_COUNT	5 /* Supported sensors number. */
++#define PECI_PLATFORMPOWER_ENERGY_SENSOR_COUNT	2 /* Supported sensors number. */
+ 
+ #define PECI_PLATFORMPOWER_ENERGY_UNIT	0
+ 
+@@ -522,6 +522,11 @@ peci_platformpower_read_max_power(void *ctx,
+ 	sensor_data->value = peci_pcs_xn_to_munits(power_info.bits.max_ppl1,
+ 						   priv->units.bits.pwr_unit);
+ 
++	if(sensor_data->value == 0)
++        {
++                sensor_data->value=400*1000;//setting max if peci command gave zero reading
++        }
++
+ 	dev_dbg(priv->dev, "raw max power %u, unit %u, max power %dmW\n",
+ 		power_info.bits.max_ppl1, priv->units.bits.pwr_unit,
+ 		sensor_data->value);
+@@ -531,6 +536,66 @@ peci_platformpower_read_max_power(void *ctx,
+ 	return ret;
+ }
+ 
++static int
++peci_platformpower_read_max_energy(void *ctx,
++                                  struct peci_sensor_conf *sensor_conf,
++                                  struct peci_sensor_data *sensor_data)
++{
++        struct peci_platformpower *priv = (struct peci_platformpower *)ctx;
++        union peci_platform_power_info_low power_info;
++        int ret = 0;
++
++        mutex_lock(&sensor_data->lock);
++
++        /*
++         * Check whether need to update reading. If not just return cached
++         * value.
++         */
++        if (!peci_sensor_need_update_with_time(sensor_data,
++                                               sensor_conf->update_interval)) {
++                dev_dbg(priv->dev, "skip reading peci, max power %dW\n",
++                        sensor_data->value);
++                goto unlock;
++        }
++
++        /*
++         * Read units to the cache. Units are needed to convert power values
++         * correctly. Units are read from CPU only once.
++         */
++        ret = peci_pcs_get_units(priv->mgr, &priv->units, &priv->units_valid);
++        if (ret) {
++                dev_dbg(priv->dev, "not able to read units\n");
++                goto unlock;
++        }
++
++        /* Read platform power info. */
++        ret = peci_platformpower_read_platf_pwr_info_low(priv->mgr,
++                                                         &power_info);
++        if (ret) {
++                dev_dbg(priv->dev, "not able to read platform info\n");
++                goto unlock;
++        }
++
++        peci_sensor_mark_updated(sensor_data);
++        sensor_data->value = peci_pcs_xn_to_munits(power_info.bits.max_ppl1,
++                                                   priv->units.bits.pwr_unit);
++
++	if(sensor_data->value == 0)
++	{
++		sensor_data->value=2100;//setting max if peci command gave zero reading
++	}
++
++	sensor_data->value = sensor_data->value*1000000;
++
++        dev_dbg(priv->dev, "raw max power %u, unit %u, max energy %dmW\n",
++                power_info.bits.max_ppl1, priv->units.bits.pwr_unit,
++                sensor_data->value);
++
++unlock:
++        mutex_unlock(&sensor_data->lock);
++        return ret;
++}
++
+ /**
+  * peci_platformpower_read_min_power - get minimal value for the platform power
+  * limit
+@@ -653,6 +718,13 @@ peci_platformpower_power_cfg[PECI_PLATFORMPOWER_POWER_CHANNEL_COUNT]
+ 			.read = peci_platformpower_get_average_power,
+ 			.write = NULL,
+ 		},
++		{
++                        .attribute = hwmon_power_average_max,
++                        .config = HWMON_P_AVERAGE_MAX,
++                        .update_interval = UPDATE_INTERVAL_100MS,
++                        .read = peci_platformpower_read_max_power,
++                        .write = NULL,
++                },
+ 		{
+ 			.attribute = hwmon_power_cap,
+ 			.config = HWMON_P_CAP,
+@@ -689,6 +761,13 @@ peci_platformpower_energy_cfg[PECI_PLATFORMPOWER_ENERGY_CHANNEL_COUNT]
+ 			.read = peci_platformpower_read_energy,
+ 			.write = NULL,
+ 		},
++		{
++                        .attribute = hwmon_energy_max,
++                        .config = HWMON_E_MAX,
++                        .update_interval = UPDATE_INTERVAL_100MS,
++                        .read = peci_platformpower_read_max_energy,
++                        .write = NULL,
++                },
+ 	}
+ };
+ 
+diff --git a/include/linux/hwmon.h b/include/linux/hwmon.h
+index 14325f93c6b2..65cbb42e8f26 100644
+--- a/include/linux/hwmon.h
++++ b/include/linux/hwmon.h
+@@ -267,11 +267,13 @@ enum hwmon_energy_attributes {
+ 	hwmon_energy_enable,
+ 	hwmon_energy_input,
+ 	hwmon_energy_label,
++	hwmon_energy_max,
+ };
+ 
+ #define HWMON_E_ENABLE			BIT(hwmon_energy_enable)
+ #define HWMON_E_INPUT			BIT(hwmon_energy_input)
+ #define HWMON_E_LABEL			BIT(hwmon_energy_label)
++#define HWMON_E_MAX                     BIT(hwmon_energy_max)
+ 
+ enum hwmon_humidity_attributes {
+ 	hwmon_humidity_enable,
+-- 
+2.34.1
+
