@@ -11,6 +11,8 @@ SRC_URI += "file://0005-Add-Bootstrap-credential-support.patch \
             file://0013-Add-CertificateExists-Cert-Errors.patch \
             file://0015-USB-Add-USB-DBus-Interface.patch \
             file://0016-Add-PrivateKeyNotFound-error.patch \
+	    file://0017-new-property-for-CertificateType-ChainCertificate.patch \
+	    file://0018-Update-enhancement-for-certificate-errors.patch \
            "
 
 include ${@bb.utils.contains('BBFILE_COLLECTIONS', 'nvidia-layer', 'phosphor-dbus-interfaces_nv.inc', '', d)}

@@ -10,4 +10,6 @@ SRC_URI += " \
 	    file://0002-asd-certificate.patch \
             file://0003-throw-CertificateExists-error.patch \
             file://0004-Throws-an-error-if-the-private-key-file-is-not-found.patch \
+	    file://0005-certificate-Chain-support.patch \
+	    file://0006-Add-enhancement-for-certificate-errors.patch \
            "

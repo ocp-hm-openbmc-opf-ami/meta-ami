@@ -1,0 +1,213 @@
+From 2d4428717e51da090970cb00eee32a0b82618b71 Mon Sep 17 00:00:00 2001
+From: Shamim Ali <ashamim@ami.com>
+Date: Thu, 3 Oct 2024 19:30:32 +0530
+Subject: [PATCH] Add enhancement for certificate errors
+
+Test Cases:
+
+root@intel-obmc:~# busctl call   xyz.openbmc_project.Certs.Manager.Server.Https /xyz/openbmc_project/certs/server/https/1 xyz.openbmc_project.Certs.Replace Replace s "/home/root/key.p
+em"
+Call failed: Private key is encrypted/failed to read the private key.
+root@intel-obmc:~#
+
+root@intel-obmc:~# busctl call   xyz.openbmc_project.Certs.Manager.Server.Https /xyz/openbmc_project/certs/server/https/1 xyz.openbmc_project.Certs.Replace Replace s "/home/root/key.p
+em"
+Call failed: certificate file is less than minimum allowable size (2048) for https.
+
+root@intel-obmc:~# busctl call   xyz.openbmc_project.Certs.Manager.Server.Https /xyz/openbmc_project/certs/server/https/1 xyz.openbmc_project.Certs.Replace Replace s "/home/root/key.p
+em"
+Call failed: Certificate file is expired.
+
+root@intel-obmc:~# busctl call   xyz.openbmc_project.Certs.Manager.Server.Https /xyz/openbmc_project/certs/server/https/1 xyz.openbmc_project.Certs.Replace Replace s "/home/root/key1.
+pem"
+Call failed: Publickey/PrivateKey Certificate File Not Match.
+
+root@intel-obmc:~# busctl call xyz.openbmc_project.Certs.Manager.Server.Https /xyz/openbmc_project/certs/server/https/1 xyz.openbmc_project.Certs.Replace Replace s "/home/root/key.pem
+"
+Call failed: private key file size (should be < 4096 bytes).
+
+root@intel-obmc:~#
+root@intel-obmc:~# busctl call xyz.openbmc_project.Certs.Manager.Server.Https /xyz/openbmc_project/certs/server/https/1 xyz.openbmc_project.Certs.Replace Replace s "/home/root/key.pem
+"
+Call failed: private/public key file size (should be < 4096 bytes).
+root@intel-obmc:~#
+
+Signed-off-by: Shamim Ali <ashamim@ami.com>
+---
+ certificate.cpp | 14 +++++++++-
+ x509_utils.cpp  | 70 +++++++++++++++++++++++++++++++++++++++++++++----
+ x509_utils.hpp  |  7 +++++
+ 3 files changed, 85 insertions(+), 6 deletions(-)
+
+diff --git a/certificate.cpp b/certificate.cpp
+index eae18df..9069f2c 100644
+--- a/certificate.cpp
++++ b/certificate.cpp
+@@ -45,7 +45,11 @@ using InvalidCertificateError =
+ using ::phosphor::logging::xyz::openbmc_project::Certs::InvalidCertificate;
+ using ::sdbusplus::xyz::openbmc_project::Common::Error::InternalFailure;
+ using ::sdbusplus::xyz::openbmc_project::Certs::Error::PrivateKeyNotFound;
++using ::sdbusplus::xyz::openbmc_project::Certs::Error::PrivateKeyCertificateFileNotMatch;
+ using PrivateKeyNotFoundReason = ::phosphor::logging::xyz::openbmc_project::Certs::PrivateKeyNotFound::REASON;
++using PrivateKeyCertificateFileNotMatchReason = ::phosphor::logging::xyz::openbmc_project::Certs::
++      PrivateKeyCertificateFileNotMatch::REASON;
++
+ 
+ // RAII support for openSSL functions.
+ using BIOMemPtr = std::unique_ptr<BIO, decltype(&::BIO_free)>;
+@@ -239,7 +243,7 @@ Certificate::Certificate(sdbusplus::bus_t& bus, const std::string& objPath,
+     auto installHelper = [this](const auto& filePath) {
+         if (!compareKeys(filePath))
+         {
+-            elog<InvalidCertificateError>(InvalidCertificate::REASON(
++            elog<PrivateKeyCertificateFileNotMatch>(PrivateKeyCertificateFileNotMatchReason(
+                 "Private key does not match the Certificate"));
+         };
+     };
+@@ -343,6 +347,14 @@ void Certificate::install(const std::string& certSrcFilePath, bool restore)
+         elog<InternalFailure>();
+     }
+ 
++    validatePrivateKeyEncryption(certSrcFilePath);
++
++    if (!compareKeys(certSrcFilePath))
++    {
++            elog<PrivateKeyCertificateFileNotMatch>(PrivateKeyCertificateFileNotMatchReason(
++                "Private key does not match the Certificate"));
++    }
++
+     X509StorePtr x509Store = getX509Store(certSrcFilePath);
+ 
+     // Load Certificate file into the X509 structure.
+diff --git a/x509_utils.cpp b/x509_utils.cpp
+index 74fa52c..6f06dff 100644
+--- a/x509_utils.cpp
++++ b/x509_utils.cpp
+@@ -30,8 +30,32 @@ namespace
+ using ::phosphor::logging::elog;
+ using ::sdbusplus::xyz::openbmc_project::Certs::Error::InvalidCertificate;
+ using ::sdbusplus::xyz::openbmc_project::Common::Error::InternalFailure;
++using ::sdbusplus::xyz::openbmc_project::Certs::Error::CertificateKeyLengthTooSmall;
++using ::sdbusplus::xyz::openbmc_project::Certs::Error::CertificateFileSizeExceeded;
++using ::sdbusplus::xyz::openbmc_project::Certs::Error::PrivateFileSizeExceeded;
++using ::sdbusplus::xyz::openbmc_project::Certs::Error::CertificateFileUntrusted;
++using ::sdbusplus::xyz::openbmc_project::Certs::Error::VerifyCertificateFileFailed;
++using ::sdbusplus::xyz::openbmc_project::Certs::Error::PrivateKeyCertificateFileNotMatch;
++using ::sdbusplus::xyz::openbmc_project::Certs::Error::CertificateFileExpired;
++using ::sdbusplus::xyz::openbmc_project::Certs::Error::PrivateKeyFileEncrypted;
+ using Reason = ::phosphor::logging::xyz::openbmc_project::Certs::
+     InvalidCertificate::REASON;
++using CertificateKeyLengthTooSmallReason = ::phosphor::logging::xyz::openbmc_project::Certs::
++      CertificateKeyLengthTooSmall::REASON;
++using CertificateFileSizeExceededReason = ::phosphor::logging::xyz::openbmc_project::Certs::
++      CertificateFileSizeExceeded::REASON;
++using PrivateFileSizeExceededReason = ::phosphor::logging::xyz::openbmc_project::Certs::
++      PrivateFileSizeExceeded::REASON;
++using CertificateFileUntrustedReason = ::phosphor::logging::xyz::openbmc_project::Certs::
++      CertificateFileUntrusted::REASON;
++using VerifyCertificateFileFailedReason = ::phosphor::logging::xyz::openbmc_project::Certs::
++      VerifyCertificateFileFailed::REASON;
++using PrivateKeyCertificateFileNotMatchReason = ::phosphor::logging::xyz::openbmc_project::Certs::
++      PrivateKeyCertificateFileNotMatch::REASON;
++using CertificateFileExpiredReason = ::phosphor::logging::xyz::openbmc_project::Certs::
++      CertificateFileExpired::REASON;
++using PrivateKeyFileEncryptedReason = ::phosphor::logging::xyz::openbmc_project::Certs::
++      PrivateKeyFileEncrypted::REASON;
+ 
+ // RAII support for openSSL functions.
+ using X509StorePtr = std::unique_ptr<X509_STORE, decltype(&::X509_STORE_free)>;
+@@ -137,8 +161,8 @@ void validateCertificateStartDate(X509& cert)
+     if (days < 0 || secs < 0)
+     {
+         lg2::error("Certificate valid date starts before the Unix Epoch");
+-        elog<InvalidCertificate>(
+-            Reason("NotBefore should after 19700101000000Z"));
++        elog<VerifyCertificateFileFailed>(
++            VerifyCertificateFileFailedReason("NotBefore should after 19700101000000Z"));
+     }
+ }
+ 
+@@ -183,10 +207,16 @@ void validateCertificateKeyLength(X509& cert)
+         elog<InvalidCertificate>(Reason("Invalid key type certificate"));
+     }
+     lg2::info("Certificate cryptographic length, KEYLENGTH:{KEYLENGTH}", "KEYLENGTH",  keyLen);
+-    if (keyLen < minKeyBitLength || keyLen > maxKeyBitLength )
++
++    if (keyLen < minKeyBitLength)
+     {
+         lg2::error("Invalid cryptographic length certificate uploaded, KEYLENGTH:{KEYLENGTH}", "KEYLENGTH",  keyLen);
+-        elog<InvalidCertificate>(Reason("Invalid key length certificate"));
++        elog<CertificateKeyLengthTooSmall>(CertificateKeyLengthTooSmallReason("Invalid key length certificate"));
++    }
++    else if(keyLen > maxKeyBitLength)
++    {
++        lg2::error("Invalid cryptographic length certificate uploaded, KEYLENGTH:{KEYLENGTH}", "KEYLENGTH",  keyLen);
++        elog<CertificateFileSizeExceeded>(CertificateFileSizeExceededReason("Invalid key length certificate"));
+     }
+ }
+ 
+@@ -247,7 +277,7 @@ void validateCertificateAgainstStore(X509_STORE& x509Store, X509& cert)
+         if (errCode == X509_V_ERR_CERT_HAS_EXPIRED)
+         {
+             lg2::error("Expired certificate ");
+-            elog<InvalidCertificate>(Reason("Expired Certificate"));
++            elog<CertificateFileExpired>(CertificateFileExpiredReason("Expired Certificate"));
+         }
+         // Loging general error here.
+         lg2::error(
+@@ -309,4 +339,34 @@ std::unique_ptr<X509, decltype(&::X509_free)> parseCert(const std::string& pem)
+     }
+     return cert;
+ }
++
++void validatePrivateKeyEncryption(const std::string& pemFilePath){
++
++    FILE *pemFilePtr = fopen(pemFilePath.c_str(),"r");
++    if (!pemFilePtr) {
++
++        lg2::error("error reading PEM file.");
++        elog<InvalidCertificate>(Reason("Unable to open Pem file"));
++    }
++
++    EVP_PKEY* pkey = PEM_read_PrivateKey(pemFilePtr, nullptr, nullptr, nullptr);
++
++    if(pkey == nullptr)
++    {
++        lg2::error("Private key is encrypted/Failed to read the private key");
++        elog<PrivateKeyFileEncrypted>(PrivateKeyFileEncryptedReason("PrivateKey is encrypted"));
++    }
++
++   int maxKeyBitLength = 4096;
++   int keyLength = EVP_PKEY_bits(pkey);
++
++   if(keyLength > maxKeyBitLength)
++   {
++        lg2::error("Invalid cryptographic length certificate uploaded, KEYLENGTH:{KEYLENGTH}", "KEYLENGTH",  keyLength);
++        elog<PrivateFileSizeExceeded>(PrivateFileSizeExceededReason("Invalid cryptographic length PrivateKey uploaded, KEYLENGTH:{KEYLENGTH} KEYLENGTH :"));
++   }
++
++    EVP_PKEY_free(pkey);
++}
++
+ } // namespace phosphor::certs
+diff --git a/x509_utils.hpp b/x509_utils.hpp
+index 4947b45..b3bd9d0 100644
+--- a/x509_utils.hpp
++++ b/x509_utils.hpp
+@@ -32,6 +32,13 @@ std::unique_ptr<X509, decltype(&::X509_free)>
+  */
+ void validateCertificateStartDate(X509& cert);
+ 
++/**
++ * @brief verify the encryption of the private key
++ * @param[in] certFilePath refrence to the certificate object with private key.
++ * @return  void
++ */
++void validatePrivateKeyEncryption(const std::string& certFilePath);
++
+ /**
+  * @brief Parses the certificate and throws error if certificate key length
+  * is in not supported range
+-- 
+2.34.1
+
