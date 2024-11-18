@@ -1,26 +1,101 @@
-From 91f35fe8a97ed831dc89e94bca8acf9d3ce281f9 Mon Sep 17 00:00:00 2001
+From 07f6e177824d930cdc9a84840666dfa44f74c142 Mon Sep 17 00:00:00 2001
 From: kirubagharanas <kirubagharanas@ami.com>
-Date: Tue, 15 Oct 2024 16:08:43 +0530
+Date: Tue, 12 Nov 2024 01:00:42 +0530
 Subject: [PATCH] fixed Firmware update security issue - Unsafe Unpacking of
  Firmware Files
 
 ---
- xyz.openbmc_project.Software.Version.service.in | 2 +-
- 1 file changed, 1 insertion(+), 1 deletion(-)
+ image_manager.cpp                             | 42 ++++++++++++++++++-
+ images.hpp                                    |  4 ++
+ ...penbmc_project.Software.Version.service.in |  2 +-
+ 3 files changed, 46 insertions(+), 2 deletions(-)
 
-diff --git a/xyz.openbmc_project.Software.Version.service.in b/xyz.openbmc_project.Software.Version.service.in
+diff --git a/image_manager.cpp b/image_manager.cpp
+index e8172c2..c8a2aee 100644
+--- a/image_manager.cpp
++++ b/image_manager.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include "image_manager.hpp"
+ 
++#include "images.cpp"
+ #include "version.hpp"
+ #include "watch.hpp"
+ 
+@@ -111,6 +112,45 @@ int Manager::processImage(const std::string& tarFilePath)
+         return -1;
+     }
+ 
++    std::vector<std::string> FWImageUpdateList = phosphor::software::image::FWImages;
++    auto optionalImages = phosphor::software::image::getOptionalImages();
++    for (auto& optionalImage : optionalImages)
++    {
++        FWImageUpdateList.push_back(optionalImage);
++        optionalImage += SIGNATURE_FILE_EXT;
++        FWImageUpdateList.push_back(optionalImage);
++    }
++
++    // create FW images list vector with tmp path
++    std::vector<std::string> FWImageUpdatedList;
++    for (auto& optionalImage : FWImageUpdateList)
++    {
++        optionalImage = tmpDirPath.string() + "/" + optionalImage;
++        FWImageUpdatedList.push_back(optionalImage);
++    }
++
++    // check file present in optionalimages
++    for (const auto& fwfiles : fs::directory_iterator(tmpDir))
++    {
++        std::string fwfilesPath = fwfiles.path().string();
++        std::string fwTraversalStr = "./";
++        if (fwfilesPath.find(fwTraversalStr) != std::string::npos) {
++            error("Uploaded file {PATH} contains traversal characters", "PATH", fwfilesPath);
++            return -1;
++        } else if (access(fwfilesPath.c_str(), X_OK) == 0) {
++            error("Uploaded file {NOACC} contains execute permission", "NOACC", fwfilesPath);
++            return -1;
++        }
++
++        auto isValidFile = std::find(FWImageUpdatedList.begin(), FWImageUpdatedList.end(), fwfilesPath.c_str());
++
++        // Check if the string was found
++        if (isValidFile == FWImageUpdatedList.end()) {
++            error("Uploaded file {NOTVALID} is not a valid Firmware file", "NOTVALID", fwfilesPath);
++            return -1;
++        }
++    }
++
+     // Verify the manifest file
+     if (!fs::is_regular_file(manifestPath, ec))
+     {
+diff --git a/images.hpp b/images.hpp
+index 8e31e39..cc94e66 100644
+--- a/images.hpp
++++ b/images.hpp
+@@ -16,6 +16,10 @@ const std::vector<std::string> bmcImages = {"image-kernel", "image-rofs",
+ // BMC flash image file name list for full flash image (image-bmc)
+ const std::string bmcFullImages = {"image-bmc"};
+ const std::string intelBmcFullImages = {"image-mtd"};
++const std::vector<std::string> FWImages = {"image-kernel", "image-rofs", "image-full", "image-rwfs",
++                                            "image-u-boot", "image-bmc", "publickey", "MANIFEST",
++                                            "image-kernel.sig", "image-rofs.sig","image-rwfs.sig", "image-u-boot.sig",
++                                            "image-bmc.sig", "publickey.sig", "MANIFEST.sig", "image-full.sig"};
+ 
+ std::vector<std::string> getOptionalImages();
+ 
+ diff --git a/xyz.openbmc_project.Software.Version.service.in b/xyz.openbmc_project.Software.Version.service.in
 index 9651ee2..734f8b6 100644
 --- a/xyz.openbmc_project.Software.Version.service.in
 +++ b/xyz.openbmc_project.Software.Version.service.in
 @@ -2,7 +2,7 @@
  Description=Phosphor Version Software Manager
- 
+
  [Service]
 -ExecStartPre=/bin/sh -c 'mkdir -p /tmp/images'
-+ExecStartPre=/bin/sh -c 'mkdir -p /tmp/images; mount -t tmpfs -o nosuid,noexec tmpfs /tmp/images'
++ExecStartPre=/bin/sh -c 'mkdir -p /tmp/images; if [  ! -f "/usr/bin/enable-emmc.sh" ]; then mount -t tmpfs -o nosuid,noexec tmpfs /tmp/images; fi'
  ExecStart=/usr/bin/phosphor-version-software-manager
  Restart=always
  Type=dbus
--- 
+--
 2.34.1
 

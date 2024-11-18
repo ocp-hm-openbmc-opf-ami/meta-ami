@@ -75,7 +75,11 @@ mountPartition () {
                 mkdir -p $mountPath
         fi
 
-      mount /dev/$devicemmc"p"$partIdx $mountPath > /dev/null
+        if [ "$mountPath" == "/tmp/images/" ]; then
+                mount -o nosuid,noexec /dev/$devicemmc"p"$partIdx $mountPath > /dev/null
+        else
+                mount /dev/$devicemmc"p"$partIdx $mountPath > /dev/null
+        fi
 }
 
 get_validation_hook_jumper() {
@@ -137,6 +141,11 @@ main () {
      else
 
         echo "No such device $mountdevicemmc present"
+        # create directory if not exist
+        if [ ! -d "/tmp/images" ]; then
+                mkdir -p "/tmp/images"
+        fi
+        mount -t tmpfs -o nosuid,noexec tmpfs /tmp/images/
 
      fi
 
