@@ -8,6 +8,7 @@ SRC_URI += " \
            file://0017-EIP-761466-Return-If-ReservedBit-used.patch \
            file://0001-Fixed-the-coredump-issue-in-rmcpping.patch \
            file://0018-Support-IPv4-and-IPv6-Header-Parameters.patch \
+           file://0308-Allow-Default-User-To-Change-Password-Even-Expired-A.patch \
            file://0308-CheckLockStatus-For-IpmiUsers.patch \
            "
 ALT_RMCPP_IFACE = "usb0"
