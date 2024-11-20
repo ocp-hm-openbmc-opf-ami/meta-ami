@@ -35,6 +35,7 @@ inline void handleSystemsStorageCollectionGet(
     asyncResp->res.jsonValue["@odata.id"] = std::format(
         "/redfish/v1/Systems/{}/Storage", BMCWEB_REDFISH_SYSTEM_URI_NAME);
     asyncResp->res.jsonValue["Name"] = "Storage Collection";
+    asyncResp->res.jsonValue["Description"] = "Collection of storage for this system";
 
     constexpr std::array<std::string_view, 1> interface{
         "xyz.openbmc_project.Inventory.Item.Storage"};
