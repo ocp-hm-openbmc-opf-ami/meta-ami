@@ -1,0 +1,248 @@
+From 0de235a16564df02074b9dca84dc29e1767474c7 Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Mon, 18 Nov 2024 18:52:10 +0800
+Subject: [PATCH] Implement DHCP Vendor Option
+
+---
+ src/dhcp_configuration.cpp | 62 ++++++++++++++++++++++++++++++++++++++
+ src/dhcp_configuration.hpp | 35 +++++++++++++++++++++
+ src/ethernet_interface.cpp |  7 +++++
+ src/util.cpp               | 28 +++++++++++++++++
+ src/util.hpp               |  5 ++-
+ 5 files changed, 136 insertions(+), 1 deletion(-)
+
+diff --git a/src/dhcp_configuration.cpp b/src/dhcp_configuration.cpp
+index e1e4b85..3d5c597 100644
+--- a/src/dhcp_configuration.cpp
++++ b/src/dhcp_configuration.cpp
+@@ -5,17 +5,21 @@
+ 
+ #include <phosphor-logging/elog-errors.hpp>
+ #include <phosphor-logging/lg2.hpp>
++#include <phosphor-logging/log.hpp>
+ #include <xyz/openbmc_project/Common/error.hpp>
+ 
+ namespace phosphor
+ {
+ namespace network
+ {
++using namespace phosphor::logging;
+ namespace dhcp
+ {
+ 
+ using namespace phosphor::network;
+ using namespace sdbusplus::xyz::openbmc_project::Common::Error;
++using NotAllowed = sdbusplus::xyz::openbmc_project::Common::Error::NotAllowed;
++using NotAllowedArgument = xyz::openbmc_project::Common::NotAllowed;
+ 
+ constexpr auto NETWORK_Service = "xyz.openbmc_project.Network";
+ constexpr auto DNS_OBJ_PATH = "/xyz/openbmc_project/network/dns";
+@@ -37,6 +41,9 @@ Configuration::Configuration(sdbusplus::bus_t& bus,
+     ConfigIntf::hostNameEnabled(getDHCPProp(conf, type, "UseHostname"), true);
+     ConfigIntf::sendHostNameEnabled(getDHCPProp(conf, type, "SendHostname"),
+                                     true);
++    ConfigIntf::vendorClassIdentifier(getDHCPVendorClassIdentifier(conf));
++    vendorOptionList = getDHCPVendorOption(conf, type);
++    this->type = type;
+     signals = initSignals();
+     registerSignal(bus);
+     emit_object_added();
+@@ -163,6 +170,61 @@ bool Configuration::domainEnabled(bool value)
+     return domain;
+ }
+ 
++std::string Configuration::vendorClassIdentifier(std::string value)
++{
++    if (this->type != DHCPType::v4)
++    {
++        log<level::ERR>("Vendor Class Identifier only supports in DHCPv4.\n");
++        elog<NotAllowed>(NotAllowedArgument::REASON("Vendor Class Identifier only supports in DHCPv4.\n"));
++    }
++    if (value == Configuration::vendorClassIdentifier())
++    {
++        return value;
++    }
++
++    ConfigIntf::vendorClassIdentifier(value);
++    parent.get().writeConfigurationFile();
++    parent.get().reloadConfigs();
++    return value;
++}
++
++int16_t Configuration::setVendorOption(uint32_t option, std::string value)
++{
++    if (auto it = vendorOptionList.find(option); it != vendorOptionList.end() && it->second == value)
++    {
++        return 0;
++    }
++
++    vendorOptionList[option] = value;
++    parent.get().writeConfigurationFile();
++    parent.get().reloadConfigs();
++    return 0;
++}
++
++
++std::string Configuration::getVendorOption(uint32_t option)
++{
++    if (vendorOptionList.find(option) == vendorOptionList.end())
++    {
++        return "";
++    }
++
++    return vendorOptionList[option];
++}
++
++int16_t Configuration::delVendorOption(uint32_t option)
++{
++    if (vendorOptionList.find(option) == vendorOptionList.end())
++    {
++        return -1;
++    }
++
++    vendorOptionList.erase(option);
++    parent.get().writeConfigurationFile();
++    parent.get().reloadConfigs();
++    return 0;
++}
++
+ } // namespace dhcp
+ } // namespace network
+ } // namespace phosphor
+diff --git a/src/dhcp_configuration.hpp b/src/dhcp_configuration.hpp
+index 8b41fbf..a2a23ac 100644
+--- a/src/dhcp_configuration.hpp
++++ b/src/dhcp_configuration.hpp
+@@ -75,6 +75,40 @@ class Configuration : public Iface
+      */
+     bool sendHostNameEnabled(bool value) override;
+ 
++    /** Set value of VendorClassIdentifier */
++    std::string vendorClassIdentifier(std::string value) override;
++
++    /** @brief Implementation for SetVendorOption
++     *  Set vendor DHCP vendor option and value
++     *
++     *  @param[in] option - 
++     *  @param[in] value - 
++     *
++     *  @return result[int16_t] - 
++     */
++    int16_t setVendorOption(uint32_t option, std::string value) override;
++
++    /** @brief Implementation for GetVendorOption
++     *  Get vendor DHCP vendor value by option
++     *
++     *  @param[in] option - 
++     *
++     *  @return result[std::string] - 
++     */
++    std::string getVendorOption(uint32_t option) override;
++
++    /** @brief Implementation for DelVendorOption
++     *  Delete vendor DHCP vendor value by option
++     *
++     *  @param[in] option - 
++     *
++     *  @return result[int16_t] - 
++     */
++    int16_t delVendorOption(uint32_t option) override;
++
++    std::unordered_map<uint32_t, std::string> vendorOptionList;
++
++    DHCPType type;
+     // Add new signal here
+     void registerSignal(sdbusplus::bus::bus& bus);
+     std::map<std::string, std::unique_ptr<sdbusplus::bus::match_t>>
+@@ -90,6 +124,7 @@ class Configuration : public Iface
+     using ConfigIntf::hostNameEnabled;
+     using ConfigIntf::ntpEnabled;
+     using ConfigIntf::sendHostNameEnabled;
++    using ConfigIntf::vendorClassIdentifier;
+ 
+   protected:
+     /** Signals to notify other service via dbus*/
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index f44371f..70a6a58 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -2135,6 +2135,13 @@ void EthernetInterface::writeConfigurationFile()
+             tfStr(dhcp4Conf->sendHostNameEnabled()));
+         dhcp4["SendNsupdate"].emplace_back(
+             tfStr(dhcp4Conf->sendHostNameEnabled()));
++        if (!dhcp4Conf->vendorClassIdentifier().empty())
++            dhcp4["VendorClassIdentifier"].emplace_back(dhcp4Conf->vendorClassIdentifier());
++
++        for (auto it = dhcp4Conf->vendorOptionList.begin(); it != dhcp4Conf->vendorOptionList.end(); it++)
++        {
++            dhcp4["SendVendorOption"].emplace_back(fmt::format("{}:string:{}", it->first, it->second).c_str());
++        }
+     }
+     {
+         auto& dhcp6 = config.map["DHCPv6"].emplace_back();
+diff --git a/src/util.cpp b/src/util.cpp
+index 1a34fca..9b9b879 100644
+--- a/src/util.cpp
++++ b/src/util.cpp
+@@ -417,6 +417,34 @@ std::tuple<std::vector<std::optional<std::string>>,
+     return std::make_tuple(ipv4List, ipv6List);
+ }
+ 
++std::unordered_map<uint32_t, std::string> getDHCPVendorOption(const config::Parser& config, DHCPType dhcpType)
++{
++    auto list = config.map.getValueStrings(dhcpType == DHCPType::v4 ? "DHCPv4" : "DHCPv6", "SendVendorOption");
++    std::unordered_map<uint32_t, std::string> map;
++    for (const auto& v : list)
++    {
++        auto elements = splitStr(v, ":");
++        map.insert(std::pair<uint32_t, std::string>(std::stol(elements.at(0)), elements.at(2)));
++        // map[e.at(0).c_str()] = e.at(2);
++
++    }
++
++    return std::move(map);
++}
++
++std::string getDHCPVendorClassIdentifier(const config::Parser& config)
++{
++    if (auto str = config.map.getLastValueString("DHCPv4", "VendorClassIdentifier");
++        str == nullptr)
++    {
++        return "";
++    }
++    else
++    {
++        return *str;
++    }
++}
++
+ std::vector<std::string> splitStr(std::string line, std::string delimiter)
+ {
+     std::vector<std::string> vec;
+diff --git a/src/util.hpp b/src/util.hpp
+index 9f4e374..cf38394 100644
+--- a/src/util.hpp
++++ b/src/util.hpp
+@@ -3,7 +3,7 @@
+ 
+ #include <stdplus/raw.hpp>
+ #include <stdplus/zstring_view.hpp>
+-
++#include <unordered_map>
+ #include <optional>
+ #include <string>
+ #include <string_view>
+@@ -171,6 +171,9 @@ std::string getIPv4DefaultGateway(const config::Parser& config);
+ 
+ std::string getMAC(const config::Parser& config);
+ 
++std::unordered_map<uint32_t, std::string> getDHCPVendorOption(const config::Parser& config, DHCPType dhcpType);
++
++std::string getDHCPVendorClassIdentifier(const config::Parser& config);
+ /** @brief Get all the interfaces from the system.
+  *  @returns list of interface names.
+  */
+-- 
+2.34.1
+
+

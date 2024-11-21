@@ -7,6 +7,7 @@ NETWORK_BONDING_SRC_URI += "file://0023-Support-Network-Bonding.patch \
                             file://0034-Implement-PHY-Control-for-Bond.patch \
                             file://0049-Fix-Bond0-Create-Failed.patch \
                             file://0050-Fix-ipmi-and-same-mac-for-two-interfaces-after-delete-bond.patch \
+                            file://0050-Fix-Write-Configuration-if-Bond-Enable.patch \
                            "
 SRC_URI:append = " \
              file://0001-ARP-Control.patch \
@@ -69,6 +70,7 @@ SRC_URI:append = " \
              file://0047-Fix-MAC-Address-Unable-Changed-after-Reboot.patch \
              file://0048-Add-Timeout-for-Retrieving-NCSI-Info.patch \
              file://0048-Reconfigure-Interface-after-LinkUp.patch \
+             file://0050-Implement-DHCP-Vendor-Option.patch \
              "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
