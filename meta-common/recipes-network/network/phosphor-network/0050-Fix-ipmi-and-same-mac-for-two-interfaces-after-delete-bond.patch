@@ -1,0 +1,74 @@
+diff --git a/src/bond.cpp b/src/bond.cpp
+index c419cda..5e11e58 100644
+--- a/src/bond.cpp
++++ b/src/bond.cpp
+@@ -242,8 +242,8 @@ void Bond::restoreConfiguration(
+ void Bond::writeBondConfiguration(bool isActive)
+ {
+     std::ofstream ofs;
+-    std::ifstream ifs;
+-    std::string intfName, line, IfaceConfDir;
++    std::ifstream ifs, tmpIfs;
++    std::string intfName, line, IfaceConfDir, slaveMAC;
+     if (isActive)
+     {
+         ifs.open(config::pathForIntfConf(
+@@ -292,6 +292,34 @@ void Bond::writeBondConfiguration(bool isActive)
+         {
+             ofs << intfName << std::endl;
+         }
++        else if (!isActive && line.starts_with("[Link]"))
++        {
++            ofs << line << std::endl;
++            tmpIfs.open(config::pathForIntfConf(
++                eth.manager.get().getBondingConfBakDir(),
++                BondIntf::activeSlave()));
++            if (!tmpIfs.is_open())
++            {
++                log<level::INFO>(
++                    "writeBondConfiguration slave configuration file not opened.\n");
++            }
++            while (tmpIfs.peek() != EOF)
++            {
++                std::getline(tmpIfs, slaveMAC);
++                if (slaveMAC.starts_with("[Link]"))
++                {
++                    slaveMAC.clear();
++                    std::getline(tmpIfs, slaveMAC);
++                    break;
++                }
++                slaveMAC.clear();
++            }
++
++            if (std::getline(ifs, line) && line.starts_with("MACAddress="))
++            {
++                ofs << slaveMAC << std::endl;
++            }
++        }
+         else
+         {
+             ofs << line << std::endl;
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index 0f4e29e..8bf59f2 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -1539,6 +1539,7 @@ ObjectPath EthernetInterface::createBond(std::string activeSlave,
+             ipv6EnableStaticRtr, true);
+         it->second->EthernetInterfaceIntf::ipv6StaticRtrAddr(ipv6StaticRtrAddr,
+                                                              true);
++        it->second->bonding->writeBondConfiguration(true);
+     }
+ 
+     execute("/bin/systemctl", "systemctl", "restart",
+@@ -1931,9 +1932,8 @@ void EthernetInterface::writeConfigurationFile()
+             auto& link = config.map["Link"].emplace_back();
+ #ifdef PERSIST_MAC
+ 
+-            config::Parser parser(config::pathForIntfConf(
+-                manager.get().getConfDir(), interfaceName()));
+-            auto str1 = parser.map.getLastValueString("Link", "MACAddress");
++            config::Parser parser(config::pathForIntfDev(manager.get().getConfDir(), bondIfcName));
++            auto str1 = parser.map.getLastValueString("NetDev", "MACAddress");
+ 
+             if (!str1->empty())
+             {

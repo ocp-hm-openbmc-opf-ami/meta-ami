@@ -6,6 +6,7 @@ NETWORK_BONDING_SRC_URI += "file://0023-Support-Network-Bonding.patch \
                             file://0033-Fix-IPMI-not-works-when-Bond-Enabled.patch \
                             file://0034-Implement-PHY-Control-for-Bond.patch \
                             file://0049-Fix-Bond0-Create-Failed.patch \
+                            file://0050-Fix-ipmi-and-same-mac-for-two-interfaces-after-delete-bond.patch \
                            "
 SRC_URI:append = " \
              file://0001-ARP-Control.patch \
