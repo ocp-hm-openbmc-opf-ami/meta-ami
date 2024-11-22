@@ -34,7 +34,7 @@ PACKAGECONFIG:append = "${@bb.utils.contains('MULTI_SOL_ENABLED', '1', " concurr
 
 do_install:append() {
 if [ "${MULTI_SOL_ENABLED}" = "1" ]; then
-    #Removing files appended from openbmc-meta-intel recipe.
+    #Removing files appended from meta-core recipe.
     rm -rf ${D}${bindir}/sol-configure.sh
 
     local drop_in=${D}${sysconfdir}/systemd/system/${PN}@${OBMC_CONSOLE_HOST_TTY}

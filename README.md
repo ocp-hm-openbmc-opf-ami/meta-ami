@@ -28,24 +28,24 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 ### 2) Common Repository for all the OneTree Build
 ```
 - git clone https://git.ami.com/core/ami-bmc/base-tech/openbmc onetree; cd onetree
-- git clone https://git.ami.com/core/ami-bmc/one-tree/core/openbmc-meta-intel
+- git clone https://git.ami.com/core/ami-bmc/one-tree/core/meta-core
 - git clone  https://git.ami.com/core/ami-bmc/one-tree/core/meta-ami
 ```
 
 ### 3) OneTree Core EGS Build Instruction
 ```
-- git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/egs openbmc-meta-intel/meta-egs
-- git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-intel openbmc-meta-intel/meta-intel
+- git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/egs meta-core/meta-egs
+- git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-intel meta-core/meta-intel
 - meta-ami/github-gitlab-url.sh
-- TEMPLATECONF=openbmc-meta-intel/meta-egs/conf/templates/default . openbmc-env
+- TEMPLATECONF=meta-core/meta-egs/conf/templates/default . openbmc-env
 - bitbake intel-platforms
 ```
 ### 4) OneTree Core BHS Build Instruction
  ```
-- git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/bhs openbmc-meta-intel/meta-bhs
-- git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-intel openbmc-meta-intel/meta-intel
+- git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/bhs meta-core/meta-bhs
+- git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-intel meta-core/meta-intel
 - meta-ami/github-gitlab-url.sh
-- TEMPLATECONF=openbmc-meta-intel/meta-bhs/conf/templates/default . openbmc-env
+- TEMPLATECONF=meta-core/meta-bhs/conf/templates/default . openbmc-env
 - bitbake intel-platforms
 ```
 ### 5) OneTree Core AST2600EVB Build Instruction
@@ -58,31 +58,31 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 
 ### 6) OneTree Intel Silicon and Expansion Pack (EGS)
 ```
-- git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/egs openbmc-meta-intel/meta-egs
-- git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-restricted openbmc-meta-intel/meta-restricted
-- git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-intel openbmc-meta-intel/meta-intel 
+- git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/egs meta-core/meta-egs
+- git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-restricted meta-core/meta-restricted
+- git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-intel meta-core/meta-intel 
 - meta-ami/github-gitlab-url.sh
-- Add meta-resticted layer into openbmc-meta-intel/meta-egs/conf/templates/default/bblayers.conf.sample
-- Enable the needed Si and EP features in openbmc-meta-intel/meta-restricted/conf/layer.conf (Uncomment IMAGE_INSTALL and/or EXTRA_IMAGE_FEATURES)
-- TEMPLATECONF=openbmc-meta-intel/meta-egs/conf/templates/default . openbmc-env
+- Add meta-resticted layer into meta-core/meta-egs/conf/templates/default/bblayers.conf.sample
+- Enable the needed Si and EP features in meta-core/meta-restricted/conf/layer.conf (Uncomment IMAGE_INSTALL and/or EXTRA_IMAGE_FEATURES)
+- TEMPLATECONF=meta-core/meta-egs/conf/templates/default . openbmc-env
 - bitbake intel-platforms
 ```
 ### 7) OneTree Intel Silicon and Expansion Pack (BHS)
 ```
-- git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/bhs openbmc-meta-intel/meta-bhs
-- git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-restricted openbmc-meta-intel/meta-restricted
-- git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-intel openbmc-meta-intel/meta-intel 
+- git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/bhs meta-core/meta-bhs
+- git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-restricted meta-core/meta-restricted
+- git clone https://git.ami.com/core/ami-bmc/one-tree/intel/meta-intel meta-core/meta-intel 
 - meta-ami/github-gitlab-url.sh
-- Add meta-resticted layer into openbmc-meta-intel/meta-bhs/conf/templates/default/bblayers.conf.sample
-- Enable the needed Si and EP features in openbmc-meta-intel/meta-restricted/conf/layer.conf (Uncomment IMAGE_INSTALL and/or EXTRA_IMAGE_FEATURES)
-- TEMPLATECONF=openbmc-meta-intel/meta-bhs/conf/templates/default . openbmc-env
+- Add meta-resticted layer into meta-core/meta-bhs/conf/templates/default/bblayers.conf.sample
+- Enable the needed Si and EP features in meta-core/meta-restricted/conf/layer.conf (Uncomment IMAGE_INSTALL and/or EXTRA_IMAGE_FEATURES)
+- TEMPLATECONF=meta-core/meta-bhs/conf/templates/default . openbmc-env
 - bitbake intel-platforms
 ```
 
 ### 8) OneTree AMI Exapnsion Pack
 ```
-- git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/egs openbmc-meta-intel/meta-egs (For EGS)
-- git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/bhs openbmc-meta-intel/meta-bhs (For BHS)
+- git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/egs meta-core/meta-egs (For EGS)
+- git clone  https://git.ami.com/core/ami-bmc/one-tree/intel/bhs meta-core/meta-bhs (For BHS)
 - git clone https://git.ami.com/core/ami-bmc/one-tree/ami/amipacks/nic meta-ami/recipes-ami/nic (For NIC EP)
 - git clone https://git.ami.com/core/ami-bmc/one-tree/ami/amipacks/nvme meta-ami/recipes-ami/nvme (For NVMe EP)
 - git clone https://git.ami.com/core/ami-bmc/one-tree/ami/amipacks/raid/raid-brcm meta-ami/recipes-ami/raid-brcm (For BRCM Raid EP)
@@ -90,8 +90,8 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 - git clone https://git.ami.com/core/ami-bmc/one-tree/ami/amipacks/firmware-update meta-ami/recipes-ami/fwupdate (For FirmwareUpdate EP)
 - meta-ami/github-gitlab-url.sh
 - Enable the needed AMI EP features in meta-ami/conf/layer.conf (Uncomment IMAGE_INSTALL)
-- TEMPLATECONF=openbmc-meta-intel/meta-egs/conf/templates/default . openbmc-env (For EGS)
-- TEMPLATECONF=openbmc-meta-intel/meta-bhs/conf/templates/default . openbmc-env (For BHS)
+- TEMPLATECONF=meta-core/meta-egs/conf/templates/default . openbmc-env (For EGS)
+- TEMPLATECONF=meta-core/meta-bhs/conf/templates/default . openbmc-env (For BHS)
 - bitbake intel-platforms
 ```
 
