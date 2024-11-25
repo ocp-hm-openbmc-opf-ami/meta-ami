@@ -7,6 +7,8 @@ SRC_URI = " \
            file://session_management.hpp \ 
            file://meson.build \
            file://xyz.openbmc_project.SessionManager.service \
+           file://dropbear_manager.cpp \
+           file://dropbear-session-manager.service \
           "
 
 S = "${WORKDIR}"
@@ -15,6 +17,7 @@ inherit pkgconfig meson systemd
 inherit obmc-phosphor-systemd
 
 SYSTEMD_SERVICE:${PN} += "xyz.openbmc_project.SessionManager.service"
+SYSTEMD_SERVICE:${PN} += "dropbear-session-manager.service"
 
 DEPENDS += " \
     boost \
@@ -26,3 +29,4 @@ DEPENDS += " \
 
 
 FILES:${PN}  += "${systemd_system_unitdir}/xyz.openbmc_project.SessionManager.service"
+FILES:${PN}  += "${systemd_system_unitdir}/dropbear-session-manager.service"

@@ -20,6 +20,7 @@
 static std::vector<SessionInfo> kvmSessionInfo;
 static std::vector<SessionInfo> webSessionInfo;
 static std::vector<SessionInfo> vmediaSessionInfo;
+static std::vector<SessionInfo> sshSessionInfo;
 static uint16_t Id = 0;
 
 /** @brief Implementation for SessionUnregister
@@ -83,6 +84,22 @@ bool sessionUnregister(uint8_t sessionId, uint8_t sessionType, int reason)
         {
             if (vmediaIface && !(vmediaIface->set_property(
                                    "VmediaSessionInfo", vmediaSessionInfo)))
+            {
+                std::cerr << "error setting vmedia State \n";
+                return false;
+            }
+        }
+        else
+        {
+            std::cerr << "Couldn't find specfifed Session Id info \n";
+            return false;
+        }
+        break;
+    case sessionType::SSH:
+        if (findAndRemove(sshSessionInfo, sessionId))
+        {
+            if (sshIface &&
+                !(sshIface->set_property("SshSessionInfo", sshSessionInfo)))
             {
                 std::cerr << "error setting vmedia State \n";
                 return false;
@@ -158,6 +175,16 @@ bool sessionRegister(uint8_t sessionId, std::string ipAdress,
         {
             Id--;
             std::cerr << "error setting VMEDIA State \n";
+            return false;
+        }
+        break;
+    case sessionType::SSH:
+        sshSessionInfo.push_back(temp);
+        if (sshIface &&
+            !(sshIface->set_property("SshSessionInfo", sshSessionInfo)))
+        {
+            Id--;
+            std::cerr << "error setting SSH State \n";
             return false;
         }
         break;

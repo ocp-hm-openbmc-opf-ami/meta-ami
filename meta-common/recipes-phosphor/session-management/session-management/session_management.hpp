@@ -25,6 +25,8 @@ static constexpr const char *interfaceWeb =
     "xyz.openbmc_project.SessionManager.Web";
 static constexpr const char *interfaceVmedia =
     "xyz.openbmc_project.SessionManager.Vmedia";
+static constexpr const char* interfaceSsh =
+    "xyz.openbmc_project.SessionManager.Ssh";
 
 static constexpr const char *kvmService = "start-ipkvm.service";
 static constexpr const char *vmediaService =
@@ -34,6 +36,7 @@ static constexpr const char *webService = "bmcweb.service";
 std::shared_ptr<sdbusplus::asio::dbus_interface> kvmIface;
 std::shared_ptr<sdbusplus::asio::dbus_interface> webIface;
 std::shared_ptr<sdbusplus::asio::dbus_interface> vmediaIface;
+std::shared_ptr<sdbusplus::asio::dbus_interface> sshIface;
 
 // Session Information
 using SessionId = uint8_t;
@@ -50,13 +53,14 @@ using SessionInfo =
 constexpr auto reasonLogout = 0x01;
 constexpr auto reasonExpiry = 0x02;
 constexpr auto reasonUnknown = 0x03;
-constexpr auto maxSessionType = 2;
+constexpr auto maxSessionType = 3;
 
 enum sessionType
 {
     KVM = 0,
     WEB = 1,
-    VMEDIA = 2
+    VMEDIA = 2,
+    SSH = 3
 };
 const std::map<uint8_t, std::string> validPriv = {{0x1, "Callback"},
                                                   {0x2, "User"},
@@ -73,6 +77,7 @@ public:
         addKvmInterface(server);
         addWebInterface(server);
         addVmediaInterface(server);
+        addSshInterface(server);
     }
     void addKvmInterface(sdbusplus::asio::object_server &server)
     {
@@ -91,6 +96,12 @@ public:
         vmediaIface = server.add_interface(sessionMgrObj, interfaceVmedia);
         vmediaIface->register_property("VmediaSessionInfo", data);
         vmediaIface->initialize();
+    }
+    void addSshInterface(sdbusplus::asio::object_server& server)
+    {
+        sshIface = server.add_interface(sessionMgrObj, interfaceSsh);
+        sshIface->register_property("SshSessionInfo", data);
+        sshIface->initialize();
     }
 
 private:
