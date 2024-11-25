@@ -1,7 +1,7 @@
 FILESEXTRAPATHS:append := ":${THISDIR}/${PN}"
 
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/obmc-ikvm;branch=main;protocol=https"
-SRCREV = "8943934431dbd739a584cf53c7b81e62c3a784ba"
+SRCREV = "7cfe2d93ca1baf509391c63866f56221b4997904"
 
 SYSTEMD_SERVICE:${PN} += "start-ipkvm.socket"
 
