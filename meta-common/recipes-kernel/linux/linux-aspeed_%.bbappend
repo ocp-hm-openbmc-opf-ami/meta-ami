@@ -27,6 +27,7 @@ SRC_URI += "file://0003-Ported-ADC-driver-changes-from-INTEL-AMI.patch \
 	file://eth_over_usb.cfg \
 	file://nfs_cifs.cfg \
 	file://bootlogo.cfg \
+        file://0042-Implement-Netlink-for-NCSI-Flow-Control.patch \
         "
 
 SRC_URI_NON_PFR_DUAL ?= ""

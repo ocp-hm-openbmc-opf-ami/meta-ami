@@ -71,6 +71,7 @@ SRC_URI:append = " \
              file://0048-Add-Timeout-for-Retrieving-NCSI-Info.patch \
              file://0048-Reconfigure-Interface-after-LinkUp.patch \
              file://0050-Implement-DHCP-Vendor-Option.patch \
+             file://0050-Implement-Netlink-for-NCSI-Flow-Control.patch \
              "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
@@ -100,5 +101,7 @@ EXTRA_OEMESON:append = " -Denable-system-firewall=true"
 
 # Uncomment to enable NCSI
 # EXTRA_OEMESON:append = " -Denable-ncsi=true -Ddefault-ncsi-interface=eth3"
+
+EXTRA_OEMESON:append = " -Dncsi-flow-control=false"
 
 SYSTEMD_SERVICE:${PN} += "xyz.openbmc_project.GARPControl.service"
