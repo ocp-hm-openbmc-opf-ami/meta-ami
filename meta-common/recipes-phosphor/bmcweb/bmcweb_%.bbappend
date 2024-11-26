@@ -57,6 +57,14 @@ SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI
 #SRC_URI_PFR = " file://0184-PFR-update-task-state-modifications-OT-2950.patch"
 #SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', SRC_URI_PFR, '', d)}"
 #
+# PFR
+# HttpPushUriTargets and ApplyTime support are required for PFR
+SRC_URI_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
+                file://0242-Add-support-to-applytime-property-in-PFR.patch \
+                file://0180-Fixed-500-Internal-server-error-while-update-cpld-fw.patch \
+                file://0259-Fix-for-time-out-issue-in-FW-update.patch \
+"
+SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', SRC_URI_PFR, '', d)}"
 #EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '',' -Dhttp-body-limit=68 ', d)}"
 #EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'nvme-mgmt', ' -Dnvme-enable-path=/xyz/openbmc_project/Nvme','', d)}"
 #EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'nvmebasic-mgmt', ' -Dnvme-enable-path=/xyz/openbmc_project/NvmeBasic','', d)}"
