@@ -12,4 +12,5 @@ SRC_URI += " \
             file://0004-Throws-an-error-if-the-private-key-file-is-not-found.patch \
 	    file://0005-certificate-Chain-support.patch \
 	    file://0006-Add-enhancement-for-certificate-errors.patch \
+	    file://0007-Removed-PrivateKey-Validation.patch \
            "
