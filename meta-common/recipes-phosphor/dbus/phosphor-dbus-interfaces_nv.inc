@@ -13,10 +13,8 @@ SRC_URI:append = " \
 	file://nv/PortState.interface.yaml \
 	file://nv/OT-2.0-PLDM-rebase-PortState_yaml_meson_buld_file.patch \
 	file://nv/OT-2.0-PLDM-rebase-PortInfo_yaml.patch \
-"
-SRC_URI:append:gb200nvl-bmc-nohmc += " \
-	file://nv/0005-Adding_Modifying_xyz_openbmc_files_for_nsmd.patch \
-        file://nv/0006-Adding_Modifying_com_nvidia_files_for_nsmd.patch \
+	file://nv/0005-Modifying_Auto_Gen_D-Bus_Files_for_nsmd.patch \
+	file://nv/0006-Adding_Auto_Gen_D-Bus_Files_for_nsmd.patch \
 "
 
 do_replace_files() {
