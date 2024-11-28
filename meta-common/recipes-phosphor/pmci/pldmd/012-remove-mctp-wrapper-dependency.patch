@@ -1,0 +1,1426 @@
+diff -Naur a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt	2024-09-13 13:38:56.980514941 +0800
++++ b/CMakeLists.txt	2024-09-13 13:56:10.827952999 +0800
+@@ -87,7 +87,7 @@
+ 
+ add_executable(${PROJECT_NAME} ${SRC_FILES} ${HEADER_FILES})
+ 
+-target_link_libraries (${PROJECT_NAME} mctpwplus sdbusplus sdeventplus -lsystemd -lpldm_intel
++target_link_libraries (${PROJECT_NAME} sdbusplus sdeventplus -lsystemd -lpldm_intel
+                         -lpthread -lstdc++fs -lphosphor_dbus -lboost_coroutine -lphosphor_logging)
+ 
+ find_package (PkgConfig REQUIRED)
+diff -Naur a/include/pldm.hpp b/include/pldm.hpp
+--- a/include/pldm.hpp	2024-09-13 13:38:56.980514941 +0800
++++ b/include/pldm.hpp	2024-09-13 13:56:10.827952999 +0800
+@@ -16,7 +16,6 @@
+ #pragma once
+ 
+ #include "base.hpp"
+-#include "mctp_wrapper.hpp"
+ 
+ #include <boost/asio.hpp>
+ #include <boost/asio/error.hpp>
+@@ -31,7 +30,7 @@
+ #include "base.h"
+ #include "pldm.h"
+ 
+-using mctpw_eid_t = mctpw::eid_t;
++typedef uint8_t mctpw_eid_t;
+ 
+ std::shared_ptr<boost::asio::io_context> getIoContext();
+ std::shared_ptr<sdbusplus::asio::connection> getSdBus();
+diff -Naur a/src/base.cpp b/src/base.cpp
+--- a/src/base.cpp	2024-09-13 13:38:56.984514949 +0800
++++ b/src/base.cpp	2024-09-13 13:56:10.831953046 +0800
+@@ -194,7 +194,7 @@
+                            const mctpw_eid_t eid,
+                            SupportedPLDMTypes& supportedTypes)
+ {
+-
++	(void)yield;
+     uint8_t instanceID = createInstanceId(defaultTID);
+     std::vector<uint8_t> getSupportedPLDMTypesRequest(sizeof(PLDMEmptyRequest),
+                                                       0x00);
+@@ -222,18 +222,6 @@
+ 	pldm_msg* response = reinterpret_cast<pldm_msg*>(responseMsg);
+ 
+ 
+-    // TID passed as 0 will be ignored since EID is present.
+-    if (!sendReceivePldmMessage(yield, defaultTID, timeOut, retryCount,
+-                                getSupportedPLDMTypesRequest,
+-                                getSupportedPLDMTypesResponse, eid))
+-    {
+-#if 0
+-  		    phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "Send or receive error while getting supported PLDM Types",
+-            phosphor::logging::entry("EID=%d", eid));
+-	   return false;
+-#endif
+-    }
+     uint8_t completionCode;
+     rc = decode_get_types_resp(
+         response,
+@@ -250,6 +238,7 @@
+ bool getPLDMVersions(boost::asio::yield_context yield, const mctpw_eid_t eid,
+                      const uint8_t pldmType, PLDMVersions& supportedVersions)
+ {
++	(void)yield;
+     int8_t maxTransfers = 16;
+     uint8_t instanceID = createInstanceId(defaultTID);
+     std::vector<uint8_t> getPLDMVersionsRequest(
+@@ -294,22 +283,9 @@
+ 		}
+ 		pldm_msg* response = reinterpret_cast<pldm_msg*>(responseMsg);
+ 
+-        // TID passed as 0 will be ignored since EID is present.
+-        if (!sendReceivePldmMessage(yield, defaultTID, timeOut, retryCount,
+-                                    getPLDMVersionsRequest,
+-                                    getPLDMVersionsResponse, eid))
+-        {
+-#if 0
+-            phosphor::logging::log<phosphor::logging::level::ERR>(
+-                "Send or receive error while getting supported PLDM Versions",
+-                phosphor::logging::entry("EID=0x%X", eid));
+-            return false;
+-#endif
+-        }
+-
+         // For multipart response next transfer handle will be updated in
+         // transferHandle variable and it will be used in subsequent iterations
+-        rc = decode_get_version_resp(
++       	rc = decode_get_version_resp(
+             response,
+             responseMsgSize  - hdrSize, &completionCode,
+             &transferHandle, &transferFlag, &responseVersion);       
+@@ -379,6 +355,7 @@
+     getPLDMCommands(boost::asio::yield_context yield, const mctpw_eid_t eid,
+                     const uint8_t pldmType, const ver32_t& version)
+ {
++	(void)yield;
+     uint8_t instanceID = createInstanceId(defaultTID);
+     std::vector<uint8_t> getCommandsRequest(
+         sizeof(pldm_get_commands_req) + hdrSize, 0x00);
+@@ -405,17 +382,6 @@
+ 	}
+ 	pldm_msg* response = reinterpret_cast<pldm_msg*>(responseMsg);
+ 
+-    if (!sendReceivePldmMessage(yield, defaultTID, timeOut, retryCount,
+-                                getCommandsRequest, getCommandsResponse, eid))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "Send or receive error during GetPLDMCommands request",
+-            phosphor::logging::entry("EID=0x%X", eid));
+-        return std::nullopt;
+-#endif
+-    }
+-
+     uint8_t completionCode;
+     SupportedCommands commands;
+     
+@@ -433,6 +399,7 @@
+ std::optional<pldm_tid_t> getTID(boost::asio::yield_context yield,
+                                  const mctpw_eid_t eid)
+ {
++	(void)yield;
+     uint8_t instanceID = createInstanceId(defaultTID);
+     std::vector<uint8_t> getTIDRequest(hdrSize, 0x00);
+     auto msg = reinterpret_cast<pldm_msg*>(getTIDRequest.data());
+@@ -446,16 +413,6 @@
+         return std::nullopt;
+     }
+ 
+-    if (!sendReceivePldmMessage(yield, defaultTID, timeOut, retryCount,
+-                                getTIDRequest, getTIDResponse, eid))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-			"Send or receive error during GetTID request");
+-	//        return std::nullopt;
+-#endif
+-    }
+-
+ 	// Send PLDM request msg and wait for response
+ 	rc = pldm_send_recv(eid, fd, getTIDRequest.data(), getTIDRequest.size(),
+ 					&responseMsg, &responseMsgSize);
+@@ -505,6 +462,7 @@
+ bool setTID(boost::asio::yield_context yield, const mctpw_eid_t eid,
+             const pldm_tid_t tid)
+ {
++	(void)yield;
+     uint8_t instanceID = createInstanceId(defaultTID);
+     std::vector<uint8_t> setTIDRequest(hdrSize + sizeof(pldm_set_tid_req),
+                                        0x00);
+@@ -519,16 +477,6 @@
+         return false;
+     }
+ 
+-    if (!sendReceivePldmMessage(yield, defaultTID, timeOut, retryCount,
+-                                setTIDRequest, setTIDResponse, eid))
+-    {
+-#if 0        
+-		phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "Send or receive error during SetTID request");
+-//        return false;
+-#endif
+-    }
+-
+ 	// Send PLDM request msg and wait for response
+ 	rc = pldm_send_recv(eid, fd, setTIDRequest.data(), setTIDRequest.size(),
+ 					&responseMsg, &responseMsgSize);
+diff -Naur a/src/firmware_update.cpp b/src/firmware_update.cpp
+--- a/src/firmware_update.cpp	2024-09-13 13:38:56.988514958 +0800
++++ b/src/firmware_update.cpp	2024-09-13 14:12:55.316634336 +0800
+@@ -155,7 +155,7 @@
+ 				}
+ 				else if (peekedLength <= -1)
+ 				{
+-						std::cout << "peekedLength is less than -1" << std::endl;
++					std::cout << "peekedLength is less than -1" << std::endl;
+ 				}
+ 				else
+ 				{
+@@ -204,7 +204,7 @@
+                                        const uint8_t complCode,
+                                        const uint8_t command)
+ {
+-
++	(void)yield;
+     std::vector<uint8_t> pldmResp(PLDMCCOnlyResponse);
+     struct pldm_msg* msgResp = reinterpret_cast<pldm_msg*>(pldmResp.data());
+     int retVal = encode_cc_only_resp(fdInstanceId, PLDM_FWUP, command,
+@@ -217,16 +217,6 @@
+             phosphor::logging::entry("RETVAL=%d", retVal));
+         return false;
+     }
+-    if (!sendPldmMessage(yield, currentTid, retryCount, msgTag, false,
+-                         pldmResp))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "sendError: Failed to send PLDM message",
+-            phosphor::logging::entry("TID=%d", currentTid));
+-        return false;
+-#endif
+-    }
+ 	std::optional<mctpw_eid_t> eid = tidMapper.getMappedEID(currentTid);
+ 
+ 	// Send PLDM request msg and wait for response
+@@ -252,16 +242,6 @@
+         phosphor::logging::log<phosphor::logging::level::ERR>(
+             "unable to send/receive CancelUpdate");
+     }
+-    if (isReserveBandwidthActive)
+-    {
+-        isReserveBandwidthActive = false;
+-        cancelReserveBWTimer();
+-        if (!releaseBandwidth(yield, currentTid, PLDM_FWUP))
+-        {
+-            phosphor::logging::log<phosphor::logging::level::ERR>(
+-                "terminateFwUpdate: releaseBandwidth failed");
+-        }
+-    }
+ 
+     return;
+ }
+@@ -490,16 +470,6 @@
+         {
+             createAsyncDelay(yield, retryRequestForUpdateDelay);
+         }
+-        if (!sendReceivePldmMessage(yield, currentTid, timeout, retryCount,
+-                                    pldmReq, pldmResp))
+-        {
+-#if 0
+-            phosphor::logging::log<phosphor::logging::level::ERR>(
+-                "requestUpdate: Failed to send or receive PLDM message",
+-                phosphor::logging::entry("TID=%d", currentTid));
+-            return PLDM_ERROR;
+-#endif
+-        }
+ 
+ 		// Send PLDM request msg and wait for response
+ 		int rc = pldm_send_recv(eid.value(), fd, pldmReq.data(), pldmReq.size(),
+@@ -511,7 +481,6 @@
+ 				return -1;
+ 		}
+ 		pldm_msg* response = reinterpret_cast<pldm_msg*>(responseMsg);
+-		//auto msgResp = reinterpret_cast<pldm_msg*>(pldmResp.data());
+         retVal = decode_request_update_resp(
+             response, responseMsgSize - hdrSize, &completionCode,
+             &fwDeviceMetaDataLen, &fdWillSendGetPkgDataCmd);
+@@ -601,7 +570,7 @@
+                                 uint32_t& nextDataTransferHandle,
+                                 uint8_t& transferFlag)
+ {
+-
++	(void)yield;
+     uint8_t instanceID = createInstanceId(currentTid);
+     std::vector<uint8_t> pldmReq(sizeof(struct PLDMEmptyRequest) +
+                                  sizeof(struct get_device_meta_data_req));
+@@ -620,16 +589,6 @@
+ 	uint8_t* responseMsg = nullptr;
+ 	size_t responseMsgSize{};
+ 	std::optional<mctpw_eid_t> eid = tidMapper.getMappedEID(currentTid);
+-    if (!sendReceivePldmMessage(yield, currentTid, timeout, retryCount, pldmReq,
+-                                pldmResp))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "GetDeviceMetaData: Failed to send or receive PLDM message",
+-            phosphor::logging::entry("TID=%d", currentTid));
+-        return PLDM_ERROR;
+-#endif
+-    }
+     struct variable_field metaData = {};
+ 
+ 	// Send PLDM request msg and wait for response
+@@ -642,7 +601,6 @@
+ 			return -1;
+ 	}
+ 	pldm_msg* response = reinterpret_cast<pldm_msg*>(responseMsg);
+-    //auto msgResp = reinterpret_cast<pldm_msg*>(pldmResp.data());
+ 
+     // Decode received response
+     retVal = decode_get_device_meta_data_resp(
+@@ -860,15 +818,6 @@
+         return retVal;
+     }
+ 
+-    if (!sendPldmMessage(yield, currentTid, retryCount, msgTag, false,
+-                         pldmResp))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "sendMetaData: Failed to send PLDM message");
+-        return PLDM_ERROR;
+-#endif
+-    }
+ 	std::optional<mctpw_eid_t> eid = tidMapper.getMappedEID(currentTid);
+ 
+ 	// Send PLDM request msg and wait for response
+@@ -951,6 +900,7 @@
+     struct variable_field& compImgSetVerStr, uint8_t& compResp,
+     uint8_t& compRespCode)
+ {
++	(void)yield;
+     uint8_t instanceID = createInstanceId(currentTid);
+     std::vector<uint8_t> pldmReq(sizeof(struct PLDMEmptyRequest) +
+                                  sizeof(struct pass_component_table_req) +
+@@ -971,17 +921,6 @@
+ 	size_t responseMsgSize{};
+ 	std::optional<mctpw_eid_t> eid = tidMapper.getMappedEID(currentTid);
+ 
+-    if (!sendReceivePldmMessage(yield, currentTid, timeout, retryCount, pldmReq,
+-                                pldmResp))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "passComponentTable: Failed to send or receive PLDM message",
+-            phosphor::logging::entry("TID=%d", currentTid));
+-        return PLDM_ERROR;
+-#endif
+-    }
+-
+ 	// Send PLDM request msg and wait for response
+ 	int rc = pldm_send_recv(eid.value(), fd, pldmReq.data(), pldmReq.size(),
+ 					&responseMsg, &responseMsgSize);
+@@ -992,7 +931,6 @@
+ 			return -1;
+ 	}
+ 	pldm_msg* response = reinterpret_cast<pldm_msg*>(responseMsg);
+-//    auto msgResp = reinterpret_cast<pldm_msg*>(pldmResp.data());
+     retVal = decode_pass_component_table_resp(
+         response, responseMsgSize - hdrSize, &completionCode, &compResp,
+         &compRespCode);
+@@ -1046,6 +984,7 @@
+                               bitfield32_t& updateOptFlagsEnabled,
+                               uint16_t& estimatedTimeReqFd)
+ {
++	(void)yield;
+     uint8_t instanceID = createInstanceId(currentTid);
+     std::vector<uint8_t> pldmReq(sizeof(struct PLDMEmptyRequest) +
+                                  sizeof(struct update_component_req) +
+@@ -1064,16 +1003,6 @@
+ 	uint8_t* responseMsg = nullptr;
+ 	size_t responseMsgSize{};
+ 	std::optional<mctpw_eid_t> eid = tidMapper.getMappedEID(currentTid);
+-    if (!sendReceivePldmMessage(yield, currentTid, timeout, retryCount, pldmReq,
+-                                pldmResp))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "updateComponent: Failed to send or receive PLDM message",
+-            phosphor::logging::entry("TID=%d", currentTid));
+-        return PLDM_ERROR;
+-#endif
+-    }
+ 
+ 	// Send PLDM request msg and wait for response
+ 	int rc = pldm_send_recv(eid.value(), fd, pldmReq.data(), pldmReq.size(),
+@@ -1085,7 +1014,6 @@
+ 			return -1;
+ 	}
+ 	pldm_msg* response = reinterpret_cast<pldm_msg*>(responseMsg);
+-    //auto msgResp = reinterpret_cast<pldm_msg*>(pldmResp.data());
+     retVal = decode_update_component_resp(
+         response, responseMsgSize - hdrSize, &completionCode,
+         &compCompatabilityResp, &compCompatabilityRespCode,
+@@ -1182,16 +1110,6 @@
+                 .c_str());
+         return retVal;
+     }
+-    // tag Owner bit cleared to false for respose message
+-    if (!sendPldmMessage(yield, currentTid, retryCount, msgTag, false,
+-                         pldmResp))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::WARNING>(
+-            "TransferComplete: Failed to send PLDM message");
+-        return PLDM_ERROR;
+-#endif
+-    }
+ 	std::optional<mctpw_eid_t> eid = tidMapper.getMappedEID(currentTid);
+ 
+ 	// Send PLDM request msg and wait for response
+@@ -1286,16 +1204,6 @@
+                 .c_str());
+         return retVal;
+     }
+-    // tag Owner bit cleared to false for respose message
+-    if (!sendPldmMessage(yield, currentTid, retryCount, msgTag, false,
+-                         pldmResp))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::WARNING>(
+-            "verifyComplete: sendErrorCompletionCode failed.");
+-        return PLDM_ERROR;
+-#endif
+-    }
+ 	std::optional<mctpw_eid_t> eid = tidMapper.getMappedEID(currentTid);
+ 
+ 	// Send PLDM request msg and wait for response
+@@ -1385,17 +1293,6 @@
+             phosphor::logging::entry("RETVAL=%d", retVal));
+         return retVal;
+     }
+-    // tag Owner bit cleared to false for respose message
+-    if (!sendPldmMessage(yield, currentTid, retryCount, msgTag, false,
+-                         pldmResp))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "ApplyComplete: Failed to send PLDM message",
+-            phosphor::logging::entry("TID=%d", currentTid));
+-        return PLDM_ERROR;
+-#endif
+-    }
+ 	std::optional<mctpw_eid_t> eid = tidMapper.getMappedEID(currentTid);
+ 
+ 	// Send PLDM request msg and wait for response
+@@ -1589,17 +1486,6 @@
+         return retVal;
+     }
+ 
+-    // tag Owner bit cleared to false for respose message
+-    if (!sendPldmMessage(yield, currentTid, retryCount, msgTag, false,
+-                         pldmResp))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "requestFirmwareData: Failed to send PLDM message",
+-            phosphor::logging::entry("TID=%d", currentTid));
+-        return PLDM_ERROR;
+-#endif
+-    }
+ 	std::optional<mctpw_eid_t> eid = tidMapper.getMappedEID(currentTid);
+ 
+ 	// Send PLDM request msg and wait for response
+@@ -1826,16 +1712,6 @@
+         return retVal;
+     }
+ 
+-    // tag Owner bit cleared to false for respose message
+-    if (!sendPldmMessage(yield, currentTid, retryCount, msgTag, false,
+-                         pldmResp))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            ("sendPackageData: Failed to send PLDM message"));
+-        return PLDM_ERROR;
+-#endif
+-    }
+ 	std::optional<mctpw_eid_t> eid = tidMapper.getMappedEID(currentTid);
+ 
+ 	// Send PLDM request msg and wait for response
+@@ -1909,6 +1785,7 @@
+     const boost::asio::yield_context yield, bool8_t selfContainedActivationReq,
+     uint16_t& estimatedTimeForSelfContainedActivation)
+ {
++	(void)yield;
+     uint8_t instanceID = createInstanceId(currentTid);
+     std::vector<uint8_t> pldmReq(sizeof(struct PLDMEmptyRequest) +
+                                  sizeof(struct activate_firmware_req));
+@@ -1925,16 +1802,6 @@
+ 	uint8_t* responseMsg = nullptr;
+ 	size_t responseMsgSize{};
+ 	std::optional<mctpw_eid_t> eid = tidMapper.getMappedEID(currentTid);
+-    if (!sendReceivePldmMessage(yield, currentTid, timeout, retryCount, pldmReq,
+-                                pldmResp))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "ActivateFirmware: Failed to send or receive PLDM message",
+-            phosphor::logging::entry("TID=%d", currentTid));
+-        return PLDM_ERROR;
+-#endif
+-    }
+ 
+ 	// Send PLDM request msg and wait for response
+ 	int rc = pldm_send_recv(eid.value(), fd, pldmReq.data(), pldmReq.size(),
+@@ -1946,7 +1813,6 @@
+ 			return -1;
+ 	}
+ 	pldm_msg* response = reinterpret_cast<pldm_msg*>(responseMsg);
+-    //auto msgResp = reinterpret_cast<pldm_msg*>(pldmResp.data());
+     size_t payloadLen = responseMsgSize - hdrSize;
+     retVal =
+         decode_activate_firmware_resp(response, payloadLen, &completionCode,
+@@ -1962,6 +1828,7 @@
+ 
+ int FWUpdate::getStatus(const boost::asio::yield_context yield)
+ {
++	(void)yield;
+     uint8_t instanceID = createInstanceId(currentTid);
+     std::vector<uint8_t> pldmReq(sizeof(struct PLDMEmptyRequest));
+     struct pldm_msg* msgReq = reinterpret_cast<pldm_msg*>(pldmReq.data());
+@@ -1975,18 +1842,6 @@
+ 	size_t responseMsgSize{};
+ 	std::optional<mctpw_eid_t> eid = tidMapper.getMappedEID(currentTid);
+ 
+-    if (!sendReceivePldmMessage(yield, currentTid, timeout, retryCount, pldmReq,
+-                                pldmResp))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "GetStatus: Failed to send or receive PLDM message",
+-            phosphor::logging::entry("TID=%d", currentTid));
+-        return PLDM_ERROR;
+-#endif
+-    }
+-
+-
+ 	// Send PLDM request msg and wait for response
+ 	int rc = pldm_send_recv(eid.value(), fd, pldmReq.data(), pldmReq.size(),
+ 					&responseMsg, &responseMsgSize);
+@@ -1997,7 +1852,6 @@
+ 			return -1;
+ 	}
+ 	pldm_msg* response = reinterpret_cast<pldm_msg*>(responseMsg);
+-    //auto msgResp = reinterpret_cast<pldm_msg*>(pldmResp.data());
+     size_t payloadLen = responseMsgSize - hdrSize;
+     retVal = decode_get_status_resp(response, payloadLen, &completionCode,
+                                     &currentState, &previousState, &auxState,
+@@ -2037,6 +1891,7 @@
+ 
+ int FWUpdate::cancelUpdateComponent(const boost::asio::yield_context yield)
+ {
++	(void)yield;
+     uint8_t instanceID = createInstanceId(currentTid);
+     std::vector<uint8_t> pldmReq(sizeof(struct PLDMEmptyRequest));
+     struct pldm_msg* msgReq = reinterpret_cast<pldm_msg*>(pldmReq.data());
+@@ -2054,16 +1909,6 @@
+ 	uint8_t* responseMsg = nullptr;
+ 	size_t responseMsgSize{};
+ 	std::optional<mctpw_eid_t> eid = tidMapper.getMappedEID(currentTid);
+-    if (!sendReceivePldmMessage(yield, currentTid, timeout, retryCount, pldmReq,
+-                                pldmResp))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "CancelUpdateComponent: Failed to send or receive PLDM message",
+-            phosphor::logging::entry("TID=%d", currentTid));
+-        return PLDM_ERROR;
+-#endif
+-    }
+ 
+ 	// Send PLDM request msg and wait for response
+ 	int rc = pldm_send_recv(eid.value(), fd, pldmReq.data(), pldmReq.size(),
+@@ -2075,7 +1920,7 @@
+ 			return -1;
+ 	}
+ 	pldm_msg* response = reinterpret_cast<pldm_msg*>(responseMsg);
+-    //auto msgResp = reinterpret_cast<pldm_msg*>(pldmResp.data());
++
+     size_t payloadLen = responseMsgSize - hdrSize;
+     retVal = decode_cancel_update_component_resp(response, payloadLen,
+                                                  &completionCode);
+@@ -2123,6 +1968,7 @@
+                            bitfield64_t& nonFunctioningComponentBitmap)
+ 
+ {
++	(void)yield;
+     uint8_t instanceID = createInstanceId(currentTid);
+     std::vector<uint8_t> pldmReq(sizeof(struct PLDMEmptyRequest));
+     struct pldm_msg* msgReq = reinterpret_cast<pldm_msg*>(pldmReq.data());
+@@ -2135,16 +1981,6 @@
+ 	uint8_t* responseMsg = nullptr;
+ 	size_t responseMsgSize{};
+ 	std::optional<mctpw_eid_t> eid = tidMapper.getMappedEID(currentTid);
+-    if (!sendReceivePldmMessage(yield, currentTid, timeout, retryCount, pldmReq,
+-                                pldmResp))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "CancelUpdate: Failed to send or receive PLDM message",
+-            phosphor::logging::entry("TID=%d", currentTid));
+-        return PLDM_ERROR;
+-#endif
+-    }
+ 
+ 	// Send PLDM request msg and wait for response
+ 	int rc = pldm_send_recv(eid.value(), fd, pldmReq.data(), pldmReq.size(),
+@@ -2156,7 +1992,6 @@
+ 			return -1;
+ 	}
+ 	pldm_msg* response = reinterpret_cast<pldm_msg*>(responseMsg);
+-    //auto msgResp = reinterpret_cast<pldm_msg*>(pldmResp.data());
+     size_t payloadLen = responseMsgSize - hdrSize;
+     retVal = decode_cancel_update_resp(response, payloadLen, &completionCode,
+                                        &nonFunctioningComponentIndication,
+@@ -2226,40 +2061,6 @@
+     reserveBWTimer->cancel();
+ }
+ 
+-void FWUpdate::activateReserveBandwidth()
+-{
+-    boost::asio::spawn([this](boost::asio::yield_context yield) {
+-        uint16_t reserveEidTimeOut = getReserveEidTimeOut();
+-        if (!reserveBandwidth(yield, currentTid, PLDM_FWUP, reserveEidTimeOut))
+-        {
+-            phosphor::logging::log<phosphor::logging::level::WARNING>(
+-                ("reserveBandwidth failed. TID: " + std::to_string(currentTid))
+-                    .c_str());
+-            return;
+-        }
+-        isReserveBandwidthActive = true;
+-        // Subtracting reserveEidTimeOut by 5 seconds to make sure the reserve
+-        // bandwidth is reactivated before reserve bandwidth is released.
+-        reserveBWTimer->expires_after(
+-            std::chrono::milliseconds((reserveEidTimeOut - 5) * 1000));
+-        reserveBWTimer->async_wait([this](const boost::system::error_code& ec) {
+-            if (ec == boost::asio::error::operation_aborted)
+-            {
+-                phosphor::logging::log<phosphor::logging::level::DEBUG>(
+-                    "reserveBWTimer operation_aborted");
+-                return;
+-            }
+-            else if (ec)
+-            {
+-                phosphor::logging::log<phosphor::logging::level::ERR>(
+-                    "reserveBWTimer failed");
+-                return;
+-            }
+-            //activateReserveBandwidth();
+-        });
+-    });
+-}
+-
+ struct SelfContainedActivationCache
+ {
+     void updateTime(pldm_tid_t tid, int status, uint16_t time)
+@@ -2544,17 +2345,6 @@
+         }
+     }
+ 
+-    if (isReserveBandwidthActive)
+-    {
+-        isReserveBandwidthActive = false;
+-        cancelReserveBWTimer();
+-        if (!releaseBandwidth(yield, currentTid, PLDM_FWUP))
+-        {
+-            phosphor::logging::log<phosphor::logging::level::WARNING>(
+-                "runUpdate: releaseBandwidth failed");
+-        }
+-    }
+-
+     if (!isComponentAvailableForUpdate)
+     {
+         phosphor::logging::log<phosphor::logging::level::ERR>(
+@@ -2763,10 +2553,6 @@
+             std::chrono::seconds(selfContainedActivationCache.getMaxTime()));
+         waitTimer->async_wait(yield[ec]);
+ 
+-        for (const auto& [matchedDevIdRecord, matchedTID] : matchedTermini)
+-        {
+-            triggerDeviceDiscovery(matchedTID);
+-        }
+     }
+ 
+     pldm::platform::resumeSensorPolling();
+diff -Naur a/src/fru.cpp b/src/fru.cpp
+--- a/src/fru.cpp	2024-09-13 13:38:56.984514949 +0800
++++ b/src/fru.cpp	2024-09-13 13:56:10.831953046 +0800
+@@ -301,17 +301,6 @@
+ 		}
+ 		pldm_msg* response = reinterpret_cast<pldm_msg*>(responseMsg);
+ 
+-		if (!sendReceivePldmMessage(yield, tid, timeout, retryCount, requestMsg,
+-								res))
+-		{
+-#if 0
+-				phosphor::logging::log<phosphor::logging::level::ERR>(
+-								"GetFruRecordTable: Failed to send or receive PLDM message",
+-								phosphor::logging::entry("TID=%d", tid));
+-				return PLDM_ERROR;
+-#endif
+-		}
+-
+ 		size_t payloadLen = responseMsgSize - pldmHdrSize;
+ 
+ 		if (payloadLen < PLDM_GET_FRU_RECORD_TABLE_MIN_RESP_BYTES)
+@@ -402,17 +391,6 @@
+ 	uint8_t* responseMsg = nullptr;
+ 	size_t responseMsgSize{};
+ 
+-    if (!sendReceivePldmMessage(yield, tid, timeout, retryCount, requestMsg,
+-                                res))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "GetFRURecordTableMetadata: Failed to send or receive PLDM message",
+-            phosphor::logging::entry("TID=%d", tid));
+-        return PLDM_ERROR;
+-#endif
+-    }
+-
+ 	// Send PLDM request msg and wait for response
+ 	rc = pldm_send_recv(eid, fd, requestMsg.data(), requestMsg.size(),
+ 					&responseMsg, &responseMsgSize);
+@@ -539,7 +517,8 @@
+ int SetPLDMFRU::sendFruData(boost::asio::yield_context yield,
+                             const std::vector<uint8_t>& setFruData)
+ {
+-    size_t offset = 0;
++    (void)yield;
++	size_t offset = 0;
+     int retVal = PLDM_SUCCESS;
+     size_t length = pldmFruBaselineTransferSize; // max payload size
+     const size_t dataSize = setFruData.size();
+@@ -594,18 +573,6 @@
+ 		uint8_t* responseMsg = nullptr;
+ 		size_t responseMsgSize{};
+ 
+-        if (!sendReceivePldmMessage(yield, tid, timeout, retryCount, requestMsg,
+-                                    res))
+-        {
+-#if 0
+-            phosphor::logging::log<phosphor::logging::level::ERR>(
+-                "SetFruRecordTable: Failed to send or receive PLDM message",
+-                phosphor::logging::entry("TID=%d", tid));
+-            return PLDM_ERROR;
+-#endif
+-        }
+-
+-
+ 		// Send PLDM request msg and wait for response
+ 		int rc = pldm_send_recv(eid, fd, requestMsg.data(), requestMsg.size(),
+ 						&responseMsg, &responseMsgSize);
+diff -Naur a/src/fwu_inventory.cpp b/src/fwu_inventory.cpp
+--- a/src/fwu_inventory.cpp	2024-09-13 13:38:56.984514949 +0800
++++ b/src/fwu_inventory.cpp	2024-09-13 13:56:10.831953046 +0800
+@@ -36,6 +36,7 @@
+ 
+ int FWInventoryInfo::runQueryDeviceIdentifiers(boost::asio::yield_context yield)
+ {
++	(void)yield;
+     uint8_t instanceID = createInstanceId(tid);
+     std::vector<uint8_t> pldmReq(sizeof(struct PLDMEmptyRequest));
+ 
+@@ -57,19 +58,6 @@
+ 	uint8_t* responseMsg = nullptr;
+ 	size_t responseMsgSize{};
+ 
+-    if (!sendReceivePldmMessage(yield, tid, timeout, retryCount, pldmReq,
+-                                pldmResp))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "QueryDeviceIdentifiers: Failed to send or receive PLDM message",
+-            phosphor::logging::entry("TID=%d", tid));
+-		return PLDM_ERROR;
+-#endif
+-	}
+-
+-	//    auto msgResp = reinterpret_cast<pldm_msg*>(pldmResp.data());
+-
+ 	// Send PLDM request msg and wait for response
+ 	int rc = pldm_send_recv(eid, fd, pldmReq.data(), pldmReq.size(),
+ 					&responseMsg, &responseMsgSize);
+@@ -238,6 +226,7 @@
+ 
+ int FWInventoryInfo::runGetFirmwareParameters(boost::asio::yield_context yield)
+ {
++	(void)yield;
+     uint8_t instanceID = createInstanceId(tid);
+     std::vector<uint8_t> pldmReq(sizeof(struct PLDMEmptyRequest));
+ 
+@@ -259,17 +248,6 @@
+ 	uint8_t* responseMsg = nullptr;
+ 	size_t responseMsgSize{};
+ 
+-    if (!sendReceivePldmMessage(yield, tid, timeout, retryCount, pldmReq,
+-                                pldmResp))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "GetFirmwareParameters: Failed to send or receive PLDM message",
+-            phosphor::logging::entry("TID=%d", tid));
+-        return PLDM_ERROR;
+-#endif
+-    }
+-
+ 	// Send PLDM request msg and wait for response
+ 
+ 	int rc = pldm_send_recv(eid, fd, pldmReq.data(), pldmReq.size(),
+@@ -285,7 +263,6 @@
+ 
+ 	pldm_msg* response = reinterpret_cast<pldm_msg*>(responseMsg);
+ 	pldmResp.assign(responseMsg, responseMsg + responseMsgSize);
+-   // auto respMsg = reinterpret_cast<pldm_msg*>(pldmResp.data());
+     size_t payloadLen = responseMsgSize - hdrSize;
+ 
+     struct get_firmware_parameters_resp resp;
+diff -Naur a/src/numeric_sensor_handler.cpp b/src/numeric_sensor_handler.cpp
+--- a/src/numeric_sensor_handler.cpp	2024-09-13 13:38:56.984514949 +0800
++++ b/src/numeric_sensor_handler.cpp	2024-09-13 13:56:10.831953046 +0800
+@@ -48,6 +48,7 @@
+ bool NumericSensorHandler::setNumericSensorEnable(
+     boost::asio::yield_context yield)
+ {
++	(void)yield;
+     uint8_t sensorOpState;
+     switch (_pdr->sensor_init)
+     {
+@@ -93,18 +94,6 @@
+     std::vector<uint8_t> resp;
+     uint8_t* responseMsg = nullptr;
+     size_t responseMsgSize{};
+-    if (!sendReceivePldmMessage(yield, _tid, commandTimeout, commandRetryCount,
+-                                req, resp))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "Failed to send or receive  SetNumericSensorEnable request",
+-            phosphor::logging::entry("TID=%d", _tid),
+-            phosphor::logging::entry("SENSOR_ID=%d", _sensorID));
+-//        return false;
+-#endif
+-    }
+-
+ 
+ 	// Send PLDM request msg and wait for response
+ 	rc = pldm_send_recv(_eid, fd, req.data(), req.size(),
+@@ -356,6 +345,7 @@
+ 
+ bool NumericSensorHandler::getSensorReading(boost::asio::yield_context yield)
+ {
++	(void)yield;
+     int rc;
+     std::vector<uint8_t> req(pldmMsgHdrSize +
+                              sizeof(pldm_get_sensor_reading_req));
+@@ -373,18 +363,7 @@
+     std::vector<uint8_t> resp;
+ 	uint8_t* responseMsg = nullptr;
+ 	size_t responseMsgSize{};
+-    if (!sendReceivePldmMessage(yield, _tid, commandTimeout, commandRetryCount,
+-                                req, resp))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "Failed to send or receive GetSensorReading request",
+-            phosphor::logging::entry("TID=%d", _tid),
+-            phosphor::logging::entry("SENSOR_ID=0x%0X", _sensorID));
+-    //    return false;
+-#endif
+-    }
+-
++	
+ 	// Send PLDM request msg and wait for response
+ 	rc = pldm_send_recv(_eid, fd, req.data(), req.size(),
+ 					&responseMsg, &responseMsgSize);
+diff -Naur a/src/pdr_manager.cpp b/src/pdr_manager.cpp
+--- a/src/pdr_manager.cpp	2024-09-13 13:38:56.984514949 +0800
++++ b/src/pdr_manager.cpp	2024-09-13 13:56:10.831953046 +0800
+@@ -119,6 +119,7 @@
+ std::optional<pldm_pdr_repository_info>
+     PDRManager::getPDRRepositoryInfo(boost::asio::yield_context yield)
+ {
++	(void)yield;
+     int rc;
+     std::vector<uint8_t> req(sizeof(PLDMEmptyRequest));
+     pldm_msg* reqMsg = reinterpret_cast<pldm_msg*>(req.data());
+@@ -132,17 +133,6 @@
+     std::vector<uint8_t> resp;
+     uint8_t* responseMsg = nullptr;
+     size_t responseMsgSize{};
+-    if (!sendReceivePldmMessage(yield, _tid, commandTimeout, commandRetryCount,
+-                                req, resp))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "Failed to send or receive GetPDRRepositoryInfo request",
+-            phosphor::logging::entry("TID=%d", _tid));
+-    //    return std::nullopt;
+-#endif
+-    }
+-
+ 
+ 	// Send PLDM request msg and wait for response
+ 	rc = pldm_send_recv(_eid, fd, req.data(), req.size(),
+@@ -244,6 +234,7 @@
+                                     RecordHandle& nextRecordHandle,
+                                     std::vector<uint8_t>& pdrRecord)
+ {
++	(void)yield;
+     std::vector<uint8_t> req(pldmMsgHdrSize + PLDM_GET_PDR_REQ_BYTES);
+     auto reqMsgPtr = reinterpret_cast<pldm_msg*>(req.data());
+     constexpr size_t requestCount =
+@@ -271,17 +262,6 @@
+ 		uint8_t* responseMsg = nullptr;
+ 		size_t responseMsgSize{};
+ 
+-        if (!sendReceivePldmMessage(yield, _tid, commandTimeout,
+-                                    commandRetryCount, req, resp))
+-        {
+-#if 0
+-            phosphor::logging::log<phosphor::logging::level::ERR>(
+-                "Failed to send or receive GetPDR request",
+-                phosphor::logging::entry("TID=%d", _tid));
+-        //    break;
+-#endif
+-        }
+-
+ 		// Send PLDM request msg and wait for response
+ 		rc = pldm_send_recv(_eid, fd, req.data(), req.size(),
+ 						&responseMsg, &responseMsgSize);
+diff -Naur a/src/platform.cpp b/src/platform.cpp
+--- a/src/platform.cpp	2024-09-13 13:38:56.984514949 +0800
++++ b/src/platform.cpp	2024-09-13 13:56:10.831953046 +0800
+@@ -201,6 +201,7 @@
+                                    const pldm_tid_t tid,
+                                    const mctpw_eid_t eid)
+ {
++	(void)yield;
+     static constexpr size_t hdrSize = sizeof(PLDMEmptyRequest);
+     uint8_t instanceID = createInstanceId(tid);
+     std::vector<uint8_t> getUIDRequest(hdrSize, 0x00);
+@@ -216,17 +217,6 @@
+ 
+     std::vector<uint8_t> getUIDResponse;
+ 
+-    if (!sendReceivePldmMessage(yield, tid, commandTimeout, commandRetryCount,
+-                                getUIDRequest, getUIDResponse, eid))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "Send or receive error during GetTerminusUUID request");
+-    //    return std::nullopt;
+-#endif
+-    }
+-
+-
+ 	// Send PLDM request msg and wait for response
+ 	rc = pldm_send_recv(eid, fd, getUIDRequest.data(), getUIDRequest.size(),
+ 					&responseMsg, &responseMsgSize);
+diff -Naur a/src/pldmd.cpp b/src/pldmd.cpp
+--- a/src/pldmd.cpp	2024-09-13 13:38:56.988514958 +0800
++++ b/src/pldmd.cpp	2024-09-13 13:56:10.831953046 +0800
+@@ -15,7 +15,6 @@
+ */
+ 
+ #include "base.hpp"
+-#include "mctp_wrapper.hpp"
+ #include "platform.hpp"
+ #include "pldm.hpp"
+ #include "utils.hpp"
+@@ -48,95 +47,11 @@
+ 
+ namespace pldm
+ {
+-
+-static bool rsvBWActive = false;
+-static pldm_tid_t reservedTID = pldmInvalidTid;
+-static uint8_t reservedPLDMType = pldmInvalidType;
+-
+ TIDMapper tidMapper;
+-std::unique_ptr<mctpw::MCTPWrapper> mctpWrapper;
+-
+-void triggerDeviceDiscovery(const pldm_tid_t tid)
+-{
+-    if (auto eidPtr = tidMapper.getMappedEID(tid))
+-    {
+-        mctpWrapper->triggerMCTPDeviceDiscovery(*eidPtr);
+-    }
+-}
+-
+-static bool validateReserveBW(const pldm_tid_t tid, const uint8_t pldmType)
+-{
+-    return rsvBWActive && !(tid == reservedTID && pldmType == reservedPLDMType);
+-}
+-
+-bool reserveBandwidth(const boost::asio::yield_context yield,
+-                      const pldm_tid_t tid, const uint8_t pldmType,
+-                      const uint16_t timeout)
+-{
+-    if (validateReserveBW(tid, pldmType))
+-    {
+-        phosphor::logging::log<phosphor::logging::level::INFO>(
+-            ("Reserve bandwidth is active for TID: " +
+-             std::to_string(reservedTID) +
+-             ". RESERVED_PLDM_TYPE: " + std::to_string(reservedPLDMType))
+-                .c_str());
+-        return false;
+-    }
+-    mctpw_eid_t eid = 0;
+-    if (auto eidPtr = tidMapper.getMappedEID(tid))
+-    {
+-        eid = *eidPtr;
+-    }
+-    else
+-    {
+-        return false;
+-    }
+-    if (mctpWrapper->reserveBandwidth(yield, eid, timeout) < 0)
+-    {
+-        return false;
+-    }
+-    rsvBWActive = true;
+-    reservedTID = tid;
+-    reservedPLDMType = pldmType;
+-    return true;
+-}
+-
+-bool releaseBandwidth(const boost::asio::yield_context yield,
+-                      const pldm_tid_t tid, const uint8_t pldmType)
+-{
+-    if (!rsvBWActive)
+-    {
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "releaseBandwidth: Reserve bandwidth is not active.");
+-        return false;
+-    }
+-    if (tid != reservedTID || pldmType != reservedPLDMType)
+-    {
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "releaseBandwidth: Invalid TID or pldm type");
+-        return false;
+-    }
+-    std::optional<mctpw_eid_t> eid = tidMapper.getMappedEID(tid);
+-    if (eid == std::nullopt)
+-    {
+-        return false;
+-    }
+-    if (mctpWrapper->releaseBandwidth(yield, *eid) < 0)
+-    {
+-        return false;
+-    }
+-    rsvBWActive = false;
+-    reservedTID = pldmInvalidTid;
+-    reservedPLDMType = pldmInvalidType;
+-    return true;
+-}
+ 
+ std::optional<std::string> getDeviceLocation(const pldm_tid_t tid)
+ {
+-    std::optional<mctpw_eid_t> eid = tidMapper.getMappedEID(tid);
+-    if (eid.has_value()) {
+-        return mctpWrapper->getDeviceLocation(eid.value());
+-    }
++	(void)tid;
+     return std::nullopt;
+ }
+ 
+@@ -276,262 +191,6 @@
+     return true;
+ }
+ 
+-static bool doSendReceievePldmMessage(boost::asio::yield_context yield,
+-                                      const mctpw_eid_t dstEid,
+-                                      const uint16_t timeout,
+-                                      std::vector<uint8_t>& pldmReq,
+-                                      std::vector<uint8_t>& pldmResp)
+-{
+-    auto sendStatus = mctpWrapper->sendReceiveYield(
+-        yield, dstEid, pldmReq, std::chrono::milliseconds(timeout));
+-    pldmResp = sendStatus.second;
+-    utils::printVect("Request(MCTP payload):", pldmReq);
+-    utils::printVect("Response(MCTP payload):", pldmResp);
+-    return sendStatus.first ? false : true;
+-}
+-
+-bool sendReceivePldmMessage(boost::asio::yield_context yield,
+-                            const pldm_tid_t tid, const uint16_t timeout,
+-                            size_t retryCount, std::vector<uint8_t> pldmReq,
+-                            std::vector<uint8_t>& pldmResp,
+-                            std::optional<mctpw_eid_t> eid)
+-{
+-    pldm_msg_hdr* hdr = reinterpret_cast<pldm_msg_hdr*>(pldmReq.data());
+-    if (validateReserveBW(tid, hdr->type))
+-    {
+-        phosphor::logging::log<phosphor::logging::level::INFO>(
+-            ("sendReceivePldmMessage is not allowed. Reserve bandwidth is "
+-             "active for TID: " +
+-             std::to_string(reservedTID) +
+-             " RESERVED_PLDM_TYPE: " + std::to_string(reservedPLDMType))
+-                .c_str());
+-        return false;
+-    }
+-    // Retry the request if
+-    //  1) No response
+-    //  2) payload.size() < 4
+-    //  3) If response bit is not set in PLDM header
+-    //  4) Invalid message type
+-    //  5) Invalid instance id
+-
+-    // Upper cap of retryCount = 5
+-    constexpr size_t maxRetryCount = 5;
+-    if (retryCount > maxRetryCount)
+-    {
+-        retryCount = maxRetryCount;
+-    }
+-
+-    for (size_t retry = 0; retry < retryCount; retry++)
+-    {
+-        mctpw_eid_t dstEid;
+-
+-        // Input EID takes precedence over TID
+-        // Usecase: TID reassignment
+-        if (eid)
+-        {
+-            dstEid = eid.value();
+-        }
+-        else
+-        {
+-            // A PLDM device removal can cause an update to TID mapper. In such
+-            // case the retry should be aborted immediately.
+-            if (auto eidPtr = tidMapper.getMappedEID(tid))
+-            {
+-                dstEid = *eidPtr;
+-            }
+-            else
+-            {
+-                phosphor::logging::log<phosphor::logging::level::ERR>(
+-                    "PLDM message send failed. Invalid TID/EID");
+-                return false;
+-            }
+-        }
+-
+-        // Insert MCTP Message Type to start of the payload
+-        if (retry == 0)
+-        {
+-            pldmReq.insert(pldmReq.begin(),
+-                           static_cast<uint8_t>(mctpw::MessageType::pldm));
+-        }
+-
+-        // Clear the resp vector each time before a retry
+-        pldmResp.clear();
+-        if (doSendReceievePldmMessage(yield, dstEid, timeout, pldmReq,
+-                                      pldmResp))
+-        {
+-            constexpr size_t minPldmMsgSize = 4;
+-            if (pldmResp.size() < minPldmMsgSize)
+-            {
+-                phosphor::logging::log<phosphor::logging::level::WARNING>(
+-                    "Invalid response length");
+-                continue;
+-            }
+-
+-            // Verify the message received is a response
+-            if (auto msgTypePtr = getPldmPacketType(pldmResp))
+-            {
+-                if (*msgTypePtr != PLDM_RESPONSE)
+-                {
+-                    phosphor::logging::log<phosphor::logging::level::WARNING>(
+-                        "PLDM message received is not response");
+-                    continue;
+-                }
+-            }
+-            else
+-            {
+-                phosphor::logging::log<phosphor::logging::level::WARNING>(
+-                    "Unable to get message type");
+-                continue;
+-            }
+-
+-            // Verify the response received is of type PLDM
+-            constexpr int mctpMsgType = 0;
+-            if (pldmResp.at(mctpMsgType) ==
+-                static_cast<uint8_t>(mctpw::MessageType::pldm))
+-            {
+-                // Remove the MCTP message type and IC bit from req and resp
+-                // payload.
+-                // Why: Upper layer handlers(PLDM message type handlers)
+-                // are not intrested in MCTP message type information and
+-                // integrity check fields.
+-                pldmResp.erase(pldmResp.begin());
+-                pldmReq.erase(pldmReq.begin());
+-            }
+-            else
+-            {
+-                phosphor::logging::log<phosphor::logging::level::WARNING>(
+-                    "Response received is not of message type PLDM");
+-                continue;
+-            }
+-
+-            // Verify request and response instance ID matches
+-            if (auto reqInstanceId = getInstanceId(pldmReq))
+-            {
+-                if (auto respInstanceId = getInstanceId(pldmResp))
+-                {
+-                    if (*reqInstanceId == *respInstanceId)
+-                    {
+-                        return true;
+-                    }
+-                }
+-            }
+-            phosphor::logging::log<phosphor::logging::level::WARNING>(
+-                "Instance ID check failed");
+-            continue;
+-        }
+-    }
+-    phosphor::logging::log<phosphor::logging::level::ERR>(
+-        "Retry count exceeded. No response");
+-    return false;
+-}
+-
+-bool sendPldmMessage(boost::asio::yield_context yield, const pldm_tid_t tid,
+-                     uint8_t retryCount, const uint8_t msgTag,
+-                     const bool tagOwner, std::vector<uint8_t> payload)
+-
+-{
+-    constexpr size_t maxRetryCount = 5;
+-    pldm_msg_hdr* hdr = reinterpret_cast<pldm_msg_hdr*>(payload.data());
+-    if (validateReserveBW(tid, hdr->type))
+-    {
+-        phosphor::logging::log<phosphor::logging::level::INFO>(
+-            ("sendPldmMessage is not allowed. Reserve bandwidth is active for "
+-             "TID: " +
+-             std::to_string(reservedTID) +
+-             " RESERVED_PLDM_TYPE: " + std::to_string(reservedPLDMType))
+-                .c_str());
+-        return false;
+-    }
+-
+-    mctpw_eid_t dstEid;
+-    if (auto eidPtr = tidMapper.getMappedEID(tid))
+-    {
+-        dstEid = *eidPtr;
+-    }
+-    else
+-    {
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "PLDM message send failed. Invalid TID");
+-        return false;
+-    }
+-    // Insert MCTP Message Type to start of the payload
+-    payload.insert(payload.begin(),
+-                   static_cast<uint8_t>(mctpw::MessageType::pldm));
+-    utils::printVect("Send PLDM message(MCTP payload):", payload);
+-    std::pair<boost::system::error_code, int> rc;
+-
+-    if (retryCount > maxRetryCount)
+-    {
+-        retryCount = maxRetryCount;
+-    }
+-
+-    for (size_t retry = 0; retry < retryCount; retry++)
+-    {
+-        rc = mctpWrapper->sendYield(yield, dstEid, msgTag, tagOwner, payload);
+-        if (rc.first || rc.second < 0)
+-        {
+-            continue;
+-        }
+-        break;
+-    }
+-
+-    if (rc.first || rc.second < 0)
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::WARNING>(
+-            ("SendMCTPPayload Failed, retry count exceeded  rc: " +
+-             std::to_string(rc.second) + " " + rc.first.message())
+-                .c_str());
+-        return false;
+-#endif
+-    }
+-    return true;
+-}
+-
+-auto msgRecvCallback = [](void*, mctpw::eid_t srcEid, bool tagOwner,
+-                          uint8_t msgTag, const std::vector<uint8_t>& data,
+-                          int) {
+-    // Intentional copy. MCTPWrapper provides const reference in callback
+-    auto payload = data;
+-    // Verify the response received is of type PLDM
+-    if (!payload.empty() &&
+-        payload.at(0) == static_cast<uint8_t>(mctpw::MessageType::pldm))
+-    {
+-        // Discard the packet if no matching TID is found
+-        // Why: We do not have to process packets from uninitialised Termini
+-        auto tid = tidMapper.getMappedTID(srcEid);
+-        if (!tid)
+-        {
+-            phosphor::logging::log<phosphor::logging::level::WARNING>(
+-                ("EID " + std::to_string(static_cast<int>(srcEid)) +
+-                 " is not mapped to any TID; Discarding the packet")
+-                    .c_str());
+-            return;
+-        }
+-
+-        utils::printVect("PLDM message received(MCTP payload):", payload);
+-        payload.erase(payload.begin());
+-        if (auto pldmMsgType = getPldmMessageType(payload))
+-        {
+-            switch (*pldmMsgType)
+-            {
+-                case PLDM_FWUP:
+-                    pldm::fwu::pldmMsgRecvFwUpdCallback(*tid, msgTag, tagOwner,
+-                                                        payload);
+-                    break;
+-                    // No use case for other PLDM message types
+-                default:
+-                    phosphor::logging::log<phosphor::logging::level::INFO>(
+-                        "Unsupported PLDM message received",
+-                        phosphor::logging::entry("TID=%d", *tid),
+-                        phosphor::logging::entry("EID=%d", srcEid),
+-                        phosphor::logging::entry("MSG_TYPE=%d", *pldmMsgType));
+-                    break;
+-            }
+-        }
+-    }
+-};
+-
+ uint8_t createInstanceId(pldm_tid_t tid)
+ {
+     static std::unordered_map<pldm_tid_t, uint8_t> instanceMap;
+@@ -635,42 +294,6 @@
+ extern void setObjServer(
+     const std::shared_ptr<sdbusplus::asio::object_server>& newServer);
+ 
+-void onDeviceUpdate(void*, const mctpw::Event& evt,
+-                    boost::asio::yield_context yield)
+-{
+-    switch (evt.type)
+-    {
+-        case mctpw::Event::EventType::deviceAdded: {
+-            pldm::platform::pauseSensorPolling();
+-            deviceInitEventHandler(evt.eid, yield);
+-            pldm::platform::resumeSensorPolling();
+-            break;
+-        }
+-        case mctpw::Event::EventType::deviceRemoved: {
+-            auto tid = pldm::tidMapper.getMappedTID(evt.eid);
+-            if (tid)
+-            {
+-                deleteDevice(tid.value());
+-            }
+-            else
+-            {
+-                phosphor::logging::log<phosphor::logging::level::WARNING>(
+-                    ("EID " + std::to_string(static_cast<int>(evt.eid)) +
+-                     " is not mapped to any TID")
+-                        .c_str());
+-            }
+-            break;
+-        }
+-        default:
+-            phosphor::logging::log<phosphor::logging::level::ERR>(
+-                "Unsupported event type in onDeviceUpdate",
+-                phosphor::logging::entry("TYPE=%d",
+-                                         static_cast<int>(evt.type)));
+-            break;
+-    }
+-    return;
+-}
+-
+ void enableDebug()
+ {
+     if (auto envPtr = std::getenv("PLDM_DEBUG"))
+@@ -801,18 +424,7 @@
+ 	std::set<uint8_t> filter_eid(pldm_eid.begin(), pldm_eid.end());
+ 	pldm_eid.assign(filter_eid.begin(), filter_eid.end());
+ 
+-	// TODO - Read from entity manager about the transport bindings to be
+-    // supported by PLDM
+-    mctpw::MCTPConfiguration config(mctpw::MessageType::pldm,
+-				    mctpw::BindingType::mctpOverPcieVdm);
+-
+-    pldm::mctpWrapper = std::make_unique<mctpw::MCTPWrapper>(
+-        conn, config, onDeviceUpdate, pldm::msgRecvCallback);
+-
+     boost::asio::spawn(*ioc, [pldm_eid](boost::asio::yield_context yield) {
+-        pldm::mctpWrapper->detectMctpEndpoints(yield);
+-        mctpw::MCTPWrapper::EndpointMap eidMap =
+-            pldm::mctpWrapper->getEndpointMap();
+ 		for (auto& val : pldm_eid)
+         {
+             pldm::platform::pauseSensorPolling();
+diff -Naur a/src/state_sensor_handler.cpp b/src/state_sensor_handler.cpp
+--- a/src/state_sensor_handler.cpp	2024-09-13 13:38:56.984514949 +0800
++++ b/src/state_sensor_handler.cpp	2024-09-13 13:56:10.831953046 +0800
+@@ -285,6 +285,7 @@
+ 
+ bool StateSensorHandler::setStateSensorEnables(boost::asio::yield_context yield)
+ {
++	(void)yield;
+     uint8_t sensorOpState;
+     switch (_pdr->stateSensorData.sensor_init)
+     {
+@@ -339,19 +340,6 @@
+     uint8_t* responseMsg = nullptr;
+     size_t responseMsgSize{};
+ 
+-    if (!sendReceivePldmMessage(yield, _tid, commandTimeout, commandRetryCount,
+-                                req, resp))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "Failed to send or receive SetStateSensorEnables request",
+-            phosphor::logging::entry("SENSOR_ID=0x%0X", _sensorID),
+-            phosphor::logging::entry("TID=%d", _tid));
+-    //    return false;
+-#endif
+-    }
+-
+-
+ 	// Send PLDM request msg and wait for response
+ 	rc = pldm_send_recv(_eid, fd, req.data(), req.size(),
+ 					&responseMsg, &responseMsgSize);
+@@ -384,6 +372,7 @@
+ bool StateSensorHandler::getStateSensorReadings(
+     boost::asio::yield_context yield)
+ {
++	(void)yield;
+     int rc;
+     std::vector<uint8_t> req(pldmMsgHdrSize +
+                              PLDM_GET_STATE_SENSOR_READINGS_REQ_BYTES);
+@@ -402,18 +391,6 @@
+     std::vector<uint8_t> resp;
+     uint8_t* responseMsg = nullptr;
+     size_t responseMsgSize{};
+-    if (!sendReceivePldmMessage(yield, _tid, commandTimeout, commandRetryCount,
+-                                req, resp))
+-    {
+-#if 0
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "Failed to send or receive GetStateSensorReadings request",
+-            phosphor::logging::entry("SENSOR_ID=0x%0X", _sensorID),
+-            phosphor::logging::entry("TID=%d", _tid));
+-    //    return false;
+-#endif
+-    }
+-
+ 
+     // Send PLDM request msg and wait for response
+     rc = pldm_send_recv(_eid, fd, req.data(), req.size(),

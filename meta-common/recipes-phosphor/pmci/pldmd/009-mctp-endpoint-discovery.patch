@@ -1,0 +1,150 @@
+diff -Naur a/include/pldm.hpp b/include/pldm.hpp
+--- a/include/pldm.hpp	2024-08-14 12:20:08.844044160 +0800
++++ b/include/pldm.hpp	2024-08-14 12:22:15.813533665 +0800
+@@ -26,8 +26,10 @@
+ #include <sdbusplus/asio/object_server.hpp>
+ #include <unordered_map>
+ #include <vector>
++#include <iostream>
+ 
+ #include "base.h"
++#include "pldm.h"
+ 
+ using mctpw_eid_t = mctpw::eid_t;
+ 
+diff -Naur a/src/pldmd.cpp b/src/pldmd.cpp
+--- a/src/pldmd.cpp	2024-08-14 12:20:08.852044254 +0800
++++ b/src/pldmd.cpp	2024-08-14 12:51:45.752637089 +0800
+@@ -19,6 +19,7 @@
+ #include "platform.hpp"
+ #include "pldm.hpp"
+ #include "utils.hpp"
++#include "dbus-utils.hpp"
+ 
+ #include <queue>
+ 
+@@ -30,6 +31,18 @@
+ 
+ static constexpr const char* pldmService = "xyz.openbmc_project.pldm";
+ static constexpr const char* pldmPath = "/xyz/openbmc_project/pldm";
++static constexpr std::string_view uuidEndpointIntfName{
++		"xyz.openbmc_project.Common.UUID"};
++
++static constexpr std::string_view unixSocketIntfName{
++		"xyz.openbmc_project.Common.UnixSocket"};
++
++const std::string mctpBindingIntfName{"xyz.openbmc_project.MCTP.Binding"};
++const std::string mctpEndpointIntfName{"xyz.openbmc_project.MCTP.Endpoint"};
++const std::string PCIeBindingType = "xyz.openbmc_project.MCTP.Binding.BindingTypes.PCIe";
++constexpr const char* MCTPInterface = "xyz.openbmc_project.MCTP.Endpoint";
++static constexpr uint8_t mctpTypePLDM = 1;
++
+ bool debug = false;
+ 
+ namespace pldm
+@@ -697,7 +710,86 @@
+ 
+     enableDebug();
+ 
+-    // TODO - Read from entity manager about the transport bindings to be
++	std::vector<int> pldm_eid;
++	std::set<pldm::dbus::Service> mctpCtrlServices;
++	pldm::MctpInfos mctpInfos;
++	pldm::dbus::MctpInterfaces mctpInterfaces;
++
++	const pldm::dbus::Interfaces ifaceList{"xyz.openbmc_project.MCTP.Endpoint"};
++	auto getSubTreeResponse = pldm::dbusutils::DBusHandler().getSubtree(
++						"/xyz/openbmc_project/mctp", 0, ifaceList);
++
++	for (const auto& [objPath, mapperServiceMap] : getSubTreeResponse)
++	{
++		for (const auto& [serviceName, interfaces] : mapperServiceMap)
++			{
++				std::cout << "  " << serviceName << std::endl;
++				mctpCtrlServices.emplace(serviceName);
++			}
++	}
++
++	for (const auto& service : mctpCtrlServices)
++	{
++		pldm::dbus::ObjectValueTree objects{};
++		auto& bus = pldm::dbusutils::DBusHandler().getBus();
++		auto method = bus.new_method_call(
++						service.c_str(), "/xyz/openbmc_project/mctp",
++						"org.freedesktop.DBus.ObjectManager", "GetManagedObjects");
++		auto reply = bus.call(method);
++		reply.read(objects);
++
++		for (const auto& [objectPath, interfaces] : objects)
++		{
++			pldm::UUID uuid{};
++			std::vector<uint8_t> address{};
++			std::string bindingType;
++			for (const auto& [intfName, properties] : interfaces)
++			{
++				if (intfName == uuidEndpointIntfName)
++				{
++					uuid = std::get<std::string>(properties.at("UUID"));
++					mctpInterfaces[uuid] = interfaces;
++				}
++				if (interfaces.contains(mctpBindingIntfName))
++				{
++					const auto& binding_properties = interfaces.at(mctpBindingIntfName);
++					if (binding_properties.contains("BindingType"))
++					{
++						bindingType = std::get<std::string>(binding_properties.at("BindingType"));
++					}
++					if (bindingType == PCIeBindingType)
++					{
++						if (interfaces.contains(mctpEndpointIntfName))
++						{
++							const auto& interface_properties = interfaces.at(mctpEndpointIntfName);
++							if (interface_properties.contains("EID") &&
++										interface_properties.contains("SupportedMessageTypes") &&
++										interface_properties.contains("MediumType"))
++							{
++								auto eid = std::get<size_t>(interface_properties.at("EID"));
++								auto mctpTypes = std::get<std::vector<uint8_t>>(
++													interface_properties.at("SupportedMessageTypes"));
++								auto mediumType = std::get<std::string>(interface_properties.at("MediumType"));
++								if (std::find(mctpTypes.begin(), mctpTypes.end(),
++													mctpTypePLDM) != mctpTypes.end())
++								{
++									pldm_eid.push_back(eid);
++								}
++							}
++						}
++					}
++				}
++			}
++		}
++	}
++	for(std::vector<uint8_t>::size_type i = 0; i < pldm_eid.size(); i++) {
++			std::cout << "PLDM EID" << pldm_eid[i] << std::endl;
++	}
++
++	std::set<uint8_t> filter_eid(pldm_eid.begin(), pldm_eid.end());
++	pldm_eid.assign(filter_eid.begin(), filter_eid.end());
++
++	// TODO - Read from entity manager about the transport bindings to be
+     // supported by PLDM
+     mctpw::MCTPConfiguration config(mctpw::MessageType::pldm,
+ 				    mctpw::BindingType::mctpOverPcieVdm);
+@@ -705,14 +797,14 @@
+     pldm::mctpWrapper = std::make_unique<mctpw::MCTPWrapper>(
+         conn, config, onDeviceUpdate, pldm::msgRecvCallback);
+ 
+-    boost::asio::spawn(*ioc, [](boost::asio::yield_context yield) {
++    boost::asio::spawn(*ioc, [pldm_eid](boost::asio::yield_context yield) {
+         pldm::mctpWrapper->detectMctpEndpoints(yield);
+         mctpw::MCTPWrapper::EndpointMap eidMap =
+             pldm::mctpWrapper->getEndpointMap();
+-        for (auto& [eid, service] : eidMap)
++		for (auto& val : pldm_eid)
+         {
+             pldm::platform::pauseSensorPolling();
+-            initDevice(eid, yield);
++			initDevice(static_cast<mctpw_eid_t>(val), yield);
+             pldm::platform::resumeSensorPolling();
+         }
+     });

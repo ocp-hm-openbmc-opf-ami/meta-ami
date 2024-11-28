@@ -1,0 +1,1301 @@
+diff -Naur a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt	2024-08-14 12:15:36.668852267 +0800
++++ b/CMakeLists.txt	2024-08-14 12:16:29.089466882 +0800
+@@ -74,6 +74,7 @@
+                ${PROJECT_SOURCE_DIR}/src/base.cpp
+                ${PROJECT_SOURCE_DIR}/src/utils.cpp
+                ${PROJECT_SOURCE_DIR}/src/fru_support.cpp
++               ${PROJECT_SOURCE_DIR}/src/dbus-utils.cpp
+ )
+ 
+ set (HEADER_FILES ${PROJECT_SOURCE_DIR}/include/pldm.hpp
+@@ -87,7 +88,7 @@
+ add_executable(${PROJECT_NAME} ${SRC_FILES} ${HEADER_FILES})
+ 
+ target_link_libraries (${PROJECT_NAME} mctpwplus sdbusplus -lsystemd -lpldm_intel
+-                        -lpthread -lstdc++fs -lphosphor_dbus -lboost_coroutine)
++                        -lpthread -lstdc++fs -lphosphor_dbus -lboost_coroutine -lphosphor_logging)
+ 
+ find_package (PkgConfig REQUIRED)
+ pkg_get_variable(SYSTEMD_SYSTEM_UNIT_DIR systemd systemdsystemunitdir)
+diff -Naur a/include/dbus-utils.hpp b/include/dbus-utils.hpp
+--- a/include/dbus-utils.hpp	1970-01-01 08:00:00.000000000 +0800
++++ b/include/dbus-utils.hpp	2024-08-14 12:16:55.265773820 +0800
+@@ -0,0 +1,437 @@
++#pragma once
++
++#include "base.h"
++//#include "bios.h"
++#include "platform.h"
++#include "utils.h"
++
++#include "types.hpp"
++
++#include <stdint.h>
++#include <systemd/sd-bus.h>
++#include <unistd.h>
++
++#include <boost/asio.hpp>
++#include <nlohmann/json.hpp>
++#include <sdbusplus/asio/connection.hpp>
++#include <sdbusplus/server.hpp>
++
++#include <exception>
++#include <filesystem>
++#include <iostream>
++#include <string>
++#include <variant>
++#include <vector>
++
++namespace pldm
++{
++namespace dbusutils
++{
++
++namespace fs = std::filesystem;
++using Json = nlohmann::json;
++constexpr bool Tx = true;
++constexpr bool Rx = false;
++
++/** @struct CustomFD
++ *
++ *  RAII wrapper for file descriptor.
++ */
++#if 0
++struct CustomFD
++{
++    CustomFD(const CustomFD&) = delete;
++    CustomFD& operator=(const CustomFD&) = delete;
++    CustomFD(CustomFD&&) = delete;
++    CustomFD& operator=(CustomFD&&) = delete;
++
++    CustomFD(int fd) : fd(fd)
++    {}
++
++    ~CustomFD()
++    {
++        if (fd >= 0)
++        {
++            close(fd);
++        }
++    }
++
++    int operator()() const
++    {
++        return fd;
++    }
++
++  private:
++    int fd = -1;
++};
++#endif
++/** @brief Calculate the pad for PLDM data
++ *
++ *  @param[in] data - Length of the data
++ *  @return - uint8_t - number of pad bytes
++ */
++uint8_t getNumPadBytes(uint32_t data);
++
++/** @brief Convert uint64 to date
++ *
++ *  @param[in] data - time date of uint64
++ *  @param[out] year - year number in dec
++ *  @param[out] month - month number in dec
++ *  @param[out] day - day of the month in dec
++ *  @param[out] hour - number of hours in dec
++ *  @param[out] min - number of minutes in dec
++ *  @param[out] sec - number of seconds in dec
++ *  @return true if decode success, false if decode faild
++ */
++bool uintToDate(uint64_t data, uint16_t* year, uint8_t* month, uint8_t* day,
++                uint8_t* hour, uint8_t* min, uint8_t* sec);
++
++/** @brief Convert effecter data to structure of set_effecter_state_field
++ *
++ *  @param[in] effecterData - the date of effecter
++ *  @param[in] effecterCount - the number of individual sets of effecter
++ *                              information
++ *  @return[out] parse success and get a valid set_effecter_state_field
++ *               structure, return nullopt means parse failed
++ */
++std::optional<std::vector<set_effecter_state_field>>
++    parseEffecterData(const std::vector<uint8_t>& effecterData,
++                      uint8_t effecterCount);
++
++/**
++ *  @brief creates an error log
++ *  @param[in] errorMsg - the error message
++ */
++void reportError(const char* errorMsg);
++
++/** @brief Convert any Decimal number to BCD
++ *
++ *  @tparam[in] decimal - Decimal number
++ *  @return Corresponding BCD number
++ */
++template <typename T>
++T decimalToBcd(T decimal)
++{
++    T bcd = 0;
++    T rem = 0;
++    auto cnt = 0;
++
++    while (decimal)
++    {
++        rem = decimal % 10;
++        bcd = bcd + (rem << cnt);
++        decimal = decimal / 10;
++        cnt += 4;
++    }
++
++    return bcd;
++}
++
++constexpr auto dbusProperties = "org.freedesktop.DBus.Properties";
++constexpr auto mapperService = "xyz.openbmc_project.ObjectMapper";
++constexpr auto mapperPath = "/xyz/openbmc_project/object_mapper";
++constexpr auto mapperInterface = "xyz.openbmc_project.ObjectMapper";
++
++struct DBusMapping
++{
++    std::string objectPath;   //!< D-Bus object path
++    std::string interface;    //!< D-Bus interface
++    std::string propertyName; //!< D-Bus property name
++    std::string propertyType; //!< D-Bus property type
++};
++
++using PropertyValue =
++    std::variant<bool, uint8_t, int16_t, uint16_t, int32_t, uint32_t, int64_t,
++                 uint64_t, double, std::string,
++                 std::vector<sdbusplus::message::object_path>,
++                 std::vector<std::string>>;
++using DbusProp = std::string;
++using DbusChangedProps = std::map<DbusProp, PropertyValue>;
++using DBusInterfaceAdded = std::vector<
++    std::pair<pldm::dbus::Interface,
++              std::vector<std::pair<pldm::dbus::Property,
++                                    std::variant<pldm::dbus::Property>>>>>;
++using ObjectPath = std::string;
++using ServiceName = std::string;
++using Interfaces = std::vector<std::string>;
++using MapperServiceMap = std::vector<std::pair<ServiceName, Interfaces>>;
++using GetSubTreeResponse = std::vector<std::pair<ObjectPath, MapperServiceMap>>;
++
++/**
++ * @brief The interface for DBusHandler
++ */
++class DBusHandlerInterface
++{
++  public:
++    virtual ~DBusHandlerInterface() = default;
++
++    virtual std::string getService(const char* path,
++                                   const char* interface) const = 0;
++    virtual GetSubTreeResponse
++        getSubtree(const std::string& path, int depth,
++                   const std::vector<std::string>& ifaceList) const = 0;
++
++    virtual void setDbusProperty(const DBusMapping& dBusMap,
++                                 const PropertyValue& value) const = 0;
++
++    virtual PropertyValue
++        getDbusPropertyVariant(const char* objPath, const char* dbusProp,
++                               const char* dbusInterface) const = 0;
++};
++
++/**
++ *  @class DBusHandler
++ *
++ *  Wrapper class to handle the D-Bus calls
++ *
++ *  This class contains the APIs to handle the D-Bus calls
++ *  to cater the request from pldm requester.
++ *  A class is created to mock the apis in the test cases
++ */
++class DBusHandler : public DBusHandlerInterface
++{
++  public:
++    /** @brief Get the bus connection. */
++    static auto& getBus()
++    {
++        static auto bus = sdbusplus::bus::new_default();
++        return bus;
++    }
++
++    /** @brief Get the asio connection. */
++    static auto& getAsioConnection()
++    {
++        static boost::asio::io_context io;
++        static auto conn = std::make_shared<sdbusplus::asio::connection>(io);
++        return conn;
++    }
++
++    /**
++     *  @brief Get the DBUS Service name for the input dbus path
++     *
++     *  @param[in] path - DBUS object path
++     *  @param[in] interface - DBUS Interface
++     *
++     *  @return std::string - the dbus service name
++     *
++     *  @throw sdbusplus::exception::exception when it fails
++     */
++    std::string getService(const char* path,
++                           const char* interface) const override;
++
++    /**
++     *  @brief Get the Subtree response from the mapper
++     *
++     *  @param[in] path - DBUS object path
++     *  @param[in] depth - Search depth
++     *  @param[in] ifaceList - list of the interface that are being
++     *                         queried from the mapper
++     *
++     *  @return GetSubTreeResponse - the mapper subtree response
++     *
++     *  @throw sdbusplus::exception::exception when it fails
++     */
++    GetSubTreeResponse
++        getSubtree(const std::string& path, int depth,
++                   const std::vector<std::string>& ifaceList) const override;
++
++    /** @brief Get property(type: variant) from the requested dbus
++     *
++     *  @param[in] objPath - The Dbus object path
++     *  @param[in] dbusProp - The property name to get
++     *  @param[in] dbusInterface - The Dbus interface
++     *
++     *  @return The value of the property(type: variant)
++     *
++     *  @throw sdbusplus::exception::exception when it fails
++     */
++    PropertyValue
++        getDbusPropertyVariant(const char* objPath, const char* dbusProp,
++                               const char* dbusInterface) const override;
++
++    /** @brief The template function to get property from the requested dbus
++     *         path
++     *
++     *  @tparam Property - Excepted type of the property on dbus
++     *
++     *  @param[in] objPath - The Dbus object path
++     *  @param[in] dbusProp - The property name to get
++     *  @param[in] dbusInterface - The Dbus interface
++     *
++     *  @return The value of the property
++     *
++     *  @throw sdbusplus::exception::exception when dbus request fails
++     *         std::bad_variant_access when \p Property and property on dbus do
++     *         not match
++     */
++    template <typename Property>
++    auto getDbusProperty(const char* objPath, const char* dbusProp,
++                         const char* dbusInterface)
++    {
++        auto VariantValue =
++            getDbusPropertyVariant(objPath, dbusProp, dbusInterface);
++        return std::get<Property>(VariantValue);
++    }
++
++    /** @brief Set Dbus property
++     *
++     *  @param[in] dBusMap - Object path, property name, interface and property
++     *                       type for the D-Bus object
++     *  @param[in] value - The value to be set
++     *
++     *  @throw sdbusplus::exception::exception when it fails
++     */
++    void setDbusProperty(const DBusMapping& dBusMap,
++                         const PropertyValue& value) const override;
++};
++
++/** @brief Fetch parent D-Bus object based on pathname
++ *
++ *  @param[in] dbusObj - child D-Bus object
++ *
++ *  @return std::string - the parent D-Bus object path
++ */
++inline std::string findParent(const std::string& dbusObj)
++{
++    fs::path p(dbusObj);
++    return p.parent_path().string();
++}
++
++/** @brief Read (static) MCTP EID of host firmware from a file
++ *
++ *  @return uint8_t - MCTP EID
++ */
++uint8_t readHostEID();
++
++/** @brief Convert a value in the JSON to a D-Bus property value
++ *
++ *  @param[in] type - type of the D-Bus property
++ *  @param[in] value - value in the JSON file
++ *
++ *  @return PropertyValue - the D-Bus property value
++ */
++PropertyValue jsonEntryToDbusVal(std::string_view type,
++                                 const nlohmann::json& value);
++
++/** @brief Find State Effecter PDR
++ *  @param[in] tid - PLDM terminus ID.
++ *  @param[in] entityID - entity that can be associated with PLDM State set.
++ *  @param[in] stateSetId - value that identifies PLDM State set.
++ *  @param[in] repo - pointer to BMC's primary PDR repo.
++ *  @return array[array[uint8_t]] - StateEffecterPDRs
++ */
++std::vector<std::vector<uint8_t>> findStateEffecterPDR(uint8_t tid,
++                                                       uint16_t entityID,
++                                                       uint16_t stateSetId,
++                                                       const pldm_pdr* repo);
++/** @brief Find State Sensor PDR
++ *  @param[in] tid - PLDM terminus ID.
++ *  @param[in] entityID - entity that can be associated with PLDM State set.
++ *  @param[in] stateSetId - value that identifies PLDM State set.
++ *  @param[in] repo - pointer to BMC's primary PDR repo.
++ *  @return array[array[uint8_t]] - StateSensorPDRs
++ */
++std::vector<std::vector<uint8_t>> findStateSensorPDR(uint8_t tid,
++                                                     uint16_t entityID,
++                                                     uint16_t stateSetId,
++                                                     const pldm_pdr* repo);
++
++/** @brief Find sensor id from a state sensor PDR
++ *
++ *  @param[in] pdrRepo - PDR repository
++ *  @param[in] tid - terminus id
++ *  @param[in] entityType - entity type
++ *  @param[in] entityInstance - entity instance number
++ *  @param[in] containerId - container id
++ *  @param[in] stateSetId - state set id
++ *
++ *  @return uint16_t - the sensor id
++ */
++uint16_t findStateSensorId(const pldm_pdr* pdrRepo, uint8_t tid,
++                           uint16_t entityType, uint16_t entityInstance,
++                           uint16_t containerId, uint16_t stateSetId);
++
++/** @brief Find effecter id from a state effecter pdr
++ *  @param[in] pdrRepo - PDR repository
++ *  @param[in] entityType - entity type
++ *  @param[in] entityInstance - entity instance number
++ *  @param[in] containerId - container id
++ *  @param[in] stateSetId - state set id
++ *  @param[in] localOrRemote - true for checking local repo and false for remote
++ *                             repo
++ *
++ *  @return uint16_t - the effecter id
++ */
++uint16_t findStateEffecterId(const pldm_pdr* pdrRepo, uint16_t entityType,
++                             uint16_t entityInstance, uint16_t containerId,
++                             uint16_t stateSetId, bool localOrRemote);
++
++/** @brief Emit the sensor event signal
++ *
++ *	@param[in] tid - the terminus id
++ *  @param[in] sensorId - sensorID value of the sensor
++ *  @param[in] sensorOffset - Identifies which state sensor within a
++ * composite state sensor the event is being returned for
++ *  @param[in] eventState - The event state value from the state change that
++ * triggered the event message
++ *  @param[in] previousEventState - The event state value for the state from
++ * which the present event state was entered.
++ *  @return PLDM completion code
++ */
++int emitStateSensorEventSignal(uint8_t tid, uint16_t sensorId,
++                               uint8_t sensorOffset, uint8_t eventState,
++                               uint8_t previousEventState);
++
++/** @brief Print the buffer
++ *
++ *  @param[in]  isTx - True if the buffer is an outgoing PLDM message, false if
++                       the buffer is an incoming PLDM message
++ *  @param[in]  buffer - Buffer to print
++ *
++ *  @return - None
++ */
++void printBuffer(bool isTx, const std::vector<uint8_t>& buffer);
++
++/** @brief Print the buffer
++ *
++ *  @param[in]  isTx - True if the buffer is an outgoing PLDM message, false if
++                       the buffer is an incoming PLDM message
++ *  @param[in] buffer - pldm message buffer to log
++ *  @param[in] bufferLen - pldm message buffer length
++ *
++ *  @return - None
++ */
++void printBuffer(bool isTx, const pldm_msg* buffer, size_t bufferLen);
++
++/** @brief Convert the buffer to std::string
++ *
++ *  If there are characters that are not printable characters, it is replaced
++ *  with space(0x20).
++ *
++ *  @param[in] var - pointer to data and length of the data
++ *
++ *  @return std::string equivalent of variable field
++ */
++std::string toString(const struct variable_field& var);
++
++/** @brief Split strings according to special identifiers
++ *
++ *  We can split the string according to the custom identifier(';', ',', '&' or
++ *  others) and store it to vector.
++ *
++ *  @param[in] srcStr       - The string to be split
++ *  @param[in] delim        - The custom identifier
++ *  @param[in] trimStr      - The first and last string to be trimmed
++ *
++ *  @return std::vector<std::string> Vectors are used to store strings
++ */
++std::vector<std::string> split(std::string_view srcStr, std::string_view delim,
++                               std::string_view trimStr = "");
++/** @brief Get the current system time in readable format
++ *
++ *  @return - std::string equivalent of the system time
++ */
++std::string getCurrentSystemTime();
++
++} // namespace utils
++} // namespace pldm
+diff -Naur a/include/types.hpp b/include/types.hpp
+--- a/include/types.hpp	1970-01-01 08:00:00.000000000 +0800
++++ b/include/types.hpp	2024-08-14 12:17:06.741908392 +0800
+@@ -0,0 +1,239 @@
++#pragma once
++
++#include <stdint.h>
++
++#include <sdbusplus/message/types.hpp>
++
++#include <bitset>
++#include <map>
++#include <set>
++#include <string>
++#include <unordered_map>
++#include <variant>
++#include <vector>
++
++namespace pldm
++{
++
++using EID = uint8_t;
++using UUID = std::string;
++using Request = std::vector<uint8_t>;
++using Response = std::vector<uint8_t>;
++using Command = uint8_t;
++
++using MctpMedium = std::string;
++using MctpBinding = std::string;
++using NetworkId = uint8_t;
++using MctpInfo = std::tuple<EID, UUID, MctpMedium, NetworkId, MctpBinding>;
++using MctpInfos = std::vector<MctpInfo>;
++using tid_t = uint8_t;
++using VendorIANA = uint32_t;
++
++namespace dbus
++{
++
++using ObjectPath = std::string;
++using Service = std::string;
++using Interface = std::string;
++using Interfaces = std::vector<std::string>;
++using Property = std::string;
++using PropertyType = std::string;
++using Value =
++    std::variant<bool, uint8_t, int16_t, uint16_t, int32_t, uint32_t, int64_t,
++                 uint64_t, double, std::string, std::vector<uint8_t>>;
++
++using PropertyMap = std::map<Property, Value>;
++using InterfaceMap = std::map<Interface, PropertyMap>;
++using ObjectValueTree = std::map<sdbusplus::message::object_path, InterfaceMap>;
++using MctpInterfaces = std::map<UUID, InterfaceMap>;
++typedef struct _pathAssociation
++{
++    std::string forward;
++    std::string reverse;
++    std::string path;
++} PathAssociation;
++
++} // namespace dbus
++
++namespace fw_update
++{
++
++// Descriptor definition
++using DescriptorType = uint16_t;
++using DescriptorData = std::vector<uint8_t>;
++using VendorDefinedDescriptorTitle = std::string;
++using VendorDefinedDescriptorData = std::vector<uint8_t>;
++using VendorDefinedDescriptorInfo =
++    std::tuple<VendorDefinedDescriptorTitle, VendorDefinedDescriptorData>;
++using DescriptorValue =
++    std::variant<DescriptorData, VendorDefinedDescriptorInfo>;
++using Descriptors = std::multiset<std::pair<DescriptorType, DescriptorValue>>;
++
++using DescriptorMap = std::unordered_map<EID, Descriptors>;
++
++// Component information
++using CompClassification = uint16_t;
++using CompIdentifier = uint16_t;
++using CompKey = std::pair<CompClassification, CompIdentifier>;
++using CompClassificationIndex = uint8_t;
++using CompVersion = std::string;
++using CompInfo = std::tuple<CompClassificationIndex, CompVersion>;
++using ComponentInfo = std::map<CompKey, CompInfo>;
++using ComponentInfoMap = std::unordered_map<EID, ComponentInfo>;
++
++// PackageHeaderInformation
++using PackageHeaderSize = size_t;
++using PackageVersion = std::string;
++using ComponentBitmapBitLength = uint16_t;
++using PackageHeaderChecksum = uint32_t;
++
++// FirmwareDeviceIDRecords
++using DeviceIDRecordCount = uint8_t;
++using DeviceUpdateOptionFlags = std::bitset<32>;
++using ApplicableComponents = std::vector<size_t>;
++using ComponentImageSetVersion = std::string;
++using FirmwareDevicePackageData = std::vector<uint8_t>;
++using FirmwareDeviceIDRecord =
++    std::tuple<DeviceUpdateOptionFlags, ApplicableComponents,
++               ComponentImageSetVersion, Descriptors,
++               FirmwareDevicePackageData>;
++using FirmwareDeviceIDRecords = std::vector<FirmwareDeviceIDRecord>;
++
++// ComponentImageInformation
++using ComponentImageCount = uint16_t;
++using CompComparisonStamp = uint32_t;
++using CompOptions = std::bitset<16>;
++using ReqCompActivationMethod = std::bitset<16>;
++using CompLocationOffset = uint32_t;
++using CompSize = uint32_t;
++using ComponentImageInfo =
++    std::tuple<CompClassification, CompIdentifier, CompComparisonStamp,
++               CompOptions, ReqCompActivationMethod, CompLocationOffset,
++               CompSize, CompVersion>;
++using ComponentImageInfos = std::vector<ComponentImageInfo>;
++
++// DeviceInventory
++using DeviceObjPath = std::string;
++using Associations =
++    std::vector<std::tuple<std::string, std::string, std::string>>;
++using DBusIntfMatch = std::pair<dbus::Interface, dbus::PropertyMap>;
++using CreateDeviceInfo = std::tuple<DeviceObjPath, Associations>;
++using UpdateDeviceInfo = DeviceObjPath;
++using DeviceInfo = std::tuple<CreateDeviceInfo, UpdateDeviceInfo>;
++using MatchDeviceInfo = std::vector<std::tuple<DBusIntfMatch, DeviceInfo>>;
++
++// FirmwareInventory
++using ComponentName = std::string;
++using ComponentIdNameMap = std::unordered_map<CompIdentifier, ComponentName>;
++using ComponentObject = std::tuple<ComponentName, Associations>;
++using CreateComponentIdNameMap = std::unordered_map<CompIdentifier, ComponentObject>;
++using UpdateComponentIdNameMap = ComponentIdNameMap;
++using FirmwareInfo = std::tuple<CreateComponentIdNameMap, UpdateComponentIdNameMap>;
++using MatchFirmwareInfo = std::vector<std::tuple<DBusIntfMatch, FirmwareInfo>>;
++
++// ComponentInformation
++using MatchComponentNameMapInfo = std::vector<std::tuple<DBusIntfMatch, ComponentIdNameMap>>;
++using ComponentNameMap = std::unordered_map<EID, ComponentIdNameMap>;
++
++/** @struct MatchEntryInfo
++ *  @brief the template struct to find the matched configured info for an dbus interface from mctp endpoint
++*/
++template <typename T, typename U>
++struct MatchEntryInfo
++{
++    MatchEntryInfo(const MatchEntryInfo&) = delete;
++    MatchEntryInfo& operator=(const MatchEntryInfo&) = delete;
++    MatchEntryInfo(MatchEntryInfo&&) = delete;
++    MatchEntryInfo& operator=(MatchEntryInfo&&) = delete;
++
++    MatchEntryInfo(const T &i) : infos(i){}
++    MatchEntryInfo(){}
++    ~MatchEntryInfo(){}
++
++    T infos;
++
++    bool matchInventoryEntry(dbus::InterfaceMap interfaceMap, U& entry) const
++    {
++        for(uint16_t i = 0; i < infos.size(); i++)
++        {
++            auto match = std::get<0>(infos[i]);
++
++            if(interfaceMap.contains(match.first) && interfaceMap[match.first] == match.second)
++            {
++                entry = std::get<1>(infos[i]);
++                return true;
++            }
++        }
++        return false;
++    }
++};
++
++/** @struct DeviceInventoryInfo
++ *  @brief the Device inventory infor parsed from config file and find the matched configured info for an dbus interface from mctp endpoint
++*/
++using DeviceInventoryInfo = MatchEntryInfo<MatchDeviceInfo, DeviceInfo>;
++/** @struct FirmwareInventoryInfo
++ *  @brief the Firmware inventory info parsed from config file and find the matched configured info for an dbus interface from mctp endpoint
++*/
++using FirmwareInventoryInfo = MatchEntryInfo<MatchFirmwareInfo, FirmwareInfo>;
++/** @struct ComponentNameMapInfo
++ *  @brief the Component name info parsed from config file and find the matched configured info for an dbus interface from mctp endpoint
++*/
++using ComponentNameMapInfo = MatchEntryInfo<MatchComponentNameMapInfo, ComponentIdNameMap>;
++
++enum class ComponentImageInfoPos : size_t
++{
++    CompClassificationPos = 0,
++    CompIdentifierPos = 1,
++    CompComparisonStampPos = 2,
++    CompOptionsPos = 3,
++    ReqCompActivationMethodPos = 4,
++    CompLocationOffsetPos = 5,
++    CompSizePos = 6,
++    CompVersionPos = 7,
++};
++
++// PackageSignatureFormat
++using PackageSignatureVersion = uint8_t;
++using PackageSignatureSecurityVersion = uint8_t;
++using PackageSignaturePayloadSize = size_t;
++using PackageSignatureSignatureType = uint8_t;
++using PackageSignatureSignatureSize = uint16_t;
++using PackageSignatureSignature = std::vector<uint8_t>;
++using PackageSignatureMinorVersion = uint8_t;
++using PackageSignatureOffsetToSignature = uint16_t;
++using PackageSignatureOffsetToPublicKey = uint16_t;
++using PackageSignaturePublicKeySize = uint16_t;
++using PackageSignaturePublicKey = std::vector<uint8_t>;
++
++} // namespace fw_update
++
++namespace pdr
++{
++
++using EID = uint8_t;
++using TerminusHandle = uint16_t;
++using TerminusID = uint8_t;
++using SensorID = uint16_t;
++using EffecterID = uint16_t;
++using EntityType = uint16_t;
++using EntityInstance = uint16_t;
++using ContainerID = uint16_t;
++using StateSetId = uint16_t;
++using CompositeCount = uint8_t;
++using SensorOffset = uint8_t;
++using EventState = uint8_t;
++using TerminusValidity = uint8_t;
++
++//!< Subset of the State Set that is supported by a effecter/sensor
++using PossibleStates = std::set<uint8_t>;
++//!< Subset of the State Set that is supported by each effecter/sensor in a
++//!< composite effecter/sensor
++using CompositeSensorStates = std::vector<PossibleStates>;
++using EntityInfo = std::tuple<ContainerID, EntityType, EntityInstance>;
++using SensorInfo = std::tuple<EntityInfo, CompositeSensorStates>;
++using StateSetData = std::tuple<StateSetId, PossibleStates>;
++using StateSetInfo = std::tuple<EntityInfo, std::vector<StateSetData>>;
++} // namespace pdr
++
++} // namespace pldm
+diff -Naur a/src/dbus-utils.cpp b/src/dbus-utils.cpp
+--- a/src/dbus-utils.cpp	1970-01-01 08:00:00.000000000 +0800
++++ b/src/dbus-utils.cpp	2024-08-14 12:17:22.530093533 +0800
+@@ -0,0 +1,593 @@
++
++#include "dbus-utils.hpp"
++
++#include "pdr.h"
++#include "pldm_types.h"
++
++#include <phosphor-logging/lg2.hpp>
++#include <xyz/openbmc_project/Common/error.hpp>
++#include <xyz/openbmc_project/Logging/Entry/server.hpp>
++#include <xyz/openbmc_project/Software/ExtendedVersion/server.hpp>
++
++#include <algorithm>
++#include <array>
++#include <cctype>
++#include <ctime>
++#include <fstream>
++#include <iostream>
++#include <map>
++#include <stdexcept>
++#include <string>
++#include <vector>
++
++namespace pldm
++{
++namespace dbusutils
++{
++#if 0
++std::vector<std::vector<uint8_t>> findStateEffecterPDR(uint8_t /*tid*/,
++                                                       uint16_t entityID,
++                                                       uint16_t stateSetId,
++                                                       const pldm_pdr* repo)
++{
++    uint8_t* outData = nullptr;
++    uint32_t size{};
++    const pldm_pdr_record* record{};
++    std::vector<std::vector<uint8_t>> pdrs;
++    try
++    {
++        do
++        {
++            record = pldm_pdr_find_record_by_type(repo, PLDM_STATE_EFFECTER_PDR,
++                                                  record, &outData, &size);
++            if (record)
++            {
++                auto pdr = reinterpret_cast<pldm_state_effecter_pdr*>(outData);
++                auto compositeEffecterCount = pdr->composite_effecter_count;
++                auto possible_states_start = pdr->possible_states;
++
++                for (auto effecters = 0x00; effecters < compositeEffecterCount;
++                     effecters++)
++                {
++                    auto possibleStates =
++                        reinterpret_cast<state_effecter_possible_states*>(
++                            possible_states_start);
++                    auto setId = possibleStates->state_set_id;
++                    auto possibleStateSize =
++                        possibleStates->possible_states_size;
++
++                    if (pdr->entity_type == entityID && setId == stateSetId)
++                    {
++                        std::vector<uint8_t> effecter_pdr(&outData[0],
++                                                          &outData[size]);
++                        pdrs.emplace_back(std::move(effecter_pdr));
++                        break;
++                    }
++                    possible_states_start += possibleStateSize + sizeof(setId) +
++                                             sizeof(possibleStateSize);
++                }
++            }
++
++        } while (record);
++    }
++    catch (const std::exception& e)
++    {
++        lg2::error(" Failed to obtain a record.", "ERROR", e);
++    }
++
++    return pdrs;
++}
++
++std::vector<std::vector<uint8_t>> findStateSensorPDR(uint8_t /*tid*/,
++                                                     uint16_t entityID,
++                                                     uint16_t stateSetId,
++                                                     const pldm_pdr* repo)
++{
++    uint8_t* outData = nullptr;
++    uint32_t size{};
++    const pldm_pdr_record* record{};
++    std::vector<std::vector<uint8_t>> pdrs;
++    try
++    {
++        do
++        {
++            record = pldm_pdr_find_record_by_type(repo, PLDM_STATE_SENSOR_PDR,
++                                                  record, &outData, &size);
++            if (record)
++            {
++                auto pdr = reinterpret_cast<pldm_state_sensor_pdr*>(outData);
++                auto compositeSensorCount = pdr->composite_sensor_count;
++                auto possible_states_start = pdr->possible_states;
++
++                for (auto sensors = 0x00; sensors < compositeSensorCount;
++                     sensors++)
++                {
++                    auto possibleStates =
++                        reinterpret_cast<state_sensor_possible_states*>(
++                            possible_states_start);
++                    auto setId = possibleStates->state_set_id;
++                    auto possibleStateSize =
++                        possibleStates->possible_states_size;
++
++                    if (pdr->entity_type == entityID && setId == stateSetId)
++                    {
++                        std::vector<uint8_t> sensor_pdr(&outData[0],
++                                                        &outData[size]);
++                        pdrs.emplace_back(std::move(sensor_pdr));
++                        break;
++                    }
++                    possible_states_start += possibleStateSize + sizeof(setId) +
++                                             sizeof(possibleStateSize);
++                }
++            }
++
++        } while (record);
++    }
++    catch (const std::exception& e)
++    {
++        lg2::error(" Failed to obtain a record.", "ERROR", e);
++    }
++
++    return pdrs;
++}
++
++uint8_t readHostEID()
++{
++    uint8_t eid{};
++    std::ifstream eidFile{HOST_EID_PATH};
++    if (!eidFile.good())
++    {
++        lg2::error("Could not open host EID file: {HOST_EID_PATH}",
++                   "HOST_EID_PATH", std::string(HOST_EID_PATH));
++    }
++    else
++    {
++        std::string eidStr;
++        eidFile >> eidStr;
++        if (!eidStr.empty())
++        {
++            eid = atoi(eidStr.c_str());
++        }
++        else
++        {
++            lg2::error("Host EID file was empty");
++        }
++    }
++
++    return eid;
++}
++
++uint8_t getNumPadBytes(uint32_t data)
++{
++    uint8_t pad;
++    pad = ((data % 4) ? (4 - data % 4) : 0);
++    return pad;
++} // end getNumPadBytes
++
++bool uintToDate(uint64_t data, uint16_t* year, uint8_t* month, uint8_t* day,
++                uint8_t* hour, uint8_t* min, uint8_t* sec)
++{
++    constexpr uint64_t max_data = 29991231115959;
++    constexpr uint64_t min_data = 19700101000000;
++    if (data < min_data || data > max_data)
++    {
++        return false;
++    }
++
++    *year = data / 10000000000;
++    data = data % 10000000000;
++    *month = data / 100000000;
++    data = data % 100000000;
++    *day = data / 1000000;
++    data = data % 1000000;
++    *hour = data / 10000;
++    data = data % 10000;
++    *min = data / 100;
++    *sec = data % 100;
++
++    return true;
++}
++
++std::optional<std::vector<set_effecter_state_field>>
++    parseEffecterData(const std::vector<uint8_t>& effecterData,
++                      uint8_t effecterCount)
++{
++    std::vector<set_effecter_state_field> stateField;
++
++    if (effecterData.size() != effecterCount * 2)
++    {
++        return std::nullopt;
++    }
++
++    for (uint8_t i = 0; i < effecterCount; ++i)
++    {
++        uint8_t set_request = effecterData[i * 2] == PLDM_REQUEST_SET
++                                  ? PLDM_REQUEST_SET
++                                  : PLDM_NO_CHANGE;
++        set_effecter_state_field filed{set_request, effecterData[i * 2 + 1]};
++        stateField.emplace_back(std::move(filed));
++    }
++
++    return std::make_optional(std::move(stateField));
++}
++#endif
++std::string DBusHandler::getService(const char* path,
++                                    const char* interface) const
++{
++    using DbusInterfaceList = std::vector<std::string>;
++    std::map<std::string, std::vector<std::string>> mapperResponse;
++    auto& bus = DBusHandler::getBus();
++
++    auto mapper = bus.new_method_call(mapperService, mapperPath,
++                                      mapperInterface, "GetObject");
++    mapper.append(path, DbusInterfaceList({interface}));
++
++    auto mapperResponseMsg = bus.call(mapper);
++    mapperResponseMsg.read(mapperResponse);
++    return mapperResponse.begin()->first;
++}
++
++GetSubTreeResponse
++    DBusHandler::getSubtree(const std::string& searchPath, int depth,
++                            const std::vector<std::string>& ifaceList) const
++{
++
++    auto& bus = pldm::dbusutils::DBusHandler::getBus();
++    auto method = bus.new_method_call(mapperService, mapperPath,
++                                      mapperInterface, "GetSubTree");
++    method.append(searchPath, depth, ifaceList);
++    auto reply = bus.call(method);
++    GetSubTreeResponse response;
++    reply.read(response);
++    return response;
++}
++
++void reportError(const char* errorMsg)
++{
++    static constexpr auto logObjPath = "/xyz/openbmc_project/logging";
++    static constexpr auto logInterface = "xyz.openbmc_project.Logging.Create";
++
++    auto& bus = pldm::dbusutils::DBusHandler::getBus();
++
++    try
++    {
++        auto service = DBusHandler().getService(logObjPath, logInterface);
++        using namespace sdbusplus::xyz::openbmc_project::Logging::server;
++        auto severity =
++            sdbusplus::xyz::openbmc_project::Logging::server::convertForMessage(
++                sdbusplus::xyz::openbmc_project::Logging::server::Entry::Level::
++                    Error);
++        auto method = bus.new_method_call(service.c_str(), logObjPath,
++                                          logInterface, "Create");
++        std::map<std::string, std::string> addlData{};
++        method.append(errorMsg, severity, addlData);
++        bus.call_noreply(method);
++    }
++    catch (const std::exception& e)
++    {
++        lg2::error("failed to make a d-bus call to create error log.", "ERROR",
++                   e);
++    }
++}
++
++void DBusHandler::setDbusProperty(const DBusMapping& dBusMap,
++                                  const PropertyValue& value) const
++{
++    auto setDbusValue = [&dBusMap, this](const auto& variant) {
++        auto& bus = getBus();
++        auto service =
++            getService(dBusMap.objectPath.c_str(), dBusMap.interface.c_str());
++        auto method = bus.new_method_call(
++            service.c_str(), dBusMap.objectPath.c_str(), dbusProperties, "Set");
++        method.append(dBusMap.interface.c_str(), dBusMap.propertyName.c_str(),
++                      variant);
++        bus.call_noreply(method);
++    };
++
++    if (dBusMap.propertyType == "uint8_t")
++    {
++        std::variant<uint8_t> v = std::get<uint8_t>(value);
++        setDbusValue(v);
++    }
++    else if (dBusMap.propertyType == "bool")
++    {
++        std::variant<bool> v = std::get<bool>(value);
++        setDbusValue(v);
++    }
++    else if (dBusMap.propertyType == "int16_t")
++    {
++        std::variant<int16_t> v = std::get<int16_t>(value);
++        setDbusValue(v);
++    }
++    else if (dBusMap.propertyType == "uint16_t")
++    {
++        std::variant<uint16_t> v = std::get<uint16_t>(value);
++        setDbusValue(v);
++    }
++    else if (dBusMap.propertyType == "int32_t")
++    {
++        std::variant<int32_t> v = std::get<int32_t>(value);
++        setDbusValue(v);
++    }
++    else if (dBusMap.propertyType == "uint32_t")
++    {
++        std::variant<uint32_t> v = std::get<uint32_t>(value);
++        setDbusValue(v);
++    }
++    else if (dBusMap.propertyType == "int64_t")
++    {
++        std::variant<int64_t> v = std::get<int64_t>(value);
++        setDbusValue(v);
++    }
++    else if (dBusMap.propertyType == "uint64_t")
++    {
++        std::variant<uint64_t> v = std::get<uint64_t>(value);
++        setDbusValue(v);
++    }
++    else if (dBusMap.propertyType == "double")
++    {
++        std::variant<double> v = std::get<double>(value);
++        setDbusValue(v);
++    }
++    else if (dBusMap.propertyType == "string")
++    {
++        std::variant<std::string> v = std::get<std::string>(value);
++        setDbusValue(v);
++    }
++    else if (dBusMap.propertyType == "array[object_path]")
++    {
++        std::variant<std::vector<sdbusplus::message::object_path>> v =
++            std::get<std::vector<sdbusplus::message::object_path>>(value);
++        setDbusValue(v);
++    }
++    else
++    {
++        throw std::invalid_argument("UnSpported Dbus Type");
++    }
++}
++
++PropertyValue DBusHandler::getDbusPropertyVariant(
++    const char* objPath, const char* dbusProp, const char* dbusInterface) const
++{
++    auto& bus = DBusHandler::getBus();
++    auto service = getService(objPath, dbusInterface);
++    auto method =
++        bus.new_method_call(service.c_str(), objPath, dbusProperties, "Get");
++    method.append(dbusInterface, dbusProp);
++    PropertyValue value{};
++    auto reply = bus.call(method);
++    reply.read(value);
++    return value;
++}
++
++PropertyValue jsonEntryToDbusVal(std::string_view type,
++                                 const nlohmann::json& value)
++{
++    PropertyValue propValue{};
++    if (type == "uint8_t")
++    {
++        propValue = static_cast<uint8_t>(value);
++    }
++    else if (type == "uint16_t")
++    {
++        propValue = static_cast<uint16_t>(value);
++    }
++    else if (type == "uint32_t")
++    {
++        propValue = static_cast<uint32_t>(value);
++    }
++    else if (type == "uint64_t")
++    {
++        propValue = static_cast<uint64_t>(value);
++    }
++    else if (type == "int16_t")
++    {
++        propValue = static_cast<int16_t>(value);
++    }
++    else if (type == "int32_t")
++    {
++        propValue = static_cast<int32_t>(value);
++    }
++    else if (type == "int64_t")
++    {
++        propValue = static_cast<int64_t>(value);
++    }
++    else if (type == "bool")
++    {
++        propValue = static_cast<bool>(value);
++    }
++    else if (type == "double")
++    {
++        propValue = static_cast<double>(value);
++    }
++    else if (type == "string")
++    {
++        propValue = static_cast<std::string>(value);
++    }
++    else
++    {
++        lg2::error("Unknown D-Bus property type, TYPE={TYPE}", "TYPE", type);
++    }
++
++    return propValue;
++}
++#if 0
++uint16_t findStateEffecterId(const pldm_pdr* pdrRepo, uint16_t entityType,
++                             uint16_t entityInstance, uint16_t containerId,
++                             uint16_t stateSetId, bool localOrRemote)
++{
++    uint8_t* pdrData = nullptr;
++    uint32_t pdrSize{};
++    const pldm_pdr_record* record{};
++    do
++    {
++        record = pldm_pdr_find_record_by_type(pdrRepo, PLDM_STATE_EFFECTER_PDR,
++                                              record, &pdrData, &pdrSize);
++        if (record && (localOrRemote ^ pldm_pdr_record_is_remote(record)))
++        {
++            auto pdr = reinterpret_cast<pldm_state_effecter_pdr*>(pdrData);
++            auto compositeEffecterCount = pdr->composite_effecter_count;
++            auto possible_states_start = pdr->possible_states;
++
++            for (auto effecters = 0x00; effecters < compositeEffecterCount;
++                 effecters++)
++            {
++                auto possibleStates =
++                    reinterpret_cast<state_effecter_possible_states*>(
++                        possible_states_start);
++                auto setId = possibleStates->state_set_id;
++                auto possibleStateSize = possibleStates->possible_states_size;
++
++                if (entityType == pdr->entity_type &&
++                    entityInstance == pdr->entity_instance &&
++                    containerId == pdr->container_id && stateSetId == setId)
++                {
++                    return pdr->effecter_id;
++                }
++                possible_states_start += possibleStateSize + sizeof(setId) +
++                                         sizeof(possibleStateSize);
++            }
++        }
++    } while (record);
++
++    return PLDM_INVALID_EFFECTER_ID;
++}
++
++int emitStateSensorEventSignal(uint8_t tid, uint16_t sensorId,
++                               uint8_t sensorOffset, uint8_t eventState,
++                               uint8_t previousEventState)
++{
++    try
++    {
++        auto& bus = DBusHandler::getBus();
++        auto msg = bus.new_signal("/xyz/openbmc_project/pldm",
++                                  "xyz.openbmc_project.PLDM.Event",
++                                  "StateSensorEvent");
++        msg.append(tid, sensorId, sensorOffset, eventState, previousEventState);
++
++        msg.signal_send();
++    }
++    catch (const std::exception& e)
++    {
++        lg2::error("Error emitting pldm event signal.", "ERROR", e);
++        return PLDM_ERROR;
++    }
++
++    return PLDM_SUCCESS;
++}
++
++uint16_t findStateSensorId(const pldm_pdr* pdrRepo, uint8_t tid,
++                           uint16_t entityType, uint16_t entityInstance,
++                           uint16_t containerId, uint16_t stateSetId)
++{
++    auto pdrs = findStateSensorPDR(tid, entityType, stateSetId, pdrRepo);
++    for (auto pdr : pdrs)
++    {
++        auto sensorPdr = reinterpret_cast<pldm_state_sensor_pdr*>(pdr.data());
++        auto compositeSensorCount = sensorPdr->composite_sensor_count;
++        auto possible_states_start = sensorPdr->possible_states;
++
++        for (auto sensors = 0x00; sensors < compositeSensorCount; sensors++)
++        {
++            auto possibleStates =
++                reinterpret_cast<state_sensor_possible_states*>(
++                    possible_states_start);
++            auto setId = possibleStates->state_set_id;
++            auto possibleStateSize = possibleStates->possible_states_size;
++            if (entityType == sensorPdr->entity_type &&
++                entityInstance == sensorPdr->entity_instance &&
++                stateSetId == setId && containerId == sensorPdr->container_id)
++            {
++                return sensorPdr->sensor_id;
++            }
++            possible_states_start +=
++                possibleStateSize + sizeof(setId) + sizeof(possibleStateSize);
++        }
++    }
++    return PLDM_INVALID_EFFECTER_ID;
++}
++#endif
++void printBuffer(bool isTx, const std::vector<uint8_t>& buffer)
++{
++    if (!buffer.empty())
++    {
++        std::ostringstream tempStream;
++        for (int byte : buffer)
++        {
++            tempStream << std::setfill('0') << std::setw(2) << std::hex << byte
++                       << " ";
++        }
++        if (isTx)
++        {
++            lg2::info("Tx: {TX}", "TX", tempStream.str());
++        }
++        else
++        {
++            lg2::info("Rx: {RX}", "RX", tempStream.str());
++        }
++    }
++}
++
++void printBuffer(bool isTx, const pldm_msg* buffer, size_t bufferLen)
++{
++    auto ptr = reinterpret_cast<const uint8_t*>(buffer);
++    auto outBuffer =
++        std::vector<uint8_t>(ptr, ptr + (sizeof(pldm_msg_hdr) + bufferLen));
++    printBuffer(isTx, outBuffer);
++}
++
++std::string toString(const struct variable_field& var)
++{
++    if (var.ptr == nullptr || !var.length)
++    {
++        return "";
++    }
++
++    std::string str(reinterpret_cast<const char*>(var.ptr), var.length);
++    std::replace_if(
++        str.begin(), str.end(), [](const char& c) { return !isprint(c); }, ' ');
++    return str;
++}
++
++std::vector<std::string> split(std::string_view srcStr, std::string_view delim,
++                               std::string_view trimStr)
++{
++    std::vector<std::string> out;
++    size_t start;
++    size_t end = 0;
++
++    while ((start = srcStr.find_first_not_of(delim, end)) != std::string::npos)
++    {
++        end = srcStr.find(delim, start);
++        std::string_view dstStr = srcStr.substr(start, end - start);
++        if (!trimStr.empty())
++        {
++            dstStr.remove_prefix(dstStr.find_first_not_of(trimStr));
++            dstStr.remove_suffix(dstStr.size() - 1 -
++                                 dstStr.find_last_not_of(trimStr));
++        }
++
++        if (!dstStr.empty())
++        {
++            out.push_back(std::string(dstStr));
++        }
++    }
++
++    return out;
++}
++
++std::string getCurrentSystemTime()
++{
++    using namespace std::chrono;
++    const time_point<system_clock> tp = system_clock::now();
++    std::time_t tt = system_clock::to_time_t(tp);
++    auto ms = duration_cast<microseconds>(tp.time_since_epoch()) -
++              duration_cast<seconds>(tp.time_since_epoch());
++
++    std::stringstream ss;
++    ss << std::put_time(std::localtime(&tt), "%F %Z %T.")
++       << std::to_string(ms.count());
++    return ss.str();
++}
++} // namespace utils
++} // namespace pldm

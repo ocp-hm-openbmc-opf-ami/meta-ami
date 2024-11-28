@@ -1,0 +1,117 @@
+diff -Naur a/src/firmware_update.cpp b/src/firmware_update.cpp
+--- a/src/firmware_update.cpp	2024-09-13 14:58:49.508359213 +0800
++++ b/src/firmware_update.cpp	2024-09-13 15:07:18.896740107 +0800
+@@ -30,11 +30,22 @@
+ 
+ #include <array>
+ #include <iostream>
++#include <sdeventplus/clock.hpp>
++#include <sdeventplus/utility/timer.hpp>
++
++#include <chrono>
++#include <cstdio>
++#include <string>
++#include <utility>
++
+ const uint8_t MCTP_MSG_TYPE_PLDM = 1;
+ using namespace sdeventplus;
+ using namespace sdeventplus::source;
++using sdeventplus::Clock;
++using sdeventplus::ClockId;
+ 
+-
++constexpr auto clockId = ClockId::RealTime;
++using Timer = sdeventplus::utility::Timer<clockId>;
+ 
+ #define PLDM_MAX_TRANSFER_SIZE 1024
+ namespace pldm
+@@ -50,10 +61,10 @@
+ constexpr uint16_t timeout = 100;
+ 
+ // Timeout in milliseconds in between fwu command
+-constexpr uint16_t fdCmdTimeout = 5000;
++//constexpr uint16_t fdCmdTimeout = 5000;
+ 
+ // Timeout in milliseconds in verify State
+-constexpr uint32_t verify_timeout = 600000;
++//constexpr uint32_t verify_timeout = 600000;
+ 
+ // Maximum retry count
+ constexpr size_t retryCount = 3;
+@@ -66,7 +77,7 @@
+ 
+ // Time in milliseconds for the update agent to wait for request firmware
+ // data command
+-const uint32_t requestFirmwareDataIdleTimeoutMs = 90000;
++//const uint32_t requestFirmwareDataIdleTimeoutMs = 90000;
+ 
+ // Maximum GetDeviceMetaData response count
+ constexpr size_t deviceMetaDataResponseCount = 100;
+@@ -138,9 +149,14 @@
+     fwUpdate->validateReqForFWUpdCmd(requestMsg);
+ }
+ 
+-void setup_event_loop() {
++void setup_event_loop(std::chrono::milliseconds maxRunTime) {
+ 
+ 		auto event = Event::get_default();
++		// Timer callback for exiting the event loop
++		auto exitCb = [&](Timer&) {
++				event.exit(0);
++		};
++		Timer exitTimer(event, std::move(exitCb), maxRunTime);
+ 		auto callback = [=](IO& io, int sfd, uint32_t revents) {
+ 				(void)sfd;
+ 				if (!(revents & EPOLLIN))
+@@ -654,7 +670,8 @@
+     while (maxNumReq--)
+     {
+         //startTimer(yield, fdCmdTimeout);
+-		setup_event_loop();
++		std::chrono::milliseconds fdCmdTimeout(5000);
++		setup_event_loop(fdCmdTimeout);
+         if (!fdReqMatched)
+         {
+             phosphor::logging::log<phosphor::logging::level::WARNING>(
+@@ -1345,7 +1362,8 @@
+     while (--maxNumReq)
+     {
+         //startTimer(yield, requestFirmwareDataIdleTimeoutMs);
+-		setup_event_loop();
++		std::chrono::milliseconds requestFirmwareDataIdleTimeoutMs(900000);
++		setup_event_loop(requestFirmwareDataIdleTimeoutMs);
+         if (!fdReqMatched)
+         {
+             phosphor::logging::log<phosphor::logging::level::WARNING>(
+@@ -1557,8 +1575,9 @@
+ 
+     while (maxNumReq--)
+     {
+-        //startTimer(yield, fdCmdTimeout);
+-		setup_event_loop();
++        //startTimer(yield, fdCmdTimeout);	
++		std::chrono::milliseconds fdCmdTimeout(5000);
++		setup_event_loop(fdCmdTimeout);
+         if (!fdReqMatched)
+         {
+             phosphor::logging::log<phosphor::logging::level::WARNING>(
+@@ -2254,7 +2273,8 @@
+             "FD changed state to VERIFY");
+ 
+         expectedCmd = PLDM_VERIFY_COMPLETE;
+-		setup_event_loop();
++		std::chrono::milliseconds verify_timeout(600000);
++		setup_event_loop(verify_timeout);
+ //        startTimer(yield, verify_timeout);
+ 
+         if (!fdReqMatched)
+@@ -2294,7 +2314,8 @@
+             "FD changed state to APPLY");
+ 
+         expectedCmd = PLDM_APPLY_COMPLETE;
+-		setup_event_loop();
++		std::chrono::milliseconds fdCmdTimeout(5000);
++		setup_event_loop(fdCmdTimeout);
+         //startTimer(yield, fdCmdTimeout);
+ 
+         if (!fdReqMatched)

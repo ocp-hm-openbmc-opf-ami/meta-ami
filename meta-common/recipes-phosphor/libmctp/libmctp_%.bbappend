@@ -1,6 +1,7 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/libmctp.git;protocol=https;branch=develop \
+           file://0001-extract-tag-owner.patch \
            file://default"
 SRCREV = "7683752b4ff32dd7703efa5a9e1f43701a208881"
 
