@@ -33,7 +33,13 @@ SRC_URI:append = " file://0001-dts-add-i3c-hub-node-to-support-two-bic-slave-dev
 # for npcm bic
 # SRC_URI:append = " file://0001-i3c-master-svc-add-delay-for-NPCM-BIC.patch"
 #
-SRC_URI:append = " file://0017-Nuvoton-layout-changes.patch "
+
+# The following patches address flashlayout changes
+SRC_URI:append = " file://0017-Nuvoton-layout-changes.patch \
+		   file://0022-Updated-bmc-size-from-64-to-128MB.patch \
+		"
+#Flashlayout Nuvoton end
+
 SRC_URI:append = " file://0018-Add-IPMB-Support-Nuvoton.patch "
 
 SRC_URI:append = " file://nfs_cifs.cfg \
