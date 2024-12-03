@@ -6,7 +6,7 @@ LICENSE = "CLOSED"
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/license-control.git;protocol=https;branch=main"
-SRCREV = "50a24eb967dca67664fbc6f1691fbb1bb531f4b3"
+SRCREV = "27beaa1ba31cd4a892dd4f639f1f8a100e2d98af"
 
 S = "${WORKDIR}/git"
 PV = "1.0+git${SRCPV}"
