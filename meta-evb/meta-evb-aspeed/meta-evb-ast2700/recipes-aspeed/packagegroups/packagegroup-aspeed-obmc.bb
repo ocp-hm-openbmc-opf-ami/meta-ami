@@ -61,7 +61,6 @@ RDEPENDS:${PN}-inband = " \
 SUMMARY:${PN}-apps = "Open Source Applications for OpenBMC Image"
 RDEPENDS:${PN}-apps = " \
     ipmitool \
-    at-scale-debug \
     pdbg \
     "
 
