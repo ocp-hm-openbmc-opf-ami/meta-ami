@@ -101,3 +101,8 @@ SRC_URI:append = "${@bb.utils.contains('USB_Port_B_Function', 'Gadget-Device', S
 #                   file://0037-IPMI-BT-Driver-Enable.patch \
 #                   "
 #SRC_URI:append:evb-ast2600 = "${@bb.utils.contains('IPMI_BT_SUPPORT', 'ipmi-bt-enable', SRC_URI_IPMI_BT, '', d)}"
+
+SRC_URI_BHS:append = "  file://0054-Updating-VW_GPIO_DIR-register.patch \
+                        file://enable_vw_gpio.cfg \
+                     "
+SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'bhs', SRC_URI_BHS, '', d)}"
