@@ -25,11 +25,14 @@ SRC_URI_BHS:append = "file://0004-Add-Task-interface-and-property.patch \
                       file://0003-bhs-Not-able-to-do-power-cycle-if-one-task-is-in-running.patch \
                       file://0009-Cancel-task-enhancement-for-power-operations.patch \
                      "
+SRC_URI_EVB2700:append = "file://0003-EVB-2700-egs-Not-able-to-do-power-cycle-if-one-task-.patch"
 
 #EVB:append = "file://0003-evb-Not-able-to-do-power-cycle-if-one-task-is-in-running.patch"
 
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'amd-chalupa', SRC_URI_AMD, '', d)}"
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'egs', SRC_URI_EGS, '', d)}"
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'bhs', SRC_URI_BHS, '', d)}"
+SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'ast2700-sdk-layer', SRC_URI_EVB2700, '', d)}"
+
 #SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb-ast2600', EVB, '', d)}"
 
