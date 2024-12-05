@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-dbus-interfaces.git;branch=main;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "fc71a025fb2f950b61302e6861f67a59c5b2a391"
+SRCREV_override = "38a8537b241a4966be49ce43546bdc2b645cc799"
 SRC_URI += "file://0005-Add-Bootstrap-credential-support.patch \
             file://0006-Add-Diag-Arugment-in-Boot-Mode-Interface.patch \
             file://0010-Added-TimeOut-for-managers.patch \
