@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI += " \
     file://net-snmp-create-v3-user \
-    file://0001-Added-changes-to-support-system-lock-mode-for-set-SN.patch \
+    file://0001-SNMP-lock-mode.patch \
     "
 
 do_install:append(){
