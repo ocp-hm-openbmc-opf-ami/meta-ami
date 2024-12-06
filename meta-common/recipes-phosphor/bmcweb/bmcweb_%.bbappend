@@ -18,6 +18,7 @@ SRC_URI_NON_PFR = " file://0067-Adding-support-for-HttpPushUriTargets.patch \
                     file://0259-Fix-for-time-out-issue-in-FW-update.patch \
                     file://0260-Clear-cache-before-firmware-update-start-to-fix-out-.patch \
                     file://0270-UpdateService-should-block-HttpPushUriTargets-When-remove-anyone-of-the-SPI.patch \
+                    file://0271-Showing-ImageName-while-firmware-update.patch \
 "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
 
