@@ -20,7 +20,7 @@ do_install:append(){
   install -m 0644 -D ${S}/selutility.hpp ${D}${includedir}/phosphor-ipmi-host
   install -m 0644 -D ${S}/phosphor-ipmi-warm-reset.target ${D}${systemd_system_unitdir}
   install -m 0644 -D ${WORKDIR}/phosphor-ipmi-host-ami.service ${D}${systemd_system_unitdir}/phosphor-ipmi-host.service
-  if [ "${MACHINE}" = "evb-ast2600" ]; then
+  if [ "${MACHINE}" = "evb-ast2600" ] || [ "${MACHINE}" = "evb-npcm845" ]; then
       install -m 0644 -D ${WORKDIR}/phosphor-ipmi-host-evb-ami.service ${D}${systemd_system_unitdir}/phosphor-ipmi-host.service
   fi
 
