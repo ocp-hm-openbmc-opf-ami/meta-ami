@@ -12,6 +12,7 @@ SRC_URI += " \
 	       file://Add-pre-check-for-enable-power-saving-mode.patch \
            file://0007-Added-Dbus-object-path-interface-and-property-for-BM.patch \
            file://0008-Add-SEL-Limit-Flags.patch \
+           file://0009-Added-Dbus-Object-for-DCMI-Thermal-Limit.patch \
 "
 
 SRC_URI_evb_aspeed:append =  " \
