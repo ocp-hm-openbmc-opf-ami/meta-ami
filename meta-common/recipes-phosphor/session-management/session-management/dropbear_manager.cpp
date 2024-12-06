@@ -11,6 +11,7 @@
 #include <string>
 #include <regex>
 #include <pwd.h>
+#include <csignal> 
 
 enum class UnregisterReason {
     LOGOUT_SESSION = 1,
@@ -31,6 +32,7 @@ struct SessionInfo {
 std::map<std::string, SessionInfo> serviceSessions;
 std::vector<SessionInfo> sshSessionInfoProperty;
 
+constexpr int monitorTriggersDelay = 3;
 
 using SshSessionInfoEntry = std::tuple<uint8_t, std::string, std::string, uint8_t, uint8_t, uint8_t, std::string>;
 using SshSessionInfoType = std::vector<SshSessionInfoEntry>;
@@ -436,6 +438,7 @@ void monitorTriggers() {
         }
 
         variable1 = variable2;
+        std::this_thread::sleep_for(std::chrono::seconds(monitorTriggersDelay));
     }
 }
 
