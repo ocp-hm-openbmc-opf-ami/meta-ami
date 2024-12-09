@@ -7,6 +7,7 @@ SRC_URI:append:evb-ast2600 = " file://0001-openbmc-flash-layout-ami-evb-64-dtsi.
                                file://0002-Enable-SGPIO-Master-0-on-EVB.patch \
 		               file://0001-Enabled-UART-ROUTING-to-EVB.patch \
 		               file://0001-Enabled-UART-driver-to-EVB.patch \
+                       file://0003-GPIO-Pin-Configurations-for-Power-Operations.patch \
                              "
                   
 #SRC_URI:append:evb-ast2600 = " file://ast2600evb.config \
