@@ -108,7 +108,7 @@ if [ -d "meta-core/meta-intel" ]; then
 
 	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.domain-mapperd.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.domain-mapperd.git;protocol=https;branch=main/g' meta-core/meta-intel/recipes-intel/domain-mapperd/domain-mapperd.bb
 
-	sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.dimm-devices-accessor.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.dimm-devices-accessor.git;protocol=https;branch=main/g' meta-core/meta-intel/recipes-intel/dimm-devices-accessor/dimm-devices-accessor.bb
+	sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.dimm-devices-accessor.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.dimm-devices-accessor.git;protocol=https;branch=bhs/g' meta-core/meta-intel/recipes-intel/dimm-devices-accessor/dimm-devices-accessor.bb
 
 	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.libpmt.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.libraries.libpmt.git;protocol=https;branch=bhs-common/g' meta-core/meta-intel/recipes-intel/pmt/libpmt_git.bb
 
