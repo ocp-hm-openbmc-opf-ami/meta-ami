@@ -1,7 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-
-SRC_URI += " \
-    file://0001-DefaultUser_admin_entry_added_ipmipass.patch \
-    file://ipmi_pass_defaultusers;subdir=git/ \
-    "
+python Add_DefaultUser_if_debugtweaks_not_enabled() {
+    if 'debug-tweaks' not in d.getVar('EXTRA_IMAGE_FEATURES', True).split():
+        d.appendVar('SRC_URI', " file://ipmi_pass_32;subdir=git/")
+}
