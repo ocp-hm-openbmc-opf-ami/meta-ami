@@ -29,6 +29,8 @@ SRC_URI += "file://0003-Ported-ADC-driver-changes-from-INTEL-AMI.patch \
 	file://bootlogo.cfg \
         file://0042-Implement-Netlink-for-NCSI-Flow-Control.patch \
         file://0053-Fix-send-hid-data-will-halt-on-hid-queue.patch \
+	file://0054-Add-i2c-slave-mqueue-support.patch \
+	file://Enable_i2c_slave.cfg \
         file://0001-aspeed-video-enable-partial-jpeg-capture-support.patch \
 		file://0055-Fix-usb-gadget-mass-storage-miss-stats-property.patch \
         "
