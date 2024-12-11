@@ -7,7 +7,7 @@ DEPENDS = "systemd nlohmann-json sdbusplus phosphor-logging phosphor-dbus-interf
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/obmc-ikvm;protocol=https;branch=feature/auto-video-settings-support"
 
 # Use AUTOREV to get the latest revision from the repository
-SRCREV = "${AUTOREV}"
+SRCREV = "76c545c6051de06180d79654abe2c7e70ef87acb"
 #SRCREV= "<COMMIT SHA>"
 
 # Set the source directory
