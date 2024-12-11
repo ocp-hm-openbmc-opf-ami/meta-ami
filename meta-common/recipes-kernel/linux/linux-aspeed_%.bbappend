@@ -96,6 +96,7 @@ SRC_URI:append= "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'use-lfmctp', SRC_
 SRC_USB_Gadget_Device = " file://0037-Enable-USB-Port-B-as-gadget-device.patch \
                           file://USB-Port-B-as-Gadget-Device.cfg \
                         "
+
 SRC_USB_HOST_Controller = " file://USB-Port-B-as-HOST-Controller.cfg "
 SRC_URI:append = "${@bb.utils.contains('USB_Port_B_Function', 'Gadget-Device', SRC_USB_Gadget_Device, SRC_USB_HOST_Controller, d)}"
 
