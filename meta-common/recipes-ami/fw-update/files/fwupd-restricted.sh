@@ -960,7 +960,9 @@ if [ $# -eq 0 ]; then
 else
     echo "path=$1"
     # clear cache before start firmware update
-    echo 3 > /proc/sys/vm/drop_caches
+    if [ ! -f $update ]; then
+        echo 3 > /proc/sys/vm/drop_caches
+    fi
     if [[ "$1" == *"/"* ]]; then
         URI=$1 # local file
         local_file=1 ;
