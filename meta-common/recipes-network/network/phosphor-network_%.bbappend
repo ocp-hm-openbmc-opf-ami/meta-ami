@@ -75,6 +75,7 @@ SRC_URI:append = " \
              file://0049-Fix-for-the-default-NTP-Server.patch \
 	     file://0049-Replace-System-call.patch \
              file://0051-Fix-IPv4-Unreachable-when-IPv6-Disables.patch \
+             file://0050-Implement-Keep-PHY-Link-Up-with-Meson-Option.patch \
              "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
@@ -103,7 +104,8 @@ EXTRA_OEMESON:append = " -Denable-advanced-route=true"
 EXTRA_OEMESON:append = " -Denable-system-firewall=true"
 
 # Uncomment to enable NCSI
-# EXTRA_OEMESON:append = " -Denable-ncsi=true -Ddefault-ncsi-interface=eth3"
+EXTRA_OEMESON:append = " -Denable-ncsi=true -Ddefault-ncsi-interface=eth1"
+EXTRA_OEMESON:append = " -Dncsi-keep-phy-link-up=false"
 
 EXTRA_OEMESON:append = " -Dncsi-flow-control=false"
 
