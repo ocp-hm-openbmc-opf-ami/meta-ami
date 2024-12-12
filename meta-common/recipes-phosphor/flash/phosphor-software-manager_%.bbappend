@@ -21,7 +21,7 @@ PACKAGECONFIG:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'sync-conf'
 
 EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '','-Dfwupd-script=enabled', d)}"
 EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '','-Doptional-images=image-bios,image-cpld,image-pldm', d)}"
-EXTRA_OEMESON += "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image','-Dactive-bmc-max-allowed=2', '', d)}"
+EXTRA_OEMESON += "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image','-Dactive-bmc-max-allowed=3', '-Dactive-bmc-max-allowed=2', d)}"
 EXTRA_OEMESON:append:intel-ast2600= "${@bb.utils.contains('PACKAGECONFIG', 'sync_bmc_files',' -Dalt-rwfs-dir="/run/media/rwfs-alt/.overlay"', '', d)}"
 
 SRC_URI_NON_PFR_DUAL:append = "file://intel-flash-bmc \

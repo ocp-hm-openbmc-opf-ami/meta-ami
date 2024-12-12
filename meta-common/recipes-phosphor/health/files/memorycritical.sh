@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # Define a list of processes to exclude (you can add more processes to this list as needed)
-exclude_list=" nscd bmcweb phosphor-image-updater phosphor-version-software-manager memorycritical memorywarning phosphor-network-manager dbus-broker phosphor-health-monitor mtd-util mtd_debug flashcp"
+exclude_list=" bmcweb phosphor-image-updater phosphor-version-software-manager memorycritical memorywarning phosphor-network-manager dbus-broker phosphor-health-monitor mtd-util mtd_debug flashcp"
 
 # Function to clear caches
 clear_caches() {
