@@ -13,6 +13,7 @@ SRC_URI += "file://0001-virtual-media-https-support.patch \
             file://0011-OT-7707-Fix-Command-Injection-in-Virtual-Media.patch \
             file://0012-OT-8043-Fix-privilege-escalation-in-virtual-media.patch \
             file://0011-Support-Nuvoton-NPCM845-UDC.patch \
+	    file://0014-OT-8821-Handle-Power-Saving-Mode-via-Virtual-Media.patch \
            "
 
 RDEPENDS:${PN} = "nbd-client nbdkit nfs-export-root"
