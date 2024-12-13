@@ -12,11 +12,11 @@ SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/bmcweb;branch=master;pro
 SRCREV_FORMAT = "override"
 SRCREV_override = "cf0c9acf2437c1d0664cbbb5389f8fc909a1415f"
 
-SRC_URI_NON_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
-                    file://0242-Add-support-to-applytime-property.patch \
+SRC_URI_NON_PFR = " file://0067-Adding-support-for-HttpPushUriTargets.patch \
+                    file://0242-Add-support-to-Apply-time-property.patch \
                     file://0180-Fixed-500-Internal-server-error-while-update-cpld-fw.patch \
                     file://0259-Fix-for-time-out-issue-in-FW-update.patch \
-		            file://0260-Clear-cache-before-firmware-update-start-to-fix-out-.patch \
+                    file://0260-Clear-cache-before-firmware-update-start-to-fix-out-.patch \
                     file://0270-UpdateService-should-block-HttpPushUriTargets-When-remove-anyone-of-the-SPI.patch \
 "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
@@ -59,7 +59,7 @@ SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI
 #
 # PFR
 # HttpPushUriTargets and ApplyTime support are required for PFR
-SRC_URI_PFR = " file://0067-adding-support-for-HttpPushUriTargets.patch \
+SRC_URI_PFR = " file://0067-Adding-support-for-HttpPushUriTargets.patch \
                 file://0242-Add-support-to-applytime-property-in-PFR.patch \
                 file://0180-Fixed-500-Internal-server-error-while-update-cpld-fw.patch \
                 file://0259-Fix-for-time-out-issue-in-FW-update.patch \

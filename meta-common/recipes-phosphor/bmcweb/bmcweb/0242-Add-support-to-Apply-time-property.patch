@@ -1,14 +1,14 @@
-From dcab0fce1d54068a99e62b6b2e0aa7120e46cd9a Mon Sep 17 00:00:00 2001
-From: kirubagharanas  <kirubagharanas@ami.com>
-Date: Tue, 10 Dec 2024 19:43:58 +0530
+From a4f0c8b1e386a123d2fcf23576bb629b882bb78b Mon Sep 17 00:00:00 2001
+From: prasannas <prasannas@ami.com>
+Date: Thu, 5 Dec 2024 09:40:49 +0530
 Subject: [PATCH 242/242] Add support to Apply time property
 
 ---
- redfish-core/lib/update_service.hpp | 379 +++++++++++++++++++++++++---
- 1 file changed, 348 insertions(+), 31 deletions(-)
+ redfish-core/lib/update_service.hpp | 380 +++++++++++++++++++++++++---
+ 1 file changed, 348 insertions(+), 32 deletions(-)
 
 diff --git a/redfish-core/lib/update_service.hpp b/redfish-core/lib/update_service.hpp
-index c02b43ed..aaccfad1 100644
+index c02b43ed..6ccf73db 100644
 --- a/redfish-core/lib/update_service.hpp
 +++ b/redfish-core/lib/update_service.hpp
 @@ -122,6 +122,21 @@ inline void cleanUp()
@@ -41,7 +41,7 @@ index c02b43ed..aaccfad1 100644
                          if (swId != imgTarget)
                          {
                              continue;
-@@ -326,6 +342,73 @@ inline bool handleCreateTask(const boost::system::error_code& ec2,
+@@ -326,7 +342,73 @@ inline bool handleCreateTask(const boost::system::error_code& ec2,
          // still alive, update timer
          taskData->extendTimer(std::chrono::minutes(10));
      }
@@ -73,7 +73,7 @@ index c02b43ed..aaccfad1 100644
 +            taskData->messages.emplace_back(messages::taskCancelled(index));
 +            return task::completed;
 +        }
-+
+ 
 +        if (taskState->ends_with("New"))
 +        {
 +            taskData->state = "Pending";
@@ -112,10 +112,10 @@ index c02b43ed..aaccfad1 100644
 +            }
 +        }
 +    }
- 
      // as firmware update often results in a
      // reboot, the task  may never "complete"
-@@ -346,6 +429,21 @@ inline void createTask(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+     // unless it is an error
+@@ -346,6 +428,21 @@ inline void createTask(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
      task->startTimer(std::chrono::minutes(5));
      task->populateResp(asyncResp->res);
      task->payload.emplace(std::move(payload));
@@ -137,7 +137,7 @@ index c02b43ed..aaccfad1 100644
  }
  
  // Note that asyncResp can be either a valid pointer or nullptr. If nullptr
-@@ -756,15 +854,16 @@ inline void uploadImageFile(crow::Response& res, std::string_view body)
+@@ -756,15 +853,16 @@ inline void uploadImageFile(crow::Response& res, std::string_view body)
  inline bool convertApplyTime(crow::Response& res, const std::string& applyTime,
                               std::string& applyTimeNewVal)
  {
@@ -161,7 +161,7 @@ index c02b43ed..aaccfad1 100644
      }
      else
      {
-@@ -1120,6 +1219,62 @@ inline void
+@@ -1120,6 +1218,62 @@ inline void
      }
  }
  
@@ -224,7 +224,7 @@ index c02b43ed..aaccfad1 100644
  inline void doHTTPUpdate(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
                           const crow::Request& req)
  {
-@@ -1143,6 +1298,12 @@ inline void doHTTPUpdate(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+@@ -1143,6 +1297,12 @@ inline void doHTTPUpdate(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
          monitorForSoftwareAvailable(asyncResp, req, "/redfish/v1/UpdateService",
                                      httpPushUriTargets);
  
@@ -237,7 +237,7 @@ index c02b43ed..aaccfad1 100644
          uploadImageFile(asyncResp->res, req.body());
      }
  }
-@@ -1311,38 +1472,94 @@ inline void
+@@ -1311,38 +1471,95 @@ inline void
      updateSvcSimpleUpdate["TransferProtocol@Redfish.AllowableValues"] =
          std::move(allowed);
  
@@ -291,7 +291,8 @@ index c02b43ed..aaccfad1 100644
 +            asyncResp->res
 +                .jsonValue["HttpPushUriOptions"]["HttpPushUriApplyTime"]
 +                          ["ApplyTime@Redfish.AllowableValues"] = {
-+                "Immediate", "OnReset"};
++                "Immediate", "OnReset", "AtMaintenanceWindowStart",
++                "InMaintenanceWindowOnReset"};
  
 -            const bool* b = std::get_if<bool>(&applyOption);
 +            if (maintenanceWindowStartTime != nullptr)
@@ -350,7 +351,7 @@ index c02b43ed..aaccfad1 100644
  }
  
  inline void
-@@ -1377,10 +1594,18 @@ inline void handleUpdateServicePatch(
+@@ -1377,15 +1594,117 @@ inline void handleUpdateServicePatch(
      std::optional<std::vector<std::string>> imgTargets;
      std::optional<bool> imgTargetBusy;
      std::optional<nlohmann::json> oem;
@@ -373,19 +374,8 @@ index c02b43ed..aaccfad1 100644
      {
          BMCWEB_LOG_DEBUG("UpdateService doPatch: Invalid request body");
          return;
-@@ -1430,7 +1655,6 @@ inline void handleUpdateServicePatch(
-                         {
-                             return;
-                         }
--
-                         bool swInvObjFound = false;
-                         for (const std::string& path : swInvPaths)
-                         {
-@@ -1643,6 +1867,100 @@ inline void handleUpdateServicePatch(
-             }
-         }
      }
-+
+ 
 +    if (applyTime)
 +    {
 +        if (applyTime == "AtMaintenanceWindowStart" ||
@@ -479,17 +469,28 @@ index c02b43ed..aaccfad1 100644
 +        }
 +        setApplyTime(asyncResp, *applyTime);
 +    }
- }
- 
- inline void handleUpdateServiceFirmwareInventoryCollectionGet(
-@@ -1809,7 +2127,6 @@ inline void handleUpdateServiceFirmwareInventoryGet(
-                 {
-                     continue;
-                 }
++
+     if (imgTargetBusy)
+     {
+         if ((httpPushUriTargetBusy) && (*imgTargetBusy))
+@@ -1477,7 +1796,6 @@ inline void handleUpdateServicePatch(
+             httpPushUriTargetBusy = *imgTargetBusy;
+         }
+     }
 -
-                 if (obj.second.empty())
-                 {
-                     continue;
+     if (oem)
+     {
+         std::optional<nlohmann::json> ami;
+@@ -1740,9 +2058,7 @@ inline void
+             if (version == nullptr)
+             {
+                 BMCWEB_LOG_DEBUG("Can't find property \"Version\"!");
+-
+                 messages::internalError(asyncResp->res);
+-
+                 return;
+             }
+             asyncResp->res.jsonValue["Version"] = *version;
 -- 
 2.34.1
 
