@@ -38,6 +38,7 @@ SRC_URI += "file://0003-Ported-ADC-driver-changes-from-INTEL-AMI.patch \
         file://0038-Fix-probe-regression-for-ASPEED-UDC.patch \
 	file://iptables.cfg \
 	file://0056-quick-fix-for-raw-I2C-type-registration.patch \
+	file://0056-fix-KCS-not-working-issue.patch \
 	"
 
 SRC_URI_NON_PFR_DUAL ?= ""
@@ -95,7 +96,7 @@ SRC_URI:append= "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'use-lfmctp', SRC_
 SRC_USB_Gadget_Device = " file://0037-Enable-USB-Port-B-as-gadget-device.patch \
                           file://USB-Port-B-as-Gadget-Device.cfg \
                         "
-SRC_USB_HOST_Controller = " file://USB-Port-B-as-HOST-Controller.cfg"
+SRC_USB_HOST_Controller = " file://USB-Port-B-as-HOST-Controller.cfg "
 SRC_URI:append = "${@bb.utils.contains('USB_Port_B_Function', 'Gadget-Device', SRC_USB_Gadget_Device, SRC_USB_HOST_Controller, d)}"
 
 
