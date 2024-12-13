@@ -8,6 +8,7 @@ NETWORK_BONDING_SRC_URI += "file://0023-Support-Network-Bonding.patch \
                             file://0049-Fix-Bond0-Create-Failed.patch \
                             file://0050-Fix-ipmi-and-same-mac-for-two-interfaces-after-delete-bond.patch \
                             file://0050-Fix-Write-Configuration-if-Bond-Enable.patch \
+                            file://0052-Fix-to-prevent-enable-bond-when-vlan-is-enabled.patch \
                            "
 SRC_URI:append = " \
              file://0001-ARP-Control.patch \

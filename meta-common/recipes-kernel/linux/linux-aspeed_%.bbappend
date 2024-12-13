@@ -64,13 +64,6 @@ SRC_URI:append:intel-ast2600  = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'c
 SRC_CPLD_EVB = "file://0044-Enable-spidev-for-spi2-and-jtag0-for-cpld-upgrade-vi.patch "
 SRC_URI:append:evb-ast2600  = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'cpld-update', SRC_CPLD_EVB,'', d)}"
 
-
-#NETWORK_BONDING_SRC_URI += "file://bond.cfg \
-#                            file://0017-Disable-Default-Network-Bonding.patch \
-#                           "
-#SRC_URI += "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
-#
-
 SRC_URI_NM += "file://disable_nm_sensor.cfg \
                file://disable_smart.cfg \
                "
@@ -112,3 +105,8 @@ SRC_URI_BHS:append = "  file://0054-Updating-VW_GPIO_DIR-register.patch \
                         file://enable_vw_gpio.cfg \
                      "
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'bhs', SRC_URI_BHS, '', d)}"
+
+NETWORK_BONDING_SRC_URI += "file://bond.cfg \
+                            file://0055-Ported-Network-Change-for-IPv6-Dynamic-Router-Command.patch \
+                           "
+SRC_URI += "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
