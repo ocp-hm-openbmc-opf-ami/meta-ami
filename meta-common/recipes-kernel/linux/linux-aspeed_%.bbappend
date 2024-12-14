@@ -111,3 +111,12 @@ NETWORK_BONDING_SRC_URI += "file://bond.cfg \
                             file://0055-Ported-Network-Change-for-IPv6-Dynamic-Router-Command.patch \
                            "
 SRC_URI += "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
+
+##############
+# PFR SUPPORT
+##############
+SRC_URI_BHS_PFR128 = "file://0056-PFR-BHS-128MB-Support.patch "
+SRC_URI_BHS_PFR256 = "file://0056-PFR-BHS-256MB-Support.patch "
+SRC_URI_BHS_PFR_CONFIG = "${@bb.utils.contains('PFR_CONFIG', 'pfr-256', SRC_URI_BHS_PFR256, SRC_URI_BHS_PFR128, d)}"
+SRC_URI_BHS_PFR = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', SRC_URI_BHS_PFR_CONFIG, '', d)}"
+SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'bhs', SRC_URI_BHS_PFR, '', d)}"
