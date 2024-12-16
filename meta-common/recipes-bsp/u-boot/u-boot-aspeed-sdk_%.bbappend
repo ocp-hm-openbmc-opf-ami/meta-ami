@@ -6,6 +6,8 @@ SRC_URI:append = " \
     file://0005-Fix-NCSI-in-UBoot.patch \
     "
 
+SRC_URI:append:evb-ast2600 = "file://0007-Save-env-variables-before-autoboot.patch "
+
 EVB_SRC_URI = " file://spl.cfg"
 AC_SRC_URI = " file://spl_archercity.cfg"
 NO_SPL_URI = " file://nospl.cfg"
