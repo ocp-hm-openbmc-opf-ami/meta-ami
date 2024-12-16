@@ -16,3 +16,4 @@ EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'redfish-core', ' -Dami-
 EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'pciesw-service', ' -Dami-pciesw=enabled','', d)}"
 EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb-ast2600', ' -Dast2600-evb=enabled','', d)}"
 EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb-nuvoton-npcm845', ' -Darbel-nuvoton=enabled','', d)}"
+EXTRA_OEMESON += "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'nm-features', ' -Dami-nm=enabled', '', d)}"
