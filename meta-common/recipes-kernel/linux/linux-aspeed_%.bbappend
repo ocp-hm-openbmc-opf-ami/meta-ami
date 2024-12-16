@@ -120,3 +120,50 @@ SRC_URI_BHS_PFR256 = "file://0056-PFR-BHS-256MB-Support.patch "
 SRC_URI_BHS_PFR_CONFIG = "${@bb.utils.contains('PFR_CONFIG', 'pfr-256', SRC_URI_BHS_PFR256, SRC_URI_BHS_PFR128, d)}"
 SRC_URI_BHS_PFR = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', SRC_URI_BHS_PFR_CONFIG, '', d)}"
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'bhs', SRC_URI_BHS_PFR, '', d)}"
+
+
+# Replacing existing kernel_do_install() with the fix from commit, https://git.yoctoproject.org/poky/commit/meta/classes-recipe/kernel.bbclass?h=styhead&id=5533d33d1e3b9be299230530c8e6ac6d0968631f
+# This function can be removed in next LF sync
+# 
+kernel_do_install() {
+	#
+	# First install the modules
+	#
+	unset CFLAGS CPPFLAGS CXXFLAGS LDFLAGS MACHINE
+	if (grep -q -i -e '^CONFIG_MODULES=y$' .config); then
+		oe_runmake DEPMOD=echo MODLIB=${D}${nonarch_base_libdir}/modules/${KERNEL_VERSION} INSTALL_FW_PATH=${D}${nonarch_base_libdir}/firmware modules_install
+		rm -f "${D}${nonarch_base_libdir}/modules/${KERNEL_VERSION}/build"
+		rm -f "${D}${nonarch_base_libdir}/modules/${KERNEL_VERSION}/source"
+		# Remove empty module directories to prevent QA issues
+		[ -d "${D}${nonarch_base_libdir}/modules/${KERNEL_VERSION}/kernel" ] && find "${D}${nonarch_base_libdir}/modules/${KERNEL_VERSION}/kernel" -type d -empty -delete
+	else
+		bbnote "no modules to install"
+	fi
+
+	#
+	# Install various kernel output (zImage, map file, config, module support files)
+	#
+	install -d ${D}/${KERNEL_IMAGEDEST}
+
+	#
+	# When including an initramfs bundle inside a FIT image, the fitImage is created after the install task
+	# by do_assemble_fitimage_initramfs.
+	# This happens after the generation of the initramfs bundle (done by do_bundle_initramfs).
+	# So, at the level of the install task we should not try to install the fitImage. fitImage is still not
+	# generated yet.
+	# After the generation of the fitImage, the deploy task copies the fitImage from the build directory to
+	# the deploy folder.
+	#
+
+	for imageType in ${KERNEL_IMAGETYPES} ; do
+		if [ $imageType != "fitImage" ] || [ "${INITRAMFS_IMAGE_BUNDLE}" != "1" ] ; then
+			install -m 0644 ${KERNEL_OUTPUT_DIR}/$imageType ${D}/${KERNEL_IMAGEDEST}/$imageType-${KERNEL_VERSION}
+		fi
+	done
+
+	install -m 0644 System.map ${D}/${KERNEL_IMAGEDEST}/System.map-${KERNEL_VERSION}
+	install -m 0644 .config ${D}/${KERNEL_IMAGEDEST}/config-${KERNEL_VERSION}
+	install -m 0644 vmlinux ${D}/${KERNEL_IMAGEDEST}/vmlinux-${KERNEL_VERSION}
+	! [ -e Module.symvers ] || install -m 0644 Module.symvers ${D}/${KERNEL_IMAGEDEST}/Module.symvers-${KERNEL_VERSION}
+
+}
