@@ -36,6 +36,7 @@ SRC_URI += "file://0003-Ported-ADC-driver-changes-from-INTEL-AMI.patch \
         file://0042-Fix-NCSI-FW-Name-Out-of-Range.patch \
         file://0038-Fix-probe-regression-for-ASPEED-UDC.patch \
 	file://iptables.cfg \
+	file://0056-quick-fix-for-raw-I2C-type-registration.patch \
 	"
 
 SRC_URI_NON_PFR_DUAL ?= ""
