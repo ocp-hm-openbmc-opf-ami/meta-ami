@@ -10,6 +10,7 @@ SRC_URI_NON_PFR:append = "file://0001-Add-Purpose-for-other-components-and-add-i
 		   file://0007-fixed-core-dump-issue-while-verifying-unsigned-image.patch \
 		   file://0008-Clear-tmp-and-firmware-inventory-while-cancel-task.patch \
 		   file://0009-fixed-Firmware-update-security-issue-Unsafe-Unpackin.patch \
+         file://0010-add-condition-to-skip-the-removal-of-BMC-obj-path-du.patch \
 		"
 
 SRC_URI:append = " ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
