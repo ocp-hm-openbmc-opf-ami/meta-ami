@@ -12,7 +12,8 @@ SRC_URI:append:evb-ast2600 = " file://0001-openbmc-flash-layout-ami-evb-64-dtsi.
                                file://0003-GPIO-Pin-Configurations-for-Power-Operations.patch \
 			       file://ast2600evb.config \
                                file://ipmb_dev.cfg \
-                       file://enable_jtag.cfg \
-                       file://0007-EnableJtagDTS.patch \
+                               file://enable_jtag.cfg \
+                               file://0001-updated-aspeed-ast2600-evb.patch \
+                               file://0004-I2C-bus-error-message-for-fault-alarm-support.patch \
                              "
 
