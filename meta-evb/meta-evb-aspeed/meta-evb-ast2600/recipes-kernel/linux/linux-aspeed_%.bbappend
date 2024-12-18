@@ -1,7 +1,7 @@
 COMPATIBLE_MACHINE = "evb-ast2600"
 
 FILESEXTRAPATHS:append := ":${THISDIR}/${PN}"
-
+                 
 SRC_URI:append:evb-ast2600 = " file://0001-openbmc-flash-layout-ami-evb-64-dtsi.patch \
                                file://enable_sgpio.cfg \ 
                                file://0002-Enable-SGPIO-Master-0-on-EVB.patch \
@@ -12,6 +12,7 @@ SRC_URI:append:evb-ast2600 = " file://0001-openbmc-flash-layout-ami-evb-64-dtsi.
                                file://0003-GPIO-Pin-Configurations-for-Power-Operations.patch \
 			       file://ast2600evb.config \
                                file://ipmb_dev.cfg \
+                       file://enable_jtag.cfg \
+                       file://0007-EnableJtagDTS.patch \
                              "
-                  
 
