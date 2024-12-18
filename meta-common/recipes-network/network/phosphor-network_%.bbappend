@@ -107,7 +107,7 @@ EXTRA_OEMESON:append = " -Denable-advanced-route=true"
 EXTRA_OEMESON:append = " -Denable-system-firewall=true"
 
 # Uncomment to enable NCSI
-EXTRA_OEMESON:append = " -Denable-ncsi=true -Ddefault-ncsi-interface=eth1"
+# EXTRA_OEMESON:append = " -Denable-ncsi=true -Ddefault-ncsi-interface=eth3"
 EXTRA_OEMESON:append = " -Dncsi-keep-phy-link-up=false"
 
 EXTRA_OEMESON:append = " -Dncsi-flow-control=false"
