@@ -41,7 +41,8 @@ SRC_URI += "file://0003-Ported-ADC-driver-changes-from-INTEL-AMI.patch \
 	file://0056-quick-fix-for-raw-I2C-type-registration.patch \
 	file://0056-fix-KCS-not-working-issue.patch \
         file://0056-fixDriverMakefileForJtag.patch \
-        "
+        file://0001-rtc-support-date.patch \
+	"
 
 SRC_URI_NON_PFR_DUAL ?= ""
 
