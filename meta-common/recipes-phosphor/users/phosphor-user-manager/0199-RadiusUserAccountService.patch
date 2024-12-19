@@ -1,0 +1,754 @@
+From 1d3ff2f5672142d20177e149ceb0705d2ccb836b Mon Sep 17 00:00:00 2001
+From: madhankumars <madhankumars@ami.com>
+Date: Mon, 11 Nov 2024 21:18:57 +0530
+Subject: [PATCH 199/199] RadiusUserAccountService
+
+---
+ user_mgr.cpp | 437 ++++++++++++++++++++++++++++++---------------------
+ user_mgr.hpp |  18 ++-
+ 2 files changed, 271 insertions(+), 184 deletions(-)
+
+diff --git a/user_mgr.cpp b/user_mgr.cpp
+index 90eca62..a62c2ea 100644
+--- a/user_mgr.cpp
++++ b/user_mgr.cpp
+@@ -22,6 +22,7 @@
+ #include "shadowlock.hpp"
+ #include "users.hpp"
+ 
++#include <dlfcn.h>
+ #include <grp.h>
+ #include <pwd.h>
+ #include <shadow.h>
+@@ -30,9 +31,9 @@
+ #include <time.h>
+ #include <unistd.h>
+ 
+-#include <boost/interprocess/sync/file_lock.hpp>
+-#include <boost/filesystem.hpp>
+ #include <boost/algorithm/string/split.hpp>
++#include <boost/filesystem.hpp>
++#include <boost/interprocess/sync/file_lock.hpp>
+ #include <phosphor-logging/elog-errors.hpp>
+ #include <phosphor-logging/elog.hpp>
+ #include <phosphor-logging/lg2.hpp>
+@@ -43,14 +44,14 @@
+ #include <array>
+ #include <ctime>
+ #include <fstream>
++#include <iostream>
+ #include <numeric>
+ #include <regex>
+ #include <span>
+ #include <string>
+ #include <string_view>
+-#include <vector>
+-#include <iostream>
+ #include <unordered_set>
++#include <vector>
+ 
+ namespace phosphor
+ {
+@@ -88,7 +89,14 @@ typedef struct
+     std::string pamModuleName;
+ } pamReorder;
+ 
+-const pamReorder pamReorderStruct[maxPamReorderModule] = { {1, "pam_unix.so"}, {2, "pam_ldap.so"}};
++struct privilageStruct
++{
++    int privNum;
++    char privStr[16];
++};
++
++const pamReorder pamReorderStruct[maxPamReorderModule] = {
++    {1, "pam_unix.so"}, {2, "pam_ldap.so"}};
+ 
+ enum privMgrLevel
+ {
+@@ -97,9 +105,15 @@ enum privMgrLevel
+     PRIV_USER,
+     PRIV_NOACCESS
+ };
+-enum complexityLevel { DISABLED, LOW, MEDIUM, HIGH };
++enum complexityLevel
++{
++    DISABLED,
++    LOW,
++    MEDIUM,
++    HIGH
++};
+ const std::string complexityLevel[] = {"Disabled", "Low", "Medium", "High"};
+-  
++
+ // Object Manager related
+ static constexpr const char* ldapMgrObjBasePath =
+     "/xyz/openbmc_project/user/ldap";
+@@ -518,36 +532,34 @@ void UserMgr::createGroup(std::string groupName)
+ 
+ void UserMgr::setPasswordExpired(std::string userName, bool isExpired)
+ {
+-  
+-  if(isExpired)
+-    {
+-	try
+-	  {
+-	    executeCmd("/usr/bin/chage", "--lastday","0" ,userName.c_str());
+-	  }
+-	catch (const InternalFailure& e)
+-	  {
+-	    log<level::ERR>("Unable to reset login failure counter");
+-	    elog<InternalFailure>();
+-	  }
+-    }
+-  else
+-    {
+-      
+-      constexpr long secondsPerDay = 60 * 60 * 24;
+-      std::string today = std::to_string(static_cast<long>(time(NULL)) / secondsPerDay);
+-      	try
+-	  {
+-	    executeCmd("/usr/bin/chage", "--lastday",today.c_str() ,userName.c_str());
+-	  }
+-	catch (const InternalFailure& e)
+-	  {
+-	    log<level::ERR>("Unable to reset login failure counter");
+-	    elog<InternalFailure>();
+-	  }
+-    }
+-
+-	
++    if (isExpired)
++    {
++        try
++        {
++            executeCmd("/usr/bin/chage", "--lastday", "0", userName.c_str());
++        }
++        catch (const InternalFailure& e)
++        {
++            log<level::ERR>("Unable to reset login failure counter");
++            elog<InternalFailure>();
++        }
++    }
++    else
++    {
++        constexpr long secondsPerDay = 60 * 60 * 24;
++        std::string today =
++            std::to_string(static_cast<long>(time(NULL)) / secondsPerDay);
++        try
++        {
++            executeCmd("/usr/bin/chage", "--lastday", today.c_str(),
++                       userName.c_str());
++        }
++        catch (const InternalFailure& e)
++        {
++            log<level::ERR>("Unable to reset login failure counter");
++            elog<InternalFailure>();
++        }
++    }
+ }
+ 
+ void UserMgr::renameUser(std::string userName, std::string newUserName)
+@@ -588,54 +600,55 @@ void UserMgr::renameUser(std::string userName, std::string newUserName)
+ 
+ int UserMgr::updatePasswordPolicy(const std::string value)
+ {
+-
+     std::string valueStr;
+-    int retval=0;
+-    uint8_t complexLvl,policy=0xff;
+-    
++    int retval = 0;
++    uint8_t complexLvl, policy = 0xff;
++
+     // check if password policy level is supported
+-    for(complexLvl=0;complexLvl<=HIGH;complexLvl++)
+-      {
+-
+-	if(value.compare(complexityLevel[complexLvl]) == 0)
+-	  {
+-	    policy = complexLvl;
+-	    break;
+-	  }
+-      }
+-    
+-    if(policy == 0xff)
+-      {
+-	log<level::ERR>("Unable to get passwordPolicyComplexity");
+-	elog<InvalidArgument>(Argument::ARGUMENT_NAME("passwordPolicyComplexity"),
+-			      Argument::ARGUMENT_VALUE(value.c_str()));
+-	return failure;
+-      }
+-
+-    if(policy == DISABLED)
+-      {
+-	retval = setPamModuleConfValue(pwQualityConfigFile, minClass,"0");
+-      }
+-    else if(policy == LOW)
+-      {
+-	retval = setPamModuleConfValue(pwQualityConfigFile, minClass,"3");
+-      }
++    for (complexLvl = 0; complexLvl <= HIGH; complexLvl++)
++    {
++        if (value.compare(complexityLevel[complexLvl]) == 0)
++        {
++            policy = complexLvl;
++            break;
++        }
++    }
++
++    if (policy == 0xff)
++    {
++        log<level::ERR>("Unable to get passwordPolicyComplexity");
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("passwordPolicyComplexity"),
++            Argument::ARGUMENT_VALUE(value.c_str()));
++        return failure;
++    }
++
++    if (policy == DISABLED)
++    {
++        retval = setPamModuleConfValue(pwQualityConfigFile, minClass, "0");
++    }
++    else if (policy == LOW)
++    {
++        retval = setPamModuleConfValue(pwQualityConfigFile, minClass, "3");
++    }
+     else
+-      {
+-	retval = setPamModuleConfValue(pwQualityConfigFile, minClass,"4");
+-      }
+-
+-    if(policy == HIGH)
+-      {
+-	retval = setPamModuleConfValue(pwQualityConfigFile, maxClassRepeat,"3");
+-	retval = setPamModuleConfValue(pwQualityConfigFile, maxSequence,"2");
+-      }
++    {
++        retval = setPamModuleConfValue(pwQualityConfigFile, minClass, "4");
++    }
++
++    if (policy == HIGH)
++    {
++        retval =
++            setPamModuleConfValue(pwQualityConfigFile, maxClassRepeat, "3");
++        retval = setPamModuleConfValue(pwQualityConfigFile, maxSequence, "2");
++    }
+     else
+-      {
+-	retval = setPamModuleConfValue(pwQualityConfigFile, maxClassRepeat,"0");
+-	retval = setPamModuleConfValue(pwQualityConfigFile, maxSequence,"0");
+-      }
+-    
++    {
++        retval =
++            setPamModuleConfValue(pwQualityConfigFile, maxClassRepeat, "0");
++        retval = setPamModuleConfValue(pwQualityConfigFile, maxSequence, "0");
++    }
++
+     return retval;
+ }
+ 
+@@ -758,7 +771,7 @@ std::string UserMgr::passwordPolicyComplexity(std::string value)
+         return value;
+     }
+ 
+-    if(updatePasswordPolicy(value) != success)
++    if (updatePasswordPolicy(value) != success)
+     {
+         log<level::ERR>("Failed to update password Policy");
+         elog<InternalFailure>();
+@@ -969,9 +982,9 @@ bool UserMgr::parseFaillockForLockout(
+     }
+     // check if NOT in Manual mode && time has expired
+     if ((AccountPolicyIface::accountUnlockTimeout() != 0) &&
+-	(lastFailedAttempt +
+-            static_cast<time_t>(AccountPolicyIface::accountUnlockTimeout()) <=
+-	 std::time(NULL)))
++        (lastFailedAttempt +
++             static_cast<time_t>(AccountPolicyIface::accountUnlockTimeout()) <=
++         std::time(NULL)))
+     {
+         return false;
+     }
+@@ -1286,6 +1299,34 @@ gid_t UserMgr::getPrimaryGroup(const std::string& userName) const
+     elog<UserNameDoesNotExist>();
+ }
+ 
++gid_t UserMgr::getRadiusUserID(const std::string& userName, int* pw_uid) const
++{
++    static auto buflen = sysconf(_SC_GETPW_R_SIZE_MAX);
++    if (buflen <= 0)
++    {
++        // Use a default size if there is no hard limit suggested by sysconf()
++        buflen = 1024;
++    }
++
++    struct passwd pwd;
++    struct passwd* pwdPtr = nullptr;
++    std::vector<char> buffer(buflen);
++
++    auto status = getpwnam_r(userName.c_str(), &pwd, buffer.data(),
++                             buffer.size(), &pwdPtr);
++    // On success, getpwnam_r() returns zero, and set *pwdPtr to pwd.
++    // If no matching password record was found, these functions return 0
++    // and store NULL in *pwdPtr
++    if (!status && (&pwd == pwdPtr))
++    {
++        *pw_uid = pwdPtr->pw_uid;
++        return pwd.pw_gid;
++    }
++
++    lg2::error("User {USERNAME} does not exist", "USERNAME", userName);
++    elog<UserNameDoesNotExist>();
++}
++
+ bool UserMgr::isGroupMember(const std::string& userName, gid_t primaryGid,
+                             const std::string& groupName) const
+ {
+@@ -1362,7 +1403,10 @@ void UserMgr::executeGroupDeletion(const char* groupName)
+ 
+ UserInfoMap UserMgr::getUserInfo(std::string userName)
+ {
++    struct privilageStruct privBuf[3] = {
++        {1, "priv-admin"}, {2, "priv-operator"}, {3, "priv-user"}};
+     UserInfoMap userInfo;
++    int userID = 0, retval = 0;
+     // Check whether the given user is local user or not.
+     if (isUserExist(userName))
+     {
+@@ -1379,9 +1423,43 @@ UserInfoMap UserMgr::getUserInfo(std::string userName)
+     else
+     {
+         auto primaryGid = getPrimaryGroup(userName);
++        int primaryPriv = (int)primaryGid;
++        void* bnss_radius_handle = NULL;
++        bool radiusEnableStatus = false;
++        bnss_radius_handle = dlopen("/usr/lib/libnss_radius.so", RTLD_LAZY);
++        if (bnss_radius_handle)
++        {
++            int (*getRadiusEnableDbusProperty)(bool*) = (int (*)(
++                bool*))dlsym(bnss_radius_handle, "getRadiusEnableDbusProperty");
++            if (NULL != getRadiusEnableDbusProperty)
++            {
++                retval = getRadiusEnableDbusProperty(&radiusEnableStatus);
++                if (!((retval < 0) || (radiusEnableStatus == false)))
++                {
++                    getRadiusUserID(userName, &userID);
++                    if (userID >= 9000)
++                    {
++                        int iter = 0;
++                        userInfo.emplace("RemoteUser", true);
++                        for (iter = 0;
++                             iter <
++                             ((signed)(sizeof(privBuf) / sizeof(privBuf[0])));
++                             iter++)
++                        {
++                            if (primaryPriv == privBuf[iter].privNum)
++                            {
++                                userInfo.emplace("UserPrivilege",
++                                                 privBuf[iter].privStr);
++                                userInfo.emplace("RemoteUser", true);
++                                return userInfo;
++                            }
++                        }
++                    }
++                }
++            }
++        }
+ 
+         DbusUserObj objects = getPrivilegeMapperObject();
+-
+         std::string ldapConfigPath;
+         std::string userPrivilege;
+ 
+@@ -1401,7 +1479,6 @@ UserInfoMap UserMgr::getUserInfo(std::string userName)
+                     }
+                 }
+             }
+-
+             if (ldapConfigPath.empty())
+             {
+                 return userInfo;
+@@ -1464,7 +1541,6 @@ UserInfoMap UserMgr::getUserInfo(std::string userName)
+         }
+         userInfo.emplace("RemoteUser", true);
+     }
+-
+     return userInfo;
+ }
+ 
+@@ -1523,65 +1599,63 @@ void UserMgr::initializeAccountPolicy()
+         AccountPolicyIface::rememberOldPasswordTimes(value);
+     }
+     valueStr.clear();
+-    //setup password policy
+-    if (getPamModuleConfValue(pwQualityConfigFile,minClass, valueStr) ==
++    // setup password policy
++    if (getPamModuleConfValue(pwQualityConfigFile, minClass, valueStr) ==
+         success)
+     {
+-      value = 0;
+-      try
++        value = 0;
++        try
+         {
+-	  tmp = std::stoul(valueStr, nullptr);
+-	  if (tmp > std::numeric_limits<decltype(value)>::max())
++            tmp = std::stoul(valueStr, nullptr);
++            if (tmp > std::numeric_limits<decltype(value)>::max())
+             {
+-	      throw std::out_of_range("Out of range");
++                throw std::out_of_range("Out of range");
+             }
+-	  value = static_cast<decltype(value)>(tmp);
++            value = static_cast<decltype(value)>(tmp);
+         }
+-      catch (const std::exception& e)
++        catch (const std::exception& e)
+         {
+-	  lg2::error("Exception for PasswordPolicy: {ERR}", "ERR",
+-		     e);
+-	  throw;
++            lg2::error("Exception for PasswordPolicy: {ERR}", "ERR", e);
++            throw;
++        }
++        if (value < 3)
++        {
++            AccountPolicyIface::passwordPolicyComplexity("Disabled");
++        }
++        else if (value == 3)
++        {
++            AccountPolicyIface::passwordPolicyComplexity("Low");
++        }
++        else
++        {
++            if (getPamModuleConfValue(pwQualityConfigFile, maxClassRepeat,
++                                      valueStr) == success)
++            {
++                value = 0;
++                try
++                {
++                    tmp = std::stoul(valueStr, nullptr);
++                    if (tmp > std::numeric_limits<decltype(value)>::max())
++                    {
++                        throw std::out_of_range("Out of range");
++                    }
++                    value = static_cast<decltype(value)>(tmp);
++                }
++                catch (const std::exception& e)
++                {
++                    lg2::error("Exception for PasswordPolicy: {ERR}", "ERR", e);
++                    throw;
++                }
++                if (value == 0)
++                {
++                    AccountPolicyIface::passwordPolicyComplexity("Medium");
++                }
++                else
++                {
++                    AccountPolicyIface::passwordPolicyComplexity("High");
++                }
++            }
+         }
+-      if(value < 3)
+-	{
+-	  AccountPolicyIface::passwordPolicyComplexity("Disabled");
+-	}
+-      else if(value == 3)
+-	{
+-	  AccountPolicyIface::passwordPolicyComplexity("Low"); 
+-	}
+-      else
+-	{
+-	  if (getPamModuleConfValue(pwQualityConfigFile,maxClassRepeat, valueStr) ==
+-	      success)
+-	    {	      
+-	      value = 0;
+-	      try
+-		{
+-		  tmp = std::stoul(valueStr, nullptr);
+-		  if (tmp > std::numeric_limits<decltype(value)>::max())
+-		    {
+-		      throw std::out_of_range("Out of range");
+-		    }
+-		  value = static_cast<decltype(value)>(tmp);
+-		}
+-	      catch (const std::exception& e)
+-		{
+-		  lg2::error("Exception for PasswordPolicy: {ERR}", "ERR",
+-			     e);
+-		  throw;
+-		}
+-	      if(value == 0)
+-		{
+-		  AccountPolicyIface::passwordPolicyComplexity("Medium");
+-		}
+-	      else
+-		{
+-		  AccountPolicyIface::passwordPolicyComplexity("High"); 
+-		}
+-	    }
+-	}
+     }
+     valueStr.clear();
+     if (getPamModuleConfValue(faillockConfigFile, maxFailedAttempt, valueStr) !=
+@@ -1691,11 +1765,11 @@ void UserMgr::initUserObjects(void)
+                 }
+             }
+             // Add user objects to the Users path.
+-	    if(userPriv.empty())
+-	    {
+-		    //skip asd user
+-		    continue;
+-	    }
++            if (userPriv.empty())
++            {
++                // skip asd user
++                continue;
++            }
+             sdbusplus::message::object_path tempObjPath(usersObjPath);
+             tempObjPath /= user;
+             std::string objPath(tempObjPath);
+@@ -1772,9 +1846,10 @@ std::vector<std::string> UserMgr::getFailedAttempt(const char* userName)
+     return executeCmd("/usr/sbin/faillock", "--user", userName);
+ }
+ 
+-void getPamOrderInfo(const std::string confFile, std::vector<uint8_t>& currentPamOrder,  std::vector<std::string>& preDefinePamOrder)
++void getPamOrderInfo(const std::string confFile,
++                     std::vector<uint8_t>& currentPamOrder,
++                     std::vector<std::string>& preDefinePamOrder)
+ {
+-
+     std::ifstream file(confFile);
+     std::string lineBuf;
+ 
+@@ -1788,10 +1863,12 @@ void getPamOrderInfo(const std::string confFile, std::vector<uint8_t>& currentPa
+     {
+         for (int loop = 0; loop < maxPamReorderModule; loop++)
+         {
+-            if (strstr(lineBuf.c_str(), pamReorderStruct[loop].pamModuleName.c_str()) != nullptr)
++            if (strstr(lineBuf.c_str(),
++                       pamReorderStruct[loop].pamModuleName.c_str()) != nullptr)
+             {
+                 currentPamOrder.push_back(pamReorderStruct[loop].pamSequenceNo);
+-                preDefinePamOrder[pamReorderStruct[loop].pamSequenceNo - 1] = lineBuf;
++                preDefinePamOrder[pamReorderStruct[loop].pamSequenceNo - 1] =
++                    lineBuf;
+             }
+         }
+     }
+@@ -1799,7 +1876,6 @@ void getPamOrderInfo(const std::string confFile, std::vector<uint8_t>& currentPa
+     return;
+ }
+ 
+-
+ std::vector<uint8_t> UserMgr::getPamOrder()
+ {
+     std::vector<uint8_t> currentPamOrder;
+@@ -1816,21 +1892,22 @@ std::string modifyPamOrderLineBuf(std::string pamOrderLineBuf, uint8_t value)
+ 
+     if (successPos != std::string::npos)
+     {
+-        size_t numStart = successPos + 8; 
++        size_t numStart = successPos + 8;
+         size_t numEnd = pamOrderLineBuf.find_first_of(" ]", numStart);
+ 
+         if (numEnd != std::string::npos)
+         {
+-            pamOrderLineBuf.replace(numStart, numEnd - numStart, std::to_string(value));
++            pamOrderLineBuf.replace(numStart, numEnd - numStart,
++                                    std::to_string(value));
+         }
+     }
+ 
+     return pamOrderLineBuf;
+ }
+ 
+-bool updatePamOrder(const std::string confFile, std::vector<uint8_t> reqPamOrder)
++bool updatePamOrder(const std::string confFile,
++                    std::vector<uint8_t> reqPamOrder)
+ {
+-
+     std::vector<std::string> preDefinePamOrder(maxPamReorderModule);
+     std::string lineBuf;
+     bool isModified = false;
+@@ -1842,7 +1919,8 @@ bool updatePamOrder(const std::string confFile, std::vector<uint8_t> reqPamOrder
+ 
+     if (reqPamOrder == currentPamOrder)
+     {
+-        std::cerr << "Requested pamOrder is the same as the previous" << std::endl;
++        std::cerr << "Requested pamOrder is the same as the previous"
++                  << std::endl;
+         return false;
+     }
+ 
+@@ -1864,23 +1942,26 @@ bool updatePamOrder(const std::string confFile, std::vector<uint8_t> reqPamOrder
+     {
+         for (int loop = 0; loop < maxPamReorderModule; loop++)
+         {
+-            if (strstr(lineBuf.c_str(), pamReorderStruct[loop].pamModuleName.c_str()) != nullptr)
++            if (strstr(lineBuf.c_str(),
++                       pamReorderStruct[loop].pamModuleName.c_str()) != nullptr)
+             {
+                 notFound = false;
+-                if(!isModified)
++                if (!isModified)
+                 {
+-                    for (int innerLoop = 0; innerLoop < maxPamReorderModule; innerLoop++)
++                    for (int innerLoop = 0; innerLoop < maxPamReorderModule;
++                         innerLoop++)
+                     {
+-                        std::string pamOrderBuf = modifyPamOrderLineBuf(preDefinePamOrder[reqPamOrder[innerLoop]-1], maxPamReorderModule + 1 - innerLoop);
++                        std::string pamOrderBuf = modifyPamOrderLineBuf(
++                            preDefinePamOrder[reqPamOrder[innerLoop] - 1],
++                            maxPamReorderModule + 1 - innerLoop);
+                         outFile << pamOrderBuf << std::endl;
+                     }
+                     isModified = true;
+-
+                 }
+                 break;
+             }
+-            else{
+-
++            else
++            {
+                 notFound = true;
+             }
+         }
+@@ -1898,7 +1979,8 @@ bool updatePamOrder(const std::string confFile, std::vector<uint8_t> reqPamOrder
+ 
+     f_lock.lock();
+ 
+-    if (std::rename(confFileTmp.c_str(), confFile.c_str()) != 0) {
++    if (std::rename(confFileTmp.c_str(), confFile.c_str()) != 0)
++    {
+         std::cerr << "Error renaming temporary config file.\n";
+         return false;
+     }
+@@ -1906,7 +1988,6 @@ bool updatePamOrder(const std::string confFile, std::vector<uint8_t> reqPamOrder
+     f_lock.unlock();
+ 
+     return true;
+-
+ }
+ 
+ bool UserMgr::setPamOrder(std::vector<uint8_t> reqPamOrder)
+@@ -1917,43 +1998,41 @@ bool UserMgr::setPamOrder(std::vector<uint8_t> reqPamOrder)
+     {
+         lg2::error("Invalid Pam Order");
+         elog<InvalidArgument>(Argument::ARGUMENT_NAME("reqPamOrder"),
+-                Argument::ARGUMENT_VALUE("NULL"));
+-
++                              Argument::ARGUMENT_VALUE("NULL"));
+     }
+ 
+-    for (const auto& element : reqPamOrder) {
+-        if( (element < 1) || (element > maxPamReorderModule))
++    for (const auto& element : reqPamOrder)
++    {
++        if ((element < 1) || (element > maxPamReorderModule))
+         {
+             lg2::error("Invalid Pam Order");
+             elog<InvalidArgument>(Argument::ARGUMENT_NAME("reqPamOrder"),
+-                    Argument::ARGUMENT_VALUE("NULL"));
++                                  Argument::ARGUMENT_VALUE("NULL"));
+         }
+-        if (nonDublicateElement.find(element) != nonDublicateElement.end()) {
+-
++        if (nonDublicateElement.find(element) != nonDublicateElement.end())
++        {
+             lg2::error("Invalid Pam Order");
+             elog<InvalidArgument>(Argument::ARGUMENT_NAME("reqPamOrder"),
+-                    Argument::ARGUMENT_VALUE("NULL"));
++                                  Argument::ARGUMENT_VALUE("NULL"));
+         }
+         nonDublicateElement.insert(element);
+     }
+ 
+-    if(!updatePamOrder(pamCommonAuthConf, reqPamOrder))
++    if (!updatePamOrder(pamCommonAuthConf, reqPamOrder))
+     {
+-        std::cerr << "Fail to update pam order" <<  pamCommonAuthConf << std::endl;
++        std::cerr << "Fail to update pam order" << pamCommonAuthConf
++                  << std::endl;
+         return false;
+-
+     }
+-    if(!updatePamOrder(pamCommonAccountConf, reqPamOrder))
++    if (!updatePamOrder(pamCommonAccountConf, reqPamOrder))
+     {
+-        std::cerr << "Fail to update pam order" << pamCommonAccountConf << std::endl;
++        std::cerr << "Fail to update pam order" << pamCommonAccountConf
++                  << std::endl;
+         return false;
+-
+     }
+ 
+     return true;
+-
+ }
+-     
+ 
+ } // namespace user
+ } // namespace phosphor
+diff --git a/user_mgr.hpp b/user_mgr.hpp
+index d788ed0..0e44ea5 100644
+--- a/user_mgr.hpp
++++ b/user_mgr.hpp
+@@ -43,7 +43,7 @@ inline constexpr size_t maxSystemUsers = 30;
+ inline constexpr uint8_t minPasswdLength = 8;
+ inline constexpr size_t maxSystemGroupNameLength = 32;
+ inline constexpr size_t maxSystemGroupCount = 64;
+-inline constexpr uint8_t maxPamReorderModule =  2;
++inline constexpr uint8_t maxPamReorderModule = 2;
+ 
+ using UserMgrIface = sdbusplus::xyz::openbmc_project::User::server::Manager;
+ using UserSSHLists =
+@@ -144,8 +144,8 @@ class UserMgr : public Ifaces
+      *  @param[in] userName - user to set password expired
+      *  @param[in] isExpired - set if the password is expired
+      */
+-   void setPasswordExpired(std::string userName, bool isExpired) override;
+-  
++    void setPasswordExpired(std::string userName, bool isExpired) override;
++
+     /** @brief rename user method.
+      *  This method renames the user as requested
+      *
+@@ -306,7 +306,6 @@ class UserMgr : public Ifaces
+ 
+     std::vector<uint8_t> getPamOrder() override;
+ 
+-
+   protected:
+     /** @brief get pam argument value
+      *  method to get argument value from pam configuration
+@@ -474,7 +473,8 @@ class UserMgr : public Ifaces
+                                               "priv-user"};
+ 
+     /** @brief groups manager container */
+-    std::vector<std::string> groupsMgr = {"web", "redfish", "ipmi", "ssh", "redfish-hostiface"};
++    std::vector<std::string> groupsMgr = {"web", "redfish", "ipmi", "ssh",
++                                          "redfish-hostiface"};
+ 
+     /** @brief map container to hold users object */
+     using UserName = std::string;
+@@ -529,6 +529,14 @@ class UserMgr : public Ifaces
+     virtual bool isGroupMember(const std::string& userName, gid_t primaryGid,
+                                const std::string& groupName) const;
+ 
++    /** @brief get primary group ID of specified user
++     *
++     * @param[in] - userName
++     * @return - primary group ID
++     */
++    virtual gid_t getRadiusUserID(const std::string& userName,
++                                  int* userID) const;
++
+   protected:
+     /** @brief get privilege mapper object
+      *  method to get dbus privilege mapper object
+-- 
+2.34.1
+

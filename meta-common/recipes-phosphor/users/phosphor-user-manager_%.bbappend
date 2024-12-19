@@ -20,6 +20,7 @@ SRC_URI += " \
              file://0018-add-snmp-media-group.patch \
              file://0022-Fix-to-add-support-to-include-dot-.-in-username.patch \
              file://0022-Added-chaanges-for-Pam-Reorder.patch \
+             file://0199-RadiusUserAccountService.patch \
              file://0023-KerberosRelatedUserManagerChanges.patch \
              file://0024-Kerberos-Config-User-Manager.patch \
            "
