@@ -5,6 +5,6 @@ FILESEXTRAPATHS:append := "${THISDIR}/${PN}:"
 do_compile:prepend() {
   # Copy TFA macro sources to webui Directory
   if ${@bb.utils.contains('IMAGE_INSTALL',' google-authenticator-libpam','true','false',d)}; then
-  echo "\nVUE_APP_TFA="true"" >> ${S}/.env.intel
+  echo -e "\nVUE_APP_TFA="true"" >> ${S}/.env.intel
   fi
 }
