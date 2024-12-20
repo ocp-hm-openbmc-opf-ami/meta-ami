@@ -79,6 +79,7 @@ SRC_URI:append = " \
              file://0050-Implement-Keep-PHY-Link-Up-with-Meson-Option.patch \
              file://0051-Interface-Not-Up-when-Nic-is-Enabled.patch \
              file://0051-Fix-to-skip-reconfiguration-for-hostusb-when-host-is.patch \
+             file://0053-Unable-to-Add-More-Than-59-IPv4-Rules-and-Subsequent-IPv6-Rules.patch \
              "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
