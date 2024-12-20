@@ -80,6 +80,7 @@ SRC_URI:append = " \
              file://0051-Interface-Not-Up-when-Nic-is-Enabled.patch \
              file://0051-Fix-to-skip-reconfiguration-for-hostusb-when-host-is.patch \
              file://0053-Unable-to-Add-More-Than-59-IPv4-Rules-and-Subsequent-IPv6-Rules.patch \
+             file://0053-Fix-to-add-expected-format-with-firewall-rules-at-iptables-rules-file.patch \
              "
 
 SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
