@@ -42,6 +42,7 @@ SRC_URI += "file://0003-Ported-ADC-driver-changes-from-INTEL-AMI.patch \
 	file://0056-fix-KCS-not-working-issue.patch \
         file://0056-fixDriverMakefileForJtag.patch \
         file://0001-rtc-support-date.patch \
+	file://0055-Ported-Network-Change-for-IPv6-Dynamic-Router-Command.patch \
 	"
 
 SRC_URI_NON_PFR_DUAL ?= ""
@@ -115,7 +116,6 @@ SRC_URI_BHS:append = "  file://0054-Updating-VW_GPIO_DIR-register.patch \
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'bhs', SRC_URI_BHS, '', d)}"
 
 NETWORK_BONDING_SRC_URI += "file://bond.cfg \
-                            file://0055-Ported-Network-Change-for-IPv6-Dynamic-Router-Command.patch \
                            "
 SRC_URI += "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
 
