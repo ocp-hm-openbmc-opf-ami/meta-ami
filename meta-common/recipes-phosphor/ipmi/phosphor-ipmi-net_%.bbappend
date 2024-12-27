@@ -16,7 +16,7 @@ python Add_DefaultUser_if_debugtweaks_not_enabled() {
         d.appendVar('SRC_URI', " file://0308-Allow-Default-User-To-Change-Password-Even-Expired-A.patch")
 }
 
-ALT_RMCPP_IFACE = "usb0"
+ALT_RMCPP_IFACE = "hostusb0"
 SYSTEMD_SERVICE:${PN} += " \
                           ${PN}@${ALT_RMCPP_IFACE}.service \
                           ${PN}@${ALT_RMCPP_IFACE}.socket \
