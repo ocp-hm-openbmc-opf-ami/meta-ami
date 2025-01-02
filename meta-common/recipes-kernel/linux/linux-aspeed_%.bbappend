@@ -43,6 +43,7 @@ SRC_URI += "file://0003-Ported-ADC-driver-changes-from-INTEL-AMI.patch \
         file://0056-fixDriverMakefileForJtag.patch \
         file://0001-rtc-support-date.patch \
 	file://0055-Ported-Network-Change-for-IPv6-Dynamic-Router-Command.patch \
+        file://0058-Turn-on-NCSI-Messages-for-Link-State.patch \
 	"
 
 SRC_URI_NON_PFR_DUAL ?= ""
