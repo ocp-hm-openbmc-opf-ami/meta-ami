@@ -14,6 +14,13 @@
 See the [Yocto documentation](https://docs.yoctoproject.org/ref-manual/system-requirements.html#required-packages-for-the-build-host)
 for the latest requirements
 
+```sh
+The OneTree Development environment, bash shell has to be the default shell.
+    Give the following command to use bash as the default shell.
+    $ sudo dpkg-reconfigure dash
+    Select No in the appearing dialog and press Enter
+```
+
 #### Ubuntu
 ```
 $ sudo apt install git python3-distutils gcc g++ make file wget \
