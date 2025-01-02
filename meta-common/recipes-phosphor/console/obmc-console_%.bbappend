@@ -21,7 +21,11 @@ SRC_URI += "${@bb.utils.contains('MULTI_SOL_ENABLED', '1', '${Multi_SOL_SRC_URI}
 
 SRC_URI += " file://0001-fix-for-solssh-issue.patch \
              file://0002-Fix-for-lauching-sol-session-with-SOL-loop-test.patch \
+             file://0003-Added-support-to-enable-disable-obmc-console-log.patch \
            "
+
+PACKAGECONFIG[obmc-console-log] = "-Dobmc-console-log=true,-Dobmc-console-log=false"
+PACKAGECONFIG:append = "${@bb.utils.contains('IMAGE_INSTALL', ' phosphor-hostlogger', '', ' obmc-console-log' , d)}"
 
 do_install:append() {
     install -d ${D}${bindir}
