@@ -1,0 +1,175 @@
+From 9d5ffc59892a4b5c1cde639f77b6dc372bcfe580 Mon Sep 17 00:00:00 2001
+From: mickhuang <mickhuang@ami.com>
+Date: Thu, 28 Nov 2024 17:10:15 +0800
+Subject: [PATCH] Link RNDIS to ECM network
+
+Signed-off-by: mickhuang <mickhuang@ami.com>
+---
+ drivers/usb/gadget/configfs.c         | 92 +++++++++++++++++++++++++++
+ drivers/usb/gadget/function/f_rndis.c | 14 ++++
+ drivers/usb/gadget/function/rndis.c   |  4 +-
+ 3 files changed, 108 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/usb/gadget/configfs.c b/drivers/usb/gadget/configfs.c
+index 4c639e9ddedc..46b12b66dfee 100644
+--- a/drivers/usb/gadget/configfs.c
++++ b/drivers/usb/gadget/configfs.c
+@@ -12,6 +12,14 @@
+ #include "u_f.h"
+ #include "u_os_desc.h"
+ 
++#include "function/u_ecm.h"
++#include "function/u_ether.h"
++#include "function/u_rndis.h"
++
++#if defined(CONFIG_USB_F_ECM) && defined(CONFIG_USB_F_RNDIS)
++#define CONFIG_ECM_AND_RNDIS_ENABLED
++#endif
++
+ int check_user_usb_string(const char *name,
+ 		struct usb_gadget_strings *stringtab_dev)
+ {
+@@ -1669,6 +1677,87 @@ configfs_attach_gadget_strings(struct gadget_info *gi)
+ 	return us;
+ }
+ 
++#ifdef CONFIG_ECM_AND_RNDIS_ENABLED
++
++static bool
++ami_find_ecm_and_rndis_instances(struct gadget_info *gi,
++				 struct usb_function_instance **ecm_fi,
++				 struct usb_function_instance **rndis_fi)
++{
++	struct usb_function_instance *tmp_fi;
++	*ecm_fi = *rndis_fi = NULL;
++
++	// Find ECM instance
++	list_for_each_entry(tmp_fi, &gi->available_func, cfs_list) {
++		if (strcmp(tmp_fi->group.cg_item.ci_name, "ecm.usb0") == 0) {
++			pr_debug("[AMI DEBUG] Find ECM instance\n");
++			*ecm_fi = tmp_fi;
++			break;
++		}
++	}
++
++	// Find RNDIS instance
++	list_for_each_entry(tmp_fi, &gi->available_func, cfs_list) {
++		if (strcmp(tmp_fi->group.cg_item.ci_name, "rndis.usb0") == 0) {
++			pr_debug("[AMI DEBUG] Find RNDIS instance\n");
++			*rndis_fi = tmp_fi;
++			break;
++		}
++	}
++
++	// Make sure ECM and RNDIS instance both have be find.
++	if (!*ecm_fi || !*rndis_fi) {
++		return false;
++	}
++
++	return true;
++}
++
++static void ami_link_rndis_to_ecm_network(struct gadget_info *gi)
++{
++	struct usb_composite_dev *cdev = &gi->cdev;
++	struct usb_function_instance *ecm_fi, *rndis_fi;
++	struct f_ecm_opts *ecm_opts;
++	struct f_rndis_opts *rndis_opts;
++	int status = 0;
++
++	if (!ami_find_ecm_and_rndis_instances(gi, &ecm_fi, &rndis_fi)) {
++		pr_debug(
++			"[AMI DEBUG] Neither ECM instance nor RNDIS instance was found\n");
++		return;
++	}
++
++	ecm_opts = container_of(ecm_fi, struct f_ecm_opts, func_inst);
++
++	if (!ecm_opts->bound) {
++		pr_debug(
++			"[AMI DEBUG] Early binding and registration of ECM's network interface\n");
++
++		// Bind ECM's network interface to the USB gadget and register the ECM network device
++		status = gether_set_gadget(ecm_opts->net, cdev->gadget);
++		if (status) {
++			return;
++		}
++		gether_register_netdev(ecm_opts->net);
++		ecm_opts->bound = true;
++	}
++
++	rndis_opts = container_of(rndis_fi, struct f_rndis_opts, func_inst);
++
++	/*
++	*During the configfs setup, RNDIS creates a default network device.
++	*To link the ECM network device to RNDIS, the original RNDIS device must be released.
++	*This operation only works during the first UDC binding. 
++	*/
++	if (!rndis_opts->borrowed_net && !rndis_opts->bound) {
++		pr_debug(
++			"[AMI DEBUG] Binding ECM network device to RNDIS during first UDC binding\n");
++		rndis_borrow_net(rndis_fi, ecm_opts->net);
++	}
++}
++
++#endif
++
+ static int configfs_composite_bind(struct usb_gadget *gadget,
+ 		struct usb_gadget_driver *gdriver)
+ {
+@@ -1697,6 +1786,9 @@ static int configfs_composite_bind(struct usb_gadget *gadget,
+ 		goto err_comp_cleanup;
+ 	}
+ 
++#ifdef CONFIG_ECM_AND_RNDIS_ENABLED
++	ami_link_rndis_to_ecm_network(gi);
++#endif
+ 
+ 	list_for_each_entry(c, &gi->cdev.configs, list) {
+ 		struct config_usb_cfg *cfg;
+diff --git a/drivers/usb/gadget/function/f_rndis.c b/drivers/usb/gadget/function/f_rndis.c
+index b47f99d17ee9..b2b311953c20 100644
+--- a/drivers/usb/gadget/function/f_rndis.c
++++ b/drivers/usb/gadget/function/f_rndis.c
+@@ -681,6 +681,20 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
+ 	rndis_iad_descriptor.bFunctionSubClass = rndis_opts->subclass;
+ 	rndis_iad_descriptor.bFunctionProtocol = rndis_opts->protocol;
+ 
++	/*
++ 	 * In drivers/usb/gadget/configfs.c:configfs_composite_bind()
++ 	 * During the RNDIS to ECM network linking process, the original
++ 	 * RNDIS netdev is cleared. To ensure proper functionality, the
++ 	 * RNDIS netdev must now be reassigned.
++ 	 */
++	if (rndis_opts->borrowed_net && rndis_opts->bound) {
++		/* Retrieve the host MAC address and assign it to the RNDIS structure */
++		gether_get_host_addr_u8(rndis_opts->net, rndis->ethaddr);
++
++		/* Update the RNDIS port's I/O port with the new netdev private data */
++		rndis->port.ioport = netdev_priv(rndis_opts->net);
++	}
++
+ 	/*
+ 	 * in drivers/usb/gadget/configfs.c:configfs_composite_bind()
+ 	 * configurations are bound in sequence with list_for_each_entry,
+diff --git a/drivers/usb/gadget/function/rndis.c b/drivers/usb/gadget/function/rndis.c
+index 29bf8664bf58..52e2a6966ecc 100644
+--- a/drivers/usb/gadget/function/rndis.c
++++ b/drivers/usb/gadget/function/rndis.c
+@@ -819,11 +819,11 @@ int rndis_msg_parser(struct rndis_params *params, u8 *buf)
+ 	case RNDIS_MSG_HALT:
+ 		pr_debug("%s: RNDIS_MSG_HALT\n",
+ 			__func__);
+-		params->state = RNDIS_UNINITIALIZED;
++		/*params->state = RNDIS_UNINITIALIZED;
+ 		if (params->dev) {
+ 			netif_carrier_off(params->dev);
+ 			netif_stop_queue(params->dev);
+-		}
++		}*/
+ 		return 0;
+ 
+ 	case RNDIS_MSG_QUERY:
+-- 
+2.34.1
+

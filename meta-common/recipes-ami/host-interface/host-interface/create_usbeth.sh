@@ -3,7 +3,20 @@
 set -x # Debug mode
 
 eth_conf_directory="/sys/kernel/config/usb_gadget/eth"
-dev_name="1e6a0000.usb-vhub"
+dev_name=""
+
+detect_platform() {
+    # AST2600
+    if [ -e "/sys/bus/platform/devices/1e6a0000.usb-vhub" ]; then
+        dev_name="1e6a0000"
+    fi
+
+    # AST27xx
+    #Todo: To support dual node, the detection case for 2700/2750 needs to be refined.
+    if [ -e "/sys/bus/platform/devices/12011000.usb-vhub" ]; then
+        dev_name="12011000"
+    fi
+}
 
 generate_random_mac() {
     # Read 6 bytes from /dev/urandom
@@ -130,6 +143,7 @@ else
 fi
 
 if [ "$1" = "connect" ]; then
+    detect_platform
     connect_eth
     ## Assigning MAC address
     USB0_MAC=$(dmesg | grep "hostusb0: MAC" | cut -d ' ' -f 7)
