@@ -1,90 +1,14 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-NETWORK_BONDING_SRC_URI += "file://0023-Support-Network-Bonding.patch \
-                            file://0027-Bond_Function_With_Static_IP_Address_Is_Not_Working_Properly.patch \
-                            file://0027-Update-Bond-active-slave-when-all-active-slaves-are-down.patch \
-                            file://0033-Fix-IPMI-not-works-when-Bond-Enabled.patch \
-                            file://0034-Implement-PHY-Control-for-Bond.patch \
-                            file://0049-Fix-Bond0-Create-Failed.patch \
-                            file://0050-Fix-ipmi-and-same-mac-for-two-interfaces-after-delete-bond.patch \
-                            file://0050-Fix-Write-Configuration-if-Bond-Enable.patch \
-                            file://0052-Fix-to-prevent-enable-bond-when-vlan-is-enabled.patch \
-                           "
+SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-networkd;branch=OT_7615_Pull_Phosphor-Network_Into_AMI_Repo_3;protocol=https;name=override;"
+SRCREV_FORMAT = "override"
+SRCREV_override = "77b340763b300520445846a402074efbeaba12a4"
+
 SRC_URI:append = " \
-             file://0001-ARP-Control.patch \
-             file://0006-keep-IPv6AcceptRA-TRUE-when-enable-ipv6-static.patch \
-             file://0007-IP-Gateway-Validation-When-Set-To-Static.patch \
-             file://0009-removed-error-message-ingnoring-function-when-settin.patch \
-             file://0010-Allow-empty-gateway6-when-ipv6-source-is-static.patch \
-             file://0010-Fix-Cannot-Communicate-With-Vlan-IP-By-IPMI-Command.patch \
-             file://0011-Fix-Dynamic-And-Static-Addrs-Shown-When-IPSrc-Is-DHCP.patch \
-             file://0013-Add-Prefix-Length-at-Neighbor.patch \
-             file://0013-Allow-Empty-Gateway4-When-IPv4-Source-Is-Static.patch \
-             file://0014-Fix-No-Default-GW-MAC-Address.patch \
-             file://0016-Add-Function-IPv4-IPv6-Enabled-Disabled.patch \
-             file://0018-Add-VLAN_MAX_NUM-for-not-creating-VLAN-interfaces-over-size.patch \
-             file://0019-Fix-Defaultgateway6-Is-Zero-When-Setting-More-Than-One_IPv6.patch \
-             file://0020-Fix-Remove-Empty-Gateway-and-Static-Gateway-Missing-and-Add-Gateway-Check-Condition.patch \
-             file://0021-Add-Function-to-Save-IPv6-Static-Router-Control.patch \
-             file://0022-Enable-Advanced-Route.patch \
              file://ipv4-advanced-route.sh \
              file://ipv6-advanced-route.sh \
-             file://0022-Re-Design-the-RA-part-in-DHCPEnabled.patch \
-             file://0024-Check-if-IPv4-and-Default-Gateway-are-in-the-Same-Series.patch \
-             file://0026-Catch-More-Exceptions-to-Avoid-Invalid-MACAddress-while-Decoding.patch \
-             file://0024-Add-Index-of-IPAddress-and-its-Related-Function.patch \
-             file://0028-Write-VLAN-Interface-Configuration-File-when-VLAN-Interface-Created.patch \
-             file://0027-Add-Interface-Count-in-SystemConfiguration.patch \
-             file://0028-Flush-IP-Index-List-when-changing-to-DHCP.patch \
-             file://0029-Add-DBus-Control-for-Firewall-Configuration.patch \
-             file://0030-Add-a-minimum-limitation-of-MTU.patch \
-             file://0032-Fix-Accepting-Reverse-Range-for-IP-Range.patch \
-             file://0033-Remain-IP-Address-After-Disabling-Enabling-Interface.patch \
-             file://0033-Fix-to-update-static-gateway6-when-ipv6-source-is-static.patch \
-             file://0034-Implement-PHY-Control-for-Non-Bond.patch \
-             file://0035-Implement-NCSI-User-Control-Auto-Failover-and-Manual.patch \
-             file://0035-Fix-Gateway6-issue.patch \
-             file://0036-Fix-Firewall-not-work-at-icmpv6.patch \
              file://nsupdate.sh \
-             file://0037-DDNS-Feature.patch \
-             file://0037-Block-Setting-Static-Address-When-DHCP-Is-On.patch \
-             file://0037-Enhancement-For-PHY-Control.patch \
-             file://0037-IPv6-Address-and-Gateway6-Checking.patch \
-             file://0038-Clear-IPv6-Static-Router-Address-when-Static-control.patch \
-             file://0037-Support-IPv6-Dynamic-and-Static-Router-Commands.patch \
-             file://0038-Support-DHCPv6-Transmission-Retransmission-Timing-Parameters.patch \
-             file://0039-Support-SLAAC-Timing-Configuration-Parameters.patch \
-             file://0040-Fix-Index-of-VLAN-Interface-Not-Got.patch \
-             file://0040-Fix-Static-Router2-IP-When-Static-Router-is-Enabled-or-Disabled.patch \
-             file://0041-Fix-Array-of-Domain-Name-String.patch \
-             file://0038-System-Firewall-Enhancement.patch \
-             file://0042-Remove-Number-Check-When-Deleting-Firewall-Rules.patch \
-             file://0040-Fix-IP-Gateway-Missing-in-Static-Source.patch \
-             file://0042-Block-ICMPv6-With-MAC-Address-Not-Work.patch \
-             file://0043-Fix-Interface-Count-Issue.patch \
-             file://0044-Support-Backup-Gateway.patch \
-             file://0042-Flush-Static-Nameserver-Addresses-when-Changing-to-Dynamic.patch \
-             file://0045-Clear-NCSI-Settings-before-Changing-Package-and-Channel.patch \
-             file://0003-Adding-channel-specific-privilege-to-network.patch \
-             file://0046-Change-The-Range-VLAN-ID.patch \
-             file://0042-Enable-NSUpdate-and-Reconfig-Link-When-Changing-Host.patch \
-             file://0047-Fix-MAC-Address-Unable-Changed-after-Reboot.patch \
-             file://0048-Add-Timeout-for-Retrieving-NCSI-Info.patch \
-             file://0048-Reconfigure-Interface-after-LinkUp.patch \
-             file://0050-Implement-DHCP-Vendor-Option.patch \
-             file://0050-Implement-Netlink-for-NCSI-Flow-Control.patch \
-             file://0049-Fix-for-the-default-NTP-Server.patch \
-	     file://0049-Replace-System-call.patch \
-             file://0051-Fix-IPv4-Unreachable-when-IPv6-Disables.patch \
-             file://0050-Implement-Keep-PHY-Link-Up-with-Meson-Option.patch \
-             file://0051-Interface-Not-Up-when-Nic-is-Enabled.patch \
-             file://0051-Fix-to-skip-reconfiguration-for-hostusb-when-host-is.patch \
-             file://0053-Unable-to-Add-More-Than-59-IPv4-Rules-and-Subsequent-IPv6-Rules.patch \
-             file://0053-Fix-to-add-expected-format-with-firewall-rules-at-iptables-rules-file.patch \
-             file://0054-Fix-IPv4-Gateway-Settings-Lost-after-Backup.patch \
              "
-
-SRC_URI:append = "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
 
 
 do_install:append() {
