@@ -15,6 +15,7 @@ SRC_URI:append = " \
 	file://nv/OT-2.0-PLDM-rebase-PortInfo_yaml.patch \
 	file://nv/0005-Modifying_Auto_Gen_D-Bus_Files_for_nsmd.patch \
 	file://nv/0006-Adding_Auto_Gen_D-Bus_Files_for_nsmd.patch \
+	file://nv/0007-Adding_D-BUS_Changes_for_nsmd.patch \
 "
 
 do_replace_files() {
