@@ -117,6 +117,7 @@ SRC_URI:append = "${@bb.utils.contains('USB_Port_B_Function', 'Gadget-Device', S
 
 SRC_URI_BHS:append = "  file://0054-Updating-VW_GPIO_DIR-register.patch \
                         file://enable_vw_gpio.cfg \
+                        file://0059-Fixed-ADC-driver-issue.patch \
                      "
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'bhs', SRC_URI_BHS, '', d)}"
 
