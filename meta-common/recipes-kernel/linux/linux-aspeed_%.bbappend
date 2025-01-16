@@ -70,7 +70,8 @@ SRC_URI:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'cpld-update', SR
 SRC_CPLD = "file://0045-Intel-Enable-Jtag0-and-spidev-for-spi2-for-cpld-upgrade-vi.patch "
 SRC_URI:append:intel-ast2600  = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'cpld-update', SRC_CPLD,'', d)}"
 
-SRC_CPLD_EVB = "file://0044-Enable-spidev-for-spi2-and-jtag0-for-cpld-upgrade-vi.patch "
+SRC_CPLD_EVB = "file://0044-Enable-spidev-for-spi2-and-jtag0-for-cpld-upgrade-vi.patch \
+		file://0058-Updated-the-SPI-memory-region-from-256MB-to-128Mb.patch "
 SRC_URI:append:evb-ast2600  = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'cpld-update', SRC_CPLD_EVB,'', d)}"
 
 SRC_URI_NM += "file://disable_nm_sensor.cfg \
