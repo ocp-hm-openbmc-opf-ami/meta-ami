@@ -792,6 +792,9 @@ ping_pong_update() {
     if test -x $update
 	then
         find $(dirname "$METAFILE_PATH") -type f -name "image-*" ! -name "*.sig" -exec cp {} /run/initramfs/ \;
+        redfish_log_fw_evt success
+        update_percentage $UPDATE_PERCENT_SUCCESS
+        return 0
     fi
     # do a quick sanity check on the image
     if [ $(stat -c "%s" "$LOCAL_PATH") -lt 10000000 ]; then
@@ -826,6 +829,7 @@ ping_pong_update() {
     fi    
     redfish_log_fw_evt success
     update_percentage $UPDATE_PERCENT_SUCCESS
+    return 0
 }
 
 cpld_full_flash()
