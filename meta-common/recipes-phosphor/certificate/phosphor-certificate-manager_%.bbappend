@@ -13,4 +13,5 @@ SRC_URI += " \
 	    file://0005-certificate-Chain-support.patch \
 	    file://0006-Add-enhancement-for-certificate-errors.patch \
 	    file://0007-Removed-PrivateKey-Validation.patch \
+            file://0009-Fix-For-rekey-rekey.patch \
            "
