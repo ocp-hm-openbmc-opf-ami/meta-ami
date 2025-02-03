@@ -7,6 +7,9 @@ extern "C" {
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <vector>
+#include <algorithm>
+#include <string>
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/io_service.hpp>
@@ -34,6 +37,10 @@ static constexpr const char *radiusRoleObj =
     "/xyz/openbmc_project/user/Radius/role_map";
 static constexpr const char *radiusRoleIntf =
     "xyz.openbmc_project.User.Radius.role_map";
+constexpr const char* priv_admin = "priv-admin";
+constexpr const char* priv_operator = "priv-operator";
+constexpr const char* priv_user = "priv-user";
+static const std::vector<std::string> privilege_list = {priv_admin, priv_operator, priv_user};
 
 std::vector<std::string> vec = {"authserver", "acctserver"};
 bool readWrite = 0;
@@ -369,8 +376,13 @@ int main() {
         "Privilege1", tmp,
         [&tmp, &oldstring, &newstring](const std::string &requested,
                                        std::string &resp) {
-          resp = requested;
+          if (std::find(privilege_list.begin(), privilege_list.end(), requested) != privilege_list.end()) {
+	  resp = requested;
           return 1;
+	  }
+	  else {
+	  return 0;
+	  }
         });
 
     radRoleIface->register_property(
@@ -384,8 +396,13 @@ int main() {
         "Privilege2", tmp,
         [&tmp, &oldstring, &newstring](const std::string &requested,
                                        std::string &resp) {
-          resp = requested;
+          if (std::find(privilege_list.begin(), privilege_list.end(), requested) != privilege_list.end()) {
+	  resp = requested;
           return 1;
+	  }
+	  else {
+	  return 0;
+	  }
         });
 
     radRoleIface->register_property(
@@ -399,8 +416,13 @@ int main() {
         "Privilege3", tmp,
         [&tmp, &oldstring, &newstring](const std::string &requested,
                                        std::string &resp) {
-          resp = requested;
+          if (std::find(privilege_list.begin(), privilege_list.end(), requested) != privilege_list.end()) {
+	  resp = requested;
           return 1;
+	  }
+	  else {
+	  return 0;
+	  }
         });
 
     radIface->register_property(
