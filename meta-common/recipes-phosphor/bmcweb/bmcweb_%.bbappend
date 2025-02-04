@@ -12,15 +12,15 @@ SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/bmcweb;branch=master;pro
 SRCREV_FORMAT = "override"
 SRCREV_override = "9ec5ba0e805f0ba2317275b814ad863db79047a7"
 
-SRC_URI_NON_PFR = " file://0067-Adding-support-for-HttpPushUriTargets.patch \
-                    file://0242-Add-support-to-Apply-time-property.patch \
-                    file://0180-Fixed-500-Internal-server-error-while-update-cpld-fw.patch \
-                    file://0259-Fix-for-time-out-issue-in-FW-update.patch \
-                    file://0260-Clear-cache-before-firmware-update-start-to-fix-out-.patch \
-                    file://0270-UpdateService-should-block-HttpPushUriTargets-When-remove-anyone-of-the-SPI.patch \
-                    file://0271-Showing-ImageName-while-firmware-update.patch \
-"
-SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
+#SRC_URI_NON_PFR = " file://0067-Adding-support-for-HttpPushUriTargets.patch \
+#                    file://0242-Add-support-to-Apply-time-property.patch \
+#                    file://0180-Fixed-500-Internal-server-error-while-update-cpld-fw.patch \
+#                    file://0259-Fix-for-time-out-issue-in-FW-update.patch \
+#                    file://0260-Clear-cache-before-firmware-update-start-to-fix-out-.patch \
+#                    file://0270-UpdateService-should-block-HttpPushUriTargets-When-remove-anyone-of-the-SPI.patch \
+#                    file://0271-Showing-ImageName-while-firmware-update.patch \
+#"
+#SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
 
 # Remove the patches if 'meta-mgx' is in BBFILE_COLLECTIONS
 #SRC_URI:remove = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'meta-mgx', SRC_URI_NON_PFR, '', d)}"
@@ -60,13 +60,13 @@ SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI
 #
 # PFR
 # HttpPushUriTargets and ApplyTime support are required for PFR
-SRC_URI_PFR = " file://0067-Adding-support-for-HttpPushUriTargets.patch \
-                file://0242-Add-support-to-applytime-property-in-PFR.patch \
-                file://0180-Fixed-500-Internal-server-error-while-update-cpld-fw.patch \
-                file://0259-Fix-for-time-out-issue-in-FW-update.patch \
-                file://0260-updating-HttpPushUriTarget-PFR.patch \
-"
-SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', SRC_URI_PFR, '', d)}"
+#SRC_URI_PFR = " file://0067-Adding-support-for-HttpPushUriTargets.patch \
+#                file://0242-Add-support-to-applytime-property-in-PFR.patch \
+#                file://0180-Fixed-500-Internal-server-error-while-update-cpld-fw.patch \
+#                file://0259-Fix-for-time-out-issue-in-FW-update.patch \
+#                file://0260-updating-HttpPushUriTarget-PFR.patch \
+#"
+#SRC_URI:append = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', SRC_URI_PFR, '', d)}"
 #EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '',' -Dhttp-body-limit=68 ', d)}"
 #EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'nvme-mgmt', ' -Dnvme-enable-path=/xyz/openbmc_project/Nvme','', d)}"
 #EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'nvmebasic-mgmt', ' -Dnvme-enable-path=/xyz/openbmc_project/NvmeBasic','', d)}"
@@ -75,4 +75,5 @@ EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'meta-mgx','-Dredfi
 EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'mtmitchell-layer', '-Dredfish-intel-feature=enabled', '', d)}"
 
 DEPENDS += "phosphor-snmp"
+
 
