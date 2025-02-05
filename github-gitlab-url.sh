@@ -40,19 +40,6 @@ sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.libespi.git;
 
 sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.at-scale-debug.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.at-scale-debug.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-core/at-scale-debug/at-scale-debug_git.bb
 
-if [ -d "meta-nvidia/meta-mgx/" ]; then
-
-sed -i 's/branch=master;protocol=https;name=override;/branch=redfish-mgx-platforms;protocol=https;name=override;/g' meta-ami/meta-common/recipes-phosphor/bmcweb/bmcweb_%.bbappend
-
-# Remove SRCREV_FORMAT and SRCREV_override lines
-sed -i '/SRCREV_FORMAT/d' meta-ami/meta-common/recipes-phosphor/bmcweb/bmcweb_%.bbappend
-sed -i '/SRCREV_override/d' meta-ami/meta-common/recipes-phosphor/bmcweb/bmcweb_%.bbappend
-
-# Add SRCREV = "${AUTOREV}"
-grep -q 'SRCREV = "${AUTOREV}"' meta-ami/meta-common/recipes-phosphor/bmcweb/bmcweb_%.bbappend || \
-sed -i '/^SRC_URI =/a SRCREV = "${AUTOREV}"' meta-ami/meta-common/recipes-phosphor/bmcweb/bmcweb_%.bbappend
-
-fi
 
 if [ -d "meta-core/meta-restricted" ]; then
 
