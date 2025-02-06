@@ -9,4 +9,5 @@ SRC_URI += "    file://0001-ast2700_enable_all_uart.patch \
         		file://0007-Add-write-public-key-in-image-support.patch \
         		file://0008-ipmi-ipmb_dev_int-add-quick-fix-for-raw-I2C-type.patch \
                 file://0009-Link-RNDIS-to-ECM-network.patch \
+                file://0010-Fix-usb-gadget-mass-storage-miss-stats-property.patch \
            "
