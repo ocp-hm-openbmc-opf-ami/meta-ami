@@ -23,6 +23,7 @@ SRC_URI += " \
              file://0199-RadiusUserAccountService.patch \
              file://0023-KerberosRelatedUserManagerChanges.patch \
              file://0024-Kerberos-Config-User-Manager.patch \
+             file://0202-IPV6-Feature-enable-related-changes.patch \
            "
 #OEM Privilege
 SRC_URI_OEM_PRIV:append = "file://upgrade_media_group.sh \
