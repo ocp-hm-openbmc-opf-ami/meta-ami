@@ -1,0 +1,290 @@
+From 9644909ad4dc1a6ba9f33c7b28e4bb0cb0756cab Mon Sep 17 00:00:00 2001
+From: eddyhan <eddyhan@ami.com>
+Date: Thu, 14 Dec 2023 14:22:31 +0800
+Subject: [PATCH 2/2] Migrate to libspdm 3.1.1.
+
+
+diff --git a/include/spdmapplib_common.hpp b/include/spdmapplib_common.hpp
+old mode 100644
+new mode 100755
+index 86a286f..c0265e7
+--- a/include/spdmapplib_common.hpp
++++ b/include/spdmapplib_common.hpp
+@@ -31,6 +31,7 @@ extern "C"
+ #include "library/spdm_responder_lib.h"
+ #include "library/spdm_transport_mctp_lib.h"
+ #include "spdm_device_secret_lib_internal.h"
++#include "library/memlib.h"
+ #include "library/malloclib.h"
+ #include "library/spdm_transport_none_lib.h"
+ }
+@@ -48,6 +49,20 @@ inline constexpr uint32_t exeConnectionDigest = 0x2;
+ inline constexpr uint32_t exeConnectionCert = 0x4;
+ inline constexpr uint32_t exeConnectionChal = 0x8;
+ inline constexpr uint32_t exeConnectionMeas = 0x10;
++
++inline constexpr uint32_t spdmMctpHeaderSize = 0x1200;
++inline constexpr uint32_t spdmTransportNoneHeaderSize = 0x1000;
++inline constexpr uint32_t libspdmTransportHeaderSize = 64;
++inline constexpr uint32_t libspdmTransportTailSize = 64;
++inline constexpr uint32_t libspdmTransportAdditionalSize =
++    (libspdmTransportHeaderSize + libspdmTransportTailSize);
++inline constexpr uint32_t libspdmSenderBufferConst = 0x1100;
++inline constexpr uint32_t libspdmReceiverBufferConst = 0x1200;
++inline constexpr uint32_t libspdmSenderBufferSize =
++    (libspdmSenderBufferConst + libspdmTransportAdditionalSize);
++inline constexpr uint32_t libspdmReceiverBufferSize =
++    (libspdmReceiverBufferConst + libspdmTransportAdditionalSize);
++
+ inline constexpr uint32_t exeConnection =
+     (exeConnectionDigest | exeConnectionCert | exeConnectionChal |
+      exeConnectionMeas);
+@@ -57,18 +72,18 @@ inline constexpr uint32_t exeConnection =
+  */
+ typedef struct
+ {
+-    void* spdmContext;
+-    void* scratchBuffer;
+-    void* certChain;
+-    void* rootCert;
++    void* spdmContext = nullptr;
++    void* scratchBuffer = nullptr;
++    void* certChain = nullptr;
++    void* rootCert = nullptr;
+     spdm_transport::TransportEndPoint transEP;
+-    uint8_t useSlotId;
+-    uint32_t sessionId;
+-    uint32_t useVersion;
+-    uint16_t useReqAsymAlgo;
+-    uint32_t useMeasurementHashAlgo;
+-    uint32_t useAsymAlgo;
+-    uint32_t useHashAlgo;
++    uint8_t useSlotId = 0;
++    uint32_t sessionId = 0;
++    uint32_t useVersion = 0;
++    uint16_t useReqAsymAlgo = 0;
++    uint32_t useMeasurementHashAlgo = 0;
++    uint32_t useAsymAlgo = 0;
++    uint32_t useHashAlgo = 0;
+     libspdm_connection_state_t connectStatus;
+     std::vector<uint8_t> data;
+     std::vector<uint8_t> dataCert;
+@@ -257,7 +272,6 @@ void formRecvMessage(size_t* responseSize, void** response,
+  *SPDM message to execute.
+  **/
+ libspdm_return_t spdmDeviceAcquireSenderBuffer(void* context,
+-                                               size_t* maxMsgSize,
+                                                void** msgBufPtr);
+ 
+ /**
+@@ -285,7 +299,6 @@ void spdmDeviceReleaseSenderBuffer(void* context, const void* msgBufPtr);
+  *SPDM message to execute.
+  **/
+ libspdm_return_t spdmDeviceAcquireReceiverBuffer(void* context,
+-                                                 size_t* maxMsgSize,
+                                                  void** msgBufPtr);
+ 
+ /**
+diff --git a/libspdm-build.sh b/libspdm-build.sh
+index c56c145..9f34a2f 100755
+--- a/libspdm-build.sh
++++ b/libspdm-build.sh
+@@ -3,7 +3,7 @@ if [ ! -f libspdm/build/lib/libspdm.a ]; then
+     echo "libspdm.a not found!!, building..."
+     git clone https://github.com/DMTF/libspdm.git
+     cd libspdm
+-    git checkout -b libspdm_build e0f4e94139f20ccbad5a57c2022878f166d2d5e1
++    git checkout -b libspdm_build 269e520c0bd87c2b82f4455f7c3e9b3f87b8eca5
+     git submodule update --init
+     mkdir build
+     cd build
+diff --git a/src/spdmapplib_common.cpp b/src/spdmapplib_common.cpp
+old mode 100644
+new mode 100755
+index 17468d9..3cb816d
+--- a/src/spdmapplib_common.cpp
++++ b/src/spdmapplib_common.cpp
+@@ -23,7 +23,7 @@ std::string setCertPath{};
+ /* Required by libspdm for send/recv payload*/
+ bool sendReceiveBufferAcquired = false;
+ size_t sendReceiveBufferSize(0);
+-std::array<uint8_t, LIBSPDM_SENDER_RECEIVE_BUFFER_SIZE> sendReceiveBuffer;
++std::array<uint8_t, libspdmReceiverBufferSize> sendReceiveBuffer;
+ 
+ char* getCertificatePath()
+ {
+@@ -38,9 +38,9 @@ void setCertificatePath(std::string& certPath)
+ void libspdmRegisterDeviceBuffer(void* spdmContext)
+ {
+     libspdm_register_device_buffer_func(
+-        spdmContext, spdmDeviceAcquireSenderBuffer,
+-        spdmDeviceReleaseSenderBuffer, spdmDeviceAcquireReceiverBuffer,
+-        spdmDeviceReleaseReceiverBuffer);
++        spdmContext, libspdmSenderBufferSize, libspdmReceiverBufferSize,
++        spdmDeviceAcquireSenderBuffer, spdmDeviceReleaseSenderBuffer,
++        spdmDeviceAcquireReceiverBuffer, spdmDeviceReleaseReceiverBuffer);
+ }
+ 
+ void freeSpdmContext(spdmItem& spdm)
+@@ -105,7 +105,7 @@ bool spdmSetConfigData(spdmItem& spdm, SPDMConfiguration& spdmConfig)
+         return false;
+     }
+ 
+-    u8Value = SPDM_MEASUREMENT_BLOCK_HEADER_SPECIFICATION_DMTF;
++    u8Value = SPDM_MEASUREMENT_SPECIFICATION_DMTF;
+     if (!spdmSetData(spdm, LIBSPDM_DATA_MEASUREMENT_SPEC, u8Value, parameter))
+     {
+         return false;
+@@ -232,6 +232,22 @@ bool spdmInit(spdmItem& spdm, const spdm_transport::TransportEndPoint& transEP,
+         return false;
+     }
+ 
++    if (transport == "mctp")
++    {
++        libspdm_register_transport_layer_func(
++            spdm.spdmContext, spdmMctpHeaderSize, libspdmTransportHeaderSize,
++            libspdmTransportTailSize, libspdm_transport_mctp_encode_message,
++            libspdm_transport_mctp_decode_message);
++    }
++    else
++    {
++        libspdm_register_transport_layer_func(
++            spdm.spdmContext, spdmTransportNoneHeaderSize, 0, 0,
++            spdm_transport_none_encode_message,
++            spdm_transport_none_decode_message);
++    }
++
++
+     size_t scratchBufferSize =
+         libspdm_get_sizeof_required_scratch_buffer(spdm.spdmContext);
+     spdm.scratchBuffer = allocate_zero_pool(scratchBufferSize);
+@@ -242,20 +258,7 @@ bool spdmInit(spdmItem& spdm, const spdm_transport::TransportEndPoint& transEP,
+         return false;
+     }
+ 
+-    libspdm_transport_encode_message_func encodeCB =
+-        (transport == "mctp") ? libspdm_transport_mctp_encode_message
+-                              : spdm_transport_none_encode_message;
+-    libspdm_transport_decode_message_func decodeCB =
+-        (transport == "mctp") ? libspdm_transport_mctp_decode_message
+-                              : spdm_transport_none_decode_message;
+-    libspdm_transport_get_header_size_func headerSizeCB =
+-        (transport == "mctp") ? libspdm_transport_mctp_get_header_size
+-                              : spdm_transport_none_get_header_size;
+     libspdm_register_device_io_func(spdm.spdmContext, sendMessage, recvMessage);
+-
+-    libspdm_register_transport_layer_func(spdm.spdmContext, encodeCB, decodeCB,
+-                                          headerSizeCB);
+-
+     libspdmRegisterDeviceBuffer(spdm.spdmContext);
+     libspdm_set_scratch_buffer(spdm.spdmContext, spdm.scratchBuffer,
+                                scratchBufferSize);
+@@ -284,11 +287,9 @@ void formRecvMessage(size_t* responseSize, void** response,
+ }
+ 
+ libspdm_return_t spdmDeviceAcquireSenderBuffer(void* /*context*/,
+-                                               size_t* max_msg_size,
+                                                void** msg_buf_ptr)
+ {
+     LIBSPDM_ASSERT(!sendReceiveBufferAcquired);
+-    *max_msg_size = sendReceiveBuffer.size();
+     *msg_buf_ptr = &sendReceiveBuffer;
+     std::fill_n(sendReceiveBuffer.begin(), sendReceiveBuffer.size(), 0);
+     sendReceiveBufferAcquired = true;
+@@ -304,11 +305,9 @@ void spdmDeviceReleaseSenderBuffer(void* /*context*/, const void* msg_buf_ptr)
+ }
+ 
+ libspdm_return_t spdmDeviceAcquireReceiverBuffer(void* /*context*/,
+-                                                 size_t* max_msg_size,
+                                                  void** msg_buf_ptr)
+ {
+     LIBSPDM_ASSERT(!sendReceiveBufferAcquired);
+-    *max_msg_size = sendReceiveBuffer.size();
+     *msg_buf_ptr = &sendReceiveBuffer;
+     std::fill_n(sendReceiveBuffer.begin(), sendReceiveBuffer.size(), 0);
+     sendReceiveBufferAcquired = true;
+diff --git a/src/spdmapplib_requester_impl.cpp b/src/spdmapplib_requester_impl.cpp
+old mode 100644
+new mode 100755
+index f970499..a091040
+--- a/src/spdmapplib_requester_impl.cpp
++++ b/src/spdmapplib_requester_impl.cpp
+@@ -181,7 +181,7 @@ bool SPDMRequesterImpl::doAuthentication(uint8_t useSlotId)
+     **/
+     if ((exeConnection & exeConnectionDigest))
+     {
+-        if (!validateSpdmRc(libspdm_get_digest(spdmResponder.spdmContext,
++        if (!validateSpdmRc(libspdm_get_digest(spdmResponder.spdmContext, NULL,
+                                                &slotMask, &totalDigestBuffer)))
+         {
+             phosphor::logging::log<phosphor::logging::level::ERR>(
+@@ -199,7 +199,8 @@ bool SPDMRequesterImpl::doAuthentication(uint8_t useSlotId)
+     }
+ 
+     if (!validateSpdmRc(libspdm_get_certificate(
+-            spdmResponder.spdmContext, useSlotId, &certChainSize, &certChain)))
++            spdmResponder.spdmContext, NULL, useSlotId,
++            &certChainSize, &certChain)))
+     {
+         phosphor::logging::log<phosphor::logging::level::ERR>(
+             "SPDMRequesterImpl::doAuthentication libspdm_get_certificate Failed");
+@@ -234,7 +235,7 @@ bool SPDMRequesterImpl::doMeasurement(const uint32_t* session_id,
+     if ((exeConnection & exeConnectionChal))
+     {
+         if (!validateSpdmRc(
+-                libspdm_challenge(spdmResponder.spdmContext, useSlotId,
++                libspdm_challenge(spdmResponder.spdmContext, NULL, useSlotId,
+                                   SPDM_CHALLENGE_REQUEST_ALL_MEASUREMENTS_HASH,
+                                   &measurementHash, nullptr)))
+         {
+@@ -407,7 +408,7 @@ bool SPDMRequesterImpl::startSecureSession(bool usePsk, uint32_t& sessionId,
+     }
+ 
+     return validateSpdmRc(libspdm_start_session(
+-        spdmResponder.spdmContext, usePsk, useMeasurementSummaryHashType,
++        spdmResponder.spdmContext, usePsk, NULL, 0, useMeasurementSummaryHashType,
+         useSlotId, sessionPolicy, &sessionId, &heartbeatPeriod,
+         measurementHash));
+ }
+@@ -441,8 +442,8 @@ bool SPDMRequesterImpl::sendSecuredMessage(uint32_t sessionId,
+                                            bool isAppMessage)
+ {
+     size_t requestSize = request.size();
+-    size_t responseSize = LIBSPDM_MAX_MESSAGE_BUFFER_SIZE;
+-    uint8_t responseArray[LIBSPDM_MAX_MESSAGE_BUFFER_SIZE];
++    size_t responseSize = libspdmReceiverBufferSize ;
++    uint8_t responseArray[libspdmReceiverBufferSize ];
+     const uint8_t* requestArray = request.data();
+     if (!validateSpdmRc(libspdm_send_receive_data(
+             spdmResponder.spdmContext, &sessionId, isAppMessage, requestArray,
+diff --git a/src/spdmapplib_responder_impl.cpp b/src/spdmapplib_responder_impl.cpp
+old mode 100644
+new mode 100755
+index 5f560e3..ed24fcc
+--- a/src/spdmapplib_responder_impl.cpp
++++ b/src/spdmapplib_responder_impl.cpp
+@@ -128,17 +128,11 @@ bool SPDMResponderImpl::addNewDevice(
+         return false;
+     }
+ 
+-    if (!validateSpdmRc(libspdm_register_session_state_callback_func(
+-            newItem.spdmContext, spdmServerSessionStateCallback)))
+-    {
+-        return false;
+-    }
++    libspdm_register_session_state_callback_func(
++        newItem.spdmContext, spdmServerSessionStateCallback);
+ 
+-    if (!validateSpdmRc(libspdm_register_connection_state_callback_func(
+-            newItem.spdmContext, spdmServerConnectionStateCallback)))
+-    {
+-        return false;
+-    }
++    libspdm_register_connection_state_callback_func(
++            newItem.spdmContext, spdmServerConnectionStateCallback);
+     spdmPool.push_back(newItem);
+     return true;
+ }
+-- 
+2.34.1
+

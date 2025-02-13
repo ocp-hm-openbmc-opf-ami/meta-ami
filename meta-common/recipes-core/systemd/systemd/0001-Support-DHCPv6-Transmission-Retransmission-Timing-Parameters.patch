@@ -1,0 +1,286 @@
+From 4aae40b85c19d8478eb3559bd0fd499c78e8902a Mon Sep 17 00:00:00 2001
+From: vaibhavs <vaibhavs@ami.com>
+Date: Fri, 21 Jun 2024 11:58:33 +0530
+Subject: [PATCH] Support DHCPv6 Transmission Retransmission Timing Parameters
+
+---
+Upstream-Status: Inappropriate [native]
+ src/libsystemd-network/dhcp6-internal.h  |  1 +
+ src/libsystemd-network/sd-dhcp6-client.c | 40 ++++++++++++++++++------
+ src/network/networkd-dhcp-common.c       | 31 ++++++++++++++++++
+ src/network/networkd-dhcp-common.h       |  1 +
+ src/network/networkd-dhcp6.c             |  5 +++
+ src/network/networkd-network-gperf.gperf | 12 +++++++
+ src/network/networkd-network.c           | 17 +++++++++-
+ src/network/networkd-network.h           |  1 +
+ src/systemd/sd-dhcp6-client.h            | 18 +++++++++++
+ 9 files changed, 115 insertions(+), 11 deletions(-)
+
+diff --git a/src/libsystemd-network/dhcp6-internal.h b/src/libsystemd-network/dhcp6-internal.h
+index e5b3b1302c..eb3ac4244f 100644
+--- a/src/libsystemd-network/dhcp6-internal.h
++++ b/src/libsystemd-network/dhcp6-internal.h
+@@ -83,6 +83,7 @@ struct sd_dhcp6_client {
+         sd_dhcp6_client_callback_t state_callback;
+         void *state_userdata;
+         bool send_release;
++        DHCP6TimingConf dhcp6_trans_param;
+ };
+ 
+ int dhcp6_network_bind_udp_socket(int ifindex, struct in6_addr *address);
+diff --git a/src/libsystemd-network/sd-dhcp6-client.c b/src/libsystemd-network/sd-dhcp6-client.c
+index c20367dfc9..da398d119e 100644
+--- a/src/libsystemd-network/sd-dhcp6-client.c
++++ b/src/libsystemd-network/sd-dhcp6-client.c
+@@ -868,8 +868,8 @@ static int client_timeout_resend(sd_event_source *s, uint64_t usec, void *userda
+ 
+         switch (client->state) {
+         case DHCP6_STATE_INFORMATION_REQUEST:
+-                init_retransmit_time = DHCP6_INF_TIMEOUT;
+-                max_retransmit_time = DHCP6_INF_MAX_RT;
++                init_retransmit_time = (usec_t)(client->dhcp6_trans_param.dhcp6_inf_timeout * USEC_PER_SEC); /*DHCP6_INF_TIMEOUT*/
++                max_retransmit_time = (usec_t)(client->dhcp6_trans_param.dhcp6_inf_max_rt * USEC_PER_SEC); /*DHCP6_INF_MAX_RT*/
+                 break;
+ 
+         case DHCP6_STATE_SOLICITATION:
+@@ -879,8 +879,8 @@ static int client_timeout_resend(sd_event_source *s, uint64_t usec, void *userda
+                         return 0;
+                 }
+ 
+-                init_retransmit_time = DHCP6_SOL_TIMEOUT;
+-                max_retransmit_time = DHCP6_SOL_MAX_RT;
++                init_retransmit_time = (usec_t)(client->dhcp6_trans_param.dhcp6_sol_timeout * USEC_PER_SEC); /*DHCP6_SOL_TIMEOUT*/
++                max_retransmit_time = (usec_t)(client->dhcp6_trans_param.dhcp6_sol_max_rt * USEC_PER_SEC); /*DHCP6_SOL_MAX_RT;*/
+                 break;
+ 
+         case DHCP6_STATE_REQUEST:
+@@ -890,13 +890,13 @@ static int client_timeout_resend(sd_event_source *s, uint64_t usec, void *userda
+                         return 0;
+                 }
+ 
+-                init_retransmit_time = DHCP6_REQ_TIMEOUT;
+-                max_retransmit_time = DHCP6_REQ_MAX_RT;
++                init_retransmit_time = (usec_t)(client->dhcp6_trans_param.dhcp6_req_timeout * USEC_PER_SEC); /*DHCP6_REQ_TIMEOUT*/
++                max_retransmit_time = (usec_t)(client->dhcp6_trans_param.dhcp6_req_max_rt * USEC_PER_SEC); /*DHCP6_REQ_MAX_RT*/
+                 break;
+ 
+         case DHCP6_STATE_RENEW:
+-                init_retransmit_time = DHCP6_REN_TIMEOUT;
+-                max_retransmit_time = DHCP6_REN_MAX_RT;
++                init_retransmit_time = (usec_t)(client->dhcp6_trans_param.dhcp6_ren_timeout * USEC_PER_SEC); /*DHCP6_REN_TIMEOUT*/
++                max_retransmit_time = (usec_t)(client->dhcp6_trans_param.dhcp6_ren_max_rt * USEC_PER_SEC); /*DHCP6_REN_MAX_RT*/
+ 
+                 /* RFC 3315, section 18.1.3. says max retransmit duration will
+                    be the remaining time until T2. Instead of setting MRD,
+@@ -904,8 +904,8 @@ static int client_timeout_resend(sd_event_source *s, uint64_t usec, void *userda
+                 break;
+ 
+         case DHCP6_STATE_REBIND:
+-                init_retransmit_time = DHCP6_REB_TIMEOUT;
+-                max_retransmit_time = DHCP6_REB_MAX_RT;
++                init_retransmit_time = (usec_t)(client->dhcp6_trans_param.dhcp6_reb_timeout * USEC_PER_SEC); /*DHCP6_REB_TIMEOUT*/
++                max_retransmit_time = (usec_t)(client->dhcp6_trans_param.dhcp6_reb_max_rt * USEC_PER_SEC); /*DHCP6_REB_MAX_RT*/
+ 
+                 /* Also, instead of setting MRD, the expire timer is already set in client_enter_bound_state(). */
+                 break;
+@@ -1592,3 +1592,23 @@ int sd_dhcp6_client_new(sd_dhcp6_client **ret) {
+ 
+         return 0;
+ }
++
++int sd_dhcp6_client_set_dhcp6_trans_param(sd_dhcp6_client *client, DHCP6TimingConf *val){
++        assert_return(client, -EINVAL);
++        assert_return(!sd_dhcp6_client_is_running(client), -EBUSY);
++
++        client->dhcp6_trans_param.dhcp6_inf_max_rt = val->dhcp6_inf_max_rt;
++        client->dhcp6_trans_param.dhcp6_inf_timeout = val->dhcp6_inf_timeout;
++        client->dhcp6_trans_param.dhcp6_reb_max_rt = val->dhcp6_reb_max_rt;
++        client->dhcp6_trans_param.dhcp6_reb_timeout = val->dhcp6_reb_timeout;
++        client->dhcp6_trans_param.dhcp6_ren_max_rt = val->dhcp6_ren_max_rt;
++        client->dhcp6_trans_param.dhcp6_ren_timeout = val->dhcp6_ren_timeout;
++        client->dhcp6_trans_param.dhcp6_req_max_rc = val->dhcp6_req_max_rc;
++        client->dhcp6_trans_param.dhcp6_req_max_rt = val->dhcp6_req_max_rt;
++        client->dhcp6_trans_param.dhcp6_req_timeout = val->dhcp6_req_timeout;
++        client->dhcp6_trans_param.dhcp6_sol_max_delay = val->dhcp6_sol_max_delay;
++        client->dhcp6_trans_param.dhcp6_sol_max_rt = val->dhcp6_sol_max_rt;
++        client->dhcp6_trans_param.dhcp6_sol_timeout = val->dhcp6_sol_timeout;
++
++        return 0;
++}
+diff --git a/src/network/networkd-dhcp-common.c b/src/network/networkd-dhcp-common.c
+index 080b15387c..423dc2791c 100644
+--- a/src/network/networkd-dhcp-common.c
++++ b/src/network/networkd-dhcp-common.c
+@@ -1487,3 +1487,34 @@ int config_parse_uplink(
+         *index = UPLINK_INDEX_AUTO;
+         return 0;
+ }
++
++int config_parse_dhcp6_trans_param(
++                const char* unit,
++                const char *filename,
++                unsigned line,
++                const char *section,
++                unsigned section_line,
++                const char *lvalue,
++                int ltype,
++                const char *rvalue,
++                void *data,
++                void *userdata) {
++
++        double *p = ASSERT_PTR(data);
++        double t;
++        int r;
++
++        assert(filename);
++        assert(lvalue);
++        assert(rvalue);
++
++        r = safe_atod(rvalue, &t);
++        if (r < 0) {
++                log_syntax(unit, LOG_WARNING, filename, line, r,
++                           "Failed to parse dhcp6_trans_param=%s, ignoring assignment: %m", rvalue);
++                return 0;
++        }
++
++        *p = t;
++        return 0;
++}
+diff --git a/src/network/networkd-dhcp-common.h b/src/network/networkd-dhcp-common.h
+index 6e3f3b2a1e..1ee257c6c4 100644
+--- a/src/network/networkd-dhcp-common.h
++++ b/src/network/networkd-dhcp-common.h
+@@ -112,3 +112,4 @@ CONFIG_PARSER_PROTOTYPE(config_parse_duid_rawdata);
+ CONFIG_PARSER_PROTOTYPE(config_parse_manager_duid_rawdata);
+ CONFIG_PARSER_PROTOTYPE(config_parse_network_duid_rawdata);
+ CONFIG_PARSER_PROTOTYPE(config_parse_uplink);
++CONFIG_PARSER_PROTOTYPE(config_parse_dhcp6_trans_param);
+diff --git a/src/network/networkd-dhcp6.c b/src/network/networkd-dhcp6.c
+index f499d0369c..135ba97ff4 100644
+--- a/src/network/networkd-dhcp6.c
++++ b/src/network/networkd-dhcp6.c
+@@ -736,6 +736,11 @@ static int dhcp6_configure(Link *link) {
+                                             "DHCPv6 CLIENT: Failed to %s sending release message on stop: %m",
+                                             enable_disable(link->network->dhcp6_send_release));
+ 
++        r = sd_dhcp6_client_set_dhcp6_trans_param(client,&link->network->dhcp6_trans_param);
++        if (r < 0)
++                return log_link_debug_errno(link, r,
++                                            "DHCPv6 CLIENT: Failed to set dhcp6 transmission timing configuration parameters: %m");
++
+         link->dhcp6_client = TAKE_PTR(client);
+ 
+         return 0;
+diff --git a/src/network/networkd-network-gperf.gperf b/src/network/networkd-network-gperf.gperf
+index a6593a080a..466d176c5f 100644
+--- a/src/network/networkd-network-gperf.gperf
++++ b/src/network/networkd-network-gperf.gperf
+@@ -562,6 +562,18 @@ TokenBucketFilter.LatencySec,                config_parse_token_bucket_filter_la
+ TrivialLinkEqualizer.Parent,                 config_parse_qdisc_parent,                                QDISC_KIND_TEQL,               0
+ TrivialLinkEqualizer.Handle,                 config_parse_qdisc_handle,                                QDISC_KIND_TEQL,               0
+ TrivialLinkEqualizer.Id,                     config_parse_trivial_link_equalizer_id,                   QDISC_KIND_TEQL,               0
++DHCPv6TimingConf.INFTimeout,                 config_parse_dhcp6_trans_param,                           0,                             offsetof(Network, dhcp6_trans_param.dhcp6_inf_timeout)
++DHCPv6TimingConf.INFMaxRt,                   config_parse_dhcp6_trans_param,                           0,                             offsetof(Network, dhcp6_trans_param.dhcp6_inf_max_rt)
++DHCPv6TimingConf.SOLMaxDelay,                config_parse_dhcp6_trans_param,                           0,                             offsetof(Network, dhcp6_trans_param.dhcp6_sol_max_delay)
++DHCPv6TimingConf.SOLTimeout,                 config_parse_dhcp6_trans_param,                           0,                             offsetof(Network, dhcp6_trans_param.dhcp6_sol_timeout)
++DHCPv6TimingConf.SOLMaxRt,                   config_parse_dhcp6_trans_param,                           0,                             offsetof(Network, dhcp6_trans_param.dhcp6_sol_max_rt)
++DHCPv6TimingConf.REQTimeout,                 config_parse_dhcp6_trans_param,                           0,                             offsetof(Network, dhcp6_trans_param.dhcp6_req_timeout)
++DHCPv6TimingConf.REQMaxRt,                   config_parse_dhcp6_trans_param,                           0,                             offsetof(Network, dhcp6_trans_param.dhcp6_req_max_rt)
++DHCPv6TimingConf.REQMaxRc,                   config_parse_dhcp6_trans_param,                           0,                             offsetof(Network, dhcp6_trans_param.dhcp6_req_max_rc)
++DHCPv6TimingConf.RENTimeout,                 config_parse_dhcp6_trans_param,                           0,                             offsetof(Network, dhcp6_trans_param.dhcp6_ren_timeout)
++DHCPv6TimingConf.RENMaxRt,                   config_parse_dhcp6_trans_param,                           0,                             offsetof(Network, dhcp6_trans_param.dhcp6_ren_max_rt)
++DHCPv6TimingConf.REBTimeout,                 config_parse_dhcp6_trans_param,                           0,                             offsetof(Network, dhcp6_trans_param.dhcp6_reb_timeout)
++DHCPv6TimingConf.REBMaxRt,                   config_parse_dhcp6_trans_param,                           0,                             offsetof(Network, dhcp6_trans_param.dhcp6_reb_max_rt)
+ /* backwards compatibility: do not add new entries to this section */
+ Network.IPv4LL,                              config_parse_ipv4ll,                                      0,                             offsetof(Network, link_local)
+ Network.IPv6Token,                           config_parse_address_generation_type,                     0,                             offsetof(Network, ndisc_tokens)
+diff --git a/src/network/networkd-network.c b/src/network/networkd-network.c
+index dcd3e5ae12..d19382e917 100644
+--- a/src/network/networkd-network.c
++++ b/src/network/networkd-network.c
+@@ -41,6 +41,7 @@
+ #include "string-util.h"
+ #include "strv.h"
+ #include "tclass.h"
++#include "dhcp6-protocol.h"
+ 
+ /* Let's assume that anything above this number is a user misconfiguration. */
+ #define MAX_NTP_SERVERS 128U
+@@ -489,6 +490,19 @@ int network_load_one(Manager *manager, OrderedHashmap **networks, const char *fi
+ 
+                 .ipoib_mode = _IP_OVER_INFINIBAND_MODE_INVALID,
+                 .ipoib_umcast = -1,
++
++                .dhcp6_trans_param.dhcp6_inf_max_rt = DHCP6_INF_MAX_RT/(USEC_PER_SEC),
++                .dhcp6_trans_param.dhcp6_inf_timeout = DHCP6_INF_TIMEOUT/(USEC_PER_SEC),
++                .dhcp6_trans_param.dhcp6_reb_max_rt = DHCP6_REB_MAX_RT/(USEC_PER_SEC),
++                .dhcp6_trans_param.dhcp6_reb_timeout = DHCP6_REB_TIMEOUT/(USEC_PER_SEC),
++                .dhcp6_trans_param.dhcp6_ren_max_rt = DHCP6_REN_MAX_RT/(USEC_PER_SEC),
++                .dhcp6_trans_param.dhcp6_ren_timeout = DHCP6_REN_TIMEOUT/(USEC_PER_SEC),
++                .dhcp6_trans_param.dhcp6_req_max_rc = DHCP6_REQ_MAX_RC/(USEC_PER_SEC),
++                .dhcp6_trans_param.dhcp6_req_max_rt = DHCP6_REQ_MAX_RT/(USEC_PER_SEC),
++                .dhcp6_trans_param.dhcp6_req_timeout = DHCP6_REQ_TIMEOUT/(USEC_PER_SEC),
++                .dhcp6_trans_param.dhcp6_sol_max_delay = DHCP6_SOL_MAX_DELAY/(USEC_PER_SEC),
++                .dhcp6_trans_param.dhcp6_sol_max_rt = DHCP6_SOL_MAX_RT/(USEC_PER_SEC),
++                .dhcp6_trans_param.dhcp6_sol_timeout = DHCP6_SOL_TIMEOUT/(USEC_PER_SEC),
+         };
+ 
+         r = config_parse_many(
+@@ -548,7 +562,8 @@ int network_load_one(Manager *manager, OrderedHashmap **networks, const char *fi
+                         "StochasticFairBlue\0"
+                         "StochasticFairnessQueueing\0"
+                         "TokenBucketFilter\0"
+-                        "TrivialLinkEqualizer\0",
++                        "TrivialLinkEqualizer\0"
++                        "DHCPv6TimingConf\0",
+                         config_item_perf_lookup, network_network_gperf_lookup,
+                         CONFIG_PARSE_WARN,
+                         network,
+diff --git a/src/network/networkd-network.h b/src/network/networkd-network.h
+index 03131b7061..38eb3ab2ac 100644
+--- a/src/network/networkd-network.h
++++ b/src/network/networkd-network.h
+@@ -202,6 +202,7 @@ struct Network {
+         char *dhcp6_netlabel;
+         bool dhcp6_send_release;
+         NFTSetContext dhcp6_nft_set_context;
++        DHCP6TimingConf dhcp6_trans_param;
+ 
+         /* DHCP Server Support */
+         bool dhcp_server;
+diff --git a/src/systemd/sd-dhcp6-client.h b/src/systemd/sd-dhcp6-client.h
+index 0ceadb8b8a..dc3f0b0473 100644
+--- a/src/systemd/sd-dhcp6-client.h
++++ b/src/systemd/sd-dhcp6-client.h
+@@ -40,6 +40,21 @@ enum {
+         SD_DHCP6_CLIENT_EVENT_INFORMATION_REQUEST       = 13
+ };
+ 
++typedef struct DHCP6TimingConf {
++        double dhcp6_inf_timeout;
++        double dhcp6_inf_max_rt;
++        double dhcp6_sol_max_delay;
++        double dhcp6_sol_timeout;
++        double dhcp6_sol_max_rt;
++        double dhcp6_req_timeout;
++        double dhcp6_req_max_rt;
++        double dhcp6_req_max_rc;
++        double dhcp6_ren_timeout;
++        double dhcp6_ren_max_rt;
++        double dhcp6_reb_timeout;
++        double dhcp6_reb_max_rt;
++}DHCP6TimingConf;
++
+ typedef struct sd_dhcp6_client sd_dhcp6_client;
+ 
+ typedef void (*sd_dhcp6_client_callback_t)(sd_dhcp6_client *client, int event, void *userdata);
+@@ -134,6 +149,9 @@ int sd_dhcp6_client_attach_device(sd_dhcp6_client *client, sd_device *dev);
+ sd_dhcp6_client *sd_dhcp6_client_ref(sd_dhcp6_client *client);
+ sd_dhcp6_client *sd_dhcp6_client_unref(sd_dhcp6_client *client);
+ int sd_dhcp6_client_new(sd_dhcp6_client **ret);
++int sd_dhcp6_client_set_dhcp6_trans_param(
++                sd_dhcp6_client *client,
++                DHCP6TimingConf *val);
+ 
+ _SD_DEFINE_POINTER_CLEANUP_FUNC(sd_dhcp6_client, sd_dhcp6_client_unref);
+ 

@@ -27,7 +27,6 @@ ast2500-default-515
 ast2500-default-54
 ast2600-dcscm
 ast2600-dcscm-amd
-ast2600-dcscm-avenue-city
 ast2600-default
 ast2600-default-515
 ast2600-default-54
@@ -49,9 +48,14 @@ ast2600-emmc-secure-tee-515
 ast2600-emmc-tee
 ast2600-emmc-tee-515
 ast2700-default
-ast2700-default-ltpi
-ast2700-default-ltpi-dual
+ast2700-default-ncsi
+ast2700-default-ast1700-evb
+ast2700-default-ast1700-evb-cdr
 ast2700-emmc
+ast2700-abr
+ast2700-dcscm
+ast2700-dcscm-ast1700-evb
+ast2700-dcscm-ast1700-demo
 ```
 
 - Linux kernel version is `6.6` by default. machine with `515` postfix for kernel v5.15, machine with `54` postfix for kernel v5.4.
@@ -61,6 +65,9 @@ ast2700-emmc
     - OPTEE-OS is disabled by default. machine with `tee` postfix for OPTEE-OS enable.
   - AST2700
     - OPTEE-OS is enabled by default.
+- ARM Trusted Firmware
+  - AST2700
+    - ATF is enabled by default and only support BL31.
 
 1. AST2700
 

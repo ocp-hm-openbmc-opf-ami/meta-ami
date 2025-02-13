@@ -1,0 +1,420 @@
+From 8984979363d1cb66f333d35f66e4038baab81fd7 Mon Sep 17 00:00:00 2001
+From: vaibhavs <vaibhavs@ami.com>
+Date: Tue, 25 Jun 2024 09:41:24 +0530
+Subject: [PATCH] Support IPv6 Dynamic and Static Router Commands
+
+---
+ src/ethernet_interface.cpp |  89 +++++++++++++++++++++++-
+ src/ethernet_interface.hpp |  13 ++++
+ src/router.hpp             | 135 +++++++++++++++++++++++++++++++++++++
+ src/util.cpp               |  42 +++++++++---
+ src/util.hpp               |   6 +-
+ 5 files changed, 270 insertions(+), 15 deletions(-)
+ create mode 100644 src/router.hpp
+
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index 6b1b721..8b58369 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -154,7 +154,9 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+     if (EthernetInterfaceIntf::ipv6EnableStaticRtr())
+     {
+         EthernetInterfaceIntf::ipv6StaticRtrAddr(
+-            getIP6StaticRtrAddr(ifaceConfig), true);
++            getIP6StaticRtrAddr(ifaceConfig, "Router1"), true);
++        EthernetInterfaceIntf::ipv6StaticRtr2Addr(
++            getIP6StaticRtrAddr(ifaceConfig, "Router2"), true);
+     }
+ 
+     auto [ipv4List, ipv6List] = getIndexList(ifaceConfig);
+@@ -375,7 +377,13 @@ void EthernetInterface::addStaticNeigh(const NeighborInfo& info)
+             EthernetInterfaceIntf::ipv6StaticRtrAddr() ==
+                 stdplus::toStr(*info.addr))
+         {
+-            prefixLength = getIP6StaticRtrPrefix(ifaceConfig);
++            prefixLength = getIP6StaticRtrPrefix(ifaceConfig, "Router1");
++        }
++        if (!EthernetInterfaceIntf::ipv6StaticRtr2Addr().empty() &&
++            EthernetInterfaceIntf::ipv6StaticRtr2Addr() ==
++                stdplus::toStr(*info.addr))
++        {
++            prefixLength = getIP6StaticRtrPrefix(ifaceConfig, "Router2");
+         }
+     }
+ 
+@@ -1053,6 +1061,19 @@ EthernetInterface::DHCPConf EthernetInterface::dhcpEnabled(DHCPConf value)
+                 }
+             }
+ 
++            if (!EthernetInterfaceIntf::ipv6StaticRtr2Addr().empty())
++            {
++                if (auto it =
++                        staticNeighbors.find(stdplus::fromStr<stdplus::In6Addr>(
++                            EthernetInterfaceIntf::ipv6StaticRtr2Addr()));
++                    it != staticNeighbors.end())
++                {
++                    staticNeighbors.erase(stdplus::fromStr<stdplus::In6Addr>(
++                        EthernetInterfaceIntf::ipv6StaticRtr2Addr()));
++                    EthernetInterfaceIntf::ipv6StaticRtr2Addr(std::string{});
++                }
++            }
++
+             ipv6IndexUsedList.clear();
+             ipv6IndexUsedList.assign(IPV6_MAX_NUM + 1, std::nullopt);
+         }
+@@ -1525,6 +1546,21 @@ void EthernetInterface::writeIfaceStateFile(std::string ifname)
+                         stdplus::toStr((itt->second->prefixLength())));
+                 }
+             }
++
++            router["IPv6StaticRtr2Addr"].emplace_back(
++                it->second->EthernetInterfaceIntf::ipv6StaticRtr2Addr());
++            if (!EthernetInterfaceIntf::ipv6StaticRtr2Addr().empty())
++            {
++                if (auto itt = it->second->staticNeighbors.find(
++                        stdplus::fromStr<stdplus::In6Addr>(
++                            it->second
++                                ->EthernetInterfaceIntf::ipv6StaticRtr2Addr()));
++                    itt != it->second->staticNeighbors.end())
++                {
++                    router["IPv6StaticRtr2Prefix"].emplace_back(
++                        stdplus::toStr((itt->second->prefixLength())));
++                }
++            }
+         }
+     }
+     {
+@@ -2437,6 +2473,22 @@ std::string EthernetInterface::ipv6StaticRtrAddr(std::string value)
+     return value;
+ }
+ 
++/** Set value of IPv6StaticRtr2Addr */
++std::string EthernetInterface::ipv6StaticRtr2Addr(std::string value)
++{
++    if (value == EthernetInterfaceIntf::ipv6StaticRtr2Addr())
++    {
++        log<level::INFO>("ipv6StaticRtr2Addr no change\n");
++        return value;
++    }
++
++    EthernetInterfaceIntf::ipv6StaticRtr2Addr(value);
++    writeConfigurationFile();
++    manager.get().reloadConfigs();
++
++    return value;
++}
++
+ /** @brief write the ARPControl configuration into the conf file.
+  */
+ void EthernetInterface::writeConfiguration()
+@@ -3020,5 +3072,38 @@ void EthernetInterface::registerSignal(sdbusplus::bus::bus& bus)
+     }
+ }
+ 
++std::vector<RACFG_T> EthernetInterface::getIPv6DynamicRouterInfo()
++{
++    try
++    {
++        RACFG_T racfg;
++        std::vector<RACFG_T> Vec;
++
++        auto dynamicGateway =
++            std::make_unique<racfg6::route>(interfaceName().c_str());
++
++        const auto& rInfo = dynamicGateway->getIPv6DynamicRouterInfo();
++
++        for (auto str = rInfo.begin(); str != rInfo.end(); str++)
++        {
++            std::get<0>(racfg) = std::vector<uint8_t>(
++                str->gateway6, str->gateway6 + sizeof(str->gateway6));
++            std::get<1>(racfg) = std::vector<uint8_t>(
++                str->prefix, str->prefix + sizeof(str->prefix));
++            std::get<2>(racfg) = str->prefixlen;
++            std::get<3>(racfg) = std::vector<uint8_t>(
++                str->gateway6MAC, str->gateway6MAC + sizeof(str->gateway6MAC));
++
++            Vec.push_back(racfg);
++        }
++        return Vec;
++    }
++    catch (const std::exception& e)
++    {
++        lg2::error("Failed with exception : {ERROR}", "ERROR", e);
++    }
++}
++
++
+ } // namespace network
+ } // namespace phosphor
+diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
+index 5cbbab9..ce7d24f 100644
+--- a/src/ethernet_interface.hpp
++++ b/src/ethernet_interface.hpp
+@@ -5,6 +5,7 @@
+ #include "ipaddress.hpp"
+ #include "ncsi_configuration.hpp"
+ #include "neighbor.hpp"
++#include "router.hpp"
+ #include "types.hpp"
+ #include "util.hpp"
+ #include "xyz/openbmc_project/Network/IP/Create/server.hpp"
+@@ -60,6 +61,9 @@ using MacAddressIntf =
+ using ServerList = std::vector<std::string>;
+ using ObjectPath = sdbusplus::message::object_path;
+ 
++using RACFG_T = std::tuple<std::vector<uint8_t>, std::vector<uint8_t>, uint8_t,
++                           std::vector<uint8_t>>;
++
+ class Manager;
+ 
+ class TestEthernetInterface;
+@@ -126,6 +130,11 @@ class EthernetInterface : public Ifaces
+      */
+     void loadDomainNames();
+ 
++    /** @brief Get IPv6 Dynamic Router Address, Prefix, Prefix Length,
++     * MACAddress
++     */
++    std::vector<RACFG_T> getIPv6DynamicRouterInfo() override;
++
+     /** @brief load the ARP Control Configurations.
+      */
+     void loadARPControl();
+@@ -314,6 +323,9 @@ class EthernetInterface : public Ifaces
+     /** Set value of IPv6StaticRtrAddr */
+     std::string ipv6StaticRtrAddr(std::string value) override;
+ 
++    /** Set value of IPv6StaticRtr2Addr */
++    std::string ipv6StaticRtr2Addr(std::string value) override;
++
+     /** Delete the index according to given IP address*/
+     void delIpIdx(std::string address, IP::Protocol protocolType);
+ 
+@@ -345,6 +357,7 @@ class EthernetInterface : public Ifaces
+     using EthernetInterfaceIntf::ipv4Enable;
+     using EthernetInterfaceIntf::ipv6Enable;
+     using EthernetInterfaceIntf::ipv6EnableStaticRtr;
++    using EthernetInterfaceIntf::ipv6StaticRtr2Addr;
+     using EthernetInterfaceIntf::ipv6StaticRtrAddr;
+     using EthernetInterfaceIntf::linkLocalAutoConf;
+     using EthernetInterfaceIntf::nameservers;
+diff --git a/src/router.hpp b/src/router.hpp
+new file mode 100644
+index 0000000..145e658
+--- /dev/null
++++ b/src/router.hpp
+@@ -0,0 +1,135 @@
++#include <arpa/inet.h>
++
++#include <cstring>
++#include <fstream>
++#include <vector>
++
++#define MACLEN 6
++
++namespace racfg6
++{
++using namespace std;
++
++class route
++{
++  public:
++    struct racfg
++    {
++        uint8_t gateway6[INET6_ADDRSTRLEN] = {0};
++        uint8_t prefix[INET6_ADDRSTRLEN] = {0};
++        uint8_t prefixlen = 0;
++        uint8_t gateway6MAC[MACLEN] = {0};
++        void reset()
++        {
++            memset(gateway6, 0, sizeof(gateway6));
++            memset(prefix, 0, sizeof(prefix));
++            memset(gateway6MAC, 0, sizeof(gateway6MAC));
++            prefixlen = 0;
++        }
++    };
++
++    route(std::string iface)
++    {
++        IPv6DynamicRouterInfo(iface);
++    }
++
++    const std::vector<racfg>& getIPv6DynamicRouterInfo() const
++    {
++        return raCfg6;
++    }
++
++  private:
++    const char* Filename = "/proc/net/ipv6_route_prefix_info";
++    std::vector<racfg> raCfg6;
++
++    void mac_pton(std::string macStr, uint8_t* mac)
++    {
++        uint8_t MACAddress[6] = {0};
++
++        size_t pos = macStr.find(":");
++        uint8_t index = 0;
++        while (pos != -1)
++        {
++            MACAddress[index++] = std::stoi(macStr.substr(0, pos), 0, 16);
++            macStr.erase(macStr.begin(), macStr.begin() + pos + 1);
++            pos = macStr.find(":");
++        }
++
++        MACAddress[index] = std::stoi(macStr, 0, 16);
++        memcpy(mac, MACAddress, sizeof(MACAddress));
++    }
++
++    void IPv6DynamicRouterInfo(std::string& iface)
++    {
++        ifstream file;
++
++        file.open(Filename, ios::in);
++        if (!file.is_open())
++        {
++            return;
++        }
++
++        std::string line;
++        std::vector<std::string> data;
++        racfg routeInfo;
++        while (file.good())
++        {
++            std::getline(file, line);
++            if (line.empty())
++            {
++                continue;
++            }
++            std::string delim = " ";
++
++            size_t pos = line.find(delim);
++
++            while (pos != -1)
++            {
++                data.push_back(line.substr(0, pos));
++                line.erase(line.begin(), line.begin() + pos + 1);
++                pos = line.find(delim);
++            }
++
++            if (line.compare(iface) != 0)
++            {
++                data.clear();
++                continue;
++            }
++
++            /*Gateway IPv6*/
++            if (inet_pton(AF_INET6, data.front().c_str(), routeInfo.gateway6) <
++                0)
++            {
++                perror("inet_pton failed ");
++            }
++            data.erase(data.begin());
++
++            /*Prefix*/
++            if (inet_pton(AF_INET6, data.front().c_str(), routeInfo.prefix) < 0)
++            {
++                perror("inet_pton failed ");
++            }
++
++            data.erase((data.begin()));
++
++            /*Prefix Length*/
++            routeInfo.prefixlen =
++                static_cast<uint8_t>(std::stoul(data.front(), 0, 10));
++            data.erase((data.begin()));
++
++            /*Gateway6MAC*/
++            mac_pton(data.front().c_str(), routeInfo.gateway6MAC);
++            data.erase((data.begin()));
++
++            raCfg6.push_back(routeInfo);
++
++            routeInfo.reset();
++
++            data.clear();
++        }
++
++        file.close();
++    }
++};
++
++} // namespace racfg6
+diff --git a/src/util.cpp b/src/util.cpp
+index 83f5a58..5fa8ca0 100644
+--- a/src/util.cpp
++++ b/src/util.cpp
+@@ -245,25 +245,45 @@ std::tuple<std::string, uint8_t, uint8_t>
+     return std::make_tuple(mode, package, channel);
+ }
+ 
+-std::string getIP6StaticRtrAddr(const config::Parser& config)
++std::string getIP6StaticRtrAddr(const config::Parser& config,
++                                const std::string& Router)
+ {
+-    if (auto str = config.map.getLastValueString("IPv6Router",
+-                                                 "IPv6StaticRtrAddr");
+-        str == nullptr)
++    std::string str{};
++
++    if (Router.compare("Router1") == 0)
+     {
+-        return "";
++        str = *config.map.getLastValueString("IPv6Router", "IPv6StaticRtrAddr");
+     }
+-    else
++    else if (Router.compare("Router2") == 0)
+     {
+-        return *str;
++        str = *config.map.getLastValueString("IPv6Router",
++                                             "IPv6StaticRtr2Addr");
++    }
++    else{
++        str = "";
+     }
++
++    return str;
+ }
+ 
+-int getIP6StaticRtrPrefix(const config::Parser& config)
++int getIP6StaticRtrPrefix(const config::Parser& config,
++                          const std::string& Router)
+ {
+-    auto val = systemdParseLast(config, "IPv6Router", "IPv6StaticRtrPrefix",
+-                                config::parseInt)
+-                   .value_or(0);
++    int val = 0;
++
++    if (Router.compare("Router1") == 0)
++    {
++        val = systemdParseLast(config, "IPv6Router", "IPv6StaticRtrPrefix",
++                               config::parseInt)
++                  .value_or(0);
++    }
++    else if (Router.compare("Router2") == 0)
++    {
++        val = systemdParseLast(config, "IPv6Router", "IPv6StaticRtr2Prefix",
++                               config::parseInt)
++                  .value_or(0);
++    }
++
+     return val;
+ }
+ 
+diff --git a/src/util.hpp b/src/util.hpp
+index 6f7c3a1..9ca667c 100644
+--- a/src/util.hpp
++++ b/src/util.hpp
+@@ -107,9 +107,11 @@ bool getIPv6AcceptRA(const config::Parser& config);
+  */
+ bool getIP6StaticRtr(const config::Parser& config);
+ 
+-std::string getIP6StaticRtrAddr(const config::Parser& config);
++std::string getIP6StaticRtrAddr(const config::Parser& config,
++                                const std::string& Router);
+ 
+-int getIP6StaticRtrPrefix(const config::Parser& config);
++int getIP6StaticRtrPrefix(const config::Parser& config,
++                          const std::string& Router);
+ 
+ std::tuple<std::string, uint8_t, uint8_t>
+     getNCSIValue(const config::Parser& config);

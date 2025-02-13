@@ -14,69 +14,83 @@ Subject: [PATCH 06/13] 0013-Add-Prefix-Length-at-Neighbor.patch
  create mode 100644 0013-Add-Prefix-Length-at-Neighbor.patch
 
 diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
-index 343a7db..6820bcf 100644
+index 3a5d517..f2d85ca 100644
 --- a/src/ethernet_interface.cpp
 +++ b/src/ethernet_interface.cpp
-@@ -247,7 +247,7 @@ void EthernetInterface::addStaticNeigh(const NeighborInfo& info)
+@@ -242,10 +242,11 @@ void EthernetInterface::addStaticNeigh(const NeighborInfo& info)
+     }
+     else
      {
-         staticNeighbors.emplace(*info.addr, std::make_unique<Neighbor>(
-                                                 bus, std::string_view(objPath),
+-        staticNeighbors.emplace(*info.addr, std::make_unique<Neighbor>(
+-                                                bus, std::string_view(objPath),
 -                                                *this, *info.addr, *info.mac,
-+                                                *this, *info.addr, *info.mac, info.prefixLength,
-                                                 Neighbor::State::Permanent));
+-                                                Neighbor::State::Permanent));
++        staticNeighbors.emplace(
++            *info.addr,
++            std::make_unique<Neighbor>(bus, std::string_view(objPath), *this,
++                                       *info.addr, *info.mac, info.prefixLength,
++                                       Neighbor::State::Permanent));
      }
  }
-@@ -338,7 +338,7 @@ ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
+ 
+@@ -340,7 +341,8 @@ ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
  }
  
  ObjectPath EthernetInterface::neighbor(std::string ipAddress,
 -                                       std::string macAddress)
-+                                       std::string macAddress, uint8_t prefixLength)
++                                       std::string macAddress,
++                                       uint8_t prefixLength)
  {
      std::optional<stdplus::InAnyAddr> addr;
      try
-@@ -371,7 +371,7 @@ ObjectPath EthernetInterface::neighbor(std::string ipAddress,
+@@ -372,9 +374,9 @@ ObjectPath EthernetInterface::neighbor(std::string ipAddress,
+     if (it == staticNeighbors.end())
      {
          it = std::get<0>(staticNeighbors.emplace(
-             *addr, std::make_unique<Neighbor>(bus, std::string_view(objPath),
+-            *addr, std::make_unique<Neighbor>(bus, std::string_view(objPath),
 -                                              *this, *addr, *lladdr,
-+                                              *this, *addr, *lladdr, prefixLength,
-                                               Neighbor::State::Permanent)));
+-                                              Neighbor::State::Permanent)));
++            *addr, std::make_unique<Neighbor>(
++                       bus, std::string_view(objPath), *this, *addr, *lladdr,
++                       prefixLength, Neighbor::State::Permanent)));
      }
      else
+     {
 diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
-index 028bab7..fe21de4 100644
+index 5c51f73..969f982 100644
 --- a/src/ethernet_interface.hpp
 +++ b/src/ethernet_interface.hpp
-@@ -138,7 +138,7 @@ class EthernetInterface : public Ifaces
+@@ -133,7 +133,8 @@ class EthernetInterface : public Ifaces
       *  @param[in] ipAddress - IP address.
       *  @param[in] macAddress - Low level MAC address.
       */
 -    ObjectPath neighbor(std::string ipAddress, std::string macAddress) override;
-+    ObjectPath neighbor(std::string ipAddress, std::string macAddress, uint8_t prefixLength) override;
++    ObjectPath neighbor(std::string ipAddress, std::string macAddress,
++                        uint8_t prefixLength) override;
  
      /** Set value of DHCPEnabled */
      DHCPConf dhcpEnabled() const override;
 diff --git a/src/neighbor.cpp b/src/neighbor.cpp
-index 4d899c4..65f37d9 100644
+index 4d899c4..4dbb81f 100644
 --- a/src/neighbor.cpp
 +++ b/src/neighbor.cpp
-@@ -25,20 +25,21 @@ static auto makeObjPath(std::string_view root, stdplus::InAnyAddr addr)
+@@ -25,20 +25,22 @@ static auto makeObjPath(std::string_view root, stdplus::InAnyAddr addr)
  Neighbor::Neighbor(sdbusplus::bus_t& bus, std::string_view objRoot,
                     stdplus::PinnedRef<EthernetInterface> parent,
                     stdplus::InAnyAddr addr, stdplus::EtherAddr lladdr,
 -                   State state) :
 -    Neighbor(bus, makeObjPath(objRoot, addr), parent, addr, lladdr, state)
 +                   uint8_t prefixLength, State state) :
-+    Neighbor(bus, makeObjPath(objRoot, addr), parent, addr, lladdr, prefixLength, state)
++    Neighbor(bus, makeObjPath(objRoot, addr), parent, addr, lladdr,
++             prefixLength, state)
  {}
  
  Neighbor::Neighbor(sdbusplus::bus_t& bus,
                     sdbusplus::message::object_path objPath,
                     stdplus::PinnedRef<EthernetInterface> parent,
--                   stdplus::InAnyAddr addr, stdplus::EtherAddr lladdr,
-+                   stdplus::InAnyAddr addr, stdplus::EtherAddr lladdr, uint8_t prefixLength,
-                    State state) :
+                    stdplus::InAnyAddr addr, stdplus::EtherAddr lladdr,
+-                   State state) :
++                   uint8_t prefixLength, State state) :
      NeighborObj(bus, objPath.str.c_str(), NeighborObj::action::defer_emit),
      parent(parent), objPath(std::move(objPath))
  {
@@ -86,7 +100,7 @@ index 4d899c4..65f37d9 100644
      NeighborObj::state(state, true);
      emit_object_added();
  }
-@@ -81,5 +82,10 @@ Neighbor::State Neighbor::state(State /*state*/)
+@@ -81,5 +83,10 @@ Neighbor::State Neighbor::state(State /*state*/)
      elog<NotAllowed>(REASON("Property update is not allowed"));
  }
  
@@ -98,10 +112,10 @@ index 4d899c4..65f37d9 100644
  } // namespace network
  } // namespace phosphor
 diff --git a/src/neighbor.hpp b/src/neighbor.hpp
-index 5072afe..3f9af74 100644
+index 5072afe..30c4ab1 100644
 --- a/src/neighbor.hpp
 +++ b/src/neighbor.hpp
-@@ -36,11 +36,12 @@ class Neighbor : public NeighborObj
+@@ -36,11 +36,13 @@ class Neighbor : public NeighborObj
       *  @param[in] parent - Parent object.
       *  @param[in] addr - IP address.
       *  @param[in] lladdr - Low level MAC address.
@@ -111,11 +125,12 @@ index 5072afe..3f9af74 100644
      Neighbor(sdbusplus::bus_t& bus, std::string_view objRoot,
               stdplus::PinnedRef<EthernetInterface> parent,
 -             stdplus::InAnyAddr addr, stdplus::EtherAddr lladdr, State state);
-+             stdplus::InAnyAddr addr, stdplus::EtherAddr lladdr, uint8_t prefixLength, State state);
++             stdplus::InAnyAddr addr, stdplus::EtherAddr lladdr,
++             uint8_t prefixLength, State state);
  
      /** @brief Delete this d-bus object.
       */
-@@ -52,6 +53,8 @@ class Neighbor : public NeighborObj
+@@ -52,6 +54,8 @@ class Neighbor : public NeighborObj
      std::string macAddress(std::string) override;
      using NeighborObj::state;
      State state(State) override;
@@ -124,12 +139,13 @@ index 5072afe..3f9af74 100644
  
      inline const auto& getObjPath() const
      {
-@@ -67,7 +70,7 @@ class Neighbor : public NeighborObj
+@@ -67,7 +71,8 @@ class Neighbor : public NeighborObj
  
      Neighbor(sdbusplus::bus_t& bus, sdbusplus::message::object_path objPath,
               stdplus::PinnedRef<EthernetInterface> parent,
 -             stdplus::InAnyAddr addr, stdplus::EtherAddr lladdr, State state);
-+             stdplus::InAnyAddr addr, stdplus::EtherAddr lladdr, uint8_t prefixLength, State state);
++             stdplus::InAnyAddr addr, stdplus::EtherAddr lladdr,
++             uint8_t prefixLength, State state);
  };
  
  } // namespace network
@@ -167,5 +183,5 @@ index 630ac14..4cdb7eb 100644
            - name: Path
              type: object_path
 -- 
-2.25.1
+2.43.0
 

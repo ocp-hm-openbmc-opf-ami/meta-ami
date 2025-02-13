@@ -1,0 +1,426 @@
+From 9eb35606cc945a172b7a28710d80385dd84a6a07 Mon Sep 17 00:00:00 2001
+From: vaibhavs <vaibhavs@ami.com>
+Date: Wed, 6 Mar 2024 17:35:22 +0530
+Subject: [PATCH] Support IPv4 and IPv6 Header Parameters
+
+---
+ ipheader.hpp      | 261 ++++++++++++++++++++++++++++++++++++++++++++++
+ main.cpp          |  16 +++
+ main.hpp          |   2 +
+ sd_event_loop.cpp |  51 +++++++++
+ sd_event_loop.hpp |   2 +
+ 5 files changed, 332 insertions(+)
+ create mode 100644 ipheader.hpp
+
+diff --git a/ipheader.hpp b/ipheader.hpp
+new file mode 100644
+index 0000000..2f9722b
+--- /dev/null
++++ b/ipheader.hpp
+@@ -0,0 +1,261 @@
++#include "main.hpp"
++#include <boost/asio.hpp>
++#include <sdbusplus/asio/object_server.hpp>
++#include <sdbusplus/asio/connection.hpp>
++#include <nlohmann/json.hpp>
++#include <fstream>
++
++namespace ipheader
++{
++
++#define DEFTIMETOLIVE 64
++#define DEFFLAG 64
++#define DEFTYPEOFSERVICE 16
++#define DEFTRAFFICCLASS 0
++#define DEFHOPLIMIT 64
++
++
++struct IPHeader
++{
++
++public:
++
++    uint8_t timeToLive;
++    uint8_t flag;
++    uint8_t typeOfService;
++    uint8_t trafficClass;
++    uint8_t hopLimit;
++
++    IPHeader(uint8_t timetoLive, uint8_t flags, uint8_t typeofService, uint8_t trafficclass, 
++	     uint8_t hoplimit): timeToLive(timetoLive), flag(flags), typeOfService(typeofService),
++	     trafficClass(trafficclass), hopLimit(hoplimit){
++    }
++
++    /**
++     * @brief Get a reference to the IPHeader
++     *
++     * @return IPHeader reference
++     */
++    static IPHeader& get()
++    {
++        static std::shared_ptr<IPHeader> ptr = nullptr;
++        if (!ptr)
++        {
++            ptr = std::make_shared<IPHeader>(DEFTIMETOLIVE,DEFFLAG,DEFTYPEOFSERVICE,DEFTRAFFICCLASS,DEFHOPLIMIT);
++        }
++        return *ptr;
++    }
++
++   /** @brief reads the ip header info from file.
++     *  @param[in] confFile - configuration filename
++     *  @returns json file data
++     */
++    nlohmann::json readJsonFile(const std::string& confFile)
++    {
++        std::ifstream jsonFile(confFile);
++        if (!jsonFile.good())
++        {
++            phosphor::logging::log<phosphor::logging::level::ERR>("JSON file not found",
++				   phosphor::logging::entry("FILE=%s", confFile.c_str()));
++	   return nullptr;
++        }
++
++        nlohmann::json data = nullptr;
++        try
++        {
++            data = nlohmann::json::parse(jsonFile, nullptr, false);
++        }
++        catch (nlohmann::json::parse_error& e)
++        {
++            throw std::runtime_error("Corrupted lan config file");
++        }
++
++        return data;
++    }
++
++    /** @brief writes the ip header info to file.
++     *  @param[in] confFile - configuration filename
++     *  @param[in] jsonData - json data to write
++     *  @returns success or failure
++     */
++    int writeJsonFile(const std::string& confFile, const nlohmann::json& jsonData)
++    {
++        std::ofstream jsonFile(confFile);
++        if (!jsonFile.good())
++        {
++            phosphor::logging::log<phosphor::logging::level::ERR>("JSON file open failed",
++				   phosphor::logging::entry("FILE=%s", confFile.c_str()));
++            return -1;
++        }
++
++        // Write JSON to file
++        jsonFile << jsonData;
++
++        jsonFile.flush();
++        return 0;
++    }
++
++    std::shared_ptr<sdbusplus::asio::dbus_interface> ipHeadIntf = nullptr;
++
++    /** @brief sets the ipv4 header parameters on socket.
++     *  @param[in] timetoLive - Time to Live field in IP Header
++     *  @param[in] flags - Flags field in IP Header
++     *  @param[in] typeofService - Type Of Service and Precedence
++     *  @returns success or failure
++     */
++    int SetIPv4Header( uint8_t timetoLive, uint8_t flags, uint8_t typeofService)
++    {
++        if(timetoLive < 1)
++        {
++            throw std::runtime_error("Invalid argument value TimeToLive");
++        }
++        if(flags & 0x9F)
++        {
++            throw std::runtime_error("Invalid argument value Flags");
++        }
++        if(typeofService & 0x01)
++        {
++            throw std::runtime_error("Invalid argument value TypeOfService");
++        }
++
++	timeToLive = timetoLive;
++	flag=flags;
++	typeOfService=typeofService;
++	updateProperty(ipHeadIntf,timeToLive,"TimeToLive");
++	updateProperty(ipHeadIntf,flag,"Flags");
++	updateProperty(ipHeadIntf,typeOfService,"TypeOfService");
++
++	auto& obj = eventloop::EventLoop::get();
++
++	if(obj.updateSocket("IPv4") == -1)
++	{
++            throw std::runtime_error("SetIPv4Header failed");
++	}
++
++	nlohmann::json jsonData = readJsonFile(configFilename);
++        jsonData["TimeToLive"] = timeToLive;
++        jsonData["Flags"] = flag;
++        jsonData["TypeOfService"] = typeOfService;
++
++	writeJsonFile(configFilename, jsonData);
++
++	return 0;
++    }
++
++    /** @brief sets the ipv6 header parameters on socket.
++     *  @param[in] TrafficClass - Traffic Class field in IPv6 Header
++     *  @param[in] HopLimit - Hop Limit field in IPv6 Header
++     *  @returns success or failure
++     */
++    int SetIPv6Header( uint8_t TrafficClass, uint8_t HopLimit)
++    {
++        if(TrafficClass & 0xC0)
++        {
++            throw std::runtime_error("Invalid argument value TrafficClass");
++        }
++	trafficClass = TrafficClass;
++	hopLimit=HopLimit;
++
++	updateProperty(ipHeadIntf,trafficClass,"TrafficClass");
++	updateProperty(ipHeadIntf,hopLimit,"HopLimit");
++
++	auto& obj = eventloop::EventLoop::get();
++
++ 	if(obj.updateSocket("IPv6") == -1)
++	{
++            throw std::runtime_error("SetIPv6Header failed");
++	}
++
++	nlohmann::json jsonData = readJsonFile(configFilename);
++        jsonData["TrafficClass"] = trafficClass;
++        jsonData["HopLimit"] = hopLimit;
++
++	writeJsonFile(configFilename, jsonData);
++
++	return 0;
++    }
++
++    void IPHeaderInit(std::string iface){
++
++        auto objPath = std::string(session::sessionManagerRootPath) + "/" + iface + "/0";
++	const char* ipHeadDbusIntf = "xyz.openbmc_project.Ipmi.IPHeader";
++
++	configFilename = "/var/lib/ipmi/lancfg_" + iface + ".json";
++
++        ipHeadIntf = std::make_shared<sdbusplus::asio::dbus_interface>(getSdBus(),objPath,ipHeadDbusIntf);
++
++        ipHeadIntf->register_method("SetIPv4Header", [this]
++                    (uint8_t timetolive, uint8_t flags, uint8_t typeofservice){
++                        return this->SetIPv4Header(timetolive, flags, typeofservice);
++                    });
++
++        ipHeadIntf->register_property("TimeToLive", this->timeToLive);
++        ipHeadIntf->register_property("Flags", this->flag);
++        ipHeadIntf->register_property("TypeOfService", this->typeOfService);
++
++        ipHeadIntf->register_method("SetIPv6Header", [this]
++                    (uint8_t trafficclass, uint8_t hoplimit){
++                        return this->SetIPv6Header(trafficclass, hoplimit);
++                    });
++
++        ipHeadIntf->register_property("TrafficClass", this->trafficClass);
++        ipHeadIntf->register_property("HopLimit", this->hopLimit);
++
++        ipHeadIntf->initialize();
++
++	nlohmann::json jsonData = readJsonFile(configFilename);
++	if (jsonData != nullptr)
++	{
++	    timeToLive = jsonData["TimeToLive"];
++	    flag = jsonData["Flags"];
++	    typeOfService = jsonData["TypeOfService"];
++
++	    trafficClass = jsonData["TrafficClass"];
++	    hopLimit = jsonData["HopLimit"];
++	    updateProperty(ipHeadIntf,timeToLive,"TimeToLive");
++	    updateProperty(ipHeadIntf,flag,"Flags");
++	    updateProperty(ipHeadIntf,typeOfService,"TypeOfService");
++	    updateProperty(ipHeadIntf,trafficClass,"TrafficClass");
++	    updateProperty(ipHeadIntf,hopLimit,"HopLimit");
++	}
++	else
++	{
++	    jsonData["TimeToLive"] = timeToLive;
++	    jsonData["Flags"] = flag;
++	    jsonData["TypeOfService"] = typeOfService;
++	    jsonData["TrafficClass"] = trafficClass;
++	    jsonData["HopLimit"] = hopLimit;
++	}
++
++	writeJsonFile(configFilename, jsonData);
++
++	auto& obj = eventloop::EventLoop::get();
++	if(obj.updateSocket("IPv4") == -1)
++	{
++            phosphor::logging::log<phosphor::logging::level::ERR>("SetIPv4Header Failed");
++	}
++
++	if(obj.updateSocket("IPv6") == -1)
++	{
++            phosphor::logging::log<phosphor::logging::level::ERR>("SetIPv6Header Failed");
++	}
++
++    }
++
++   private:
++
++    std::string configFilename;
++
++    void updateProperty(std::shared_ptr<sdbusplus::asio::dbus_interface>& interface,
++                        uint8_t &value, const char* PropertyName)
++    {
++	if (interface && !(interface->set_property(PropertyName,value)))
++	{
++            phosphor::logging::log<phosphor::logging::level::ERR>(
++                    ("Error setting property " + std::string(PropertyName)).c_str(),
++                    phosphor::logging::entry("VALUE=%l", value));
++      }
++    }
++};
++
++} //namespace ipheader
+diff --git a/main.cpp b/main.cpp
+index 4702d62..da9421d 100644
+--- a/main.cpp
++++ b/main.cpp
+@@ -9,6 +9,7 @@
+ #include "sessions_manager.hpp"
+ #include "socket_channel.hpp"
+ #include "sol_module.hpp"
++#include "ipheader.hpp"
+ 
+ #include <assert.h>
+ #include <dirent.h>
+@@ -35,6 +36,8 @@ sd_bus* bus = nullptr;
+ 
+ std::shared_ptr<sdbusplus::asio::connection> sdbusp;
+ 
++std::shared_ptr<sdbusplus::asio::object_server> objServer;
++
+ /*
+  * @brief Required by apphandler IPMI Provider Library
+  */
+@@ -51,6 +54,15 @@ std::shared_ptr<sdbusplus::asio::connection> getSdBus()
+     return sdbusp;
+ }
+ 
++/*
++ * @brief mechanism to get at sdbusplus object_server
++ */
++std::shared_ptr<sdbusplus::asio::object_server> getObjServer()
++{
++    return objServer;
++}
++
++
+ static EInterfaceIndex currentInterfaceIndex = interfaceUnknown;
+ static void setInterfaceIndex(const std::string& channel)
+ {
+@@ -116,6 +128,10 @@ int main(int argc, char* argv[])
+         return EXIT_FAILURE;
+     }
+ 
++    auto& ipHeader = ipheader::IPHeader::get();
++
++    ipHeader.IPHeaderInit(channel);
++
+     // Start Event Loop
+     return loop.startEventLoop();
+ }
+diff --git a/main.hpp b/main.hpp
+index a5be04c..5c5f49f 100644
+--- a/main.hpp
++++ b/main.hpp
+@@ -2,6 +2,7 @@
+ 
+ #include <boost/asio/io_context.hpp>
+ #include <sdbusplus/asio/connection.hpp>
++#include <sdbusplus/asio/object_server.hpp>
+ 
+ #include <cstddef>
+ #include <memory>
+@@ -14,3 +15,4 @@ extern sd_bus* bus;
+ 
+ std::shared_ptr<sdbusplus::asio::connection> getSdBus();
+ std::shared_ptr<boost::asio::io_context> getIo();
++std::shared_ptr<sdbusplus::asio::object_server> getObjServer();
+diff --git a/sd_event_loop.cpp b/sd_event_loop.cpp
+index fa8319c..bdbacbf 100644
+--- a/sd_event_loop.cpp
++++ b/sd_event_loop.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include "main.hpp"
+ #include "message_handler.hpp"
++#include "ipheader.hpp"
+ 
+ #include <error.h>
+ #include <netinet/in.h>
+@@ -254,4 +255,54 @@ int EventLoop::startEventLoop()
+     return EXIT_SUCCESS;
+ }
+ 
++int EventLoop::updateSocket(std::string inetFamily)
++{
++   auto& ipHeader = ipheader::IPHeader::get();
++
++   if(inetFamily.compare("IPv4") == 0)
++   {
++        if(::setsockopt(udpSocket->native_handle(), IPPROTO_IP, IP_TTL,
++                     &ipHeader.timeToLive, sizeof(uint8_t)) == -1)
++        {
++	    return -1;
++	}
++
++        uint8_t flag = (ipHeader.flag >> 5);
++
++        if(::setsockopt(udpSocket->native_handle(), IPPROTO_IP, IP_MTU_DISCOVER,
++                    &flag, sizeof(flag)) == -1)
++        {
++	    return -1;
++	}
++
++        if(::setsockopt(udpSocket->native_handle(), IPPROTO_IP, IP_TOS,
++                    &ipHeader.typeOfService, sizeof(uint8_t)) == -1)
++        {
++	    return -1;
++	}
++   }
++   else if(inetFamily.compare("IPv6") == 0)
++   {
++	uint32_t trafficClass = static_cast<uint32_t>(ipHeader.trafficClass);
++	uint32_t hopLimit = static_cast<uint32_t>(ipHeader.hopLimit);
++
++        if(::setsockopt(udpSocket->native_handle(), IPPROTO_IPV6, IPV6_TCLASS,
++                    &trafficClass, sizeof(uint32_t)) == -1)
++        {
++	    return -1;
++	}
++
++        if(::setsockopt(udpSocket->native_handle(), IPPROTO_IPV6, IPV6_UNICAST_HOPS,
++                    &hopLimit, sizeof(uint32_t)) == -1)
++        {
++	    return -1;
++	}
++
++   }
++
++   return EXIT_SUCCESS;
++}
++
++
++
+ } // namespace eventloop
+diff --git a/sd_event_loop.hpp b/sd_event_loop.hpp
+index f580b32..cd15e54 100644
+--- a/sd_event_loop.hpp
++++ b/sd_event_loop.hpp
+@@ -87,6 +87,8 @@ class EventLoop
+                     std::string iface,
+                     uint16_t reqPort = ipmi::rmcpp::defaultPort);
+ 
++    int updateSocket(std::string inetFamily);
++
+   private:
+     /** @brief async handler for incoming udp packets */
+     void handleRmcpPacket();

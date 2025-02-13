@@ -1,0 +1,272 @@
+From 14eb244514245d032bb55cf6a3cd73bcf097c03c Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Thu, 14 Nov 2024 13:35:55 +0800
+Subject: [PATCH] Implement Netlink for NCSI Flow Control
+
+---
+ meson.build                |  1 +
+ meson_options.txt          |  1 +
+ src/argument.cpp           |  6 ++++-
+ src/ncsi_configuration.cpp | 28 +++++++++++++++++++++++
+ src/ncsi_netlink_main.cpp  | 46 ++++++++++++++++++++++++++++++++++++++
+ src/ncsi_util.cpp          | 24 ++++++++++++++++++++
+ src/ncsi_util.hpp          | 41 +++++++++++++++++++++++++++++++++
+ 7 files changed, 146 insertions(+), 1 deletion(-)
+
+diff --git a/meson.build b/meson.build
+index cefb68b..4277d4e 100644
+--- a/meson.build
++++ b/meson.build
+@@ -23,6 +23,7 @@ conf_data.set('SYNC_MAC_FROM_INVENTORY', get_option('sync-mac'))
+ conf_data.set('PERSIST_MAC', get_option('persist-mac'))
+ conf_data.set10('FORCE_SYNC_MAC_FROM_INVENTORY', get_option('force-sync-mac'))
+ conf_data.set('AMI_IP_ADVANCED_ROUTING_SUPPORT', get_option('enable-advanced-route'))
++conf_data.set10('NCSI_FLOW_CONTROL', get_option('ncsi-flow-control'))
+ conf_data.set('AMI_NCSI_SUPPORT', get_option('enable-ncsi'))
+ conf_data.set_quoted('DEFAULT_NCSI_INTERFACE', get_option('default-ncsi-interface'))
+ conf_data.set10('SYSTEM_FIREWALL_SUPPORT', get_option('enable-system-firewall'))
+diff --git a/meson_options.txt b/meson_options.txt
+index b0c4ce1..75b4273 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -15,6 +15,7 @@ option('persist-mac', type: 'boolean',
+ option('force-sync-mac', type: 'boolean',
+        description: 'Force sync mac address no matter is first boot or not')
+ option('enable-advanced-route', type: 'boolean', description: 'Enable advanced route or not')
++option('ncsi-flow-control', type: 'boolean', description: 'Enable NCSI flow control or not')
+ option('enable-ncsi', type: 'boolean', description: 'Enable NCSI Feature or not')
+ option('default-ncsi-interface', type: 'string', description: 'Default NCSI interface')
+ option('enable-system-firewall', type: 'boolean', description: 'Enable system firewall rules or not')
+diff --git a/src/argument.cpp b/src/argument.cpp
+index 0c49b11..e924676 100644
+--- a/src/argument.cpp
++++ b/src/argument.cpp
+@@ -77,6 +77,8 @@ void ArgumentParser::usage(char** argv)
+     std::cerr << "    --package=<package>  Specify a package.\n";
+     std::cerr << "    --channel=<channel> Specify a channel.\n";
+     std::cerr << "    --index=<device index> Specify device ifindex.\n";
++    std::cerr << "    --type=<hex data> Send a specified command.\n";
++    std::cerr << "    --data=<hex data> Send a specified command with data.\n";
+     std::cerr << std::flush;
+ }
+ 
+@@ -88,11 +90,13 @@ const option ArgumentParser::options[] = {
+     {"package", required_argument, NULL, 'p'},
+     {"channel", required_argument, NULL, 'c'},
+     {"index", required_argument, NULL, 'x'},
++    {"type", required_argument, NULL, 't'},
++    {"data", required_argument, NULL, 'd'},
+     {"help", no_argument, NULL, 'h'},
+     {0, 0, 0, 0},
+ };
+ 
+-const char* ArgumentParser::optionStr = "i:s:r:o:p:c:x:h?";
++const char* ArgumentParser::optionStr = "i:s:r:o:p:c:x:t:d:h?";
+ 
+ const std::string ArgumentParser::trueString = "true";
+ const std::string ArgumentParser::emptyString = "";
+diff --git a/src/ncsi_configuration.cpp b/src/ncsi_configuration.cpp
+index 749ad53..183f674 100644
+--- a/src/ncsi_configuration.cpp
++++ b/src/ncsi_configuration.cpp
+@@ -36,6 +36,34 @@ Configuration::Configuration(sdbusplus::bus_t& bus, std::string_view path,
+     NCSIIface::channel(channel, true);
+     if (NCSIIface::mode() == NCSIIface::Mode::Manual)
+         setChannel(eth.getIfIdx(), package, channel);
++
++#if NCSI_FLOW_CONTROL
++    {
++        std::vector<std::tuple<uint16_t, std::vector<uint16_t>>> channelList;
++        std::string cmdStr = "14";
++        std::vector<unsigned char> data;
++        std::string byte = "03";
++        try
++        {
++            data.push_back(stoi(byte, nullptr, 16));
++        }
++        catch (const std::exception& e)
++        {
++            log<level::INFO>("Payload invalid.\n");
++        }
++        getChannelList(eth.getIfIdx(), -1, channelList);
++        for (auto v : channelList)
++        {
++            auto [p, channels] = v;
++            for (auto c : channels)
++            {
++                ncsi::sendCommand(
++                    eth.getIfIdx(), p, c, (int)strtol(cmdStr.c_str(), NULL, 16),
++                    std::span<const unsigned char>(data.begin(), data.end()));
++            }
++        }
++    }
++#endif
+     emit_object_added();
+ }
+ 
+diff --git a/src/ncsi_netlink_main.cpp b/src/ncsi_netlink_main.cpp
+index 5f65777..a613805 100644
+--- a/src/ncsi_netlink_main.cpp
++++ b/src/ncsi_netlink_main.cpp
+@@ -88,6 +88,8 @@ int main(int argc, char** argv)
+     }
+ 
+     auto payloadStr = (options)["oem-payload"];
++    auto cmdStr = (options)["type"];
++    auto ssStr = (options)["data"];
+     if (!payloadStr.empty())
+     {
+         std::string byte(2, '\0');
+@@ -127,6 +129,50 @@ int main(int argc, char** argv)
+             indexInt, packageInt, channelInt,
+             std::span<const unsigned char>(payload.begin(), payload.end()));
+     }
++    else if (!cmdStr.empty())
++    {
++        auto dataStr = (options)["data"];
++        if (dataStr.empty())
++        {
++            exitWithError("Payload invalid: specify two hex digits per byte.",
++                          argv);
++        }
++        std::string byte(2, '\0');
++        std::vector<unsigned char> data;
++
++        if (dataStr.size() % 2)
++            exitWithError("Payload invalid: specify two hex digits per byte.",
++                          argv);
++
++        for (unsigned int i = 1; i < dataStr.size(); i += 2)
++        {
++            byte[0] = dataStr[i - 1];
++            byte[1] = dataStr[i];
++
++            try
++            {
++                data.push_back(stoi(byte, nullptr, 16));
++            }
++            catch (const std::exception& e)
++            {
++                exitWithError("Payload invalid.", argv);
++            }
++        }
++
++        if (data.empty())
++        {
++            exitWithError("No payload specified.", argv);
++        }
++
++        if (packageInt == DEFAULT_VALUE)
++        {
++            exitWithError("Package not specified.", argv);
++        }
++        return ncsi::sendCommand(
++            indexInt, packageInt, channelInt,
++            (int)strtol(cmdStr.c_str(), NULL, 16),
++            std::span<const unsigned char>(data.begin(), data.end()));
++    }
+     else if ((options)["set"] == "true")
+     {
+         // Can not perform set operation without package.
+diff --git a/src/ncsi_util.cpp b/src/ncsi_util.cpp
+index 3e3e879..7c1faab 100644
+--- a/src/ncsi_util.cpp
++++ b/src/ncsi_util.cpp
+@@ -215,6 +215,12 @@ CallBack infoCallBack = [](struct nl_msg* msg, void* arg) {
+                 lg2::debug("Channel Link State : {LINK_STATE}", "LINK_STATE",
+                            lg2::hex, link);
+             }
++            if (channeltb[NCSI_CHANNEL_ATTR_FC])
++            {
++                auto fc = nla_get_u32(channeltb[NCSI_CHANNEL_ATTR_FC]);
++                lg2::debug("Channel Flow Control : {LINK_STATE}", "LINK_STATE",
++                           lg2::hex, fc);
++            }
+             if (channeltb[NCSI_CHANNEL_ATTR_VLAN_LIST])
+             {
+                 lg2::debug("Active Vlan ids");
+@@ -410,6 +416,24 @@ int applyCmd(int ifindex, const Command& cmd, int package = DEFAULT_VALUE,
+ 
+ } // namespace internal
+ 
++int sendCommand(int ifindex, int package, int channel, int cmd,
++                std::span<const unsigned char> payload)
++{
++    lg2::debug("Send Command, CHANNEL : {CHANNEL} , PACKAGE : {PACKAGE}, "
++               "INTERFACE_INDEX: {INTERFACE_INDEX}",
++               "CHANNEL", lg2::hex, channel, "PACKAGE", lg2::hex, package,
++               "INTERFACE_INDEX", lg2::hex, ifindex);
++    if (!payload.empty())
++    {
++        lg2::debug("Payload: {PAYLOAD}", "PAYLOAD", toHexStr(payload));
++    }
++
++    return internal::applyCmd(
++        ifindex,
++        internal::Command(ncsi_nl_commands::NCSI_CMD_SEND_CMD, cmd, payload),
++        package, channel, NONE, internal::sendCallBack);
++}
++
+ int sendOemCommand(int ifindex, int package, int channel,
+                    std::span<const unsigned char> payload)
+ {
+diff --git a/src/ncsi_util.hpp b/src/ncsi_util.hpp
+index a41f446..7595446 100644
+--- a/src/ncsi_util.hpp
++++ b/src/ncsi_util.hpp
+@@ -11,10 +11,51 @@ namespace network
+ namespace ncsi
+ {
+ 
++/**
++ * enum ncsi_nl_channel_attrs - NCSI netlink channel-specific attributes
++ *
++ * @NCSI_CHANNEL_ATTR_UNSPEC: unspecified attributes to catch errors
++ * @NCSI_CHANNEL_ATTR: nested array of channel attributes
++ * @NCSI_CHANNEL_ATTR_ID: channel ID
++ * @NCSI_CHANNEL_ATTR_VERSION_MAJOR: channel major version number
++ * @NCSI_CHANNEL_ATTR_VERSION_MINOR: channel minor version number
++ * @NCSI_CHANNEL_ATTR_VERSION_STR: channel version string
++ * @NCSI_CHANNEL_ATTR_LINK_STATE: channel link state flags
++ * @NCSI_CHANNEL_ATTR_ACTIVE: channels with this flag are in
++ *	NCSI_CHANNEL_ACTIVE state
++ * @NCSI_CHANNEL_ATTR_FORCED: flag signifying a channel has been set as
++ *	preferred
++ * @NCSI_CHANNEL_ATTR_VLAN_LIST: nested array of NCSI_CHANNEL_ATTR_VLAN_IDs
++ * @NCSI_CHANNEL_ATTR_VLAN_ID: VLAN ID being filtered on this channel
++ * @NCSI_CHANNEL_ATTR_FC: Flow Control being set on this channel
++ * @NCSI_CHANNEL_ATTR_MAX: highest attribute number
++ */
++enum ncsi_nl_channel_attrs
++{
++    NCSI_CHANNEL_ATTR_UNSPEC,
++    NCSI_CHANNEL_ATTR,
++    NCSI_CHANNEL_ATTR_ID,
++    NCSI_CHANNEL_ATTR_VERSION_MAJOR,
++    NCSI_CHANNEL_ATTR_VERSION_MINOR,
++    NCSI_CHANNEL_ATTR_VERSION_STR,
++    NCSI_CHANNEL_ATTR_LINK_STATE,
++    NCSI_CHANNEL_ATTR_ACTIVE,
++    NCSI_CHANNEL_ATTR_FORCED,
++    NCSI_CHANNEL_ATTR_VLAN_LIST,
++    NCSI_CHANNEL_ATTR_VLAN_ID,
++    NCSI_CHANNEL_ATTR_FC,
++    __NCSI_CHANNEL_ATTR_AFTER_LAST,
++    NCSI_CHANNEL_ATTR_MAX = __NCSI_CHANNEL_ATTR_AFTER_LAST - 1
++};
++
+ constexpr auto DEFAULT_VALUE = -1;
+ constexpr auto NONE = 0;
+ 
+ static std::vector<std::tuple<uint16_t, std::vector<uint16_t>>> pakckageChannel;
++
++int sendCommand(int ifindex, int package, int channel, int cmd,
++                std::span<const unsigned char> payload);
++
+ /* @brief  This function will ask underlying NCSI driver
+  *         to send an OEM command (command type 0x50) with
+  *         the specified payload as the OEM data.
+-- 
+2.43.0
+
+

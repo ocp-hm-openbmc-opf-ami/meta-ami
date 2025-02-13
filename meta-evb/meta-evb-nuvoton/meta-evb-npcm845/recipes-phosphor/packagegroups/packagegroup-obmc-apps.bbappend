@@ -1,0 +1,2 @@
+
+RDEPENDS:${PN}-settings = "settings"

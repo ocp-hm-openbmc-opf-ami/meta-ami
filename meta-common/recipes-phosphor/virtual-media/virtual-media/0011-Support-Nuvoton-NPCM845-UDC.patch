@@ -1,0 +1,141 @@
+From e91373419b5f602495ebae0bbe7cb7979ad1518e Mon Sep 17 00:00:00 2001
+From: mickhuang <mickhuang@ami.com>
+Date: Mon, 14 Oct 2024 20:58:00 +0800
+Subject: [PATCH 11/11] Support Nuvoton NPCM845 UDC
+
+Add support for detecting NPCM845 UDC and adjust the port handling logic for the specific platform.
+
+Signed-off-by: mickhuang <mickhuang@ami.com>
+Signed-off-by: Hariharan Rangasamy <hariharanr@ami.com>
+---
+ src/system.hpp | 103 +++++++++++++++++++++++++++++++++++--------------
+ 1 file changed, 75 insertions(+), 28 deletions(-)
+
+diff --git a/src/system.hpp b/src/system.hpp
+index a7c091c..49a9798 100644
+--- a/src/system.hpp
++++ b/src/system.hpp
+@@ -768,10 +768,19 @@ struct UsbGadget
+         const fs::path configDir = gadgetDir / "configs/c.1";
+         const fs::path massStorageDir = configDir / "mass_storage.usb0";
+         const fs::path configStringsDir = configDir / "strings/0x409";
+-        const std::string usbVirtualHub =
+-            fs::exists("/sys/bus/platform/devices/12011000.usb-vhub")
+-                ? "12011000" /* AST2700 */
+-                : "1e6a0000";
++        std::string usbVirtualHub;
++        if (fs::exists("/sys/bus/platform/devices/12011000.usb-vhub"))
++        {
++            usbVirtualHub = "12011000";  /* AST2700 */
++        }
++        else if (fs::exists("/sys/bus/platform/devices/ci_hdrc.0"))
++        {
++            usbVirtualHub = "ci_hdrc";  /* npcm845 */
++        }
++        else
++        {
++            usbVirtualHub = "1e6a0000";  /* AST2600 */
++        }
+ 
+         /* Parameters for Session management register/unregister */
+ 
+@@ -946,34 +955,72 @@ struct UsbGadget
+                     }
+                     else
+                     {
+-                        for (const auto& port : fs::directory_iterator(
+-                                 "/sys/bus/platform/devices/" + usbVirtualHub +
+-                                 ".usb-vhub"))
++                        if (usbVirtualHub == "12011000" || usbVirtualHub == "1e6a0000")
+                         {
+-                            const std::string portId = port.path().filename();
+ 
+-                            if (portId.find(usbVirtualHub + ".usb-vhub:p") !=
+-                                std::string::npos)
++                            for (const auto& port : fs::directory_iterator(
++                                    "/sys/bus/platform/devices/" + usbVirtualHub +
++                                    ".usb-vhub"))
++                            {
++                                const std::string portId = port.path().filename();
++
++                                if (portId.find(usbVirtualHub + ".usb-vhub:p") !=
++                                    std::string::npos)
++                                {
++                                    constexpr std::string_view portDelimiter = ":p";
++                                    const std::string portNumber =
++                                        portId.substr(portId.find(portDelimiter) +
++                                                    portDelimiter.size());
++
++                                    // GadgetId is port number minus 1
++                                    const int gadgetId = std::stoi(portNumber) - 1;
++
++                                    if (fs::is_directory(port) &&
++                                        !fs::is_symlink(port) &&
++                                        !fs::exists(
++                                            port.path() /
++                                            ("gadget." + std::to_string(gadgetId)) /
++                                            "suspended"))
++                                    {
++                                        LogMsg(Logger::Debug,
++                                            "Use port : ", portId);
++                                        echoToFile(gadgetDir / "UDC", portId);
++                                        return 0;
++                                    }
++                                }
++                            }
++                        }
++                        else
++                        {
++                            for (const auto& port : fs::directory_iterator(
++                                    "/sys/bus/platform/devices/"
++                                    ))
+                             {
+-                                constexpr std::string_view portDelimiter = ":p";
+-                                const std::string portNumber =
+-                                    portId.substr(portId.find(portDelimiter) +
+-                                                  portDelimiter.size());
+-
+-                                // GadgetId is port number minus 1
+-                                const int gadgetId = std::stoi(portNumber) - 1;
+-
+-                                if (fs::is_directory(port) &&
+-                                    !fs::is_symlink(port) &&
+-                                    !fs::exists(
+-                                        port.path() /
+-                                        ("gadget." + std::to_string(gadgetId)) /
+-                                        "suspended"))
++                                const std::string portId = port.path().filename();
++
++                                if (portId.find(usbVirtualHub) !=
++                                    std::string::npos)
+                                 {
+-                                    LogMsg(Logger::Debug,
+-                                           "Use port : ", portId);
+-                                    echoToFile(gadgetDir / "UDC", portId);
+-                                    return 0;
++                                    constexpr std::string_view portDelimiter = ".";
++                                    const std::string portNumber =
++                                        portId.substr(portId.find(portDelimiter) +
++                                                    portDelimiter.size());
++
++                                    // For npcm845, GadgetId is port number
++                                    const int gadgetId = std::stoi(portNumber);
++
++                                    // For npcm845, the UDC node is always a symlink, so this condition check is unnecessary.
++                                    if (fs::is_directory(port) &&
++                                        !fs::exists(
++                                            port.path() /
++                                            ("gadget." + std::to_string(gadgetId)) /
++                                            "suspended"))
++                                    {
++                                        LogMsg(Logger::Debug,
++                                            "Use port : ", portId);
++                                        echoToFile(gadgetDir / "UDC", portId);
++                                        return 0;
++                                    }
+                                 }
+                             }
+                         }
+-- 
+2.43.0
+

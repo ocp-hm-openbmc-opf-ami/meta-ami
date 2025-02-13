@@ -53,7 +53,7 @@ if [ "$1" == "deregister" ]; then
         fi
     done
 elif [ "$1" == "register" ]; then
-    ENABLED=`busctl get-property xyz.openbmc_project.Network /xyz/openbmc_project/network/dhcp xyz.openbmc_project.Network.DHCPConfiguration SendNsupdateEnabled | cut -d" " -f2`
+    ENABLED=`busctl get-property xyz.openbmc_project.Network /xyz/openbmc_project/network/dns xyz.openbmc_project.Network.DDNS SendNsupdateEnabled | cut -d" " -f2`
     if [ "$ENABLED" = "true" ]; then
         if [ -n "$2" ]; then
             FILES="/etc/dns.d/nsupdate_tmp-add-$2"

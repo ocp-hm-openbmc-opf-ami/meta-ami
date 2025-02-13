@@ -1,1 +1,1 @@
-COMPATIBLE_MACHINE = "evb-ast2600"
+u-boot-aspeed-sdk_%.bbappend

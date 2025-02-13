@@ -1,0 +1,100 @@
+From 1e6df4c065b0ea4964a44e68d7ed262115a5bc35 Mon Sep 17 00:00:00 2001
+From: mickhuang <mickhuang@ami.com>
+Date: Mon, 29 Apr 2024 15:14:58 +0800
+Subject: [PATCH] Add pre-check for enabling power-saving mode
+
+Utilizing D-Bus information from the session manager for pre-checking.
+---
+ src/main.cpp | 64 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 64 insertions(+)
+
+diff --git a/src/main.cpp b/src/main.cpp
+index 7c1ee63..8eef06f 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -14,11 +14,70 @@
+ // limitations under the License.
+ */
+ 
++#include <sdbusplus/bus.hpp>
++#include <sdbusplus/bus/match.hpp>
+ #include "interface.hpp"
+ #include "defaults.hpp"
++
++#define DBUS_PROPERTIES_INTERFACE "org.freedesktop.DBus.Properties"
++
+ static constexpr auto powerSaveMode = "/sys/class/usb/usb_vhub/power_save_mode";
+ static constexpr auto ccNodeBusy = 0xC0;
+ 
++static const std::string sessMgrService = "xyz.openbmc_project.SessionManager";
++static const std::string sessMgrObjPath = "/xyz/openbmc_project/SessionManager";
++static const std::string sessMgrIface = "xyz.openbmc_project.SessionManager";
++static const std::string sessMgrVmediaIface =
++    "xyz.openbmc_project.SessionManager.Vmedia";
++static const std::string sessMgrKVMIface = "xyz.openbmc_project.SessionManager.Kvm";
++
++using sessionInfo =
++    std::tuple<uint8_t, std::string, std::string, uint8_t, uint8_t, uint8_t, std::string>;
++using propertyVariant = std::variant<std::vector<sessionInfo>>;
++
++int isKVMInUSe()
++{
++    propertyVariant propertyVar;
++    auto bus = sdbusplus::bus::new_default_system();
++
++    auto msgGet =
++        bus.new_method_call(sessMgrService.c_str(), sessMgrObjPath.c_str(),
++                            DBUS_PROPERTIES_INTERFACE, "Get");
++
++    msgGet.append(sessMgrKVMIface.c_str(), "KvmSessionInfo");
++
++    auto reply = bus.call(msgGet);
++    reply.read(propertyVar);
++
++    auto& sessionVector = std::get<std::vector<sessionInfo>>(propertyVar);
++
++    // std::cout << "KVM session number: " << sessionVector.size() << std::endl;
++
++    return sessionVector.size();
++}
++
++int isVirtualMediaInUse()
++{
++    propertyVariant propertyVar;
++    auto bus = sdbusplus::bus::new_default_system();
++
++    auto msgGet =
++        bus.new_method_call(sessMgrService.c_str(), sessMgrObjPath.c_str(),
++                            DBUS_PROPERTIES_INTERFACE, "Get");
++
++    msgGet.append(sessMgrVmediaIface.c_str(), "VmediaSessionInfo");
++
++    auto reply = bus.call(msgGet);
++    reply.read(propertyVar);
++
++    auto& sessionVector = std::get<std::vector<sessionInfo>>(propertyVar);
++
++    // std::cout << "Vmedia session number: " << sessionVector.size() <<
++    // std::endl;
++
++    return sessionVector.size();
++}
++
+ int setUSBPowerSaveMode(int cmd)
+ {
+     int usbfd;
+@@ -27,6 +86,11 @@ int setUSBPowerSaveMode(int cmd)
+     // convert int command to char
+     char value = cmd + '0';
+ 
++    if (0 < isKVMInUSe() || 0 < isVirtualMediaInUse())
++    {
++        return ccNodeBusy;
++    }
++
+     usbfd = open(powerSaveMode, O_RDWR);
+ 
+     if (usbfd < 0)
+-- 
+2.34.1
+

@@ -13,52 +13,51 @@ Subject: [PATCH 1/2] Implement PHY Control for Non Bond
  6 files changed, 324 insertions(+), 40 deletions(-)
 
 diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
-index 0cf15d9..cf6d0cb 100644
+index e30d80c..6e1a238 100644
 --- a/src/ethernet_interface.cpp
 +++ b/src/ethernet_interface.cpp
-@@ -161,7 +161,21 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
- 
-     ipv4IndexUsedList.resize(IPV4_MAX_NUM+1, std::nullopt);
-     ipv6IndexUsedList.resize(IPV6_MAX_NUM+1, std::nullopt);
-+    if (!this->vlan.has_value() && getPHYInfo(ifaceConfig).has_value())
-+    {
-+        auto [autoNeg, duplex, speed] = getPHYInfo(ifaceConfig).value();
-+        if (!autoNeg && !duplex.empty() || speed > 0)
+@@ -161,6 +161,30 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+     ipv4IndexUsedList.resize(IPV4_MAX_NUM + 1, std::nullopt);
+     ipv6IndexUsedList.resize(IPV6_MAX_NUM + 1, std::nullopt);
+
++    try {
++        if (auto phyConf = getPHYInfo(ifaceConfig); phyConf.has_value())
 +        {
-+            EthernetInterfaceIntf::autoNeg(autoNeg, true);
-+            EthernetInterfaceIntf::duplex(
-+                duplex == "full" ? Duplex::full : Duplex::half, true);
-+            EthernetInterfaceIntf::speed(speed, true);
-+            system::setLink(interfaceName(), speed, duplex == "full" ? 1 : 0,
-+                            autoNeg ? 1 : 0);
++            if (!this->vlan.has_value())
++            {
++                auto [autoNeg, duplex, speed] = phyConf.value();
++                if (!autoNeg && !duplex.empty() || speed > 0)
++                {
++                    EthernetInterfaceIntf::autoNeg(autoNeg, true);
++                    EthernetInterfaceIntf::duplex(
++                        duplex == "full" ? Duplex::full : Duplex::half, true);
++                    EthernetInterfaceIntf::speed(speed, true);
++                    system::setLink(interfaceName(), speed, duplex == "full" ? 1 : 0,
++                                    autoNeg ? 1 : 0);
++                }
++            }
 +        }
++    } catch (const std::exception& e)
++    {
++        log<level::ERR>(fmt::format("e.what() = {}", e.what()).c_str());
 +    }
- 
++
 +    EthernetInterfaceIntf::ncsi(false, true);
++
      this->loadARPControl();
      emit_object_added();
  
-@@ -225,6 +240,18 @@ void EthernetInterface::updateInfo(const InterfaceInfo& info, bool skipSignal)
+@@ -201,6 +217,8 @@ void EthernetInterface::updateInfo(const InterfaceInfo& info, bool skipSignal)
          });
          EthernetInterfaceIntf::autoNeg(ethInfo.autoneg, skipSignal);
          EthernetInterfaceIntf::speed(ethInfo.speed, skipSignal);
 +        EthernetInterfaceIntf::duplex(
 +            ethInfo.duplex == 1 ? Duplex::full : Duplex::half, skipSignal);
-+    }
-+    try
-+    {
-+        getChannelPrivilege(*info.name);
-+    }
-+    catch (const std::exception& e)
-+    {
-+        lg2::error(
-+            "Error in getting channel privilege interfaceName = {IFNAME}: {WHAT}",
-+            "IFNAME", this->interfaceName(), "WHAT", e.what());
      }
+ }
  
-     getChannelPrivilege(*info.name);
-@@ -1251,6 +1278,100 @@ ServerList EthernetInterface::ntpServers(ServerList /*servers*/)
-     elog<NotAllowed>(NotAllowedArgument::REASON("ReadOnly Property"));
+@@ -1193,6 +1211,100 @@ ServerList EthernetInterface::staticNTPServers(ServerList value)
+     return value;
  }
  
 +void EthernetInterface::writeIfaceStateFile(std::string ifname)
@@ -155,57 +154,79 @@ index 0cf15d9..cf6d0cb 100644
 +                           .c_str()});
 +}
 +
- void EthernetInterface::writeConfigurationFile()
+ ServerList EthernetInterface::ntpServers(ServerList /*servers*/)
  {
-     config::Parser config;
-@@ -1345,45 +1470,7 @@ void EthernetInterface::writeConfigurationFile()
+     elog<NotAllowed>(NotAllowedArgument::REASON("ReadOnly Property"));
+@@ -1333,67 +1445,8 @@ void EthernetInterface::writeConfigurationFile()
+ #else
+         lla.emplace_back("no");
  #endif
-         }
-         {
--            config::Parser IfaceState;
+-        config::Parser IfaceState;
+-        {
+-            auto& state = IfaceState.map["Network"].emplace_back();
+-            state["IPv4Enable"].emplace_back(
+-                EthernetInterfaceIntf::ipv4Enable() ? "true" : "false");
+-            state["IPv6Enable"].emplace_back(
+-                EthernetInterfaceIntf::ipv6Enable() ? "true" : "false");
+-            auto& router = IfaceState.map["IPv6Router"].emplace_back();
+-            router["IPv6EnableStaticRtr"].emplace_back(
+-                EthernetInterfaceIntf::ipv6EnableStaticRtr() ? "true"
+-                                                             : "false");
+-            if (EthernetInterfaceIntf::ipv6EnableStaticRtr())
 -            {
--                auto& state = IfaceState.map["Network"].emplace_back();
--                state["IPv4Enable"].emplace_back(EthernetInterfaceIntf::ipv4Enable() ? "true" : "false");
--                state["IPv6Enable"].emplace_back(EthernetInterfaceIntf::ipv6Enable() ? "true" : "false");
--
--                auto& router = IfaceState.map["IPv6Router"].emplace_back();
--                router["IPv6EnableStaticRtr"].emplace_back(EthernetInterfaceIntf::ipv6EnableStaticRtr() ? "true" : "false");
--                if (EthernetInterfaceIntf::ipv6EnableStaticRtr()) {
--                    router["IPv6StaticRtrAddr"].emplace_back(EthernetInterfaceIntf::ipv6StaticRtrAddr());
--                    if (!EthernetInterfaceIntf::ipv6StaticRtrAddr().empty()) {
--                        if (auto it = staticNeighbors.find(stdplus::fromStr<stdplus::In6Addr>(EthernetInterfaceIntf::ipv6StaticRtrAddr())); it != staticNeighbors.end()) {
--                            router["IPv6StaticRtrPrefix"].emplace_back(stdplus::toStr((it->second->prefixLength())));
--                        }
+-                router["IPv6StaticRtrAddr"].emplace_back(
+-                    EthernetInterfaceIntf::ipv6StaticRtrAddr());
+-                if (!EthernetInterfaceIntf::ipv6StaticRtrAddr().empty())
+-                {
+-                    if (auto it = staticNeighbors.find(
+-                            stdplus::fromStr<stdplus::In6Addr>(
+-                                EthernetInterfaceIntf::ipv6StaticRtrAddr()));
+-                        it != staticNeighbors.end())
+-                    {
+-                        router["IPv6StaticRtrPrefix"].emplace_back(
+-                            stdplus::toStr((it->second->prefixLength())));
 -                    }
 -                }
 -            }
+-        }
+-        {
+-            if (!dhcp4() || !dhcp6())
 -            {
--                if (!dhcp4() || !dhcp6()) {
--                    auto& index = IfaceState.map["Address"].emplace_back()["Index"];
--                    if (!dhcp4() && EthernetInterfaceIntf::ipv4Enable()) {
--                        for (auto i = 0; i < ipv4IndexUsedList.size(); i++) {
--                            if (ipv4IndexUsedList.at(i).has_value()) {
--                                index.emplace_back(fmt::format("{}/{}", ipv4IndexUsedList.at(i).value(), i));
--                            }
--                        } // for
--                    } // if
--
--                    if (!dhcp6() && EthernetInterfaceIntf::ipv6Enable()) {
--                        for (auto i = 0; i < ipv6IndexUsedList.size(); i++) {
--                            if (ipv6IndexUsedList.at(i).has_value()) {
--                                index.emplace_back(fmt::format("{}/{}", ipv6IndexUsedList.at(i).value(), i));
--                            }
--                        } // for
--                    } // if
--                } // if
--            }
--
--            IfaceState.writeFile(fs::path{fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(), interfaceName()).c_str()});
-+            writeIfaceStateFile(interfaceName());
-         }
-         {
-             network["IPv6AcceptRA"].emplace_back(EthernetInterfaceIntf::ipv6Enable() && ipv6AcceptRA() ? "true" : "false");
-@@ -2109,6 +2196,139 @@ int EthernetInterface::getCreatedVLANNum(fs::path confFile) {
+-                auto& index = IfaceState.map["Address"].emplace_back()["Index"];
+-                if (!dhcp4() && EthernetInterfaceIntf::ipv4Enable())
+-                {
+-                    for (auto i = 0; i < ipv4IndexUsedList.size(); i++)
+-                    {
+-                        if (ipv4IndexUsedList.at(i).has_value())
+-                        {
+-                            index.emplace_back(fmt::format(
+-                                "{}/{}", ipv4IndexUsedList.at(i).value(), i));
+-                        }
+-                    } // for
+-                }     // if
+ 
+-                if (!dhcp6() && EthernetInterfaceIntf::ipv6Enable())
+-                {
+-                    for (auto i = 0; i < ipv6IndexUsedList.size(); i++)
+-                    {
+-                        if (ipv6IndexUsedList.at(i).has_value())
+-                        {
+-                            index.emplace_back(fmt::format(
+-                                "{}/{}", ipv6IndexUsedList.at(i).value(), i));
+-                        }
+-                    } // for
+-                }     // if
+-            }         // if
+-        }
+-        IfaceState.writeFile(fs::path{
+-            fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(),
+-                        interfaceName())
+-                .c_str()});
++        writeIfaceStateFile(interfaceName());
+ 
+         network["IPv6AcceptRA"].emplace_back(
+             EthernetInterfaceIntf::ipv6Enable() && ipv6AcceptRA() ? "true"
+@@ -2054,6 +2107,141 @@ int EthernetInterface::getCreatedVLANNum(fs::path confFile)
      return (config.map.getValueStrings("Network", "VLAN")).size();
  }
  
@@ -258,10 +279,10 @@ index 0cf15d9..cf6d0cb 100644
 +
 +    if (value != 10 && value != 100)
 +    {
-+        log<level::ERR>(
-+            "Only Support 10 Mbps and 100 Mbps");
-+        elog<InvalidArgument>(Argument::ARGUMENT_NAME("Speed"),
-+                              Argument::ARGUMENT_VALUE(std::to_string(value).c_str()));
++        log<level::ERR>("Only Support 10 Mbps and 100 Mbps");
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("Speed"),
++            Argument::ARGUMENT_VALUE(std::to_string(value).c_str()));
 +    }
 +
 +    if (value == EthernetInterfaceIntf::speed())
@@ -275,12 +296,15 @@ index 0cf15d9..cf6d0cb 100644
 +            interfaceName(), value,
 +            static_cast<unsigned char>(EthernetInterfaceIntf::duplex()),
 +            static_cast<unsigned char>(EthernetInterfaceIntf::autoNeg()));
-+    } catch (const std::exception& e)
++    }
++    catch (const std::exception& e)
 +    {
 +        log<level::ERR>(
-+            fmt::format("Unable to set speed with this value: {} Mbps\n", value).c_str());
++            fmt::format("Unable to set speed with this value: {} Mbps\n", value)
++                .c_str());
 +        elog<NotAllowed>(NotAllowedArgument::REASON(
-+            fmt::format("Unable to set speed with this value: {} Mbps\n", value).c_str()));
++            fmt::format("Unable to set speed with this value: {} Mbps\n", value)
++                .c_str()));
 +    }
 +    EthernetInterfaceIntf::speed(value);
 +    writeConfigurationFile();
@@ -341,15 +365,14 @@ index 0cf15d9..cf6d0cb 100644
 +    return ethInfo.duplex == 1 ? Duplex::full : Duplex::half;
 +}
 +
-+
- std::tuple<std::optional<std::string>, uint8_t> EthernetInterface::getDwMacAddrByIP(std::string gateway) {
-     int ret = 0;
-     std::tuple<std::optional<std::string>, uint8_t> retVal(std::nullopt, 0);
+ std::tuple<std::optional<std::string>, uint8_t>
+     EthernetInterface::getDwMacAddrByIP(std::string gateway)
+ {
 diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
-index 926a3f3..f8a17f8 100644
+index 69f1d39..e64bd26 100644
 --- a/src/ethernet_interface.hpp
 +++ b/src/ethernet_interface.hpp
-@@ -253,6 +253,21 @@ class EthernetInterface : public Ifaces
+@@ -234,6 +234,21 @@ class EthernetInterface : public Ifaces
       */
      std::string defaultGateway6(std::string gateway) override;
  
@@ -368,26 +391,26 @@ index 926a3f3..f8a17f8 100644
 +    /** Set value of Duplex */
 +    Duplex duplex(Duplex value) override;
 +
-     /** @brief sets the channel maxium privilege.
-      *  @param[in] value - Channel privilege which needs to be set on the
-      * system.
-@@ -328,6 +343,7 @@ class EthernetInterface : public Ifaces
-     using EthernetInterfaceIntf::ipv6EnableStaticRtr;
-     using EthernetInterfaceIntf::ipv6StaticRtrAddr;
- 
-+    using EthernetInterfaceIntf::autoNeg;
-     using EthernetInterfaceIntf::domainName;
-     using EthernetInterfaceIntf::nameservers;
-     using EthernetInterfaceIntf::staticNameServers;
-@@ -401,6 +417,8 @@ class EthernetInterface : public Ifaces
+     /** @brief Function to reload network configurations.
       */
-     nlohmann::json readJsonFile(const std::string& configFile);
+     void reloadConfigs();
+@@ -294,6 +309,7 @@ class EthernetInterface : public Ifaces
+     using ARPControlIface::arpResponse;
+     using ARPControlIface::gratuitousARP;
+     using ARPControlIface::gratuitousARPInterval;
++    using EthernetInterfaceIntf::autoNeg;
+     using EthernetInterfaceIntf::defaultGateway;
+     using EthernetInterfaceIntf::defaultGateway6;
+     using EthernetInterfaceIntf::ipv4Enable;
+@@ -354,6 +370,8 @@ class EthernetInterface : public Ifaces
+      */
+     void writeConfiguration();
  
 +    void writeIfaceStateFile(std::string ifname);
 +
-     /** @brief writes the channel access info to file.
-      *  @param[in] configFile - channel access filename
-      *  @param[in] jsonData - json data to write
+     void writeNicConfiguration(bool isActive);
+ 
+     /** @brief set the ARP Response status in sysctl config for the ethernet
 diff --git a/src/system_queries.cpp b/src/system_queries.cpp
 index 87ba4aa..f811c7d 100644
 --- a/src/system_queries.cpp
@@ -447,7 +470,7 @@ index 5b54985..1b183e2 100644
  
  void setNICUp(std::string_view ifname, bool up);
 diff --git a/src/util.cpp b/src/util.cpp
-index efae343..a442e3c 100644
+index 8c3d108..7a3e222 100644
 --- a/src/util.cpp
 +++ b/src/util.cpp
 @@ -3,6 +3,7 @@
@@ -458,7 +481,7 @@ index efae343..a442e3c 100644
  #include "types.hpp"
  
  #include <sys/wait.h>
-@@ -233,6 +234,34 @@ int getIP6StaticRtrPrefix(const config::Parser& config) {
+@@ -247,6 +248,37 @@ int getIP6StaticRtrPrefix(const config::Parser& config)
      return val;
  }
  
@@ -475,8 +498,11 @@ index efae343..a442e3c 100644
 +            {
 +                return std::nullopt;
 +            }
-+            std::string duplex = *config.map.getLastValueString("Link", "Duplex");
-+            int speed = systemdParseLast(config, "Link", "Speed", config::parseInt).value_or(-1);
++            std::string duplex = *config.map.getLastValueString("Link",
++                                                                "Duplex");
++            int speed = systemdParseLast(config, "Link", "Speed",
++                                         config::parseInt)
++                            .value_or(-1);
 +            return std::make_tuple(autoNeg.value(), duplex, speed);
 +        }
 +        catch (const std::exception& e)
@@ -494,12 +520,12 @@ index efae343..a442e3c 100644
  {
      return systemdParseLast(config, "Network", "DHCP", systemdParseDHCP)
 diff --git a/src/util.hpp b/src/util.hpp
-index f9cc073..e6f65b6 100644
+index 6ad4e1b..a4ea37c 100644
 --- a/src/util.hpp
 +++ b/src/util.hpp
-@@ -138,6 +138,9 @@ DHCPVal getDHCPValue(const config::Parser& config);
-  */
- bool getDHCPProp(const config::Parser& config, std::string_view key);
+@@ -152,6 +152,9 @@ DHCPVal getDHCPValue(const config::Parser& config);
+ bool getDHCPProp(const config::Parser& config, DHCPType dhcpType,
+                  std::string_view key);
  
 +std::optional<std::tuple<bool, std::string, int>>
 +    getPHYInfo(const config::Parser& config);

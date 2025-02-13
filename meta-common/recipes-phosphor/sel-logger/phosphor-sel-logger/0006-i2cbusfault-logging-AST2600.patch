@@ -1,0 +1,251 @@
+From bba174f7c431cba87ea451c6942444a7184f3645 Mon Sep 17 00:00:00 2001
+From: Dillibabu <dillibabug@ami.com>
+Date: Mon, 27 May 2024 18:05:08 +0530
+Subject: [PATCH] 1.Added support for i2cbus fault in AST2600.
+
+Signed-off-by: Dillibabu <dillibabug@ami.com>
+---
+ include/i2cBusfault_monitor.hpp | 164 ++++++++++++++++++++++++++++++++
+ meson.build                     |   3 +
+ meson.options                   |   2 +
+ src/sel_logger.cpp              |  14 ++-
+ 4 files changed, 182 insertions(+), 1 deletion(-)
+ create mode 100644 include/i2cBusfault_monitor.hpp
+
+diff --git a/include/i2cBusfault_monitor.hpp b/include/i2cBusfault_monitor.hpp
+new file mode 100644
+index 0000000..0705b17
+--- /dev/null
++++ b/include/i2cBusfault_monitor.hpp
+@@ -0,0 +1,164 @@
++#ifdef SEL_I2C_BUSFAULT
++
++#pragma once
++
++#include <sel_logger.hpp>
++#include <string>
++#include <string_view>
++#include <variant>
++#include <poll.h>
++#include <time.h>
++#include <systemd/sd-journal.h>
++#include <stdio.h>
++#include <unistd.h>
++#include <sstream>
++#include <bitset>
++
++/*calculation for get the i2c bus number from base address */
++#define I2C_BUS_NUM(x) (((x - I2CBASE_ADD) / 0x80) - 1)
++
++constexpr const uint8_t ADDRESS_LEN = 8;
++constexpr const uint8_t I2C_ARBITRATION = 0x03;
++constexpr const uint8_t I2C_ABNORMAL = 0x05;
++constexpr const uint8_t I2C_SCL_TIMEOUT = 0x06;
++constexpr const uint8_t I2C_SDA_TIMEOUT = 0x0E;
++constexpr const char *i2c_pattern = "received master error interrupt";
++
++constexpr const uint32_t I2CBASE_ADD = 0x1e78a000;
++constexpr const char *I2CBASE_ADD_PATTERN = "1e78";
++
++std::shared_ptr<sdbusplus::asio::connection> connn;
++sd_journal *journal_contex;
++
++inline static void
++sendEventLog(std::shared_ptr<sdbusplus::asio::connection> conn,
++             const std::string faultReason,
++             uint8_t busNum)
++{
++  std::string eventMessage =
++      "I2c Busfault due to " + faultReason + "On I2C-" + std::to_string(busNum);
++
++  sdbusplus::message_t newLogEntry = conn->new_method_call(
++      "xyz.openbmc_project.Logging", "/xyz/openbmc_project/logging",
++      "xyz.openbmc_project.Logging.Create", "Create");
++  const std::string logLevel =
++      "xyz.openbmc_project.Logging.Entry.Level.Error";
++  const std::string msg = "Message:";
++  newLogEntry.append(std::move(eventMessage), std::move(logLevel),
++                     std::map<std::string, std::string>(
++                         {{std::move(msg), std::move(faultReason)}}));
++  conn->call(newLogEntry);
++}
++
++int intt_Journal(std::shared_ptr<sdbusplus::asio::connection> &conn)
++{
++  connn = conn;
++  return 0;
++}
++uint32_t hex_to_byte(const std::string &hex)
++{
++  unsigned int output;
++  std::stringstream ss;
++  ss << std::hex << hex;
++  ss >> output;
++  return output;
++}
++void monitor_log(void)
++{
++  const void *data;
++  uint8_t BusNum = 0;
++  size_t len;
++  int ret = 0;
++
++  ret = sd_journal_open(&journal_contex, SD_JOURNAL_LOCAL_ONLY);
++  if (ret < 0)
++  {
++    std::cerr << "Failed to open journal:" << strerror(-ret) << std::endl;
++  }
++  while (sd_journal_next(journal_contex) > 0)
++  {
++    ret = sd_journal_get_data(journal_contex, "MESSAGE", &data, &len);
++    if (ret < 0)
++    {
++      std::cerr << "Failed to read message field: " << strerror(-ret) << std::endl;
++      continue;
++    }
++  }
++  for (;;)
++  {
++    ret = sd_journal_next(journal_contex);
++    if (ret < 0)
++    {
++      std::cerr << "Failed to iterate to next entry" << strerror(-ret) << std::endl;
++      break;
++    }
++    if (ret == 0)
++    {
++      ret = sd_journal_wait(journal_contex, (uint64_t)-1);
++      if (ret < 0)
++      {
++        std::cerr << "Failed to wait for changes:" << strerror(-ret) << std::endl;
++        break;
++      }
++      continue;
++    }
++    ret = sd_journal_get_data(journal_contex, "MESSAGE", &data, &len);
++    if (ret < 0)
++    {
++      std::cerr << "Failed to read message field:" << strerror(-ret) << std::endl;
++      continue;
++    }
++    std::string pattern = (char *)data;
++
++    if (pattern.find(i2c_pattern) != std::string::npos)
++    {
++      int busadd_pos = pattern.find(I2CBASE_ADD_PATTERN);
++      std::string busBase_Add = pattern.substr(busadd_pos, ADDRESS_LEN);
++
++      if (busBase_Add.length() == ADDRESS_LEN)
++      {
++        uint32_t baseAdd = hex_to_byte(busBase_Add);
++        BusNum = I2C_BUS_NUM(baseAdd);
++      }
++      int value_pos = pattern.find("0x");
++      std::string value = pattern.substr(value_pos + 2, 10);
++
++      if (value.length() == ADDRESS_LEN)
++      {
++        uint32_t regvalue = hex_to_byte(value);
++        std::bitset<32> faultbits(regvalue);
++
++        if (faultbits.any())
++        {
++          if (faultbits.test(I2C_ABNORMAL) == true)
++          {
++            std::cerr << "I2c Abnormal start/stop on I2C-" << BusNum << std::endl;
++            sendEventLog(connn, " I2c Abnormal start/stop ", BusNum);
++          }
++          if (faultbits.test(I2C_ARBITRATION) == true)
++          {
++            std::cerr << "Arbitration Loss on I2C-" << BusNum << std::endl;
++            sendEventLog(connn, " Arbitration Loss", BusNum);
++          }
++          if (faultbits.test(I2C_SCL_TIMEOUT) == true)
++          {
++            std::cerr << "SCL line Timeout on I2C-" << BusNum << std::endl;
++            sendEventLog(connn, " SCL TIMEOUT", BusNum);
++          }
++          if (faultbits.test(I2C_SDA_TIMEOUT) == true)
++          {
++            std::cerr << "SDA line Timeout on I2C-" << BusNum << std::endl;
++            sendEventLog(connn, " SDA TIMEOUT", BusNum);
++          }
++          faultbits.reset();
++        }
++      }
++      else
++      {
++        std::cerr << "Data length is invalid" << std::endl;
++      }
++    }
++  }
++  sd_journal_close(journal_contex);
++}
++#endif
+diff --git a/meson.build b/meson.build
+index 680c912..18ea86b 100644
+--- a/meson.build
++++ b/meson.build
+@@ -39,6 +39,9 @@ endif
+ if get_option('log-crash')
+   cpp_args += '-DSEL_LOGGER_LOG_CRASH'
+ endif
++if get_option('i2c-bus-fault')
++  cpp_args += '-DSEL_I2C_BUSFAULT'
++endif
+ 
+ executable(
+   'sel-logger',
+diff --git a/meson.options b/meson.options
+index eeffc16..f742a37 100644
+--- a/meson.options
++++ b/meson.options
+@@ -12,3 +12,5 @@ option('send-to-logger', type: 'boolean',
+        description: 'Automatically log events to Redfish for pulse type assert-deassert sensor events')
+ option('log-crash', type: 'boolean',
+        description: 'Automaticall log events to Redfish for systemd service failure')
++option('i2c-bus-fault', type: 'boolean', value: false,
++       description: 'log message will be added whenever get i2c fault')
+\ No newline at end of file
+diff --git a/src/sel_logger.cpp b/src/sel_logger.cpp
+index 35068f4..9732fec 100644
+--- a/src/sel_logger.cpp
++++ b/src/sel_logger.cpp
+@@ -34,6 +34,9 @@
+ #ifdef SEL_LOGGER_LOG_CRASH
+ #include <crash_event_monitor.hpp>
+ #endif
++#ifdef SEL_I2C_BUSFAULT
++#include "i2cBusfault_monitor.hpp"
++#endif
+ 
+ #include <filesystem>
+ #include <fstream>
+@@ -405,6 +408,11 @@ int main(int, char*[])
+ {
+     // setup connection to dbus
+     boost::asio::io_context io;
++
++#ifdef SEL_I2C_BUSFAULT
++    boost::asio::io_context i2c_context;
++#endif
++
+     auto conn = std::make_shared<sdbusplus::asio::connection>(io);
+ 
+     // IPMI SEL Object
+@@ -472,7 +480,11 @@ int main(int, char*[])
+ #ifdef SEL_LOGGER_LOG_CRASH
+     sdbusplus::bus::match_t crashEventMonitorH = crashErrorEventMonitor(conn);
+ #endif
+-
++#ifdef SEL_I2C_BUSFAULT
++    intt_Journal(conn);
++    boost::asio::post(i2c_context, monitor_log);
++    i2c_context.run();
++#endif    
+     io.run();
+ 
+     return 0;
+-- 
+2.34.1
+

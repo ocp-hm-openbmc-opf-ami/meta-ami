@@ -11,44 +11,46 @@ Subject: [PATCH 09/13] 0014-Fix-No-Default-GW-MAC-Address.patch
  create mode 100644 0014-Fix-No-Default-GW-MAC-Address.patch
 
 diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
-index 4126815..e77b1de 100644
+index 3c38409..4820ea6 100644
 --- a/src/ethernet_interface.cpp
 +++ b/src/ethernet_interface.cpp
-@@ -25,6 +25,10 @@
- #include <unordered_map>
- #include <variant>
+@@ -6,9 +6,12 @@
+ #include "system_queries.hpp"
+ #include "util.hpp"
  
-+#include <sys/ioctl.h>        /* macro ioctl is defined */
-+#include <linux/if_packet.h>  /* struct sockaddr_ll (see man 7 packet) */
++#include <linux/if_packet.h> /* struct sockaddr_ll (see man 7 packet) */
+ #include <linux/rtnetlink.h>
+ #include <net/if.h>
+ #include <net/if_arp.h>
 +#include <netinet/ether.h>
-+
- namespace phosphor
- {
- namespace network
-@@ -279,7 +283,7 @@ ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
-                         gateway.emplace(stdplus::fromStr<stdplus::In6Addr>(ipgateway));
-                         ip_address::isValidIPv6Addr((in6_addr*)(&gateway.value()), ip_address::Type::IP6_ADDRESS);
++#include <sys/ioctl.h> /* macro ioctl is defined */
+ #include <sys/stat.h>
+ 
+ #include <phosphor-logging/elog-errors.hpp>
+@@ -283,7 +286,7 @@ ObjectPath EthernetInterface::ip(IP::Protocol protType, std::string ipaddress,
+                     ip_address::isValidIPv6Addr((in6_addr*)(&gateway.value()),
+                                                 ip_address::Type::IP6_ADDRESS);
                  }
 -                EthernetInterfaceIntf::defaultGateway6(ipgateway);
 +                defaultGateway6(ipgateway);
                  break;
              default:
                  throw std::logic_error("Exhausted protocols");
-@@ -406,8 +410,19 @@ bool EthernetInterface::ipv6AcceptRA(bool value)
+@@ -411,10 +414,22 @@ bool EthernetInterface::ipv6AcceptRA(bool value)
  
  bool EthernetInterface::dhcp4(bool value)
  {
 -    if (dhcp4() != EthernetInterfaceIntf::dhcp4(value))
--    {
-+    if (dhcp4() != value) {
-+        if (value) {
-+            if (!EthernetInterfaceIntf::defaultGateway().empty()) {
++    if (dhcp4() != value)
+     {
++        if (value)
++        {
++            if (!EthernetInterfaceIntf::defaultGateway().empty())
++            {
 +                manager.get().removeNeighbor(
-+                    NeighborInfo{
-+                        .ifidx=ifIdx,
-+                        .addr=stdplus::fromStr<stdplus::In4Addr>(EthernetInterfaceIntf::defaultGateway())
-+                    }
-+                );
++                    NeighborInfo{.ifidx = ifIdx,
++                                 .addr = stdplus::fromStr<stdplus::In4Addr>(
++                                     EthernetInterfaceIntf::defaultGateway())});
 +            }
 +        }
 +
@@ -56,46 +58,54 @@ index 4126815..e77b1de 100644
          writeConfigurationFile();
          manager.get().reloadConfigs();
      }
-@@ -988,6 +1003,14 @@ std::string EthernetInterface::defaultGateway(std::string gateway)
+     return value;
+ }
+@@ -1005,6 +1018,12 @@ std::string EthernetInterface::defaultGateway(std::string gateway)
      if (gateway != defaultGateway())
      {
          gateway = EthernetInterfaceIntf::defaultGateway(std::move(gateway));
 +        manager.get().removeNeighbor(
-+            NeighborInfo{
-+                .ifidx=ifIdx,
-+                .addr=stdplus::fromStr<stdplus::In4Addr>(EthernetInterfaceIntf::defaultGateway())
-+            }
-+        );
++            NeighborInfo{.ifidx = ifIdx,
++                         .addr = stdplus::fromStr<stdplus::In4Addr>(
++                             EthernetInterfaceIntf::defaultGateway())});
 +
 +        setDwMacAddrByIP(gateway);
          writeConfigurationFile();
          manager.get().reloadConfigs();
      }
-@@ -1319,5 +1342,182 @@ bool EthernetInterface::sysctlConfig(const std::string& cmd)
-     return ((outConfig.empty())?1:0);
+@@ -1227,5 +1246,216 @@ bool EthernetInterface::sysctlConfig(const std::string& cmd)
+     return ((outConfig.empty()) ? 1 : 0);
  }
  
-+int EthernetInterface::setDwMacAddrByIP(std::string gateway) {
++int EthernetInterface::setDwMacAddrByIP(std::string gateway)
++{
 +    int ret = 0;
 +    std::ifstream ifs("/proc/net/arp");
-+    if (!ifs) {
++    if (!ifs)
++    {
 +        log<level::INFO>("/proc/net/arp not opened\n");
 +        return std::string::npos;
 +    }
 +
 +    auto prefixLength = 0;
-+    for (auto& addr : addrs) {
-+        if (addr.second->type() == IP::Protocol::IPv4 && addr.second->origin() != IP::AddressOrigin::LinkLocal) {
++    for (auto& addr : addrs)
++    {
++        if (addr.second->type() == IP::Protocol::IPv4 &&
++            addr.second->origin() != IP::AddressOrigin::LinkLocal)
++        {
 +            prefixLength = addr.second->prefixLength();
 +        }
 +    }
 +    std::string line, mac;
 +    std::vector<std::string> vv;
-+    while (!ifs.eof()) {
-+        ifs >> line ;
-+        if (line == gateway) {
++    while (!ifs.eof())
++    {
++        ifs >> line;
++        if (line == gateway)
++        {
 +            ifs >> line >> line >> mac >> line >> line;
-+            if (line == interfaceName() && ether_aton(mac.c_str()) != nullptr) {
++            if (line == interfaceName() && ether_aton(mac.c_str()) != nullptr)
++            {
 +                neighbor(gateway, mac, prefixLength);
 +                return 0;
 +            }
@@ -105,36 +115,40 @@ index 4126815..e77b1de 100644
 +    int s = -1;
 +
 +    struct ifreq ifr;
-+    struct sockaddr_ll srcsock,dstsock,recvsock;
++    struct sockaddr_ll srcsock, dstsock, recvsock;
 +    int retry = 2;
 +    uint8_t buf[256] = {0};
 +    uint8_t packet[4096] = {0};
 +    uint8_t preMAC[6] = {0};
-+    struct arphdr *arph = NULL;
++    struct arphdr* arph = NULL;
 +    socklen_t alen;
 +    fd_set rfds;
 +    struct timeval tv;
-+    int retval=0;
++    int retval = 0;
 +    int nfds = 0;
-+    uint8_t *p = NULL;;
-+
++    uint8_t* p = NULL;
 +
 +    s = socket(PF_PACKET, SOCK_DGRAM, 0);
-+    if (s < 0) {
++    if (s < 0)
++    {
 +        ret = std::string::npos;
 +        goto end;
 +    }
 +
 +    memset(&ifr, 0, sizeof(ifr));
-+    ret = snprintf(ifr.ifr_name,sizeof(ifr.ifr_name),"%s",interfaceName().c_str());
-+    if(ret < 0 || ret >= (signed int)sizeof(ifr.ifr_name)) {
++    ret = snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s",
++                   interfaceName().c_str());
++    if (ret < 0 || ret >= (signed int)sizeof(ifr.ifr_name))
++    {
 +        lg2::error("Buffer Overflow\n");
 +        ret = std::string::npos;
 +        goto close;
 +    }
 +
-+    if (ioctl(s, SIOCGIFINDEX, &ifr) < 0) {
-+        lg2::error("Interface {INTERFACENAME} not found\n", "INTERFACENAME", interfaceName());
++    if (ioctl(s, SIOCGIFINDEX, &ifr) < 0)
++    {
++        lg2::error("Interface {INTERFACENAME} not found\n", "INTERFACENAME",
++                   interfaceName());
 +        ret = std::string::npos;
 +        goto close;
 +    }
@@ -142,41 +156,54 @@ index 4126815..e77b1de 100644
 +    srcsock.sll_family = AF_PACKET;
 +    srcsock.sll_ifindex = if_nametoindex(interfaceName().c_str());
 +    srcsock.sll_protocol = htons(ETH_P_ARP);
-+    if (bind(s, (struct sockaddr *)&srcsock, sizeof(srcsock)) == -1) {
-+        lg2::error("Failure in Binding Interface {INTERFACENAME}'s index = {INDEX}\n", "INTERFACENAME", interfaceName(), "INDEX", srcsock.sll_ifindex);
++    if (bind(s, (struct sockaddr*)&srcsock, sizeof(srcsock)) == -1)
++    {
++        lg2::error(
++            "Failure in Binding Interface {INTERFACENAME}'s index = {INDEX}\n",
++            "INTERFACENAME", interfaceName(), "INDEX", srcsock.sll_ifindex);
 +        ret = std::string::npos;
 +        goto close;
 +    }
 +
 +    alen = sizeof(srcsock);
-+    if (getsockname(s, (struct sockaddr *)& srcsock, &alen)) {
++    if (getsockname(s, (struct sockaddr*)&srcsock, &alen))
++    {
 +        lg2::error("Failure in getsockname\n");
 +        ret = std::string::npos;
 +        goto close;
 +    }
 +
-+    if (srcsock.sll_halen == 0) {
-+        log<level::ERR>(fmt::format("Interface {} is not able to communicate\n", interfaceName()).c_str());
-+        lg2::error("Interface {INTERFACENAME} is not able to communicate\n", "INTERFACENAME", interfaceName());
++    if (srcsock.sll_halen == 0)
++    {
++        log<level::ERR>(fmt::format("Interface {} is not able to communicate\n",
++                                    interfaceName())
++                            .c_str());
++        lg2::error("Interface {INTERFACENAME} is not able to communicate\n",
++                   "INTERFACENAME", interfaceName());
 +        ret = std::string::npos;
 +        goto close;
 +    }
 +
-+    for (auto& addr : addrs) {
-+        if (addr.second->type() == IP::Protocol::IPv4 && addr.second->origin() != IP::AddressOrigin::LinkLocal) {
++    for (auto& addr : addrs)
++    {
++        if (addr.second->type() == IP::Protocol::IPv4 &&
++            addr.second->origin() != IP::AddressOrigin::LinkLocal)
++        {
 +            prefixLength = addr.second->prefixLength();
 +            retry = 2;
-+            while(retry) {
++            while (retry)
++            {
 +                dstsock = srcsock;
 +                memset(dstsock.sll_addr, -1, dstsock.sll_halen);
-+                in_addr addrTmp = stdplus::fromStr<stdplus::In4Addr>(addr.second->address());
-+                uint8_t *ip = (uint8_t *)&addrTmp.s_addr;
-+                ip = (uint8_t *)(&addrTmp.s_addr);
++                in_addr addrTmp =
++                    stdplus::fromStr<stdplus::In4Addr>(addr.second->address());
++                uint8_t* ip = (uint8_t*)&addrTmp.s_addr;
++                ip = (uint8_t*)(&addrTmp.s_addr);
 +                memset(buf, 0, sizeof(buf));
 +                memset(packet, 0, sizeof(packet));
 +
-+                arph = (struct arphdr *)buf;
-+                p = (uint8_t *)(arph+1);
++                arph = (struct arphdr*)buf;
++                p = (uint8_t*)(arph + 1);
 +
 +                arph->ar_hrd = htons(ARPHRD_ETHER);
 +                arph->ar_pro = htons(ETH_P_IP);
@@ -193,17 +220,18 @@ index 4126815..e77b1de 100644
 +                p += arph->ar_hln;
 +
 +                addrTmp = stdplus::fromStr<stdplus::In4Addr>(gateway);
-+                ip = (uint8_t *)(&addrTmp.s_addr);
++                ip = (uint8_t*)(&addrTmp.s_addr);
 +                memcpy(p, &ip[0], arph->ar_pln);
 +                p += arph->ar_pln;
 +
-+                if( 0 == sendto(s, buf, p - buf, 0, (struct sockaddr *)&dstsock, sizeof(dstsock)))
++                if (0 == sendto(s, buf, p - buf, 0, (struct sockaddr*)&dstsock,
++                                sizeof(dstsock)))
 +                {
 +                    continue;
 +                }
 +
-+                arph = (struct arphdr *) packet;
-+                p = (unsigned char *) (arph + 1);
++                arph = (struct arphdr*)packet;
++                p = (unsigned char*)(arph + 1);
 +
 +                FD_ZERO(&rfds);
 +                FD_SET(s, &rfds);
@@ -215,14 +243,17 @@ index 4126815..e77b1de 100644
 +                    lg2::error("select() error\n");
 +                else if (retval)
 +                {
-+                    if(FD_ISSET (s, &rfds))
++                    if (FD_ISSET(s, &rfds))
 +                    {
-+                        if (recvfrom(s, packet, sizeof(packet), 0,(struct sockaddr *) &recvsock, &alen) < 0)
++                        if (recvfrom(s, packet, sizeof(packet), 0,
++                                     (struct sockaddr*)&recvsock, &alen) < 0)
 +                        {
 +                            lg2::error("Failed in Recvfrom\n");
 +                        }
-+                        //If IpAddr and the ip from response are not the same, then set MAC address all zero
-+                        if( ip[0] != p[6] || ip[1] != p[7]|| ip[2] != p[8] || ip[3] != p[9] )
++                        // If IpAddr and the ip from response are not the same,
++                        // then set MAC address all zero
++                        if (ip[0] != p[6] || ip[1] != p[7] || ip[2] != p[8] ||
++                            ip[3] != p[9])
 +                        {
 +                            memset(p, 0, 6);
 +                        }
@@ -232,14 +263,19 @@ index 4126815..e77b1de 100644
 +                {
 +                    goto close;
 +                }
-+                if(retry == 2)
++                if (retry == 2)
 +                {
 +                    memcpy(preMAC, p, 6);
 +                }
 +                retry--;
 +            }
-+            if(0 == memcmp(p,preMAC,6)) {
-+                neighbor(gateway, fmt::format("{:0>2x}:{:0>2x}:{:0>2x}:{:0>2x}:{:0>2x}:{:0>2x}", p[0],p[1],p[2],p[3],p[4],p[5]), prefixLength);
++            if (0 == memcmp(p, preMAC, 6))
++            {
++                neighbor(gateway,
++                         fmt::format(
++                             "{:0>2x}:{:0>2x}:{:0>2x}:{:0>2x}:{:0>2x}:{:0>2x}",
++                             p[0], p[1], p[2], p[3], p[4], p[5]),
++                         prefixLength);
 +                ret = 0;
 +                goto close;
 +            } // if
@@ -255,10 +291,10 @@ index 4126815..e77b1de 100644
  } // namespace network
  } // namespace phosphor
 diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
-index 6679657..e729aab 100644
+index 969f982..f41a0f2 100644
 --- a/src/ethernet_interface.hpp
 +++ b/src/ethernet_interface.hpp
-@@ -249,6 +249,11 @@ class EthernetInterface : public Ifaces
+@@ -238,6 +238,11 @@ class EthernetInterface : public Ifaces
       */
      uint64_t gratuitousARPInterval(uint64_t interval) override;
  
@@ -267,14 +303,14 @@ index 6679657..e729aab 100644
 +     */
 +    int setDwMacAddrByIP(std::string gateway);
 +
-     /** @brief Get current interface index.
-      */
-     uint8_t getIfIdx();
+     using EthernetInterfaceIntf::interfaceName;
+     using EthernetInterfaceIntf::linkUp;
+     using EthernetInterfaceIntf::mtu;
 diff --git a/src/network_manager.cpp b/src/network_manager.cpp
-index b2a2934..81cce64 100644
+index e3959bd..ee46294 100644
 --- a/src/network_manager.cpp
 +++ b/src/network_manager.cpp
-@@ -487,6 +487,7 @@ void Manager::addDefGw(unsigned ifidx, stdplus::InAnyAddr addr)
+@@ -386,6 +386,7 @@ void Manager::addDefGw(unsigned ifidx, stdplus::InAnyAddr addr)
                  {
                      it->second->EthernetInterfaceIntf::defaultGateway(
                          stdplus::toStr(addr));
@@ -282,21 +318,23 @@ index b2a2934..81cce64 100644
                  }
                  else
                  {
-@@ -537,6 +538,14 @@ void Manager::removeDefGw(unsigned ifidx, stdplus::InAnyAddr addr)
+@@ -436,6 +437,16 @@ void Manager::removeDefGw(unsigned ifidx, stdplus::InAnyAddr addr)
                      stdplus::ToStrHandle<stdplus::ToStr<stdplus::In4Addr>> tsh;
                      if (it->second->defaultGateway() == tsh(addr))
                      {
-+                        if (!it->second->EthernetInterfaceIntf::defaultGateway().empty()) {
-+                            removeNeighbor(
-+                                NeighborInfo{
-+                                    .ifidx=if_nametoindex(it->second->interfaceName().c_str()),
-+                                    .addr=stdplus::fromStr<stdplus::In4Addr>(it->second->EthernetInterfaceIntf::defaultGateway())
-+                                }
-+                            );
++                        if (!it->second->EthernetInterfaceIntf::defaultGateway()
++                                 .empty())
++                        {
++                            removeNeighbor(NeighborInfo{
++                                .ifidx = if_nametoindex(
++                                    it->second->interfaceName().c_str()),
++                                .addr = stdplus::fromStr<stdplus::In4Addr>(
++                                    it->second->EthernetInterfaceIntf::
++                                        defaultGateway())});
 +                        }
                          it->second->EthernetInterfaceIntf::defaultGateway("");
                      }
                  }
 -- 
-2.25.1
+2.43.0
 

@@ -1,0 +1,1080 @@
+From 9bf4736a3ef51c34d5080dc680112115c4067c54 Mon Sep 17 00:00:00 2001
+From: madhankumars <madhankumars@ami.com>
+Date: Wed, 13 Nov 2024 14:52:47 +0530
+Subject: [PATCH 3/3] amiFunctionality
+
+---
+ etc/dictionary     |    1 +
+ src/radiusclient.c | 1011 +++++++++++++++++++++++++++++++++++++++-----
+ 2 files changed, 896 insertions(+), 116 deletions(-)
+
+diff --git a/etc/dictionary b/etc/dictionary
+index caebe9d..bd696b4 100644
+--- a/etc/dictionary
++++ b/etc/dictionary
+@@ -81,6 +81,7 @@ ATTRIBUTE	NAS-Port-Type		61	integer
+ ATTRIBUTE	Port-Limit		62	integer
+ ATTRIBUTE	Login-LAT-Port		63	integer
+ ATTRIBUTE	Connect-Info		77	string
++ATTRIBUTE       Custom-Attribute-80     80      string
+ 
+ #
+ #	RFC3162 IPv6 attributes
+diff --git a/src/radiusclient.c b/src/radiusclient.c
+index b5c3899..98c2d20 100644
+--- a/src/radiusclient.c
++++ b/src/radiusclient.c
+@@ -26,155 +26,934 @@
+  * $Id: radiusclient.c,v 1.6 2006/04/04 20:52:04 sobomax Exp $
+  */
+ 
++#include "pam_helper.h"
+ #include <ctype.h>
++#include <dlfcn.h>
++#include <errno.h>
++#include <radiusclient-ng.h>
++#include <security/pam_appl.h>
++#include <security/pam_modules.h>
++#include <stdbool.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+ #include <unistd.h>
+ 
+-#include <radiusclient-ng.h>
++#define INVALID_USR_CREDEN 0x80
++#define IPMI_USER_DISABLED 0x02
++#define MAX_USER_NAME_LENGTH 16
++#define SERVICE_NAME_LEN 16
++#define USER_NAME_LEN 48
++#define USER_BMC_IP 56
++#define MAX_IP_LEN 46
++#define MODCNT_ENVNAME "MDCount"
++#define SEL_LOGIN_SUCCESS 0
++#define SEL_LOGOUT_SUCCESS 1
++#define SEL_LOGIN_FAILED 3
++#define SEL_PUBKEY_LOGIN_FAILED 6
++#define TAIL_BIN_PATH "/usr/bin/tail"
++#define GREP_BIN_PATH "/bin/grep"
++#define AUDIT_INFO_FILE "/var/log/info.log"
++#define WEB_SERVICE_SECURE "HTTPS"
++#define WEB_SERVICE_NON_SECURE "HTTP"
++#define test 1
++#define test1 2
++#define test2 3
++#define test3 4
++#define MAX_ENV_COUNT 3
+ 
+-int process(void *, VALUE_PAIR *, int, int);
++/*need to remove while link*/
++#define QUEUE_NAME 64
++#define PAM_USERNAME 64
++#define ADD_PAM_USER 1
++#define PAM_RADIUS_RES_Q "/var/PAMRADIUSQ"
++#define PAM_HELPER_Q "/var/PAMHelper"
+ 
+-static void
+-usage(void)
+-{
++struct privilageStruct {
++  int privNum;
++  char privStr[16];
++};
++int process(void *, VALUE_PAIR *, int, int, int *);
++int sigwrap_open(const char *pathname, int flags) {
++  while (1) {
++    int hFile = open(pathname, flags);
+ 
+-    fprintf(stderr, "usage: radiusclient [-f config_file] [-p nas_port] [-s | [-a] a1=v1 [a2=v2[...[aN=vN]...]]]\n");
+-    exit(1);
++    if (hFile != -1)
++      return hFile;
++
++    if (errno != EINTR)
++      return hFile;
++  }
+ }
++/*openbmc related pam modules invoking*/
++/* the name we store our context under */
++#define PLD_CTX "PAM_LDAPD_CTX"
++/* structure that stores the results for an nslcd call */
++struct nslcd_resp {
++  int res;
++  char msg[1024];
++};
+ 
+-int
+-main(int argc, char **argv)
+-{
+-    int i, nas_port, ch, acct, server, ecount, firstline, theend;
+-    void *rh;
+-    size_t len;
+-    VALUE_PAIR *send, **vp;
+-    char *rc_conf, *cp;
+-    char lbuf[4096];
++/* this struct represents the context that the PAM module keeps
++   between calls */
++struct pld_ctx {
++  char *username;
++  struct nslcd_resp saved_authz;
++  struct nslcd_resp saved_session;
++  int asroot;
++  char *oldpassword;
++};
+ 
+-    rc_conf = RC_CONFIG_FILE;
+-    nas_port = 5060;
++/* clear the context to all empty values */
++static void ctx_clear(struct pld_ctx *ctx) {
++  if (ctx->username) {
++    free(ctx->username);
++    ctx->username = NULL;
++  }
++  ctx->saved_authz.res = PAM_SUCCESS;
++  memset(ctx->saved_authz.msg, 0, sizeof(ctx->saved_authz.msg));
++  ctx->saved_session.res = PAM_SUCCESS;
++  memset(ctx->saved_session.msg, 0, sizeof(ctx->saved_session.msg));
++  ctx->asroot = 0;
++  if (ctx->oldpassword) {
++    memset(ctx->oldpassword, 0, strlen(ctx->oldpassword));
++    free(ctx->oldpassword);
++    ctx->oldpassword = NULL;
++  }
++}
+ 
+-    acct = 0;
+-    server = 0;
+-    while ((ch = getopt(argc, argv, "af:p:s")) != -1) {
+-        switch (ch) {
+-        case 'f':
+-            rc_conf = optarg;
+-            break;
++/* free the context (this is installed as handler into PAM) */
++static void ctx_free(pam_handle_t *pamh, void *data, int err) {
++  struct pld_ctx *ctx = data;
++  ctx_clear(ctx);
++  free(ctx);
++}
+ 
+-        case 'p':
+-            nas_port = atoi(optarg);
+-            break;
++/* try to get the module's context, returns a PAM status code */
++static int ctx_get(pam_handle_t *pamh, const char *username,
++                   struct pld_ctx **pctx) {
++  struct pld_ctx *ctx = NULL;
++  int rc;
++  /* try to get the context from PAM */
++  rc = pam_get_data(pamh, PLD_CTX, (const void **)&ctx);
++  if ((rc == PAM_SUCCESS) && (ctx != NULL)) {
++    /* if the user is different clear the context */
++    if ((ctx->username != NULL) && (strcmp(ctx->username, username) != 0))
++      ctx_clear(ctx);
++  } else {
++    /* allocate a new context */
++    ctx = calloc(1, sizeof(struct pld_ctx));
++    if (ctx == NULL) {
++      fprintf(stderr, "calloc(): failed to allocate memory: %s",
++              strerror(errno));
++      return PAM_BUF_ERR;
++    }
++    ctx_clear(ctx);
++    /* store the new context with the handler to free it */
++    rc = pam_set_data(pamh, PLD_CTX, ctx, ctx_free);
++    if (rc != PAM_SUCCESS) {
++      ctx_free(pamh, ctx, 0);
++      fprintf(stderr, "failed to store context: %s", pam_strerror(pamh, rc));
++      /*pam_syslog(pamh, LOG_ERR, "failed to store context: %s",
++                 pam_strerror(pamh, rc));*/
++      return rc;
++    }
++  }
++  /* save the username in the context */
++  if (ctx->username == NULL)
++    ctx->username = strdup(username);
++  /* return the context */
++  *pctx = ctx;
++  return PAM_SUCCESS;
++}
++
++/* our PAM module configuration */
++struct pld_cfg {
++  int nullok;
++  int no_warn;
++  int ignore_unknown_user;
++  int ignore_authinfo_unavail;
++  int debug;
++  uid_t minimum_uid;
++};
++
++static void cfg_init(pam_handle_t *pamh, int flags, int argc, const char **argv,
++                     struct pld_cfg *cfg) {
++  int i;
++  /* initialise config with defaults */
++  cfg->nullok = 0;
++  cfg->no_warn = 0;
++  cfg->ignore_unknown_user = 0;
++  cfg->ignore_authinfo_unavail = 0;
++  cfg->debug = 0;
++  cfg->minimum_uid = 0;
++  /* go over arguments */
++  for (i = 0; i < argc; i++) {
++    if (strcmp(argv[i], "use_first_pass") == 0)
++      /* ignore, this option is used by pam_get_authtok() internally */;
++    else if (strcmp(argv[i], "try_first_pass") == 0)
++      /* ignore, this option is used by pam_get_authtok() internally */;
++    else if (strcmp(argv[i], "nullok") == 0)
++      cfg->nullok = 1;
++    else if (strcmp(argv[i], "use_authtok") == 0)
++      /* ignore, this option is used by pam_get_authtok() internally */;
++    else if (strcmp(argv[i], "no_warn") == 0)
++      cfg->no_warn = 1;
++    else if (strcmp(argv[i], "ignore_unknown_user") == 0)
++      cfg->ignore_unknown_user = 1;
++    else if (strcmp(argv[i], "ignore_authinfo_unavail") == 0)
++      cfg->ignore_authinfo_unavail = 1;
++    else if (strcmp(argv[i], "debug") == 0)
++      cfg->debug = 1;
++    else if (strncmp(argv[i], "minimum_uid=", 12) == 0)
++      cfg->minimum_uid = (uid_t)atoi(argv[i] + 12);
++    else
++      fprintf(stderr, "unknown option: %s", argv[i]);
++  }
++  /* check flags */
++  if (flags & PAM_SILENT)
++    cfg->no_warn = 1;
++}
++
++static int init(pam_handle_t *pamh, struct pld_cfg *cfg, struct pld_ctx **ctx,
++                const char **username, const char **service, const char **ruser,
++                const char **rhost, const char **tty) {
++  int rc;
++  struct passwd *pwent;
++  /* get user name */
++  rc = pam_get_user(pamh, username, NULL);
++  if (rc != PAM_SUCCESS) {
++    fprintf(stderr, "failed to get user name: %s", pam_strerror(pamh, rc));
++    return rc;
++  }
++  if ((*username == NULL) || ((*username)[0] == '\0')) {
++    fprintf(stderr, "got empty user name");
++    return PAM_USER_UNKNOWN;
++  }
++  /* check uid is not applicable for radius hence commenting
++  if (cfg->minimum_uid > 0)
++  {
++    pwent = pam_modutil_getpwnam(args->pamh, *username);
++    if ((pwent != NULL) && (pwent->pw_uid < cfg->minimum_uid))
++    {
++      if (cfg->debug)
++        pam_syslog(pamh, LOG_DEBUG, "uid below minimum_uid; user=%s uid=%ld",
++                   *username, (long)pwent->pw_uid);
++      return cfg->ignore_unknown_user ? PAM_IGNORE : PAM_USER_UNKNOWN;
++    }
++  }*/
++  /* get our context */
++  rc = ctx_get(pamh, *username, ctx);
++  if (rc != PAM_SUCCESS)
++    return rc;
++  /* get service name */
++  rc = pam_get_item(pamh, PAM_SERVICE, (const void **)service);
++  if (rc != PAM_SUCCESS) {
++    fprintf(stderr, "failed to get service name: %s", pam_strerror(pamh, rc));
++    return rc;
++  }
++  /* get more PAM information (ignore errors) */
++  pam_get_item(pamh, PAM_RUSER, (const void **)ruser);
++  pam_get_item(pamh, PAM_RHOST, (const void **)rhost);
++  pam_get_item(pamh, PAM_TTY, (const void **)tty);
++  return PAM_SUCCESS;
++}
++
++/* map a NSLCD PAM status code to a PAM status code */
++static int nslcd2pam_rc(pam_handle_t *pamh, int rc) {
++#define map(i)                                                                 \
++  case NSLCD_##i:                                                              \
++    return i;
++  switch (rc) {
++  case (PAM_SUCCESS):
++  case (PAM_PERM_DENIED):
++  case (PAM_AUTH_ERR):
++  case (PAM_CRED_INSUFFICIENT):
++  case (PAM_AUTHINFO_UNAVAIL):
++  case (PAM_USER_UNKNOWN):
++  case (PAM_MAXTRIES):
++  case (PAM_NEW_AUTHTOK_REQD):
++  case (PAM_ACCT_EXPIRED):
++  case (PAM_SESSION_ERR):
++  case (PAM_AUTHTOK_ERR):
++  case (PAM_AUTHTOK_DISABLE_AGING):
++  case (PAM_IGNORE):
++  case (PAM_ABORT):
++  case (PAM_AUTHTOK_EXPIRED):
++    return rc;
++  default:
++    fprintf(stderr, "unknown NSLCD_PAM_* code returned: %d", rc);
++    return PAM_ABORT;
++  }
++}
++
++/* check whether the specified user is handled by nslcd */
++static int nslcd_request_exists(pam_handle_t *pamh, struct pld_cfg *cfg,
++                                const char *username) {
++#if 0
++  PAM_REQUEST(
++    0x00080001,
++    /* log debug message */
++    fprintf(stderr, "nslcd account check; user=%s", username),
++    /* write the request parameters */
++    WRITE_STRING(fp, username),
++    /* read the result entry (skip it completely) */
++    SKIP_STRING(fp);            /* user name */
++    SKIP_STRING(fp);            /* passwd entry */
++    SKIP(fp, sizeof(int32_t));  /* uid */
++    SKIP(fp, sizeof(int32_t));  /* gid */
++    SKIP_STRING(fp);            /* gecos */
++    SKIP_STRING(fp);            /* home dir */
++    SKIP_STRING(fp);            /* shell */
++  )
++#endif
++}
++
++/* perform an authentication call over nslcd */
++static int nslcd_request_authc(pam_handle_t *pamh, struct pld_cfg *cfg,
++                               const char *username, const char *service,
++                               const char *ruser, const char *rhost,
++                               const char *tty, const char *passwd,
++                               struct nslcd_resp *authc_resp,
++                               struct nslcd_resp *authz_resp) {
++#if 0 
++  PAM_REQUEST(
++    NSLCD_ACTION_PAM_AUTHC,
++    /* log debug message */
++    pam_syslog(pamh, LOG_DEBUG, "nslcd authentication; user=%s", username),
++    /* write the request parameters */
++    WRITE_STRING(fp, username);
++    WRITE_STRING(fp, service);
++    WRITE_STRING(fp, ruser);
++    WRITE_STRING(fp, rhost);
++    WRITE_STRING(fp, tty);
++    WRITE_STRING(fp, passwd),
++    /* read the result entry */
++    READ_PAM_CODE(fp, authc_resp->res);
++    READ_STRING(fp, authc_resp->msg); /* user name */
++    /* if we want the authorisation response, save it, otherwise skip it */
++    if (authz_resp != NULL)
++    {
++      READ_PAM_CODE(fp, authz_resp->res);
++      READ_STRING(fp, authz_resp->msg);
++    }
++    else
++    {
++      SKIP(fp, sizeof(int32_t));
++      SKIP_STRING(fp);
++    }
++  )
++#endif
++}
++
++/* do a session open nslcd request */
++static int nslcd_request_sess_o(pam_handle_t *pamh, struct pld_cfg *cfg,
++                                const char *username, const char *service,
++                                const char *ruser, const char *rhost,
++                                const char *tty, struct nslcd_resp *resp) {
++#if 0
++  PAM_REQUEST(
++    NSLCD_ACTION_PAM_SESS_O,
++    /* log debug message */
++    pam_syslog(pamh, LOG_DEBUG, "nslcd session open; user=%s", username),
++    /* write the request parameters */
++    WRITE_STRING(fp, username);
++    WRITE_STRING(fp, service);
++    WRITE_STRING(fp, ruser);
++    WRITE_STRING(fp, rhost);
++    WRITE_STRING(fp, tty),
++    /* read the result entry */
++    READ_STRING(fp, resp->msg)
++  )
++#endif
++}
++
++/* do a session close nslcd request */
++static int nslcd_request_sess_c(pam_handle_t *pamh, struct pld_cfg *cfg,
++                                const char *username, const char *service,
++                                const char *ruser, const char *rhost,
++                                const char *tty, const char *sessid) {
++#if 0 
++  PAM_REQUEST(
++    NSLCD_ACTION_PAM_SESS_C,
++    /* log debug message */
++    pam_syslog(pamh, LOG_DEBUG, "nslcd session close; user=%s", username),
++    /* write the request parameters */
++    WRITE_STRING(fp, username);
++    WRITE_STRING(fp, service);
++    WRITE_STRING(fp, ruser);
++    WRITE_STRING(fp, rhost);
++    WRITE_STRING(fp, tty);
++    WRITE_STRING(fp, sessid),
++    /* no result entry to read */ ;
++  )
++#endif
++}
++
++/* do a password modification nslcd call */
++static int nslcd_request_pwmod(pam_handle_t *pamh, struct pld_cfg *cfg,
++                               const char *username, const char *service,
++                               const char *ruser, const char *rhost,
++                               const char *tty, int asroot,
++                               const char *oldpasswd, const char *newpasswd,
++                               struct nslcd_resp *resp) {
++#if 0
++  PAM_REQUEST(
++    NSLCD_ACTION_PAM_PWMOD,
++    /* log debug message */
++    pam_syslog(pamh, LOG_DEBUG, "nslcd password modify; user=%s", username),
++    /* write the request parameters */
++    WRITE_STRING(fp, username);
++    WRITE_STRING(fp, service);
++    WRITE_STRING(fp, ruser);
++    WRITE_STRING(fp, rhost);
++    WRITE_STRING(fp, tty);
++    WRITE_INT32(fp, asroot);
++    WRITE_STRING(fp, oldpasswd);
++    WRITE_STRING(fp, newpasswd),
++    /* read the result entry */
++    READ_PAM_CODE(fp, resp->res);
++    READ_STRING(fp, resp->msg);
++  )
++#endif
++}
++
++static int nslcd_request_config_get(pam_handle_t *pamh, struct pld_cfg *cfg,
++                                    int cfgopt, struct nslcd_resp *resp) {
++#if 0
++  PAM_REQUEST(
++    NSLCD_ACTION_CONFIG_GET,
++    /* log debug message */
++    fprintf(stderr, "nslcd request config (%d)", cfgopt),
++    /* write the request parameter */
++    WRITE_INT32(fp, cfgopt),
++    /* read the result entry */
++    READ_STRING(fp, resp->msg);
++  )
++#endif
++}
++
++/* remap the return code based on the configuration */
++static int remap_pam_rc(int rc, struct pld_cfg *cfg) {
++  if ((rc == PAM_AUTHINFO_UNAVAIL) && cfg->ignore_authinfo_unavail)
++    return PAM_IGNORE;
++  if ((rc == PAM_USER_UNKNOWN) && cfg->ignore_unknown_user)
++    return PAM_IGNORE;
++  return rc;
++}
++
++static void usage(void) {
++
++  fprintf(stderr, "usage: radiusclient [-f config_file] [-p nas_port] [-s | "
++                  "[-a] a1=v1 [a2=v2[...[aN=vN]...]]]\n");
++  exit(1);
++}
++
++int main(int argc, char **argv) {
++  int i, nas_port, ch, acct, server, ecount, firstline, theend;
++  int privilage = 0;
++  void *rh;
++  size_t len;
++  VALUE_PAIR *send, **vp;
++  char *rc_conf, *cp;
++  char lbuf[4096];
++
++  rc_conf = RC_CONFIG_FILE;
++  nas_port = 5060;
+ 
+-        case 'a':
++  acct = 0;
++  server = 0;
++  while ((ch = getopt(argc, argv, "af:p:s")) != -1) {
++    switch (ch) {
++    case 'f':
++      rc_conf = optarg;
++      break;
++
++    case 'p':
++      nas_port = atoi(optarg);
++      break;
++
++    case 'a':
++      acct = 1;
++      break;
++
++    case 's':
++      server = 1;
++      break;
++
++    default:
++      usage();
++    }
++  }
++  argc -= optind;
++  argv += optind;
++
++  if ((argc == 0 && server == 0) || (argc != 0 && server != 0))
++    usage();
++
++  if ((rh = rc_read_config(rc_conf)) == NULL) {
++    fprintf(stderr, "error opening radius configuration file\n");
++    exit(1);
++  }
++
++  if (rc_read_dictionary(rh, rc_conf_str(rh, "dictionary")) != 0) {
++    fprintf(stderr, "error reading radius dictionary\n");
++    exit(2);
++  }
++
++  if (server == 0) {
++    send = NULL;
++    vp = &send;
++    for (i = 0; i < argc; i++) {
++      if (rc_avpair_parse(rh, argv[i], vp) < 0) {
++        fprintf(stderr, "%s: can't parse AV pair\n", argv[i]);
++        exit(3);
++      }
++      vp = &send->next;
++    }
++    exit(process(rh, send, acct, nas_port, &privilage));
++  }
++  while (1 == 1) {
++    send = NULL;
++    vp = &send;
++    ecount = 0;
++    firstline = 1;
++    acct = 0;
++    do {
++      len = 0;
++      cp = rc_fgetln(stdin, &len);
++      theend = 1;
++      if (cp != NULL && len > 0) {
++        if (firstline != 0) {
++          if (len >= 4 && memcmp(cp, "ACCT", 4) == 0)
+             acct = 1;
++          firstline = 0;
++          theend = 0;
++          continue;
++        }
++        for (i = 0; i < len; i++) {
++          if (!isspace(cp[i])) {
++            theend = 0;
+             break;
++          }
++        }
++        if (theend == 0) {
++          memcpy(lbuf, cp, len);
++          lbuf[len] = '\0';
++          if (rc_avpair_parse(rh, lbuf, vp) < 0) {
++            fprintf(stderr, "%s: can't parse AV pair\n", lbuf);
++            ecount++;
++          } else {
++            vp = &send->next;
++          }
++        }
++      }
++    } while (theend == 0);
++    if (send != NULL && ecount == 0)
++      printf("%d\n\n", process(rh, send, acct, nas_port, &privilage));
++    else
++      printf("%d\n\n", -1);
++    fflush(stdout);
++    if (send != NULL)
++      rc_avpair_free(send);
++    if (cp == NULL || len <= 0)
++      break;
++  }
++  exit(0);
++}
+ 
+-        case 's':
+-            server = 1;
+-            break;
++void GetPAMItems(pam_handle_t *pamh, char *ip_addr, char *username,
++                 char *service) {
++  const void *login_info;
++  int retval = 0;
+ 
+-        default:
+-            usage();
+-        }
++  memset(ip_addr, 0, MAX_IP_LEN);
++  memset(username, 0, USER_NAME_LEN);
++  memset(service, 0, SERVICE_NAME_LEN);
++
++  retval = pam_get_item(pamh, PAM_RHOST, (const void **)&login_info);
++  if (retval == PAM_SUCCESS) {
++    if (login_info)
++      memcpy(
++          ip_addr, login_info,
++          MIN(MAX_IP_LEN, 1 + strnlen((const char *)login_info, MAX_IP_LEN)));
++  }
++  retval = pam_get_item(pamh, PAM_SERVICE, (const void **)&login_info);
++  if (retval == PAM_SUCCESS) {
++    memcpy(service, login_info,
++           MIN(SERVICE_NAME_LEN,
++               1 + strnlen((const char *)login_info, SERVICE_NAME_LEN)));
++  }
++  retval = pam_get_item(pamh, PAM_USER, (const void **)&login_info);
++  if (retval == PAM_SUCCESS) {
++    memcpy(username, login_info,
++           MIN(USER_NAME_LEN,
++               1 + strnlen((const char *)login_info, USER_NAME_LEN)));
++  }
++  return;
++}
++
++void GetModuleCountEnv(pam_handle_t *pamh, int *cntr) {
++  char env_count[MAX_ENV_COUNT] = {0};
++  char env_name[USER_NAME_LEN] = {0};
++
++  /*Check MDCount Environment variable is available?. if yes
++  take the module count (number of modules it traversed)*/
++  if (NULL != pam_getenv(pamh, MODCNT_ENVNAME)) {
++    if (snprintf(env_count, sizeof(env_count), "%s",
++                 pam_getenv(pamh, MODCNT_ENVNAME)) >= MAX_ENV_COUNT) {
++      return;
+     }
+-    argc -= optind;
+-    argv += optind;
++    *cntr = atoi(env_count);
++  }
++  if (*cntr > 4)
++    *cntr = 0;
++  *cntr = *cntr + 1;
++  sprintf(env_name, "%s=%d", MODCNT_ENVNAME, *cntr);
++  if (PAM_SUCCESS != pam_putenv(pamh, env_name)) {
++    fprintf(stderr, "GetModuleCountEnv_1 = %s \n", env_name);
++  }
++  return;
++}
++PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc,
++                                   const char **argv) {
++  /*radius module related variable declarations*/
++  int i, nas_port, ch, acct, server, ecount, firstline, theend, ret = 0,
++                                                                pam_handle;
++  void *rh;
++  size_t len;
++  VALUE_PAIR *send, **vp;
++  char *rc_conf, *cp;
++  char lbuf[4096];
++  int retval = PAM_SUCCESS;
++  int pam_err = 0;
++  int privilage = 0;
++  char userNamePassword[256] = {0};
+ 
+-    if ((argc == 0 && server == 0) || (argc != 0 && server != 0))
+-        usage();
++  /*pam module related variable declrations*/
++  int rc;
++  struct pld_cfg cfg;
++  struct pld_ctx *ctx;
++  const char *username, *service;
++  const char *ruser = NULL, *rhost = NULL, *tty = NULL;
++  char *passwd = NULL;
++  struct nslcd_resp resp;
+ 
+-    if ((rh = rc_read_config(rc_conf)) == NULL) {
+-        fprintf(stderr, "error opening radius configuration file\n");
+-        exit(1);
++  /// usr/lib/libnss_radius.so
++  int (*post_pam_userinfo)(pamusrpkt_t *pu, char *queue);
++  void *bnss_radius_handle = NULL;
++
++  int (*getRadiusEnableDbusProperty)(bool *radiusEnableStatus);
++  int (*getRadiusPortDbusProperty)(int *radiusPortNo);
++  bool radiusEnableStatus = false;
++  int radiusPortNo = 0;
++  bnss_radius_handle = dlopen("/usr/lib/libnss_radius.so", RTLD_LAZY);
++  if (bnss_radius_handle) {
++    getRadiusEnableDbusProperty =
++        dlsym(bnss_radius_handle, "getRadiusEnableDbusProperty");
++    if (NULL != getRadiusEnableDbusProperty) {
++      retval = getRadiusEnableDbusProperty(&radiusEnableStatus);
++      if ((retval < 0) || (radiusEnableStatus == false)) {
++        retval = -1;
++        return retval;
++      }
++    }
++    getRadiusPortDbusProperty =
++        dlsym(bnss_radius_handle, "getRadiusPortDbusProperty");
++    if (NULL != getRadiusPortDbusProperty) {
++      retval = getRadiusPortDbusProperty(&radiusPortNo);
++      if ((retval < 0) || (radiusPortNo != 1812)) {
++        retval = -1;
++        return retval;
++      }
+     }
++  }
++
++  /*libnss_radius related variables declartions*/
++  pamusrpkt_t pam_radius_req, pam_radius_res;
++  memset(&pam_radius_req, 0, sizeof(pamusrpkt_t));
++  memset(&pam_radius_res, 0, sizeof(pamusrpkt_t));
+ 
+-    if (rc_read_dictionary(rh, rc_conf_str(rh, "dictionary")) != 0) {
+-        fprintf(stderr, "error reading radius dictionary\n");
+-        exit(2);
++  /* set up configuration */
++  cfg_init(pamh, flags, argc, argv, &cfg);
++  rc = init(pamh, &cfg, &ctx, &username, &service, &ruser, &rhost, &tty);
++  if (rc != PAM_SUCCESS)
++    return remap_pam_rc(rc, &cfg);
++
++  i = 0;
++
++  rc = pam_get_authtok(pamh, PAM_AUTHTOK, (const void **)&passwd, NULL);
++  if (rc != PAM_SUCCESS) {
++    retval = PAM_AUTH_ERR;
++    /* very strange. */
++    return rc;
++  }
++
++  /* check password */
++  if (!cfg.nullok && ((passwd == NULL) || (passwd[0] == '\0'))) {
++    if (cfg.debug)
++      fprintf(stderr, "user has empty password, access denied");
++    return PAM_AUTH_ERR;
++  }
++  rc_conf = RC_CONFIG_FILE;
++  nas_port = 5060;
++
++  acct = 0;
++  server = 0;
++  while ((ch = getopt(argc, argv, "af:p:s")) != -1) {
++    switch (ch) {
++    case 'f':
++      rc_conf = optarg;
++      break;
++
++    case 'p':
++      nas_port = atoi(optarg);
++      break;
++
++    case 'a':
++      acct = 1;
++      break;
++
++    case 's':
++      server = 1;
++      break;
++
++    default:
++      usage();
+     }
++  }
++  argc -= optind;
++  argv += optind;
+ 
+-    if (server == 0) {
+-        send = NULL;
+-        vp = &send;
+-        for (i = 0; i < argc; i++) {
+-            if (rc_avpair_parse(rh, argv[i], vp) < 0) {
+-                fprintf(stderr, "%s: can't parse AV pair\n", argv[i]);
+-                exit(3);
+-            }
+-            vp = &send->next;
++  if ((argc == 0 && server == 0) || (argc != 0 && server != 0))
++    usage();
++
++  if ((rh = rc_read_config(rc_conf)) == NULL) {
++    retval = PAM_AUTH_ERR;
++    return retval;
++  }
++
++  if (rc_read_dictionary(rh, rc_conf_str(rh, "dictionary")) != 0) {
++    retval = PAM_AUTH_ERR;
++    return retval;
++  }
++
++  if (server == 0) {
++    send = NULL;
++    vp = &send;
++    snprintf(userNamePassword, sizeof(userNamePassword),
++             "User-Name=%s Password=%s", username, passwd);
++    if (rc_avpair_parse(rh, userNamePassword, vp) < 0) {
++      retval = PAM_AUTH_ERR;
++      return retval;
++      vp = &send->next;
++    }
++    retval = process(rh, send, acct, nas_port, &privilage);
++    if (retval == 0) {
++      // Add user
++      pam_radius_req.action = ADD_PAM_USER;
++      pam_radius_req.pt = PAM_RADIUS_TBL;
++      ret = snprintf(pam_radius_req.srcq, sizeof(pam_radius_req.srcq), "%s",
++                     PAM_RADIUS_RES_Q);
++      if (ret < 0 || ret >= (signed)sizeof(pam_radius_req.srcq)) {
++        fprintf(stderr, "Buffer Overflow\n");
++        return -1;
++      }
++      ret = snprintf(pam_radius_req.usr.name, sizeof(pam_radius_req.usr.name),
++                     "%s", username);
++      if (ret < 0 || ret >= (signed)sizeof(pam_radius_req.usr.name)) {
++        fprintf(stderr, "Buffer Overflow\n");
++        return -1;
++      }
++      // pam_radius_req.usr.priv = privilege;
++      // this need to updated while sync
++      pam_radius_req.usr.priv = privilage;
++      PAMH_CREATE_Q(PAM_RADIUS_RES_Q);
++      PAMH_OPEN_Q(PAM_RADIUS_RES_Q, pam_handle);
++      bnss_radius_handle = dlopen("/usr/lib/libnss_radius.so", RTLD_LAZY);
++      if (bnss_radius_handle) {
++        post_pam_userinfo = dlsym(bnss_radius_handle, "post_pam_userinfo");
++        if (NULL != post_pam_userinfo) {
++          retval = post_pam_userinfo(&pam_radius_req, PAM_HELPER_Q);
++          if (retval < 0) {
++            retval = PAM_AUTHINFO_UNAVAIL;
++            return retval;
++          }
+         }
+-        exit(process(rh, send, acct, nas_port));
++      }
++
++      return PAM_SUCCESS;
++    } else {
++      // authentication failure
++      return retval;
+     }
+-    while (1 == 1) {
+-        send = NULL;
+-        vp = &send;
+-        ecount = 0;
+-        firstline = 1;
+-        acct = 0;
+-        do {
+-            len = 0;
+-            cp = rc_fgetln(stdin, &len);
+-            theend = 1;
+-            if (cp != NULL && len > 0) {
+-                if (firstline != 0) {
+-                    if (len >= 4 && memcmp(cp, "ACCT", 4) == 0)
+-                        acct = 1;
+-                    firstline = 0;
+-                    theend = 0;
+-                    continue;
+-                }
+-                for (i = 0; i < len; i++) {
+-                    if (!isspace(cp[i])) {
+-                        theend = 0;
+-                        break;
+-                    }
+-                }
+-                if (theend == 0) {
+-                    memcpy(lbuf, cp, len);
+-                    lbuf[len] = '\0';
+-                    if (rc_avpair_parse(rh, lbuf, vp) < 0) {
+-                        fprintf(stderr, "%s: can't parse AV pair\n", lbuf);
+-                        ecount++;
+-                    } else {
+-                        vp = &send->next;
+-                    }
+-                }
+-            }
+-        } while (theend == 0);
+-        if (send != NULL && ecount == 0)
+-            printf("%d\n\n", process(rh, send, acct, nas_port));
+-        else
+-            printf("%d\n\n", -1);
+-        fflush(stdout);
+-        if (send != NULL)
+-            rc_avpair_free(send);
+-        if (cp == NULL || len <= 0)
++  }
++  while (1 == 1) {
++    send = NULL;
++    vp = &send;
++    ecount = 0;
++    firstline = 1;
++    acct = 0;
++    do {
++      len = 0;
++      cp = rc_fgetln(stdin, &len);
++      theend = 1;
++      if (cp != NULL && len > 0) {
++        if (firstline != 0) {
++          if (len >= 4 && memcmp(cp, "ACCT", 4) == 0)
++            acct = 1;
++          firstline = 0;
++          theend = 0;
++          continue;
++        }
++        for (i = 0; i < len; i++) {
++          if (!isspace(cp[i])) {
++            theend = 0;
+             break;
+-    }
+-    exit(0);
++          }
++        }
++        if (theend == 0) {
++          memcpy(lbuf, cp, len);
++          lbuf[len] = '\0';
++          if (rc_avpair_parse(rh, lbuf, vp) < 0) {
++            ecount++;
++          } else {
++            vp = &send->next;
++          }
++        }
++      }
++    } while (theend == 0);
++    if (send != NULL && ecount == 0)
++      printf("%d\n\n", process(rh, send, acct, nas_port, &privilage));
++    else
++      printf("%d\n\n", -1);
++    fflush(stdout);
++    if (send != NULL)
++      rc_avpair_free(send);
++    if (cp == NULL || len <= 0)
++      break;
++  }
++  return (PAM_SUCCESS);
++}
++
++PAM_EXTERN int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc,
++                              const char *argv[]) {
++  if (0) {
++    pamh = pamh;
++    flags = flags;
++    argc = argc;
++    argv = argv;
++  }
++
++  return (PAM_SUCCESS);
++}
++
++PAM_EXTERN int pam_sm_acct_mgmt(pam_handle_t *pamh, int flags, int argc,
++                                const char *argv[]) {
++  if (0) {
++    pamh = pamh;
++    flags = flags;
++    argc = argc;
++    argv = argv;
++  }
++  return (PAM_SUCCESS);
+ }
+ 
+-int
+-process(void *rh, VALUE_PAIR *send, int acct, int nas_port)
+-{
+-    VALUE_PAIR *received;
+-    char msg[4096];
+-    int i;
++PAM_EXTERN int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc,
++                                   const char *argv[]) {
++  char ip_addr[MAX_IP_LEN] = {0};
++  char username[USER_NAME_LEN] = {0};
++  char service[SERVICE_NAME_LEN] = {0};
++  int priv = 0;
++  /*Get the Information from handler*/
++  GetPAMItems(pamh, ip_addr, username, service);
++  if (0) {
++    flags = flags;
++    argc = argc;
++    argv = argv;
++  }
++  return (PAM_SUCCESS);
++}
+ 
+-    received = NULL;
+-    if (acct == 0) {
+-        i = rc_auth(rh, nas_port, send, &received, msg);
+-        if (received != NULL) {
+-            printf("%s", rc_avpair_log(rh, received));
++PAM_EXTERN int pam_sm_close_session(pam_handle_t *pamh, int flags, int argc,
++                                    const char *argv[]) {
++  char ip_addr[MAX_IP_LEN] = {0};
++  char username[USER_NAME_LEN] = {0};
++  char service[SERVICE_NAME_LEN] = {0};
++  int priv = 0;
++  /*Get the Information from handler*/
++  GetPAMItems(pamh, ip_addr, username, service);
++  if (0) {
++    pamh = pamh;
++    flags = flags;
++    argc = argc;
++    argv = argv;
++  }
++  return (PAM_SUCCESS);
++}
++
++PAM_EXTERN int pam_sm_chauthtok(pam_handle_t *pamh, int flags, int argc,
++                                const char *argv[]) {
++  if (0) {
++    pamh = pamh;
++    flags = flags;
++    argc = argc;
++    argv = argv;
++  }
++  return PAM_SUCCESS;
++}
++
++int process(void *rh, VALUE_PAIR *send, int acct, int nas_port,
++            int *privilage) {
++  VALUE_PAIR *received;
++  char msg[4096];
++  char privlage[1024] = {0};
++  char groupName[1024] = {0};
++  int i, retval = 0;
++  char *serverRes;
++  int (*getDbusProperty)(char *groupName, char *priv);
++  void *bnss_radius_handle = NULL;
++  struct privilageStruct privBuf[3] = {
++      {1, "priv-admin"}, {2, "priv-operator"}, {3, "priv-user"}};
++  int iter = 0;
++  received = NULL;
++  if (acct == 0) {
++    i = rc_auth(rh, nas_port, send, &received, msg);
++    if (received != NULL) {
++      serverRes = rc_avpair_log(rh, received);
++      memcpy(groupName, serverRes, strlen(serverRes));
++      bnss_radius_handle = dlopen("/usr/lib/libnss_radius.so", RTLD_LAZY);
++      if (bnss_radius_handle) {
++        getDbusProperty = dlsym(bnss_radius_handle, "getDbusProperty");
++        if (NULL != getDbusProperty) {
++          retval = getDbusProperty(groupName, privlage);
++          if ((retval < 0) || (strlen(groupName) < 1) ||
++              (strlen(privlage) < 1)) {
++            retval = -1;
+             rc_avpair_free(received);
++            return retval;
++          } else {
++            for (iter = 0; iter < (sizeof(privBuf) / sizeof(privBuf[0]));
++                 iter++) {
++              if (strstr(privBuf[iter].privStr, privlage)) {
++                *privilage = privBuf[iter].privNum;
++                break;
++              }
++            }
++            if (iter >= ((sizeof(privBuf) / sizeof(privBuf[0])))) {
++              retval = -1;
++              rc_avpair_free(received);
++              return retval;
++            }
++          }
+         }
+-    } else {
+-        i = rc_acct(rh, nas_port, send);
+-    }
++      }
+ 
+-    return (i == OK_RC) ? 0 : 1;
++      rc_avpair_free(received);
++    }
++  } else {
++    i = rc_acct(rh, nas_port, send);
++  }
++  fprintf(stderr, "radius auth = %d\n", i);
++  return (i == OK_RC) ? 0 : 1;
+ }
+-- 
+2.34.1
+

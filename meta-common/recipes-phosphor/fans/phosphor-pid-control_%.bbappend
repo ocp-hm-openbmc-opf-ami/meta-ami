@@ -1,7 +1,8 @@
 FILESEXTRAPATHS:append := ":${THISDIR}/${PN}"
 
-SRCREV = "df597657fd0d1c248d1685e3b69478c80fc33461"
+#SRCREV = "8dc277cc790efa2a25a4778693cba1bfa24ab741"
 
+SRCREV = "bd63bcaca2ac9edf1778136cf240e3bbe8b31566"
 
 
 SRC_URI:append = " \

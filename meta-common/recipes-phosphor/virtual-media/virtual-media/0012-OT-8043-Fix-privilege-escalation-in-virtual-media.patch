@@ -1,0 +1,280 @@
+From 2620c5b905e0d98332b8e055fd7afad86cdc228a Mon Sep 17 00:00:00 2001
+From: Mohammed Javith Akthar M <mohammedjavitham@ami.com>
+Date: Thu, 10 Oct 2024 07:06:47 -0400
+Subject: [PATCH 12/12] OT-8043 Fix privilege escalation in virtual-media
+
+Issue Description:
+------------------
+1. Mount options does not include recommended secure configurations
+2. Mount always done in write mode.
+
+Fix:
+----
+1. Added nosuid,nodev,noexec in mount options for NFS and CIFS
+2. Fixed mounting readonly and write by configuring mount flags
+
+Signed-off-by: Mohammed Javith Akthar M <mohammedjavitham@ami.com>
+---
+ src/nfs.hpp   | 69 ++++++++++++++++-----------------------------------
+ src/smb.hpp   | 38 ++++++++--------------------
+ src/utils.hpp | 36 ++++++++++++++++++++++-----
+ 3 files changed, 62 insertions(+), 81 deletions(-)
+
+diff --git a/src/nfs.hpp b/src/nfs.hpp
+index 83243a1..5c4d3b7 100644
+--- a/src/nfs.hpp
++++ b/src/nfs.hpp
+@@ -3,8 +3,6 @@
+ #include "logger.hpp"
+ #include "utils.hpp"
+ 
+-#include <sys/mount.h>
+-
+ #include <filesystem>
+ #include <optional>
+ 
+@@ -19,24 +17,30 @@ class NfsShare
+ 
+     bool mount(const fs::path& remote, bool rw)
+     {
+-        LogMsg(Logger::Debug, "Trying to mount NFS remotely : ", remote);
++        std::string options = "";
++        std::string remoteNfsPath = "";
++        std::string fs = "nfs4";
++        unsigned long flags = (rw ? 0 : MS_RDONLY);
+ 
+-        const std::string params = "";
+-        const std::string perm = rw ? "rw" : "ro";
+-        std::string options = params + "," + perm;
++        LogMsg(Logger::Debug, "Trying to mount NFS remotely : ", remote);
+ 
+-        std::string versionOpt = "nfs4";
++        if (parseNfsArgs(remote, remoteNfsPath, options) !=
++            true)
++        {
++            LogMsg(Logger::Info, "NFS Mount failed when parsing remote path ",
++                   remote);
++            return 1;
++        }
+ 
+-        auto ec = mountWithNfsVers(remote, options, versionOpt);
++        auto ec = utils::safeMount(remoteNfsPath, mountDir, fs, flags, options);
+ 
+         if (ec)
+         {
+-            versionOpt = "nfs";
+-            ec = mountWithNfsVers(remote, options, versionOpt);
++            fs = "nfs";
++            options += ",nolock";
++            ec = utils::safeMount(remoteNfsPath, mountDir, fs, flags, options);
+         }
+ 
+-        utils::secureCleanup(options);
+-
+         if (ec)
+         {
+             return false;
+@@ -46,49 +50,20 @@ class NfsShare
+ 
+   private:
+     std::string mountDir;
+-
++    /* remote will have <remote_host>:<remote_path> format. Although it
++    ** works for SMB, it fails for NFS with parsing error.
++    ** So need to give in :<remotepath> and append addr=<remote_host> in
++    ** options to make it work */
+     bool parseNfsArgs(const std::string remote, std::string& remoteNfsPath,
+                       std::string& options)
+     {
+         std::string::size_type index = remote.find(":/", 0);
+-        if ((index != std::string::npos) && (index > 0))
++        if (index != std::string::npos)
+         {
+             remoteNfsPath = remote.substr(index, remote.length() - 1);
+-            options += (",nolock,addr=" + remote.substr(0, index));
++            options += ("addr=" + remote.substr(0, index));
+             return true;
+         }
+         return false;
+     }
+-
+-    int mountWithNfsVers(const fs::path& remote, std::string options,
+-                         const std::string& version)
+-    {
+-        std::string remoteNfsPath = "";
+-
+-        if (parseNfsArgs(remote.generic_string(), remoteNfsPath, options) !=
+-            true)
+-        {
+-            LogMsg(Logger::Info, "NFS Mount failed when parsing remote path ",
+-                   remote.generic_string());
+-            return 1;
+-        }
+-
+-        /* remote will have <remote_host>:<remote_path> format. Although it
+-        ** works for SMB, it fails for NFS with parsing error.
+-        ** So need to give in :<remotepath> and append addr=<remote_host> in
+-        ** options to make it work */
+-        auto ec = ::mount(remoteNfsPath.c_str(), mountDir.c_str(),
+-                          version.c_str(), 0, options.c_str());
+-
+-        utils::secureCleanup(options);
+-        utils::secureCleanup(remoteNfsPath);
+-
+-        if (ec)
+-        {
+-            LogMsg(Logger::Info, "Mount failed for ", version,
+-                   " with ec = ", ec, " errno = ", errno);
+-        }
+-
+-        return ec;
+-    }
+ };
+diff --git a/src/smb.hpp b/src/smb.hpp
+index b694d48..05cd96a 100644
+--- a/src/smb.hpp
++++ b/src/smb.hpp
+@@ -3,8 +3,6 @@
+ #include "logger.hpp"
+ #include "utils.hpp"
+ 
+-#include <sys/mount.h>
+-
+ #include <filesystem>
+ #include <optional>
+ #include <string>
+@@ -23,10 +21,11 @@ class SmbShare
+     {
+         LogMsg(Logger::Debug, "Trying to mount remote : ", remote);
+ 
+-        const std::string params = "sec=ntlmsspi,seal,cache=none";
+-        const std::string perm = rw ? "rw" : "ro";
+-        std::string options = params + "," + perm;
+-        std::string credentialsOpt;
++        std::string options = "sec=ntlmsspi,seal,cache=none";
++        std::string credentialsOpt = "";
++        const std::string fs = "cifs";
++        std::string versionOpt = ",vers=3.1.1";
++        unsigned long flags = (rw ? 0 : MS_RDONLY);
+ 
+         if (!credentials)
+         {
+@@ -47,14 +46,15 @@ class SmbShare
+         }
+         options += "," + credentialsOpt;
+ 
+-        std::string versionOpt = "vers=3.1.1";
+-        auto ec = mountWithSmbVers(remote, options, versionOpt);
++        auto ec =
++            utils::safeMount(remote, mountDir, fs, flags, options + versionOpt);
+ 
+         if (ec)
+         {
+             // vers=3 will negotiate max version from 3.02 and 3.0
+-            versionOpt = "vers=3";
+-            ec = mountWithSmbVers(remote, options, versionOpt);
++            versionOpt = ",vers=3";
++            ec = utils::safeMount(remote, mountDir, fs, flags,
++                                  options + versionOpt);
+         }
+ 
+         utils::secureCleanup(options);
+@@ -75,22 +75,4 @@ class SmbShare
+     {
+         return username.find(',') == std::string::npos;
+     }
+-
+-    int mountWithSmbVers(const fs::path& remote, std::string options,
+-                         const std::string& version)
+-    {
+-        options += "," + version;
+-
+-        auto ec = ::mount(remote.c_str(), mountDir.c_str(), "cifs", 0,
+-                          options.c_str());
+-        utils::secureCleanup(options);
+-
+-        if (ec)
+-        {
+-            LogMsg(Logger::Info, "Mount failed for ", version,
+-                   " with ec = ", ec, " errno = ", errno);
+-        }
+-
+-        return ec;
+-    }
+ };
+diff --git a/src/utils.hpp b/src/utils.hpp
+index 1c03aa0..d3ef74e 100644
+--- a/src/utils.hpp
++++ b/src/utils.hpp
+@@ -2,6 +2,7 @@
+ 
+ #include "logger.hpp"
+ 
++#include <sys/mount.h>
+ #include <unistd.h>
+ 
+ #include <algorithm>
+@@ -154,8 +155,7 @@ class NamedPipe
+ 
+     NamedPipe(boost::asio::io_context& io, const std::string name,
+               Buffer&& buffer) :
+-        name(name),
+-        impl(io, name), buffer{std::move(buffer)}
++        name(name), impl(io, name), buffer{std::move(buffer)}
+     {
+     }
+ 
+@@ -294,8 +294,7 @@ class SignalSender
+     SignalSender(std::shared_ptr<sdbusplus::asio::connection> con,
+                  const std::string& obj, const std::string& iface,
+                  const std::string& name) :
+-        con(con),
+-        interface(iface), object(obj), name(name){};
++        con(con), interface(iface), object(obj), name(name){};
+ 
+     SignalSender() = delete;
+     SignalSender(const SignalSender&) = delete;
+@@ -324,8 +323,7 @@ class NotificationWrapper
+   public:
+     NotificationWrapper(std::unique_ptr<SignalSender> signal,
+                         std::unique_ptr<boost::asio::steady_timer> timer) :
+-        signal(std::move(signal)),
+-        timer(std::move(timer))
++        signal(std::move(signal)), timer(std::move(timer))
+     {
+     }
+ 
+@@ -363,4 +361,30 @@ class NotificationWrapper
+     bool started{false};
+ };
+ 
++/// @brief Performs mount operation with safety parameters
++/// @param remotePath Remote file system path
++/// @param localPath Local file system path
++/// @param fs Mount file system type
++/// @param flags Mount flags
++/// @param options Mount options
++/// @return 0 on Success, errorcode on failure
++static int safeMount(const std::string remotePath, const std::string localPath,
++                     const std::string fs, unsigned long flags,
++                     const std::string options)
++{
++    flags += (MS_NODEV | MS_NOEXEC | MS_NOSUID);
++
++    // LogMsg(Logger::info, "Trying to mount ", remotePath, " to ", localPath,
++    //        " on ", fs, " with flags ", flags, " ,options ", options);
++
++    auto ec = ::mount(remotePath.c_str(), localPath.c_str(), fs.c_str(), flags,
++                      options.c_str());
++    if (ec)
++    {
++        LogMsg(Logger::Info, "Mount failed for ", fs, " with ec = ", ec,
++               " errno = ", errno);
++    }
++    return ec;
++}
++
+ } // namespace utils
+-- 
+2.43.0
+

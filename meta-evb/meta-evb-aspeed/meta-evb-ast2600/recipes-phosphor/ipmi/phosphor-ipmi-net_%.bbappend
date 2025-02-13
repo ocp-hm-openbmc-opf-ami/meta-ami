@@ -11,6 +11,18 @@ SYSTEMD_SERVICE:${PN} += " \
      ${PN}@${ALT_RMCPP_IFACE_ETH1}.socket \
      "
 
+ALT_RMCPP_IFACE_ETH2 = "eth2"
+SYSTEMD_SERVICE:${PN} += " \
+     ${PN}@${ALT_RMCPP_IFACE_ETH2}.service \
+     ${PN}@${ALT_RMCPP_IFACE_ETH2}.socket \
+     "
+
+ALT_RMCPP_IFACE_ETH3 = "eth3"
+SYSTEMD_SERVICE:${PN} += " \
+     ${PN}@${ALT_RMCPP_IFACE_ETH3}.service \
+     ${PN}@${ALT_RMCPP_IFACE_ETH3}.socket \
+     "
+
 ALT_RMCPP_IFACE_BOND = "bond0"
 SYSTEMD_SERVICE:${PN} += " \
      ${PN}@${ALT_RMCPP_IFACE_BOND}.service \

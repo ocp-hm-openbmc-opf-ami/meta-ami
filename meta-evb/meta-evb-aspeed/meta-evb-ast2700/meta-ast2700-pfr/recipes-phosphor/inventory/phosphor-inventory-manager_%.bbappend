@@ -1,0 +1,1 @@
+DEPENDS:append = " static-inventory"

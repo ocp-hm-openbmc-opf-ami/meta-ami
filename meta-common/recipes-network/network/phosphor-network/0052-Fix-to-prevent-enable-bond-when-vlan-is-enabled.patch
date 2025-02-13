@@ -1,0 +1,83 @@
+From 489a7dcadce5a75d5e5779a36fb4b3b3f6a9f037 Mon Sep 17 00:00:00 2001
+From: vaibhavs <vaibhavs@ami.com>
+Date: Wed, 11 Dec 2024 14:25:14 +0530
+Subject: [PATCH] Fix to prevent enable bond when vlan is enabled
+
+---
+ src/bond.cpp               | 27 ++++++++++++---------------
+ src/ethernet_interface.cpp | 14 +++++++++++---
+ 2 files changed, 23 insertions(+), 18 deletions(-)
+
+diff --git a/src/bond.cpp b/src/bond.cpp
+index 5e11e58..09c8ba7 100644
+--- a/src/bond.cpp
++++ b/src/bond.cpp
+@@ -116,24 +116,21 @@ void Bond::delete_()
+ 
+     execute("/bin/systemctl", "systemctl", "restart",
+             "systemd-networkd.service");
+-    eth.manager.get().addReloadPostHook([&]() {
+-        std::this_thread::sleep_for(std::chrono::seconds(3));
+-        for (auto it = eth.manager.get().interfaces.begin();
+-             it != eth.manager.get().interfaces.end(); it++)
++
++    sleep(3);
++
++    for (auto it = eth.manager.get().interfaces.begin();
++         it != eth.manager.get().interfaces.end(); it++)
++    {
++        if (it->second->interfaceName() != "usb0")
+         {
+-            if (it->second->interfaceName() != "usb0")
+-            {
+-                execute(
+-                    "/bin/systemctl", "systemctl", "reset-failed",
+-                    fmt::format("phosphor-ipmi-net@{}.service", parentIfName)
++            execute("/bin/systemctl", "systemctl", "restart",
++                    fmt::format("phosphor-ipmi-net@{}.service",
++                                it->second->interfaceName())
+                         .c_str());
+-                execute("/bin/systemctl", "systemctl", "try-restart",
+-                        fmt::format("phosphor-ipmi-net@{}.service",
+-                                    it->second->interfaceName())
+-                            .c_str());
+-            }
+         }
+-    });
++    }
++
+     eth.manager.get().reloadConfigs();
+ }
+ 
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index 22c821f..dd9d4ed 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -1430,6 +1430,16 @@ ObjectPath EthernetInterface::createVLAN(uint16_t id)
+ ObjectPath EthernetInterface::createBond(std::string activeSlave,
+                                          uint8_t miiMonitor)
+ {
++
++    for (const auto& [_, intf] : manager.get().interfaces)
++    {
++        if (intf->interfaceName().find(".") != std::string::npos)
++        {
++            log<level::ERR>("Bond cannot be enabled as VLAN is enabled");
++            elog<NotAllowed>(NotAllowedArgument::REASON("Bond cannot be enabled as VLAN is enabled"));
++        }
++    }
++
+     auto intfName = bondIfcName;
+     std::string macStr{}, ipv6StaticRtrAddr{};
+     std::optional<stdplus::In4Addr> gw = std::nullopt;
+@@ -1897,9 +1907,7 @@ void EthernetInterface::writeConfigurationFile()
+ 
+     if ((it != manager.get().interfaces.end()) &&
+         (interfaceName().compare(bondIfcName) != 0) &&
+-        (interfaceName().compare("usb0") != 0) &&
+-        (it->second->linkUp())
+-        )
++        (interfaceName().compare("usb0") != 0))
+     {
+         std::error_code ec{};
+         if (fs::exists(config::pathForIntfConf(manager.get().getConfDir(),

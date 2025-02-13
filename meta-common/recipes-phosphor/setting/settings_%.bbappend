@@ -9,8 +9,11 @@ SRC_URI += " \
            file://0004-USB-Register-USB-DBus-Methods.patch \
            file://0005-Adding-systemlock-object-path-interface-and-systemlo.patch \
 	       file://0006-Add-support-to-applytime-property.patch \
+	       file://Add-pre-check-for-enable-power-saving-mode.patch \
+           file://0007-Added-Dbus-object-path-interface-and-property-for-BM.patch \
+           file://0008-Add-SEL-Limit-Flags.patch \
+           file://0009-Added-Dbus-Object-for-DCMI-Thermal-Limit.patch \
 "
-
 
 SRC_URI_evb_aspeed:append =  " \
            file://0005-Add-Restriction-Mode-Interface.patch \
@@ -21,18 +24,13 @@ RDEPENDS:${PN} = "bash"
 inherit systemd
 SYSTEMD_SERVICE:${PN} += "system-guid.service"
 
-
-
 do_install:append () {
 
  install -m 0755 ${WORKDIR}/system-guid.sh ${D}/${bindir}/system-guid.sh
-     install -d ${D}${base_libdir}/systemd/system
-    install -m 0644 ${WORKDIR}/system-guid.service ${D}${base_libdir}/systemd/system/system-guid.service
-
+ install -d ${D}${base_libdir}/systemd/system
+ install -m 0644 ${WORKDIR}/system-guid.service ${D}${base_libdir}/systemd/system/system-guid.service
 
 }
-
-
 
 FILES:${PN} = "${bindir}/*"
 FILES:${PN}:append = " ${base_libdir}/systemd/system/system-guid.service"

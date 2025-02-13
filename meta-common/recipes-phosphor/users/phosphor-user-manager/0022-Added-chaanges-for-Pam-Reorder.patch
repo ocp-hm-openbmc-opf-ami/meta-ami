@@ -1,0 +1,265 @@
+From 25e983fd3e637f481922cc45ab6305705228f1c7 Mon Sep 17 00:00:00 2001
+From: pandiarajt <pandiarajt@ami.com>
+Date: Tue, 18 Jun 2024 18:29:41 +0530
+Subject: [PATCH 191/191] Added chaanges for Pam Reorder
+
+---
+ user_mgr.cpp | 197 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ user_mgr.hpp |   6 ++
+ 2 files changed, 203 insertions(+)
+
+diff --git a/user_mgr.cpp b/user_mgr.cpp
+index 1c7ad21..b4179c7 100644
+--- a/user_mgr.cpp
++++ b/user_mgr.cpp
+@@ -30,6 +30,8 @@
+ #include <time.h>
+ #include <unistd.h>
+ 
++#include <boost/interprocess/sync/file_lock.hpp>
++#include <boost/filesystem.hpp>
+ #include <boost/algorithm/string/split.hpp>
+ #include <phosphor-logging/elog-errors.hpp>
+ #include <phosphor-logging/elog.hpp>
+@@ -47,6 +49,8 @@
+ #include <string>
+ #include <string_view>
+ #include <vector>
++#include <iostream>
++#include <unordered_set>
+ 
+ namespace phosphor
+ {
+@@ -75,6 +79,16 @@ static constexpr const char* defaultPWHistoryConfigFile =
+     "/etc/security/pwhistory.conf";
+ static constexpr const char* defaultPWQualityConfigFile =
+     "/etc/security/pwquality.conf";
++constexpr const char* pamCommonAuthConf = "/etc/pam.d/common-auth";
++constexpr const char* pamCommonAccountConf = "/etc/pam.d/common-account";
++
++typedef struct
++{
++    uint8_t pamSequenceNo;
++    std::string pamModuleName;
++} pamReorder;
++
++const pamReorder pamReorderStruct[maxPamReorderModule] = { {1, "pam_unix.so"}, {2, "pam_ldap.so"}};
+ 
+ enum privMgrLevel
+ {
+@@ -1758,5 +1772,188 @@ std::vector<std::string> UserMgr::getFailedAttempt(const char* userName)
+     return executeCmd("/usr/sbin/faillock", "--user", userName);
+ }
+ 
++void getPamOrderInfo(const std::string confFile, std::vector<uint8_t>& currentPamOrder,  std::vector<std::string>& preDefinePamOrder)
++{
++
++    std::ifstream file(confFile);
++    std::string lineBuf;
++
++    if (!file.is_open())
++    {
++        std::cerr << "Failed to open file" << confFile << std::endl;
++        return;
++    }
++
++    while (std::getline(file, lineBuf))
++    {
++        for (int loop = 0; loop < maxPamReorderModule; loop++)
++        {
++            if (strstr(lineBuf.c_str(), pamReorderStruct[loop].pamModuleName.c_str()) != nullptr)
++            {
++                currentPamOrder.push_back(pamReorderStruct[loop].pamSequenceNo);
++                preDefinePamOrder[pamReorderStruct[loop].pamSequenceNo - 1] = lineBuf;
++            }
++        }
++    }
++    file.close();
++    return;
++}
++
++
++std::vector<uint8_t> UserMgr::getPamOrder()
++{
++    std::vector<uint8_t> currentPamOrder;
++    std::vector<std::string> preDefinePamOrder(maxPamReorderModule);
++
++    getPamOrderInfo(pamCommonAuthConf, currentPamOrder, preDefinePamOrder);
++
++    return currentPamOrder;
++}
++
++std::string modifyPamOrderLineBuf(std::string pamOrderLineBuf, uint8_t value)
++{
++    size_t successPos = pamOrderLineBuf.find("success=");
++
++    if (successPos != std::string::npos)
++    {
++        size_t numStart = successPos + 8; 
++        size_t numEnd = pamOrderLineBuf.find_first_of(" ]", numStart);
++
++        if (numEnd != std::string::npos)
++        {
++            pamOrderLineBuf.replace(numStart, numEnd - numStart, std::to_string(value));
++        }
++    }
++
++    return pamOrderLineBuf;
++}
++
++bool updatePamOrder(const std::string confFile, std::vector<uint8_t> reqPamOrder)
++{
++
++    std::vector<std::string> preDefinePamOrder(maxPamReorderModule);
++    std::string lineBuf;
++    bool isModified = false;
++    bool notFound = false;
++    std::string confFileTmp = confFile + "tmp";
++    std::vector<uint8_t> currentPamOrder;
++
++    getPamOrderInfo(confFile, currentPamOrder, preDefinePamOrder);
++
++    if (reqPamOrder == currentPamOrder)
++    {
++        std::cerr << "Requested pamOrder is the same as the previous" << std::endl;
++        return false;
++    }
++
++    std::ifstream file(confFile);
++    if (!file.is_open())
++    {
++        std::cerr << "Failed to open file" << confFile << std::endl;
++        return false;
++    }
++    std::ofstream outFile(confFileTmp);
++    if (!outFile.is_open())
++    {
++        std::cerr << "Failed to open file" << confFileTmp << std::endl;
++        file.close();
++        return false;
++    }
++
++    while (std::getline(file, lineBuf))
++    {
++        for (int loop = 0; loop < maxPamReorderModule; loop++)
++        {
++            if (strstr(lineBuf.c_str(), pamReorderStruct[loop].pamModuleName.c_str()) != nullptr)
++            {
++                notFound = false;
++                if(!isModified)
++                {
++                    for (int innerLoop = 0; innerLoop < maxPamReorderModule; innerLoop++)
++                    {
++                        std::string pamOrderBuf = modifyPamOrderLineBuf(preDefinePamOrder[reqPamOrder[innerLoop]-1], maxPamReorderModule + 1 - innerLoop);
++                        outFile << pamOrderBuf << std::endl;
++                    }
++                    isModified = true;
++
++                }
++                break;
++            }
++            else{
++
++                notFound = true;
++            }
++        }
++
++        if (notFound)
++        {
++            outFile << lineBuf << std::endl;
++        }
++    }
++
++    file.close();
++    outFile.close();
++
++    boost::interprocess::file_lock f_lock(confFile.c_str());
++
++    f_lock.lock();
++
++    if (std::rename(confFileTmp.c_str(), confFile.c_str()) != 0) {
++        std::cerr << "Error renaming temporary config file.\n";
++        return false;
++    }
++
++    f_lock.unlock();
++
++    return true;
++
++}
++
++bool UserMgr::setPamOrder(std::vector<uint8_t> reqPamOrder)
++{
++    std::unordered_set<uint8_t> nonDublicateElement;
++
++    if (reqPamOrder.size() != maxPamReorderModule)
++    {
++        lg2::error("Invalid Pam Order");
++        elog<InvalidArgument>(Argument::ARGUMENT_NAME("reqPamOrder"),
++                Argument::ARGUMENT_VALUE("NULL"));
++
++    }
++
++    for (const auto& element : reqPamOrder) {
++        if( (element < 1) || (element > maxPamReorderModule))
++        {
++            lg2::error("Invalid Pam Order");
++            elog<InvalidArgument>(Argument::ARGUMENT_NAME("reqPamOrder"),
++                    Argument::ARGUMENT_VALUE("NULL"));
++        }
++        if (nonDublicateElement.find(element) != nonDublicateElement.end()) {
++
++            lg2::error("Invalid Pam Order");
++            elog<InvalidArgument>(Argument::ARGUMENT_NAME("reqPamOrder"),
++                    Argument::ARGUMENT_VALUE("NULL"));
++        }
++        nonDublicateElement.insert(element);
++    }
++
++    if(!updatePamOrder(pamCommonAuthConf, reqPamOrder))
++    {
++        std::cerr << "Fail to update pam order" <<  pamCommonAuthConf << std::endl;
++        return false;
++
++    }
++    if(!updatePamOrder(pamCommonAccountConf, reqPamOrder))
++    {
++        std::cerr << "Fail to update pam order" << pamCommonAccountConf << std::endl;
++        return false;
++
++    }
++
++    return true;
++
++}
++     
++
+ } // namespace user
+ } // namespace phosphor
+diff --git a/user_mgr.hpp b/user_mgr.hpp
+index 6a73f89..ab1f50c 100644
+--- a/user_mgr.hpp
++++ b/user_mgr.hpp
+@@ -43,6 +43,7 @@ inline constexpr size_t maxSystemUsers = 30;
+ inline constexpr uint8_t minPasswdLength = 8;
+ inline constexpr size_t maxSystemGroupNameLength = 32;
+ inline constexpr size_t maxSystemGroupCount = 64;
++inline constexpr uint8_t maxPamReorderModule =  2;
+ 
+ using UserMgrIface = sdbusplus::xyz::openbmc_project::User::server::Manager;
+ using UserSSHLists =
+@@ -301,6 +302,11 @@ class UserMgr : public Ifaces
+ 
+     static std::vector<std::string> readAllGroupsOnSystem();
+ 
++    bool setPamOrder(std::vector<uint8_t> pamOrder) override;
++
++    std::vector<uint8_t> getPamOrder() override;
++
++
+   protected:
+     /** @brief get pam argument value
+      *  method to get argument value from pam configuration
+-- 
+2.34.1
+

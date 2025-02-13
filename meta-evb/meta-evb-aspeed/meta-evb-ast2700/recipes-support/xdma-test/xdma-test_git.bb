@@ -7,7 +7,7 @@ INSANE_SKIP:${PN} = "ldflags"
 
 SRC_URI = "git://github.com/eddiejames/xdma-test.git;protocol=https;branch=master"
 
-PV = "1.0+git${SRCPV}"
+PV = "1.0+git"
 SRCREV = "caf176d53488433e2685ec082ac3d16bed9c1dc2"
 
 S = "${WORKDIR}/git"

@@ -1,0 +1,192 @@
+From a7999fc44599c604275090057f4bcaa04b093493 Mon Sep 17 00:00:00 2001
+From: madhankumars <madhankumars@ami.com>
+Date: Thu, 6 Feb 2025 19:03:55 +0530
+Subject: [PATCH 202/202] IPV6-Feature-enable-related-changes
+
+---
+ phosphor-ldap-config/ldap_config.cpp |  8 ++++-
+ phosphor-ldap-config/ldap_config.hpp |  2 ++
+ phosphor-ldap-config/utils.cpp       | 53 ++++++++++++++++++++++++++--
+ phosphor-ldap-config/utils.hpp       | 34 ++++++++++++++++++
+ 4 files changed, 93 insertions(+), 4 deletions(-)
+
+diff --git a/phosphor-ldap-config/ldap_config.cpp b/phosphor-ldap-config/ldap_config.cpp
+index 9d888e8..117c1aa 100644
+--- a/phosphor-ldap-config/ldap_config.cpp
++++ b/phosphor-ldap-config/ldap_config.cpp
+@@ -512,6 +512,12 @@ std::string Config::ldapServerURI(std::string value)
+     std::string val;
+     try
+     {
++        std::string ipAddress = getIPAddressFromURI(value);
++        if((ipAddress.length() >= MIN_IPV6_LEN) && (isIPv6(ipAddress)))
++        {
++            std::string scheme = getSchemeFromURI(value);
++            value = constructLDAPURL(scheme,ipAddress);
++        }
+         if (value == ldapServerURI())
+         {
+             return value;
+@@ -812,7 +818,7 @@ void Config::save(Archive& archive, const std::uint32_t /*version*/) const
+ template <class Archive>
+ void Config::load(Archive& archive, const std::uint32_t /*version*/)
+ {
+-    bool bVal;
++    bool bVal = false;
+     archive(bVal);
+     EnableIface::enabled(bVal);
+ 
+diff --git a/phosphor-ldap-config/ldap_config.hpp b/phosphor-ldap-config/ldap_config.hpp
+index c1f503b..edc15df 100644
+--- a/phosphor-ldap-config/ldap_config.hpp
++++ b/phosphor-ldap-config/ldap_config.hpp
+@@ -15,6 +15,8 @@
+ #include <set>
+ #include <string>
+ 
++#define MIN_IPV6_LEN 3 
++
+ namespace phosphor
+ {
+ namespace ldap
+diff --git a/phosphor-ldap-config/utils.cpp b/phosphor-ldap-config/utils.cpp
+index f6efdd9..370e2e1 100644
+--- a/phosphor-ldap-config/utils.cpp
++++ b/phosphor-ldap-config/utils.cpp
+@@ -3,7 +3,6 @@
+ #include <arpa/inet.h>
+ #include <ldap.h>
+ #include <netdb.h>
+-
+ #include <boost/algorithm/string.hpp>
+ 
+ #include <cstring>
+@@ -14,6 +13,54 @@ namespace phosphor
+ namespace ldap
+ {
+ 
++
++bool isIPv6(const std::string& ip) {
++    struct addrinfo hints, *res = nullptr;
++    bool is_ipv6 = false;
++    std::memset(&hints, 0, sizeof(hints));
++    hints.ai_family = AF_UNSPEC;
++
++    int result = getaddrinfo(ip.c_str(), nullptr, &hints, &res);
++    if (result != 0) {
++        return is_ipv6;
++    }
++
++    is_ipv6 = (res->ai_family == AF_INET6);
++    freeaddrinfo(res);
++    return is_ipv6;
++}
++
++
++std::string getIPAddressFromURI(const std::string& url) {
++    constexpr std::string_view ipv4Ipv6Delimiter = "://";
++    size_t pos = url.find(ipv4Ipv6Delimiter);
++    if (pos != std::string::npos) {
++        return url.substr(pos + ipv4Ipv6Delimiter.length());
++    }
++    return "";
++}
++
++std::string constructLDAPURL(const std::string& scheme, const std::string& ip) {
++    constexpr std::string_view ipv6StartPoint = "[";
++    constexpr std::string_view ipv6EndPoint = "]";
++    if (isIPv6(ip)) {
++        return scheme + ipv6StartPoint.data() + ip + ipv6EndPoint.data();
++    } else {
++        return scheme + ip;
++    }
++}
++
++std::string getSchemeFromURI(const std::string& url) {
++    constexpr std::string_view ipv4Ipv6Delimiter = "://";
++    constexpr uint16_t schemeStartPosition = 0;
++    constexpr uint16_t schemeDelimiterLength = 3;
++    size_t pos = url.find(ipv4Ipv6Delimiter);
++    if (pos != std::string::npos) {
++        return url.substr(schemeStartPosition, pos + schemeDelimiterLength);
++    }
++    return "";
++}
++
+ bool isValidLDAPURI(const std::string& uri, const char* scheme)
+ {
+     // Return false if the user tries to configure port 0
+@@ -26,7 +73,7 @@ bool isValidLDAPURI(const std::string& uri, const char* scheme)
+     {
+         return false;
+     }
+-
++    
+     LDAPURLDesc* ludpp = nullptr;
+     int res = LDAP_URL_ERR_BADURL;
+     res = ldap_url_parse(uri.c_str(), &ludpp);
+@@ -36,9 +83,9 @@ bool isValidLDAPURI(const std::string& uri, const char* scheme)
+     };
+     std::unique_ptr<LDAPURLDesc, decltype(ludppCleanupFunc)> ludppPtr(
+         ludpp, ludppCleanupFunc);
+-
+     if (res != LDAP_URL_SUCCESS)
+     {
++
+         return false;
+     }
+     if (std::strcmp(scheme, ludppPtr->lud_scheme) != 0)
+diff --git a/phosphor-ldap-config/utils.hpp b/phosphor-ldap-config/utils.hpp
+index b1450b7..2b34394 100644
+--- a/phosphor-ldap-config/utils.hpp
++++ b/phosphor-ldap-config/utils.hpp
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include <string>
++#include <cstdint>
+ 
+ namespace phosphor
+ {
+@@ -16,5 +17,38 @@ namespace ldap
+  */
+ bool isValidLDAPURI(const std::string& uri, const char* scheme);
+ 
++/**
++ * @brief Checks if the given IP address is IPv6.
++ * 
++ * @param ip The IP address to check.
++ * @return true if the IP address is IPv6, false otherwise.
++ */
++bool isIPv6(const std::string& ip);
++
++/**
++ * @brief Extracts the IP address from a given URI.
++ * 
++ * @param url The URI from which to extract the IP address.
++ * @return The extracted IP address as a string.
++ */
++std::string getIPAddressFromURI(const std::string& url);
++
++/**
++ * @brief Constructs an LDAP URL from the given scheme and IP address.
++ * 
++ * @param scheme The scheme to use (e.g., "ldap").
++ * @param ip The IP address to include in the URL.
++ * @return The constructed LDAP URL as a string.
++ */
++std::string constructLDAPURL(const std::string& scheme, const std::string& ip);
++
++/**
++ * @brief Extracts the scheme from a given URI.
++ * 
++ * @param url The URI from which to extract the scheme.
++ * @return The extracted scheme as a string.
++ */
++std::string getSchemeFromURI(const std::string& url);
++
+ } // namespace ldap
+ } // namespace phosphor
+-- 
+2.34.1
+

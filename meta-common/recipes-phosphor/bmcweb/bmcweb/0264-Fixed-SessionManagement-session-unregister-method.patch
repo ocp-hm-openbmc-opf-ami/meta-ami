@@ -1,0 +1,232 @@
+From b91bbc68450ae7a372836019b2b9625aed74be13 Mon Sep 17 00:00:00 2001
+From: vamsikrishnak <vamsikrishnak@ami.com>
+Date: Fri, 10 May 2024 00:30:13 +0530
+Subject: [PATCH] Fixed SessionManagement session unregister method
+
+Signed-off-by: vamsikrishnak <vamsikrishnak@ami.com>
+---
+ include/kvm_websocket.hpp             |   6 +-
+ include/sessions.hpp                  |   1 +
+ redfish-core/lib/redfish_sessions.hpp | 156 ++++++++++++--------------
+ 3 files changed, 80 insertions(+), 83 deletions(-)
+
+diff --git a/include/kvm_websocket.hpp b/include/kvm_websocket.hpp
+index 0989acde..e9363e54 100644
+--- a/include/kvm_websocket.hpp
++++ b/include/kvm_websocket.hpp
+@@ -114,7 +114,11 @@ class KvmSession : public std::enable_shared_from_this<KvmSession>
+                              payload.size());
+             conn.sendBinary(payload);
+             outputBuffer.consume(bytesRead);
+-
++	    //closing KVM when web session deleted
++            if(!conn.session->kvmConnections)
++            {
++                 closeWebSocket();
++            }
+             doRead();
+         });
+     }
+diff --git a/include/sessions.hpp b/include/sessions.hpp
+index f1060259..0345f1fa 100644
+--- a/include/sessions.hpp
++++ b/include/sessions.hpp
+@@ -312,6 +312,7 @@ class SessionStore
+         crow::ibm_mc_lock::Lock::getInstance().releaseLock(session->uniqueId);
+ #endif
+         authTokens.erase(session->sessionToken);
++	session->kvmConnections =0;
+         needWrite = true;
+     }
+ 
+diff --git a/redfish-core/lib/redfish_sessions.hpp b/redfish-core/lib/redfish_sessions.hpp
+index da81c152..e2930135 100644
+--- a/redfish-core/lib/redfish_sessions.hpp
++++ b/redfish-core/lib/redfish_sessions.hpp
+@@ -57,6 +57,20 @@ std::string getRole(std::string role)
+           return "";
+ }
+ 
++
++const propertyValue getSessiondata(const std::string& interface,
++                                   const std::string& propertyName)
++{
++    propertyValue value;
++    auto b = sdbusplus::bus::new_default_system();
++    auto method = b.new_method_call(SessionManagerService, SessionManagerObj,
++                                    DBUS_PROPERTY_IFACE, "Get");
++    method.append(interface, propertyName);
++    auto reply = b.call(method);
++    reply.read(value);
++    return value;
++}
++
+ inline void fillSessionObject(crow::Response& res,
+                               const persistent_data::UserSession& session)
+ {
+@@ -333,6 +347,66 @@ inline void
+     {
+         return;
+     }
++
++   if(sessionId.find('_') != std::string::npos)
++    {
++     size_t Pos = sessionId.find('_');
++     std::string num = sessionId.substr(Pos + 1);
++    int SessId = std::stoi(num);
++    int sessType;
++    bool found = false;
++
++    // Fetching sessionType with sessionId
++    for (size_t i = 0; i < SessionInterfaces.size(); ++i)
++    {
++        propertyValue data = getSessiondata(SessionInterfaces[i],
++                                            SessionProperties[i]);
++        if (std::holds_alternative<sessionRet>(data))
++        {
++            sessionRet& vec = std::get<sessionRet>(data);
++            for (const auto& tuple : vec)
++            {
++                int id;
++                std::string IpAddess;
++                std::string userName;
++                int SessionType;
++                int privilege;
++                int UserId;
++                std::tie(id, IpAddess, userName, SessionType, privilege,
++                         UserId) = tuple;
++                if (SessId == id)
++                {
++                    sessType = SessionType;
++                    found = true;
++                    break;
++                }
++            }
++        }
++        if (found)
++            break;
++    }
++    // Unregister session
++    crow::connections::systemBus->async_method_call(
++        [asyncResp](const boost::system::error_code& ec, bool value) {
++        if (ec)
++        {
++            BMCWEB_LOG_DEBUG("Failed to unRegister: {}", ec);
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        if (value)
++        {
++            asyncResp->res.result(boost::beast::http::status::no_content);
++            return;
++        }
++    },
++        SessionManagerService, SessionManagerObj,
++        "xyz.openbmc_project.SessionManager", "SessionUnregister",
++        static_cast<uint8_t>(SessId), static_cast<uint8_t>(sessType), 1);
++
++    return;
++ }
++
+     auto session =
+         persistent_data::SessionStore::getInstance().getSessionByUid(sessionId);
+ 
+@@ -530,83 +604,6 @@ inline void handleSessionCollectionGet(
+     asyncResp->res.jsonValue["Members@odata.count"] = members.size();
+ }
+ 
+-const propertyValue getSessiondata(const std::string& interface,
+-                                   const std::string& propertyName)
+-{
+-    propertyValue value;
+-    auto b = sdbusplus::bus::new_default_system();
+-    auto method = b.new_method_call(SessionManagerService, SessionManagerObj,
+-                                    DBUS_PROPERTY_IFACE, "Get");
+-    method.append(interface, propertyName);
+-    auto reply = b.call(method);
+-    reply.read(value);
+-    return value;
+-}
+-
+-inline void handleSessionManagerPost(
+-    crow::App& app, const crow::Request& req,
+-    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+-    const std::string& sessionId)
+-{
+-    size_t Pos = sessionId.find('_');
+-    std::string num = sessionId.substr(Pos + 1);
+-    int SessId = std::stoi(num);
+-    int sessType;
+-    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
+-    {
+-        return;
+-    }
+-    bool found = false;
+-
+-    // Fetching sessionType with sessionId
+-    for (size_t i = 0; i < SessionInterfaces.size(); ++i)
+-    {
+-        propertyValue data = getSessiondata(SessionInterfaces[i],
+-                                            SessionProperties[i]);
+-        if (std::holds_alternative<sessionRet>(data))
+-        {
+-            sessionRet& vec = std::get<sessionRet>(data);
+-            for (const auto& tuple : vec)
+-            {
+-                int id;
+-                std::string IpAddess;
+-                std::string userName;
+-                int SessionType;
+-                int privilege;
+-                int UserId;
+-                std::tie(id, IpAddess, userName, SessionType, privilege,
+-                         UserId) = tuple;
+-                if (SessId == id)
+-                {
+-                    sessType = SessionType;
+-                    found = true;
+-                    break;
+-                }
+-            }
+-        }
+-        if (found)
+-            break;
+-    }
+-    // Unregister session
+-    crow::connections::systemBus->async_method_call(
+-        [asyncResp](const boost::system::error_code& ec, bool value) {
+-        if (ec)
+-        {
+-            BMCWEB_LOG_DEBUG("Failed to unRegister: {}", ec);
+-            messages::internalError(asyncResp->res);
+-            return;
+-        }
+-        if (value)
+-        {
+-            messages::success(asyncResp->res);
+-            return;
+-        }
+-    },
+-        SessionManagerService, SessionManagerObj,
+-        "xyz.openbmc_project.SessionManager", "SessionUnregister",
+-        static_cast<uint8_t>(SessId), static_cast<uint8_t>(sessType), 1);
+-}
+-
+ inline void handleSessionCollectionMembersGet(
+     crow::App& app, const crow::Request& req,
+     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
+@@ -902,11 +899,6 @@ inline void requestRoutesSession(App& app)
+         .methods(boost::beast::http::verb::get)(
+             std::bind_front(handleSessionGet, std::ref(app)));
+ 
+-    BMCWEB_ROUTE(app, "/redfish/v1/SessionService/Sessions/<str>/")
+-        .privileges(redfish::privileges::postSessionService)
+-        .methods(boost::beast::http::verb::post)(
+-            std::bind_front(handleSessionManagerPost, std::ref(app)));
+-
+     BMCWEB_ROUTE(app, "/redfish/v1/SessionService/Sessions/<str>/")
+         .privileges(redfish::privileges::deleteSession)
+         .methods(boost::beast::http::verb::delete_)(
+-- 
+2.43.2
+

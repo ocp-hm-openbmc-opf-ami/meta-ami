@@ -12,43 +12,17 @@ Subject: [PATCH] Gateway
  5 files changed, 250 insertions(+), 7 deletions(-)
 
 diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
-index 48bce5a..d25951d 100644
+index 1cbc688..1ce11a0 100644
 --- a/src/ethernet_interface.cpp
 +++ b/src/ethernet_interface.cpp
-@@ -7,9 +7,12 @@
- #include "util.hpp"
- 
- #include <fcntl.h>
-+#include <linux/if_packet.h> /* struct sockaddr_ll (see man 7 packet) */
- #include <linux/rtnetlink.h>
- #include <net/if.h>
- #include <net/if_arp.h>
-+#include <netinet/ether.h>
-+#include <sys/ioctl.h> /* macro ioctl is defined */
- #include <sys/stat.h>
- 
- #include <phosphor-logging/elog-errors.hpp>
-@@ -20,17 +23,14 @@
- #include <xyz/openbmc_project/Common/error.hpp>
- 
- #include <algorithm>
-+#include <chrono>
+@@ -25,5 +25,6 @@
  #include <filesystem>
  #include <format>
- #include <fstream>
 +#include <sstream>
  #include <string>
  #include <unordered_map>
  #include <variant>
--#include <chrono>
--
--#include <sys/ioctl.h>        /* macro ioctl is defined */
--#include <linux/if_packet.h>  /* struct sockaddr_ll (see man 7 packet) */
--#include <netinet/ether.h>
- 
- namespace phosphor
- {
-@@ -135,11 +135,13 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+@@ -124,11 +125,13 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
  
      if (info.defgw4)
      {
@@ -63,9 +37,9 @@ index 48bce5a..d25951d 100644
 +                                               true);
      }
  
-     const config::Parser& ifaceConfig(fs::path{fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(),interfaceName()).c_str()});
-@@ -414,6 +416,48 @@ std::tuple<bool, ObjectPath> EthernetInterface::createStaticIP(IP::Protocol prot
-                 if (!EthernetInterface::ipv6Enable()) {
+     const config::Parser& ifaceConfig(fs::path{
+@@ -472,6 +475,48 @@ std::tuple<bool, ObjectPath> EthernetInterface::createStaticIP(
+                 {
                      throw NotAllowed();
                  }
 +                if (!ipgateway.empty())
@@ -111,12 +85,13 @@ index 48bce5a..d25951d 100644
 +                    ip_address::isSameSeries6(ipaddress, gw6, prefixLength);
 +                }
                  addr.emplace(stdplus::fromStr<stdplus::In6Addr>(ipaddress));
-                 ip_address::isValidIPv6Addr((in6_addr*)(&addr.value()), ip_address::Type::IP6_ADDRESS);
-                 if(!ipgateway.empty())
-@@ -1728,6 +1772,32 @@ std::string EthernetInterface::defaultGateway6(std::string gateway)
-         elog<NotAllowed>(NotAllowedArgument::REASON(fmt::format("Not support in current state. IPv4 of {} is not enabled.\n", interfaceName()).c_str()));
+                 ip_address::isValidIPv6Addr((in6_addr*)(&addr.value()),
+                                             ip_address::Type::IP6_ADDRESS);
+@@ -1805,6 +1850,33 @@ std::string EthernetInterface::defaultGateway6(std::string gateway)
+                 interfaceName())
+                 .c_str()));
      }
- 
++
 +    try
 +    {
 +        for (auto& addr : addrs)
@@ -147,21 +122,28 @@ index 48bce5a..d25951d 100644
      if (gateway != defaultGateway6())
      {
 diff --git a/src/network_manager.cpp b/src/network_manager.cpp
-index 94e7478..2ca50c5 100644
+index bbf813e..a3f3144 100644
 --- a/src/network_manager.cpp
 +++ b/src/network_manager.cpp
-@@ -43,6 +43,8 @@ static constexpr const char* userMgrObjBasePath = "/xyz/openbmc_project/user";
- static constexpr const char* userMgrInterface =
-     "xyz.openbmc_project.User.Manager";
- static constexpr const char* propNameAllPrivileges = "AllPrivileges";
+@@ -20,12 +20,15 @@
+ #include <stdplus/print.hpp>
+ #include <stdplus/str/cat.hpp>
+ #include <xyz/openbmc_project/Common/error.hpp>
++#include <xyz/openbmc_project/State/BMC/server.hpp>
+ 
+ #include <filesystem>
+ #include <format>
+ 
+ constexpr char ARPCONTROL_CONF_DIR[] = "/etc/arpcontrol";
+ constexpr char INTERFACE_CONF_DIR[] = "/etc/interface";
 +constexpr auto BMC_STATE_PROP_INTERFACE = "xyz.openbmc_project.State.BMC";
 +constexpr auto BMC_STATE_SERVICE_PATH = "/xyz/openbmc_project/state/bmc0";
  
- std::unique_ptr<sdbusplus::bus::match_t> usrMgmtSignal(nullptr);
- 
-@@ -180,6 +182,10 @@ Manager::Manager(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+ namespace phosphor
+ {
+@@ -166,6 +169,10 @@ Manager::Manager(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+         bus, (this->objPath / "firewall").str, *this);
      setConfDir(confDir);
-     initSupportedPrivilges();
  
 +    initCompleted = false;
 +    signals = initSignals();
@@ -170,7 +152,7 @@ index 94e7478..2ca50c5 100644
  #ifdef AMI_IP_ADVANCED_ROUTING_SUPPORT
      advanced_route_lock = std::unique_lock(advanced_route_mutex);
      advanced_route_worker = std::thread(&Manager::AdvancedRoute, this);
-@@ -737,6 +743,116 @@ void Manager::handleAdminState(std::string_view state, unsigned ifidx)
+@@ -629,6 +636,116 @@ void Manager::handleAdminState(std::string_view state, unsigned ifidx)
      }
  }
  
@@ -288,10 +270,10 @@ index 94e7478..2ca50c5 100644
  {
      confDir = dir;
 diff --git a/src/network_manager.hpp b/src/network_manager.hpp
-index 3300df7..a413752 100644
+index 05ce0d1..14e6f6d 100644
 --- a/src/network_manager.hpp
 +++ b/src/network_manager.hpp
-@@ -246,12 +246,25 @@ class Manager : public ManagerIface
+@@ -212,7 +212,20 @@ class Manager : public ManagerIface
      /** @brief Custom IPTables Rule directory. */
      fs::path customIPTablesDir;
  
@@ -307,21 +289,16 @@ index 3300df7..a413752 100644
 +     */
 +    std::vector<std::string> getGateway6FromFile();
 +
- #ifdef AMI_IP_ADVANCED_ROUTING_SUPPORT
    private:
++    bool initCompleted;
+ #ifdef AMI_IP_ADVANCED_ROUTING_SUPPORT
      std::thread advanced_route_worker;
      void AdvancedRoute();
-     std::unique_lock<std::mutex> advanced_route_lock;
-     std::mutex advanced_route_mutex;
-+    bool initCompleted;
- #endif
- };
- 
 diff --git a/src/util.cpp b/src/util.cpp
-index efae343..2ef3faa 100644
+index c07886a..53f33a0 100644
 --- a/src/util.cpp
 +++ b/src/util.cpp
-@@ -233,6 +233,19 @@ int getIP6StaticRtrPrefix(const config::Parser& config) {
+@@ -298,6 +298,19 @@ std::optional<std::tuple<bool, std::string, int>>
      }
  }
  
@@ -341,11 +318,10 @@ index efae343..2ef3faa 100644
  DHCPVal getDHCPValue(const config::Parser& config)
  {
      return systemdParseLast(config, "Network", "DHCP", systemdParseDHCP)
-@@ -383,6 +396,30 @@ void isSameSeries(std::string ipStr, std::string gwStr, uint8_t prefixLength) {
-         throw std::logic_error("Gateway address and IP address aren't in the same subnet.");
+@@ -499,6 +512,29 @@ void isSameSeries(std::string ipStr, std::string gwStr, uint8_t prefixLength)
      } // if
  }
-+
+ 
 +void isSameSeries6(std::string ipStr, std::string gwStr, uint8_t prefixLength)
 +{
 +    auto ip = stdplus::fromStr<stdplus::In6Addr>(ipStr);
@@ -370,35 +346,24 @@ index efae343..2ef3faa 100644
 +    }
 +}
  } // namespace ip_address
- 
- 
+ } // namespace network
+ } // namespace phosphor
 diff --git a/src/util.hpp b/src/util.hpp
-index f9cc073..38b292b 100644
+index 6f7c3a1..6614c67 100644
 --- a/src/util.hpp
 +++ b/src/util.hpp
-@@ -67,6 +67,8 @@ void isValidIPv6Addr(in6_addr* addr, Type Type);
-  */
- void isSameSeries(std::string ipAddr, std::string gateway, uint8_t prefixLength);
+@@ -70,6 +70,8 @@ void isValidIPv6Addr(in6_addr* addr, Type Type);
+ void isSameSeries(std::string ipAddr, std::string gateway,
+                   uint8_t prefixLength);
  
 +void isSameSeries6(std::string ipStr, std::string gwStr, uint8_t prefixLength);
 +
  } // namespace ip_address
  
  /* @brief converts a sockaddr for the specified address family into
-@@ -123,6 +125,11 @@ bool getIP6Enable(const config::Parser& config);
-  */
- std::tuple<std::vector<std::optional<std::string>>,std::vector<std::optional<std::string>>> getIndexList(const config::Parser& parser);
- 
-+/** @brief read the IPv6 Default Gateway from the configuration file
-+ *  @param[in] config - The parsed configuration.
-+ */
-+std::string getIP6Gateway(const config::Parser& config);
-+
- /** @brief read the DHCP value from the configuration file
-  *  @param[in] config - The parsed configuration.
-  */
 -- 
 2.43.0
+
 
 
 

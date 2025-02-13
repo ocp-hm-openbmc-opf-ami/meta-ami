@@ -7,6 +7,7 @@ SRC_URI += " \
 	   file://phos-psu-monitor.service \
            file://0001-phosphor-power-psu-monitor.patch \
            "
+SRCREV = "2d068dc70d1ab893315edaaaffd84160cd90c9fd"
 
 PACKAGECONFIG:append = " monitor"
 PACKAGECONFIG:append = " monitor-ng"

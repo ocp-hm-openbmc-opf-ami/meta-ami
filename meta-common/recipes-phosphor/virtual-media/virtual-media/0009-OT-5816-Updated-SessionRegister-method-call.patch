@@ -1,0 +1,147 @@
+From 4ad4dd79b4f62699416d7b8187209075b86ba8f4 Mon Sep 17 00:00:00 2001
+From: Amlana Bhuyan <amlanab@ami.com>
+Date: Thu, 13 Jun 2024 17:38:53 +0530
+Subject: [PATCH] OT-5816 Updated SessionRegister method call
+
+ As per design modifications added new parameter
+ mountingMethod in SessionRegister method call.
+
+Signed-off-by: Amlana Bhuyan <amlanab@ami.com>
+---
+ src/system.hpp | 55 +++++++++++++++++++++++++++++++++++---------------
+ 1 file changed, 39 insertions(+), 16 deletions(-)
+
+diff --git a/src/system.hpp b/src/system.hpp
+index 129f51d..c326c83 100644
+--- a/src/system.hpp
++++ b/src/system.hpp
+@@ -503,11 +503,26 @@ const std::string sessMgrIface = "xyz.openbmc_project.SessionManager";
+ const std::string sessMgrVmediaIface =
+     "xyz.openbmc_project.SessionManager.Vmedia";
+
+-using sessionInfo =
+-    std::tuple<uint16_t, std::string, std::string, uint8_t, uint8_t, uint8_t>;
++using sessionInfo = std::tuple<uint8_t, std::string, std::string, uint8_t,
++                               uint8_t, uint8_t, std::string>;
+ using sessionList = std::vector<sessionInfo>;
+-using propertyVariant = std::variant<std::vector<sessionInfo>>;
++using propertyVariant = std::variant<sessionList>;
+
++/* @brief Method to determine mount method type[console/remote] */
++static std::string mountMethod(const std::string& Slot)
++{
++
++    if (Slot == "Slot_0" || Slot == "Slot_1")
++    {
++        return "console";
++    }
++    else if (Slot == "Slot_2" || Slot == "Slot_3")
++    {
++        return "remote";
++    }
++
++    return " ";
++}
+ static void unMount(std::string Slot)
+ {
+     std::string vMediaService = "xyz.openbmc_project.VirtualMedia";
+@@ -552,7 +567,7 @@ class DbusMonitor
+     DbusMonitor(DbusMonitor&&) = delete;
+     DbusMonitor& operator=(DbusMonitor&&) = delete;
+
+-    std::string findKeyForValue(const activesessionmap& map, uint16_t value)
++    std::string findKeyForValue(const activesessionmap& map, uint8_t value)
+     {
+         for (const auto& pair : map)
+         {
+@@ -566,15 +581,15 @@ class DbusMonitor
+         return "INVALID";
+     }
+
+-    std::vector<uint16_t>
+-        findRemovedSessionIDs(const std::vector<uint16_t>& activeSessionIDs,
+-                              const std::vector<uint16_t>& updatedSessionIDs)
++    std::vector<uint8_t>
++        findRemovedSessionIDs(const std::vector<uint8_t>& activeSessionIDs,
++                              const std::vector<uint8_t>& updatedSessionIDs)
+     {
+-        std::vector<uint16_t> removedSessionIDs;
++        std::vector<uint8_t> removedSessionIDs;
+
+         // Sort the vectors to perform set difference operation
+-        std::vector<uint16_t> sortedActiveSessionIDs = activeSessionIDs;
+-        std::vector<uint16_t> sortedUpdatedSessionIDs = updatedSessionIDs;
++        std::vector<uint8_t> sortedActiveSessionIDs = activeSessionIDs;
++        std::vector<uint8_t> sortedUpdatedSessionIDs = updatedSessionIDs;
+         std::sort(sortedActiveSessionIDs.begin(), sortedActiveSessionIDs.end());
+         std::sort(sortedUpdatedSessionIDs.begin(),
+                   sortedUpdatedSessionIDs.end());
+@@ -590,14 +605,14 @@ class DbusMonitor
+
+     void handleSessions(const sessionList& list)
+     {
+-        std::vector<uint16_t> updatedSessionIDs;
+-        std::vector<uint16_t> activeSessionIDs;
+-        std::vector<uint16_t> removedSessionIDs;
++        std::vector<uint8_t> updatedSessionIDs;
++        std::vector<uint8_t> activeSessionIDs;
++        std::vector<uint8_t> removedSessionIDs;
+         std::string Slot;
+
+         for (const auto& tuple : list)
+         {
+-            uint16_t sessionID = std::get<0>(tuple);
++            uint8_t sessionID = std::get<0>(tuple);
+             updatedSessionIDs.push_back(sessionID);
+         }
+
+@@ -608,7 +623,7 @@ class DbusMonitor
+
+         removedSessionIDs =
+             findRemovedSessionIDs(activeSessionIDs, updatedSessionIDs);
+-        for (uint16_t rmvID : removedSessionIDs)
++        for (uint8_t rmvID : removedSessionIDs)
+         {
+             LogMsg(Logger::Info, "Removed Session ID: ", rmvID);
+
+@@ -768,6 +783,7 @@ struct UsbGadget
+         uint8_t userId;
+         bool status = false;
+         int reason;
++        std::string mountingMethod;
+
+         if (change == StateChange::inserted)
+         {
+@@ -798,6 +814,7 @@ struct UsbGadget
+                 sessionType = VMEDIA;
+                 previlage = PRIV_LEVEL_ADMIN;
+                 userId = DEFAULT_USER_ID;
++                mountingMethod = mountMethod(name);
+
+                 propertyVariant propertyVar;
+                 auto bus = sdbusplus::bus::new_system();
+@@ -806,7 +823,7 @@ struct UsbGadget
+                     sessMgrIface.c_str(), "SessionRegister");
+
+                 msgReg.append(sessionId, ipAddr, userName, sessionType,
+-                              previlage, userId);
++                              previlage, userId, mountingMethod);
+
+                 auto reply = bus.call(msgReg);
+                 reply.read(status);
+@@ -974,6 +991,12 @@ struct UsbGadget
+                 LogMsg(Logger::Error, "[App]: UsbGadget: ", e.what());
+                 success = false;
+             }
++            catch (const sdbusplus::exception::SdBusError& e)
++            {
++                LogMsg(Logger::Error, "[App]: UsbGadget: D-Bus call Failed ",
++                       e.what());
++                success = false;
++            }
+         }
+         // StateChange: notMonitored, inserted were handler
+         // earlier. We'll get here only for removed, or cleanup
+--
+2.25.1
+

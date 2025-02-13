@@ -19,3 +19,9 @@ SRC_URI:append:nuvoton:df-obmc-static-norootfs = " file://enable-spinor-ubifs.cf
 SRC_URI:append:nuvoton = " file://0001-mctp-avoid-confusion-over-local-peer-dest-source-add.patch"
 SRC_URI:append:nuvoton = " file://0002-mctp-make-key-lookups-match-the-ANY-address-on-eithe.patch"
 SRC_URI:append:nuvoton = " file://0003-mctp-serial-use-netif_receive_skb-instead-of-netif_r.patch"
+
+SRC_URI:append:nuvoton = " file://iptables.cfg"
+SRC_URI:append:nuvoton = " file://bond.cfg"
+SRC_URI:append:nuvoton = " file://iproute.cfg"
+SRC_URI:append:nuvoton = " file://vlan.cfg"
+SRC_URI:append:nuvoton = " file://0018-Disable-Bond0-by-Default.patch"

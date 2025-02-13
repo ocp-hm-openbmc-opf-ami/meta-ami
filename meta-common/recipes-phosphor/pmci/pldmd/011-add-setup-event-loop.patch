@@ -1,0 +1,276 @@
+diff -Naur a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt	2024-09-13 13:05:35.726975200 +0800
++++ b/CMakeLists.txt	2024-09-13 13:28:00.684354419 +0800
+@@ -87,7 +87,7 @@
+ 
+ add_executable(${PROJECT_NAME} ${SRC_FILES} ${HEADER_FILES})
+ 
+-target_link_libraries (${PROJECT_NAME} mctpwplus sdbusplus -lsystemd -lpldm_intel
++target_link_libraries (${PROJECT_NAME} mctpwplus sdbusplus sdeventplus -lsystemd -lpldm_intel
+                         -lpthread -lstdc++fs -lphosphor_dbus -lboost_coroutine -lphosphor_logging)
+ 
+ find_package (PkgConfig REQUIRED)
+diff -Naur a/include/firmware_update.hpp b/include/firmware_update.hpp
+--- a/include/firmware_update.hpp	2024-09-13 13:05:35.730975249 +0800
++++ b/include/firmware_update.hpp	2024-09-13 13:28:00.684354419 +0800
+@@ -36,8 +36,7 @@
+     FWUpdate(const pldm_tid_t _tid, const uint8_t _deviceIDRecord);
+     int runUpdate(const boost::asio::yield_context yield,
+                   SelfContainedActivationCache& selfContainedActivationCache);
+-    void validateReqForFWUpdCmd(const pldm_tid_t tid, const uint8_t messageTag,
+-                                const std::vector<uint8_t>& req);
++    void validateReqForFWUpdCmd(const std::vector<uint8_t>& req);
+     bool setMatchedFDDescriptors();
+     void terminateFwUpdate(const boost::asio::yield_context yield);
+     template <typename propertyType>
+diff -Naur a/src/firmware_update.cpp b/src/firmware_update.cpp
+--- a/src/firmware_update.cpp	2024-09-13 13:05:35.730975249 +0800
++++ b/src/firmware_update.cpp	2024-09-13 13:35:34.996167703 +0800
+@@ -25,6 +25,16 @@
+ #include <xyz/openbmc_project/PLDM/FWU/FWUBase/server.hpp>
+ 
+ #include "utils.h"
++#include <sdeventplus/event.hpp>
++#include <sdeventplus/source/io.hpp>
++
++#include <array>
++#include <iostream>
++const uint8_t MCTP_MSG_TYPE_PLDM = 1;
++using namespace sdeventplus;
++using namespace sdeventplus::source;
++
++
+ 
+ #define PLDM_MAX_TRANSFER_SIZE 1024
+ namespace pldm
+@@ -68,7 +78,6 @@
+ std::unique_ptr<FWUpdate> fwUpdate = nullptr;
+ std::unique_ptr<sdbusplus::asio::dbus_interface> associationsIntf = nullptr;
+ std::map<uint8_t, std::string> inventoryPaths;
+-TIDMapper tidMapper;
+ 
+ FWUpdate::FWUpdate(const pldm_tid_t _tid, const uint8_t _deviceIDRecord) :
+     reserveBWTimer(
+@@ -77,9 +86,7 @@
+ {
+ }
+ 
+-void FWUpdate::validateReqForFWUpdCmd(const pldm_tid_t tid,
+-                                      const uint8_t messageTag,
+-                                      const std::vector<uint8_t>& req)
++void FWUpdate::validateReqForFWUpdCmd(const std::vector<uint8_t>& req)
+ {
+     if (req.size() < hdrSize)
+     {
+@@ -101,7 +108,7 @@
+                 .c_str());
+     }
+ 
+-    if (tid != currentTid || msgHdr->command != expectedCmd)
++    if (msgHdr->command != expectedCmd)
+     {
+         phosphor::logging::log<phosphor::logging::level::INFO>(
+             ("Firmware update in progress for TID: " +
+@@ -109,13 +116,73 @@
+                 .c_str());
+         return;
+     }
+-    msgTag = messageTag;
++    
+     fdReqMatched = true;
+     fdReq = req;
+-    expectedCommandTimer->cancel();
++    //expectedCommandTimer->cancel();
+     return;
+ }
+ 
++void processRxMsg(const std::vector<uint8_t>& requestMsg)
++{
++
++   pldm_header_info hdrFields{};
++
++    const pldm_msg_hdr* hdr = reinterpret_cast<const pldm_msg_hdr*>(
++    requestMsg.data());
++    if (PLDM_SUCCESS != unpack_pldm_header(hdr, &hdrFields))
++    {
++        std::cout << "Empty PLDM request header" << std::endl;
++    }
++
++    fwUpdate->validateReqForFWUpdCmd(requestMsg);
++}
++
++void setup_event_loop() {
++
++		auto event = Event::get_default();
++		auto callback = [=](IO& io, int sfd, uint32_t revents) {
++				(void)sfd;
++				if (!(revents & EPOLLIN))
++				{
++						std::cout << "AMI DEBUG EVENT NOT RECEIVED" << std::endl;
++						return;
++				}
++				ssize_t peekedLength = recv(fd, nullptr, 0, MSG_PEEK | MSG_TRUNC);
++				if (peekedLength == 0)
++				{
++						io.get_event().exit(0);
++				}
++				else if (peekedLength <= -1)
++				{
++						std::cout << "peekedLength is less than -1" << std::endl;
++				}
++				else
++				{
++						std::vector<uint8_t> requestMsg(peekedLength);
++						auto recvDataLength = recv(
++										fd, static_cast<void*>(requestMsg.data()), peekedLength, 0);
++						if (recvDataLength == peekedLength)
++						{
++								if (MCTP_MSG_TYPE_PLDM != requestMsg[1])
++								{
++								}
++								else
++								{
++										// process message and send response
++										std::vector<uint8_t> dataFromThirdByte(requestMsg.begin() + 2, requestMsg.begin() + recvDataLength);
++
++										processRxMsg(dataFromThirdByte);
++								}
++						}
++						io.get_event().exit(0);
++				}
++		};
++		IO io(event, fd, EPOLLIN, std::move(callback));
++		event.loop();
++}
++
++
+ bool FWUpdate::setMatchedFDDescriptors()
+ {
+     auto itr = terminusFwuProperties.find(currentTid);
+@@ -161,14 +228,7 @@
+ #endif
+     }
+ 	std::optional<mctpw_eid_t> eid = tidMapper.getMappedEID(currentTid);
+-	// Open connection to MCTP socket
+-	int fd = pldm_open();
+-	if (-1 == fd)
+-	{
+-			std::cout << "Failed to init mctp"
+-					<< "\n";
+-			return -1;
+-	}
++
+ 	// Send PLDM request msg and wait for response
+ 	int rc = pldm_send(eid.value(), fd, pldmResp.data(), pldmResp.size());
+ 	if (0 > rc)
+@@ -635,7 +695,8 @@
+ 
+     while (maxNumReq--)
+     {
+-        startTimer(yield, fdCmdTimeout);
++        //startTimer(yield, fdCmdTimeout);
++		setup_event_loop();
+         if (!fdReqMatched)
+         {
+             phosphor::logging::log<phosphor::logging::level::WARNING>(
+@@ -1006,10 +1067,12 @@
+     if (!sendReceivePldmMessage(yield, currentTid, timeout, retryCount, pldmReq,
+                                 pldmResp))
+     {
++#if 0
+         phosphor::logging::log<phosphor::logging::level::ERR>(
+             "updateComponent: Failed to send or receive PLDM message",
+             phosphor::logging::entry("TID=%d", currentTid));
+         return PLDM_ERROR;
++#endif
+     }
+ 
+ 	// Send PLDM request msg and wait for response
+@@ -1384,7 +1447,8 @@
+ 
+     while (--maxNumReq)
+     {
+-        startTimer(yield, requestFirmwareDataIdleTimeoutMs);
++        //startTimer(yield, requestFirmwareDataIdleTimeoutMs);
++		setup_event_loop();
+         if (!fdReqMatched)
+         {
+             phosphor::logging::log<phosphor::logging::level::WARNING>(
+@@ -1607,7 +1671,8 @@
+ 
+     while (maxNumReq--)
+     {
+-        startTimer(yield, fdCmdTimeout);
++        //startTimer(yield, fdCmdTimeout);
++		setup_event_loop();
+         if (!fdReqMatched)
+         {
+             phosphor::logging::log<phosphor::logging::level::WARNING>(
+@@ -2190,7 +2255,7 @@
+                     "reserveBWTimer failed");
+                 return;
+             }
+-            activateReserveBandwidth();
++            //activateReserveBandwidth();
+         });
+     });
+ }
+@@ -2248,7 +2313,7 @@
+     phosphor::logging::log<phosphor::logging::level::INFO>(
+         "FD changed state to LEARN COMPONENTS");
+     createAsyncDelay(yield, delayBtw);
+-    activateReserveBandwidth();
++    //activateReserveBandwidth();
+     retVal = processSendPackageData(yield);
+     if (retVal != PLDM_SUCCESS)
+     {
+@@ -2388,8 +2453,8 @@
+             "FD changed state to VERIFY");
+ 
+         expectedCmd = PLDM_VERIFY_COMPLETE;
+-
+-        startTimer(yield, verify_timeout);
++		setup_event_loop();
++//        startTimer(yield, verify_timeout);
+ 
+         if (!fdReqMatched)
+         {
+@@ -2428,8 +2493,8 @@
+             "FD changed state to APPLY");
+ 
+         expectedCmd = PLDM_APPLY_COMPLETE;
+-
+-        startTimer(yield, fdCmdTimeout);
++		setup_event_loop();
++        //startTimer(yield, fdCmdTimeout);
+ 
+         if (!fdReqMatched)
+         {
+@@ -2579,7 +2644,9 @@
+             "MCTP Tag Owner is not set, dropping unexpected packet");
+         return;
+     }
+-    fwUpdate->validateReqForFWUpdCmd(tid, msgTag, message);
++    (void)msgTag;
++    (void)message;
++    //fwUpdate->validateReqForFWUpdCmd(tid, msgTag, message);
+     return;
+ }
+ 
+diff -Naur a/src/pldmd.cpp b/src/pldmd.cpp
+--- a/src/pldmd.cpp	2024-09-13 13:05:35.730975249 +0800
++++ b/src/pldmd.cpp	2024-09-13 13:28:00.688354409 +0800
+@@ -477,11 +477,13 @@
+ 
+     if (rc.first || rc.second < 0)
+     {
++#if 0
+         phosphor::logging::log<phosphor::logging::level::WARNING>(
+             ("SendMCTPPayload Failed, retry count exceeded  rc: " +
+              std::to_string(rc.second) + " " + rc.first.message())
+                 .c_str());
+         return false;
++#endif
+     }
+     return true;
+ }

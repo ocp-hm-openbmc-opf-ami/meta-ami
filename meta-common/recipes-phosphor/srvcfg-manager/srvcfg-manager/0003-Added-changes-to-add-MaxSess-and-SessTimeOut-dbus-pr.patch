@@ -1,0 +1,411 @@
+From 2cd21f2c769aaab25ae9868fb3afbfd0b23569a8 Mon Sep 17 00:00:00 2001
+From: pandiarajt <pandiarajt@ami.com>
+Date: Mon, 9 Sep 2024 09:52:30 +0530
+Subject: [PATCH 61/61] Added changes to add MaxSess and SessTimeOut dbus
+ property for specifc services and functionality support for dropbear
+
+---
+ inc/dropbear_srvcfgmgr.hpp |   7 ++
+ inc/srvcfg_manager.hpp     |   6 ++
+ meson.build                |   1 +
+ src/dropbear_srvcfgmgr.cpp |  76 +++++++++++++++
+ src/main.cpp               |   1 +
+ src/srvcfg_manager.cpp     | 189 ++++++++++++++++++++++++++++++++++++-
+ 6 files changed, 279 insertions(+), 1 deletion(-)
+ create mode 100644 inc/dropbear_srvcfgmgr.hpp
+ create mode 100644 src/dropbear_srvcfgmgr.cpp
+
+diff --git a/inc/dropbear_srvcfgmgr.hpp b/inc/dropbear_srvcfgmgr.hpp
+new file mode 100644
+index 0000000..1c181fb
+--- /dev/null
++++ b/inc/dropbear_srvcfgmgr.hpp
+@@ -0,0 +1,7 @@
++#pragma once
++#include <cstdint>
++
++bool updateDropbearTimeout(uint64_t timeout);
++void createOrUpdateDropinFile(int maxSessions);
++
++
+diff --git a/inc/srvcfg_manager.hpp b/inc/srvcfg_manager.hpp
+index b0e345c..c4f8606 100644
+--- a/inc/srvcfg_manager.hpp
++++ b/inc/srvcfg_manager.hpp
+@@ -15,9 +15,11 @@
+ */
+ #pragma once
+ #include "utils.hpp"
++#include "dropbear_srvcfgmgr.hpp"
+ 
+ #include <boost/container/flat_map.hpp>
+ #include <sdbusplus/timer.hpp>
++extern void updateGlobalDataFromFile();
+ 
+ namespace phosphor
+ {
+@@ -36,6 +38,8 @@ static constexpr const char* sockAttrPropPort = "Port";
+ static constexpr const char* srvCfgPropMasked = "Masked";
+ static constexpr const char* srvCfgPropEnabled = "Enabled";
+ static constexpr const char* srvCfgPropRunning = "Running";
++static constexpr const char* srvCfgPropTimeOut = "SessionTimeOut";
++static constexpr const char* srvCfgPropMaxSess = "MaxSession";
+ 
+ #ifdef USB_CODE_UPDATE
+ static constexpr const char* usbCodeUpdateUnitName = "phosphor_usb_code_update";
+@@ -97,6 +101,8 @@ class ServiceConfig
+     std::string activeState;
+     std::string subState;
+     uint16_t portNum;
++    uint16_t maxSess;
++    uint64_t timeOut;
+     std::vector<std::string> channelList;
+     std::string protocol;
+     std::string stateValue;
+diff --git a/meson.build b/meson.build
+index f5a1d74..cf66398 100644
+--- a/meson.build
++++ b/meson.build
+@@ -41,6 +41,7 @@ executable('phosphor-srvcfg-manager',
+            'src/main.cpp',
+            'src/srvcfg_manager.cpp',
+            'src/utils.cpp',
++           'src/dropbear_srvcfgmgr.cpp',
+         implicit_include_directories: false,
+         include_directories: ['inc'],
+         dependencies: deps,
+diff --git a/src/dropbear_srvcfgmgr.cpp b/src/dropbear_srvcfgmgr.cpp
+new file mode 100644
+index 0000000..afd49df
+--- /dev/null
++++ b/src/dropbear_srvcfgmgr.cpp
+@@ -0,0 +1,76 @@
++#include <iostream>
++#include <fstream>
++#include <sstream>
++#include <string>
++#include <sys/stat.h>
++#include <cstdlib>
++#include "dropbear_srvcfgmgr.hpp"
++
++const std::string DROPBEAR_DROPIN_DIR = "/etc/systemd/system/dropbear.socket.d/";
++const std::string DROPBEAR_DROPIN_FILE = DROPBEAR_DROPIN_DIR + "maxsessions.conf";
++const std::string DROPBEAR_ENV = "/etc/default/dropbear";
++
++bool updateDropbearTimeout(uint64_t timeout) {
++    std::ifstream inputFile(DROPBEAR_ENV);
++    std::stringstream buffer;
++
++    if (inputFile) {
++        buffer << inputFile.rdbuf();
++        inputFile.close();
++    } else {
++        std::cerr << "Error: Cannot open the file " << DROPBEAR_ENV << std::endl;
++        return false;
++    }
++
++    std::string fileContent = buffer.str();
++    std::string searchKey = "DROPBEAR_IDLE_TIMEOUT";
++    std::string newTimeout = "DROPBEAR_IDLE_TIMEOUT=\" -I " + std::to_string(timeout) + "\"\n";
++
++    size_t pos = fileContent.find(searchKey);
++    if (pos != std::string::npos) {
++        size_t endPos = fileContent.find("\n", pos);
++        fileContent.replace(pos, endPos - pos + 1, newTimeout);
++    } else {
++        fileContent.append(newTimeout);
++    }
++
++    std::ofstream outputFile(DROPBEAR_ENV);
++    if (outputFile) {
++        outputFile << fileContent;
++        outputFile.close();
++    } else {
++        std::cerr << "Error: Cannot write to the file " << DROPBEAR_ENV << std::endl;
++        return false;
++    }
++
++    return true;
++}
++
++void createDropinDirectory() {
++    struct stat info;
++    if (stat(DROPBEAR_DROPIN_DIR.c_str(), &info) != 0) {
++        if (mkdir(DROPBEAR_DROPIN_DIR.c_str(), 0755) != 0) {
++            std::cerr << "Failed to create drop-in directory: " << DROPBEAR_DROPIN_DIR << std::endl;
++            exit(EXIT_FAILURE);
++        } else {
++            std::cout << "Drop-in directory created: " << DROPBEAR_DROPIN_DIR << std::endl;
++        }
++    }
++}
++
++void createOrUpdateDropinFile(int maxSessions) {
++    createDropinDirectory();
++    std::ofstream fileOut(DROPBEAR_DROPIN_FILE);
++    if (!fileOut.is_open()) {
++        std::cerr << "Failed to open drop-in file for writing: " << DROPBEAR_DROPIN_FILE << std::endl;
++        exit(EXIT_FAILURE);
++    }
++
++    fileOut << "[Socket]\n";
++    fileOut << "MaxConnections=" << maxSessions << "\n";
++    fileOut.close();
++
++    std::cout << "Drop-in file updated with MaxConnections=" << maxSessions << " in " << DROPBEAR_DROPIN_FILE << std::endl;
++}
++
++
+diff --git a/src/main.cpp b/src/main.cpp
+index 453602d..2ff3502 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -329,6 +329,7 @@ void checkAndInit(sdbusplus::asio::object_server& server,
+ 
+ int main()
+ {
++    updateGlobalDataFromFile();
+     boost::asio::io_context io;
+     auto conn = std::make_shared<sdbusplus::asio::connection>(io);
+     timer = std::make_unique<boost::asio::steady_timer>(io);
+diff --git a/src/srvcfg_manager.cpp b/src/srvcfg_manager.cpp
+index 69f639d..24b3e4a 100644
+--- a/src/srvcfg_manager.cpp
++++ b/src/srvcfg_manager.cpp
+@@ -25,6 +25,8 @@
+ #include <cstdio>
+ #endif
+ 
++#include <iostream>
++#include <nlohmann/json.hpp>
+ #include <fstream>
+ #include <regex>
+ 
+@@ -33,6 +35,56 @@ extern std::map<std::string, std::shared_ptr<phosphor::service::ServiceConfig>>
+     srvMgrObjects;
+ static bool updateInProgress = false;
+ 
++const std::string filename = "/etc/srvcfg-manager/srvcfg.json";
++using srvcfgMap = std::map<std::string, std::pair<uint16_t, uint16_t>>;
++using json = nlohmann::json;
++//using namespace std;
++json global_data;
++
++void updateGlobalDataFromFile() {
++    std::ifstream file(filename);
++    if (!file.is_open()) {
++        std::cerr << "Failed to open file: " << filename << std::endl;
++        return;
++    }
++
++    try {
++        file >> global_data;
++    } catch (json::parse_error& e) {
++        std::cerr << "Parse error while reading JSON file: " << e.what() << std::endl;
++    }
++
++    file.close();
++}
++
++void updateFileFromGlobalData() {
++    std::ofstream file(filename);
++    if (!file.is_open()) {
++        std::cerr << "Failed to open file for writing: " << filename << std::endl;
++        return;
++    }
++
++    try {
++        file << std::setw(4) << global_data << std::endl;
++        std::cout << "JSON data successfully written to file: " << filename << std::endl;
++    } catch (json::exception& e) {
++        std::cerr << "Error while writing JSON data to file: " << e.what() << std::endl;
++    }
++
++    file.close();
++}
++
++bool checkServicetoAddTimeOutandMaxSessProp(const std::string& service_name) {
++    for (const auto& service : global_data["services"]) {
++        if (service["name"] == service_name) {
++            return true;
++        }
++    }
++    return false;
++}
++
++
++
+ namespace phosphor
+ {
+ namespace service
+@@ -532,6 +584,43 @@ void ServiceConfig::registerProperties()
+ {
+     srvCfgIface = server.add_interface(objPath, serviceConfigIntfName);
+ 
++    bool TimoutPropStatus = false;
++    bool MaxSessPropStatus = false;
++    bool EnabledPropStatus = false;
++    bool EnabledStatus = false;
++
++    if(checkServicetoAddTimeOutandMaxSessProp(instantiatedUnitName))
++    {
++        for (auto& service : global_data["services"])
++        {
++            if (service["name"] == instantiatedUnitName) {
++                TimoutPropStatus =  service.contains("timeout");
++                MaxSessPropStatus = service.contains("max_session_limit");
++                EnabledPropStatus = service.contains("Enabled");
++
++                if (MaxSessPropStatus) {
++                    maxSess = service["max_session_limit"];
++                }
++                if (TimoutPropStatus){
++                    uint64_t timeout_tmp = service["timeout"];
++                    if(timeout_tmp < 30 || timeout_tmp > 86400)
++                    {
++                        timeOut = 600;
++                    }
++                    else{
++                        timeOut = timeout_tmp;
++                    }
++
++                }
++                if (EnabledPropStatus){
++                    EnabledStatus  = service["Enabled"];
++                }
++
++                break;
++            }
++        }
++    }
++
+     if (!socketObjectPath.empty())
+     {
+         sockAttrIface = server.add_interface(objPath, sockAttrIntfName);
+@@ -558,6 +647,62 @@ void ServiceConfig::registerProperties()
+             });
+     }
+ 
++    if(TimoutPropStatus)
++    {
++        srvCfgIface->register_property(
++            srvCfgPropTimeOut, timeOut,
++            [this](const uint64_t& req, uint64_t& res) {
++                if (!internalSet)
++                {
++                    if(req < 30 || req > 86400){
++                        std::cout << "inavlid data :"<< req << std::endl;
++                        return 0;
++                    }
++
++                    if (req == res)
++                    {
++                        return 1;
++                    }
++                    if (updateInProgress)
++                    {
++                        return 0;
++                    }
++                    for (auto& service : global_data["services"])
++                    {
++                        if (service["name"] == instantiatedUnitName) {
++                            service["timeout"] = timeOut =  req;
++                            break;
++                        }
++                    }
++                    if( instantiatedUnitName == "dropbear")
++                    {
++                        if(!updateDropbearTimeout(timeOut)) {
++                            std::cout << "Fail to update the Timeout value" << std::endl;
++                            return 0;
++                        }
++                    }
++                    updateFileFromGlobalData();
++                    startServiceRestartTimer();
++                }
++                res = req;
++                return 1;
++            });
++    }
++
++
++    if(MaxSessPropStatus)
++    {
++        if(instantiatedUnitName == "dropbear")
++        {
++            createOrUpdateDropinFile(maxSess);
++        }
++
++        srvCfgIface->register_property(
++            srvCfgPropMaxSess, maxSess,
++            sdbusplus::asio::PropertyPermission::readOnly);
++            
++    }
++
+     srvCfgIface->register_property(
+         srvCfgPropMasked, unitMaskedState, [this](const bool& req, bool& res) {
+             if (!internalSet)
+@@ -648,7 +793,21 @@ void ServiceConfig::registerProperties()
+                     lg2::error("Invalid value specified");
+                     return -EINVAL;
+                 }
+-                unitEnabledState = req;
++                if(checkServicetoAddTimeOutandMaxSessProp(instantiatedUnitName))
++                {
++                    for (auto& service : global_data["services"])
++                    {
++                        if (service["name"] == instantiatedUnitName) {
++                            service["Enabled"] = unitEnabledState = req;
++                            break;
++                        }
++                    }
++                    updateFileFromGlobalData();
++                }
++                else{
++                    unitEnabledState = req;
++                }
++
+                 updatedFlag |=
+                     (1 << static_cast<uint8_t>(UpdatedProp::enabledState));
+                 startServiceRestartTimer();
+@@ -708,6 +867,37 @@ void ServiceConfig::registerProperties()
+         });
+ 
+     srvCfgIface->initialize();
++    if(checkServicetoAddTimeOutandMaxSessProp(instantiatedUnitName))
++    {
++
++        internalSet = true;
++        if(TimoutPropStatus)
++        {
++            if( instantiatedUnitName == "dropbear")
++            {
++                if(!updateDropbearTimeout(timeOut)) {
++                    std::cout << "Fail to update the Timeout for " << instantiatedUnitName << std::endl;
++                }
++            }
++            srvCfgIface->set_property(srvCfgPropTimeOut, timeOut);
++        }
++
++        if(EnabledPropStatus && (!unitMaskedState))
++        {
++            if (unitEnabledState != EnabledStatus)
++            {
++                unitEnabledState = unitRunningState = EnabledStatus;
++                srvCfgIface->set_property(srvCfgPropEnabled, unitEnabledState);
++                srvCfgIface->set_property(srvCfgPropRunning, unitRunningState);
++                updatedFlag |= (1<< static_cast<uint8_t>(UpdatedProp::runningState));
++                updatedFlag |= (1<< static_cast<uint8_t>(UpdatedProp::enabledState));
++                startServiceRestartTimer();
++            }
++        }
++        internalSet = false;
++
++    }
++
+     if (!socketObjectPath.empty())
+     {
+         sockAttrIface->initialize();
+-- 
+2.34.1
+

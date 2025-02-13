@@ -1,0 +1,135 @@
+From 28217031cd3e4cb82eaf2584672316c90b6e6e1e Mon Sep 17 00:00:00 2001
+From: mickhuang <mickhuang@ami.com>
+Date: Tue, 15 Oct 2024 11:44:37 +0800
+Subject: Fix-usb-gadget-mass-storage-miss-stats-property
+
+Fix usb gadget mass storage miss stats property, as virtual-media will rely on it.
+
+Signed-off-by: mickhuang <mickhuang@ami.com>
+---
+ drivers/usb/gadget/function/f_mass_storage.c | 12 ++++++++
+ drivers/usb/gadget/function/storage_common.c |  9 ++++++
+ drivers/usb/gadget/function/storage_common.h | 29 ++++++++++++++++++++
+ 3 files changed, 50 insertions(+)
+
+diff --git a/drivers/usb/gadget/function/f_mass_storage.c b/drivers/usb/gadget/function/f_mass_storage.c
+index 3abf7f586e2a..5c71b03cff35 100644
+--- a/drivers/usb/gadget/function/f_mass_storage.c
++++ b/drivers/usb/gadget/function/f_mass_storage.c
+@@ -683,6 +683,8 @@ static int do_read(struct fsg_common *common)
+ 		amount_left  -= nread;
+ 		common->residue -= nread;
+ 
++		fsg_stats_rd_attempt(&curlun->stats, nread);
++
+ 		/*
+ 		 * Except at the end of the transfer, nread will be
+ 		 * equal to the buffer size, which is divisible by the
+@@ -883,6 +885,8 @@ static int do_write(struct fsg_common *common)
+ 		amount_left_to_write -= nwritten;
+ 		common->residue -= nwritten;
+ 
++		fsg_stats_wr_attempt(&curlun->stats, nwritten);
++
+ 		/* If an error occurred, report it and its position */
+ 		if (nwritten < amount) {
+ 			curlun->sense_data = SS_WRITE_ERROR;
+@@ -3250,6 +3254,13 @@ static ssize_t fsg_lun_opts_forced_eject_store(struct config_item *item,
+ 
+ CONFIGFS_ATTR_WO(fsg_lun_opts_, forced_eject);
+ 
++static ssize_t fsg_lun_opts_stats_show(struct config_item *item, char *page)
++{
++	return fsg_show_stats(to_fsg_lun_opts(item)->lun, page);
++}
++
++CONFIGFS_ATTR_RO(fsg_lun_opts_, stats);
++
+ static struct configfs_attribute *fsg_lun_attrs[] = {
+ 	&fsg_lun_opts_attr_file,
+ 	&fsg_lun_opts_attr_ro,
+@@ -3258,6 +3269,7 @@ static struct configfs_attribute *fsg_lun_attrs[] = {
+ 	&fsg_lun_opts_attr_nofua,
+ 	&fsg_lun_opts_attr_inquiry_string,
+ 	&fsg_lun_opts_attr_forced_eject,
++	&fsg_lun_opts_attr_stats,
+ 	NULL,
+ };
+ 
+diff --git a/drivers/usb/gadget/function/storage_common.c b/drivers/usb/gadget/function/storage_common.c
+index 208c6a92780a..0fce9d8ea96c 100644
+--- a/drivers/usb/gadget/function/storage_common.c
++++ b/drivers/usb/gadget/function/storage_common.c
+@@ -373,6 +373,15 @@ ssize_t fsg_show_inquiry_string(struct fsg_lun *curlun, char *buf)
+ }
+ EXPORT_SYMBOL_GPL(fsg_show_inquiry_string);
+ 
++ssize_t fsg_show_stats(struct fsg_lun *curlun, char *buf)
++{
++	return sprintf(buf, "read cnt: %u\n" "read sum: %llu\n"
++		       "write cnt: %u\n" "write sum: %llu\n",
++		       curlun->stats.read.count, curlun->stats.read.bytes,
++		       curlun->stats.write.count, curlun->stats.write.bytes);
++}
++EXPORT_SYMBOL_GPL(fsg_show_stats);
++
+ /*
+  * The caller must hold fsg->filesem for reading when calling this function.
+  */
+diff --git a/drivers/usb/gadget/function/storage_common.h b/drivers/usb/gadget/function/storage_common.h
+index 0a544a82cbf8..fd8fe65cf11e 100644
+--- a/drivers/usb/gadget/function/storage_common.h
++++ b/drivers/usb/gadget/function/storage_common.h
+@@ -95,6 +95,32 @@ do {									\
+  */
+ #define INQUIRY_STRING_LEN ((size_t) (8 + 16 + 4 + 1))
+ 
++struct fsg_stats_cnt {
++	u64 bytes;
++	u32 count;
++};
++
++struct fsg_stats {
++	struct fsg_stats_cnt read;
++	struct fsg_stats_cnt write;
++};
++
++static inline void fsg_stats_update(struct fsg_stats_cnt *cnt, u64 diff)
++{
++	cnt->count++;
++	cnt->bytes += diff;
++}
++
++static inline void fsg_stats_wr_attempt(struct fsg_stats *stats, u64 b_written)
++{
++	fsg_stats_update(&stats->write, b_written);
++}
++
++static inline void fsg_stats_rd_attempt(struct fsg_stats *stats, u64 b_read)
++{
++	fsg_stats_update(&stats->read, b_read);
++}
++
+ struct fsg_lun {
+ 	struct file	*filp;
+ 	loff_t		file_length;
+@@ -120,6 +146,8 @@ struct fsg_lun {
+ 	const char	*name;		/* "lun.name" */
+ 	const char	**name_pfx;	/* "function.name" */
+ 	char		inquiry_string[INQUIRY_STRING_LEN];
++
++	struct fsg_stats	stats;
+ };
+ 
+ static inline bool fsg_lun_is_open(struct fsg_lun *curlun)
+@@ -208,6 +236,7 @@ ssize_t fsg_show_file(struct fsg_lun *curlun, struct rw_semaphore *filesem,
+ ssize_t fsg_show_inquiry_string(struct fsg_lun *curlun, char *buf);
+ ssize_t fsg_show_cdrom(struct fsg_lun *curlun, char *buf);
+ ssize_t fsg_show_removable(struct fsg_lun *curlun, char *buf);
++ssize_t fsg_show_stats(struct fsg_lun *curlun, char *buf);
+ ssize_t fsg_store_ro(struct fsg_lun *curlun, struct rw_semaphore *filesem,
+ 		     const char *buf, size_t count);
+ ssize_t fsg_store_nofua(struct fsg_lun *curlun, const char *buf, size_t count);
+-- 
+2.34.1
+

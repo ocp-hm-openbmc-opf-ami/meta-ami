@@ -1,0 +1,574 @@
+From 9ed4663d6abb24604882d3553fe063d22e76c299 Mon Sep 17 00:00:00 2001
+From: dineshsv <dineshsv@ami.com>
+Date: Thu, 12 Sep 2024 12:45:06 +0530
+Subject: [PATCH] Add D-Bus SEL Logging and SEL Policy support
+
+Recreated the below patch
+
+This patch add support for Logging SEL Events to D-Bus instead of
+file based logging. Existing OneTree support stores the SEL Logs in
+file's and the IPMI/Redfish interface will read the corresponding files
+based on the Request. This patch Add support to Add/Read SEL logs from the
+D-Bus objects.
+
+All the logs will be updated to D-Bus using "Create" D-Bus method
+from phosphor-logging package. All the events loged for Threshold
+and Discrete sensor will be updated to D-Bus objected and Redfish
+messages is framed properly for Event Logs. Moved the PEF to
+common part so when a SEL event is logged PEF action can be
+performed.This patch add support for properly logging the discrete
+sensor event, so it will be logged properly into Redfish & IPMI.
+
+This patch also add support log SEL Event based on SEL policy
+
+Tested in AST2600evb & Intel Archercity Platform:
+
+1)Add SEL Entry Command:
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel list
+SEL has no entries
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 raw 0x0a 0x44 0x00 0x00 0x02 0x00 0x00 0x00 0x00 0x41 0x0
+0x04 0x20 0x0 0x6f 0x01 0xff 0xff
+01 00 //Response
+msgubuntu@Dell-server-3:~$
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel list
+1 | 11/05/2023 | 16:17:02 | OS Critical Stop | Run-time critical stop | Asserted
+msgubuntu@Dell-server-3:~$
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 raw 0x0a 0x44 0x00 0x00 0x02 0x00 0x00 0x00 0x00 0x41 0x0 0x04 0x12 0x0 0x6f 0x05 0xff 0xff
+02 00 //Response
+msgubuntu@Dell-server-3:~$
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel list
+1 | 11/05/2023 | 16:17:02 | OS Critical Stop | Run-time critical stop | Asserted
+2 | 11/05/2023 | 16:17:24 | System Event | Timestamp Clock Sync | Asserted
+
+2) Get SEL Entry command:
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel list
+1 | 11/05/2023 | 16:17:02 | OS Critical Stop | Run-time critical stop | Asserted
+2 | 11/05/2023 | 16:17:24 | System Event | Timestamp Clock Sync | Asserted
+
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel get 0x01
+SEL Record ID : 0001
+Record Type : 02
+Timestamp : 11/05/2023 16:17:02
+Generator ID : 0041
+EvM Revision : 04
+Sensor Type : OS Critical Stop
+Sensor Number : 00
+Event Type : Sensor-specific Discrete
+Event Direction : Assertion Event
+Event Data : 01ffff
+Description : Run-time critical stop
+
+msgubuntu@Dell-server-3:~$
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel get 0x02
+SEL Record ID : 0002
+Record Type : 02
+Timestamp : 11/05/2023 16:17:24
+Generator ID : 0041
+EvM Revision : 04
+Sensor Type : System Event
+Sensor Number : 00
+Event Type : Sensor-specific Discrete
+Event Direction : Assertion Event
+Event Data : 05ffff
+Description : Timestamp Clock Sync
+
+3)Delete SEL Entry :
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel list
+1 | 11/05/2023 | 16:17:02 | OS Critical Stop | Run-time critical stop | Asserted
+2 | 11/05/2023 | 16:17:24 | System Event | Timestamp Clock Sync | Asserted
+msgubuntu@Dell-server-3:~$
+
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel delete 0x01
+Deleted entry 1 //Response
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel list
+2 | 11/05/2023 | 16:17:24 | System Event | Timestamp Clock Sync | Asserted
+msgubuntu@Dell-server-3:~$
+
+4)Clear SEL Entry:
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel list
+2 | 11/05/2023 | 16:17:24 | System Event | Timestamp Clock Sync | Asserted
+msgubuntu@Dell-server-3:~$
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel clear
+Clearing SEL. Please allow a few seconds to erase.
+msgubuntu@Dell-server-3:~$
+msgubuntu@Dell-server-3:~$ ipmitool -H 10.0.136.250 -U root -P 0penBmc -I
+lanplus -C 17 sel list
+SEL has no entries //Response
+msgubuntu@Dell-server-3:~$
+
+- Configure SMTP Mail alert and trigger SEL events to verify PEF.
+
+1) Threshold temperature sensor:
+root@intel-obmc:~# ipmitool sensor | grep -i BMC
+BMC Temp | 32.000 | degrees C | ok | na | 0.000 | 5.000 | 110.000 | 115.000 | na
+root@intel-obmc:~#
+root@intel-obmc:~# ipmitool sensor thresh "BMC Temp" lnc 40
+Locating sensor record 'BMC Temp'...
+Setting sensor "BMC Temp" Lower Non-Critical threshold to 40.000
+root@intel-obmc:~#
+root@intel-obmc:~# ipmitool sel list
+1 | 11/05/23 | 17:00:42 UTC | Temperature #0x01 | Lower Non-critical going low | Asserted
+root@intel-obmc:~#
+
+//Received Mail alert at configured destination:
+
+msgubuntu@smtp:~/Maildir/new$ cat 1699203695.V802I1fc0304M76023.smtp
+Return-Path: <dbusSELtest@ami.com>
+X-Original-To: msgubuntu@coreqa.com
+Delivered-To: msgubuntu@coreqa.com
+Received: from intel-obmc (unknown [10.0.136.250])
+by smtp.coreqa.com (Postfix) with ESMTP id 084392640A9A
+for <msgubuntu@coreqa.com>; Sun, 5 Nov 2023 22:31:35 +0530 (IST)
+Date: Sun, 05 Nov 2023 17:00:42 +0000
+From: dbusSELtest@ami.com
+Message-Id: <1699203642.244440.315@intel-obmc>
+To: msgubuntu@coreqa.com
+Subject: Alert from intel-obmc
+
+Sensor Name : BMC_Temp
+Sensor Type : temperature
+Severity : Warning
+Description : BMC_Temp warning low threshold assert. Reading=32.000000 Threshold=40.000000.
+msgubuntu@smtp:~/Maildir/new$
+
+//Redfish Event log
+
+RF URL: https://10.0.136.250/redfish/v1/Systems/system/LogServices/EventLog/Entries/1
+{
+"@odata.id": "/redfish/v1/Systems/system/LogServices/EventLog/Entries/1",
+"@odata.type": "#LogEntry.v1_9_0.LogEntry",
+"AdditionalDataURI": "/redfish/v1/Systems/system/LogServices/EventLog/Entries/1/attachment",
+"Created": "2023-11-05T17:00:42.146+00:00",
+"EntryType": "Event",
+"Id": "1",
+"Message": "BMC_Temp warning low threshold assert. Reading=32.000000 Threshold=40.000000.",
+"Modified": "2023-11-05T17:00:42.146+00:00",
+"Name": "System Event Log Entry",
+"Resolved": false,
+"Severity": "OK"
+}
+
+2) Discrete Sensor Event:
+
+root@intel-obmc:~# ipmitool sel list
+1 | 11/05/23 | 17:00:42 UTC | Temperature #0x01 | Lower Non-critical going low | Asserted
+2 | 11/05/23 | 17:03:30 UTC | Watchdog2 #0x08 | Power cycle | Asserted
+root@intel-obmc:~#
+
+//Received Mail alert at configured destination:
+
+return-Path: <dbusSELtest@ami.com>
+X-Original-To: msgubuntu@coreqa.com
+Delivered-To: msgubuntu@coreqa.com
+Received: from intel-obmc (unknown [10.0.136.250])
+by smtp.coreqa.com (Postfix) with ESMTP id A268E2640216
+for <msgubuntu@coreqa.com>; Sun, 5 Nov 2023 22:34:23 +0530 (IST)
+Date: Sun, 05 Nov 2023 17:03:30 +0000
+From: dbusSELtest@ami.com
+Message-Id: <1699203810.873940.315@intel-obmc>
+To: msgubuntu@coreqa.com
+Subject: Alert from intel-obmc
+
+Sensor Name : Watchdog2
+Sensor Type : watchdog
+Severity : Information
+Description : Watchdog2 sensor PowerCycleevent assert detected
+msgubuntu@smtp:~/Maildir/new$
+
+//Redfish Event log
+
+RF URL: https://10.0.136.250/redfish/v1/Systems/system/LogServices/EventLog/Entries/2
+
+{
+"@odata.id": "/redfish/v1/Systems/system/LogServices/EventLog/Entries/2",
+"@odata.type": "#LogEntry.v1_9_0.LogEntry",
+"AdditionalDataURI": "/redfish/v1/Systems/system/LogServices/EventLog/Entries/2/attachment",
+"Created": "2023-11-05T17:03:30.779+00:00",
+"EntryType": "Event",
+"Id": "2",
+"Message": "Watchdog2 sensor PowerCycleevent assert detected",
+"Modified": "2023-11-05T17:03:30.779+00:00",
+"Name": "System Event Log Entry",
+"Resolved": false,
+"Severity": "OK"
+}
+
+Signed-off-by: vipinc <vipinc@ami.com>
+
+Signed-off-by: dineshsv <dineshsv@ami.com>
+---
+ include/sel_logger.hpp              |  59 +++++++++++
+ include/threshold_event_monitor.hpp |  24 +++--
+ include/watchdog_event_monitor.hpp  |  15 +++
+ src/sel_logger.cpp                  | 150 +++++++++++++---------------
+ 4 files changed, 163 insertions(+), 85 deletions(-)
+
+diff --git a/include/sel_logger.hpp b/include/sel_logger.hpp
+index 1bd981b..1d47837 100644
+--- a/include/sel_logger.hpp
++++ b/include/sel_logger.hpp
+@@ -62,9 +62,68 @@ static const std::string selLogFilename = "ipmi_sel";
+ static const std::string nextRecordFilename = "next_records";
+ #endif
+ 
++static void toHexStr(const std::vector<uint8_t>& data, std::string& hexStr)
++{
++    std::stringstream stream;
++    stream << std::hex << std::uppercase << std::setfill('0');
++    for (int v : data)
++    {
++        stream << std::setw(2) << v;
++    }
++    hexStr = stream.str();
++}
++
++static void doPefTask(
++    std::shared_ptr<sdbusplus::asio::connection> conn, const std::string& path,
++    bool assert, const uint16_t& recordId, const std::vector<uint8_t>& selData,
++    const std::string& message, const std::optional<uint8_t> addSenType)
++{
++    // Assign default values if none are provided
++    uint8_t senNum = 0xff;
++    uint8_t evtype = 0xff;
++    uint8_t sentype = 0xff;
++
++    if (!path.empty())
++    {
++        senNum = getSensorNumberFromPath(path);
++        evtype = getSensorEventTypeFromPath(path);
++        sentype = getSensorTypeFromPath(path);
++    }
++    else if (addSenType.has_value())
++    {
++        sentype = addSenType.value();
++        evtype = getEventType(sentype);
++    }
++    evtype |= assert ? 0x00 : 0x80;
++    std::chrono::microseconds timeout = DBUS_TIMEOUT;
++    auto startPefTask =
++        conn->new_method_call(pefService, pefObjPath, pefIface, pefTaskMethod);
++    startPefTask.append(static_cast<uint16_t>(recordId), sentype, senNum,
++                        evtype, selData[0], selData[1], selData[2], selBMCGenID,
++                        message.c_str());
++    try
++    {
++        conn->call(startPefTask, timeout.count());
++    }
++    catch (sdbusplus::exception_t&)
++    {
++        std::cerr << "Failed to call doPefTask\n";
++    }
++}
++
++#ifdef SEL_LOGGER_SEND_TO_LOGGING_SERVICE
++using AdditionalData = std::map<std::string, std::string>;
++static void selAddSystemRecord(
++    std::shared_ptr<sdbusplus::asio::connection> conn,
++    const std::string& message, const std::string& path,
++    const std::vector<uint8_t>& selData, const bool& assert,
++    const uint16_t& genId, const std::optional<AdditionalData>& addData);
++#else
++
+ template <typename... T>
+ static uint16_t
+     selAddSystemRecord(std::shared_ptr<sdbusplus::asio::connection> conn,
+                        const std::string& message, const std::string& path,
+                        const std::vector<uint8_t>& selData, const bool& assert,
+                        const uint16_t& genId, T&&... metadata);
++#endif
+diff --git a/include/threshold_event_monitor.hpp b/include/threshold_event_monitor.hpp
+index 0882385..0fb07b0 100644
+--- a/include/threshold_event_monitor.hpp
++++ b/include/threshold_event_monitor.hpp
+@@ -311,17 +311,27 @@ inline static sdbusplus::bus::match_t startThresholdAssertMonitor(
+         }
+         if (eventType != eventNone)
+         {
++            unsigned int recordId;
++            std::string selDataStr;
++            toHexStr(eventData, selDataStr);
+             sdbusplus::message_t AddToLog = conn->new_method_call(
+                 "xyz.openbmc_project.Logging", "/xyz/openbmc_project/logging",
+                 "xyz.openbmc_project.Logging.Create", "Create");
+-            AddToLog.append(journalMsg, LogLevel,
+-                            std::map<std::string, std::string>(
+-                                {{"SENSOR_PATH", std::string(msg.get_path())},
+-                                 {"EVENT", threshold},
+-                                 {"DIRECTION", direction},
+-                                 {"THRESHOLD", std::to_string(thresholdVal)},
+-                                 {"READING", std::to_string(assertValue)}}));
++            AddToLog.append(
++                journalMsg, LogLevel,
++                std::map<std::string, std::string>(
++                    {{"SENSOR_PATH", std::string(msg.get_path())},
++                     {"EVENT", threshold},
++                     {"SENSOR_DATA", selDataStr},
++                     {"GENERATOR_ID", std::to_string(selBMCGenID)},
++                     {"RECORD_TYPE", std::to_string(selSystemType)},
++                     {"EVENT_DIR", std::to_string(assert)},
++                     {"DIRECTION", direction},
++                     {"THRESHOLD", std::to_string(thresholdVal)},
++                     {"READING", std::to_string(assertValue)}}));
+             conn->call(AddToLog);
++            doPefTask(conn, msg.get_path(), assert, recordId, eventData,
++                      journalMsg, std::nullopt);
+         }
+ #else
+         selAddSystemRecord(
+diff --git a/include/watchdog_event_monitor.hpp b/include/watchdog_event_monitor.hpp
+index 777ac16..84f5f8f 100644
+--- a/include/watchdog_event_monitor.hpp
++++ b/include/watchdog_event_monitor.hpp
+@@ -225,12 +225,27 @@ inline static void sendWatchdogEventLog(
+             "watchdog countdown " + std::to_string(watchdogInterval / 1000) +
+             " seconds " + std::string(*expireAction) + " action");
+ 
++#ifdef SEL_LOGGER_SEND_TO_LOGGING_SERVICE
++        sdbusplus::message_t newLogEntry = conn->new_method_call(
++            "xyz.openbmc_project.Logging", "/xyz/openbmc_project/logging",
++            "xyz.openbmc_project.Logging.Create", "Create");
++        const std::string logLevel =
++            "xyz.openbmc_project.Logging.Entry.Level.Informational";
++        const std::string watchdogActionName = "WATCHDOG_ACTION";
++        newLogEntry.append(std::move(journalMsg), std::move(logLevel),
++                           std::map<std::string, std::string>(
++                               {{std::move(watchdogActionName),
++                                 std::move(std::string(*expireAction))}}));
++        conn->call(newLogEntry);
++#else
++
+         std::string redfishMessageID = "OpenBMC.0.1.IPMIWatchdog";
+ 
+         selAddSystemRecord(
+             conn, journalMsg, std::string(msg.get_path()), eventData, assert,
+             selBMCGenID, "REDFISH_MESSAGE_ID=%s", redfishMessageID.c_str(),
+             "REDFISH_MESSAGE_ARGS=%s", eventMessageArgs.c_str(), NULL);
++#endif
+     }
+ }
+ 
+diff --git a/src/sel_logger.cpp b/src/sel_logger.cpp
+index fca3233..636b7bd 100644
+--- a/src/sel_logger.cpp
++++ b/src/sel_logger.cpp
+@@ -429,16 +429,13 @@ static uint16_t getEntryCount()
+ #endif
+ #endif
+ 
+-static void toHexStr(const std::vector<uint8_t>& data, std::string& hexStr)
+-{
+-    std::stringstream stream;
+-    stream << std::hex << std::uppercase << std::setfill('0');
+-    for (int v : data)
+-    {
+-        stream << std::setw(2) << v;
+-    }
+-    hexStr = stream.str();
+-}
++#ifdef SEL_LOGGER_SEND_TO_LOGGING_SERVICE
++static void selAddSystemRecord(
++    [[maybe_unused]] std::shared_ptr<sdbusplus::asio::connection> conn,
++    [[maybe_unused]] const std::string& message, const std::string& path,
++    const std::vector<uint8_t>& selData, const bool& assert,
++    const uint16_t& genId, const std::optional<AdditionalData>& additionalData)
++#else
+ 
+ template <typename... T>
+ static uint16_t selAddSystemRecord(
+@@ -446,12 +443,15 @@ static uint16_t selAddSystemRecord(
+     [[maybe_unused]] const std::string& message, const std::string& path,
+     const std::vector<uint8_t>& selData, const bool& assert,
+     const uint16_t& genId, [[maybe_unused]] T&&... metadata)
++#endif
+ {
+     // Only 3 bytes of SEL event data are allowed in a system record
+     if (selData.size() > selEvtDataMaxSize)
+     {
+         throw std::invalid_argument("Event data too large");
+     }
++    unsigned int recordId;
++    uint8_t sensorType = 0xFF;
+     std::string selDataStr;
+     toHexStr(selData, selDataStr);
+ 
+@@ -460,45 +460,63 @@ static uint16_t selAddSystemRecord(
+         "xyz.openbmc_project.Logging", "/xyz/openbmc_project/logging",
+         "xyz.openbmc_project.Logging.Create", "Create");
+ 
+-    std::string journalMsg(
+-        message + " from " + path + ": " +
+-        " RecordType=" + std::to_string(selSystemType) +
+-        ", GeneratorID=" + std::to_string(genId) +
+-        ", EventDir=" + std::to_string(assert) + ", EventData=" + selDataStr);
++    std::string journalMsg = message;
++    if (journalMsg.empty())
++    {
++        std::string journalMsg(
++            message + " from " + path + ": " +
++            " RecordType=" + std::to_string(selSystemType) + ", GeneratorID=" +
++            std::to_string(genId) + ", EventDir=" + std::to_string(assert) +
++            ", EventData=" + selDataStr);
++    }
++    auto initialize = [&]() -> std::map<std::string, std::string> {
++        std::map<std::string, std::string> response{
++            {"SENSOR_PATH", path},
++            {"GENERATOR_ID", std::to_string(genId)},
++            {"RECORD_TYPE", std::to_string(selSystemType)},
++            {"EVENT_DIR", std::to_string(assert)},
++            {"SENSOR_DATA", selDataStr}};
+ 
+-    AddToLog.append(
+-        journalMsg, "xyz.openbmc_project.Logging.Entry.Level.Informational",
+-        std::map<std::string, std::string>(
+-            {{"SENSOR_PATH", path},
+-             {"GENERATOR_ID", std::to_string(genId)},
+-             {"RECORD_TYPE", std::to_string(selSystemType)},
+-             {"EVENT_DIR", std::to_string(assert)},
+-             {"SENSOR_DATA", selDataStr}}));
++        if (additionalData.has_value())
++        {
++            auto addData = additionalData.value();
++            auto itr = addData.find("SENSOR_TYPE");
++            if (itr != addData.end())
++            {
++                sensorType =
++                    static_cast<uint8_t>(std::stoi(addData["SENSOR_TYPE"]));
++                return addData;
++            }
++            else
++            {
++                sensorType = getSensorTypeFromPath(path);
++                return response;
++            }
++        }
++        return response;
++    };
++
++    // TODO: based on the event only the the severity should be defined
++    AddToLog.append(journalMsg,
++                    "xyz.openbmc_project.Logging.Entry.Level.Informational",
++                    initialize());
+     conn->call(AddToLog);
+-    return 0;
+ #else
+-    // check for OS Critical Sensor Event
+-    uint8_t sentype = getSensorTypeFromPath(path);
+-    uint8_t senNum = getSensorNumberFromPath(path);
+-    uint8_t evtype = getSensorEventTypeFromPath(path);
+-    if (sentype == osCriticalStop && evtype == sensorSpecificEvent)
++    recordId = getNewRecordId();
++    if (recordId != 0)
+     {
+-        auto bus = sdbusplus::bus::new_default();
+-        ipmi::Value event = static_cast<uint16_t>(1 << selData[0]);
+-        auto method = bus.new_method_call(
+-            osService, path.c_str(), "org.freedesktop.DBus.Properties", "Set");
+-        method.append(DiscreteIntf, "State", event);
+-        auto reply = bus.call(method);
+-        if (reply.is_method_error())
+-        {
+-            std::cerr << "Failed to update OS Critical Stop sensor";
+-        }
++        sd_journal_send(
++            "MESSAGE=%s", message.c_str(), "PRIORITY=%i", selPriority,
++            "MESSAGE_ID=%s", selMessageId, "IPMI_SEL_RECORD_ID=%d", recordId,
++            "IPMI_SEL_RECORD_TYPE=%x", selSystemType,
++            "IPMI_SEL_GENERATOR_ID=%x", genId, "IPMI_SEL_SENSOR_PATH=%s",
++            path.c_str(), "IPMI_SEL_EVENT_DIR=%x", assert, "IPMI_SEL_DATA=%s",
++            selDataStr.c_str(), std::forward<T>(metadata)..., NULL);
+     }
++#endif
+     // check for OS Critical Sensor Event
+-    uint8_t sentype = getSensorTypeFromPath(path);
+-    uint8_t senNum = getSensorNumberFromPath(path);
+     uint8_t evtype = getSensorEventTypeFromPath(path);
+-    if (sentype == osCriticalStop && evtype == sensorSpecificEvent)
++    if (sensorType == osCriticalStop && evtype == sensorSpecificEvent)
+     {
+         auto bus = sdbusplus::bus::new_default();
+         ipmi::Value event = static_cast<uint16_t>(1 << selData[0]);
+@@ -512,42 +530,7 @@ static uint16_t selAddSystemRecord(
+         }
+     }
+ 
+-    unsigned int recordId = getNewRecordId();
+-    if (recordId < selInvalidRecID)
+-    {
+-        if (recordId != 0)
+-        {
+-            sd_journal_send(
+-                "MESSAGE=%s", message.c_str(), "PRIORITY=%i", selPriority,
+-                "MESSAGE_ID=%s", selMessageId, "IPMI_SEL_RECORD_ID=%d",
+-                recordId, "IPMI_SEL_RECORD_TYPE=%x", selSystemType,
+-                "IPMI_SEL_GENERATOR_ID=%x", genId, "IPMI_SEL_SENSOR_PATH=%s",
+-                path.c_str(), "IPMI_SEL_EVENT_DIR=%x", assert,
+-                "IPMI_SEL_DATA=%s", selDataStr.c_str(),
+-                std::forward<T>(metadata)..., NULL);
+-
+-            evtype |= assert ? 0x00 : 0x80;
+-            std::chrono::microseconds timeout = DBUS_TIMEOUT;
+-
+-            // Do PEF Action
+-            auto startPefTask = conn->new_method_call(pefService, pefObjPath,
+-                                                      pefIface, pefTaskMethod);
+-            startPefTask.append(static_cast<uint16_t>(recordId), sentype,
+-                                senNum, evtype, selData[0], selData[1],
+-                                selData[2], static_cast<uint16_t>(genId),
+-                                message.c_str());
+-            try
+-            {
+-                conn->call(startPefTask, timeout.count());
+-            }
+-            catch (sdbusplus::exception_t&)
+-            {
+-                std::cerr << "Failed to call doPefTask\n";
+-            }
+-        }
+-    }
+-    return recordId;
+-#endif
++    doPefTask(conn, path, assert, recordId, selData, message, sensorType);
+ }
+ 
+ static uint16_t selAddOemRecord(
+@@ -617,6 +600,16 @@ int main(int, char*[])
+         server.add_interface(ipmiSelPath, ipmiSelAddInterface);
+ 
+     // Add a new SEL entry
++#ifdef SEL_LOGGER_SEND_TO_LOGGING_SERVICE
++    ifaceAddSel->register_method(
++        "IpmiSelAdd",
++        [conn](const std::string& message, const std::string& path,
++               const std::vector<uint8_t>& selData, const bool& assert,
++               const uint16_t& genId, const AdditionalData& addData) {
++            return selAddSystemRecord(conn, message, path, selData, assert,
++                                      genId, addData);
++        });
++#else
+     ifaceAddSel->register_method(
+         "IpmiSelAdd",
+         [conn](const std::string& message, const std::string& path,
+@@ -625,6 +618,7 @@ int main(int, char*[])
+             return selAddSystemRecord(conn, message, path, selData, assert,
+                                       genId);
+         });
++#endif
+     // Add a new OEM SEL entry
+     ifaceAddSel->register_method(
+         "IpmiSelAddOem",
+-- 
+2.25.1
+

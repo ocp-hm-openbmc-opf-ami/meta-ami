@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-host-ipmid.git;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "0d513ad99ca8105830a79d005e58ea4bc0db7fa7"
+SRCREV_override = "185db5961e3a757de8b02144442c35327f44f1f2"
 
 SRC_URI += " \
            file://phosphor-ipmi-host-ami.service \
@@ -12,13 +12,14 @@ SRC_URI += " \
 SRC_URI_EGS:append = " \
     file://0001-Fix-for-sensorlist-timeout.patch"
 
+DEPENDS += "libmapper"
 do_install:append(){
   install -d ${D}${includedir}/phosphor-ipmi-host
   install -m 0644 -D ${S}/sensorhandler.hpp ${D}${includedir}/phosphor-ipmi-host
   install -m 0644 -D ${S}/selutility.hpp ${D}${includedir}/phosphor-ipmi-host
   install -m 0644 -D ${S}/phosphor-ipmi-warm-reset.target ${D}${systemd_system_unitdir}
   install -m 0644 -D ${WORKDIR}/phosphor-ipmi-host-ami.service ${D}${systemd_system_unitdir}/phosphor-ipmi-host.service
-  if [ "${MACHINE}" = "evb-ast2600" ]; then
+  if [ "${MACHINE}" = "evb-ast2600" ] || [ "${MACHINE}" = "evb-npcm845" ]; then
       install -m 0644 -D ${WORKDIR}/phosphor-ipmi-host-evb-ami.service ${D}${systemd_system_unitdir}/phosphor-ipmi-host.service
   fi
 

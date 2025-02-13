@@ -1,0 +1,524 @@
+From f06e0605cda033543d13a6c0e2e67e0271b0fbeb Mon Sep 17 00:00:00 2001
+From: madhankumars <madhankumars@ami.com>
+Date: Thu, 12 Sep 2024 15:12:36 +0530
+Subject: [PATCH 78/78] Added_AES_Encryption_and_Properties.patch
+
+---
+ snmp_client.cpp       | 155 ++++++++++++++++++++++++++++++++++--------
+ snmp_client.hpp       |  26 ++++++-
+ snmp_conf_manager.cpp |  91 ++++++++++++++++---------
+ snmp_conf_manager.hpp |   9 ++-
+ snmp_serialize.cpp    |  12 +++-
+ snmp_util.cpp         |   4 ++
+ snmp_util.hpp         |   2 +
+ 7 files changed, 232 insertions(+), 67 deletions(-)
+
+diff --git a/snmp_client.cpp b/snmp_client.cpp
+index 6af157f..cedc5b5 100644
+--- a/snmp_client.cpp
++++ b/snmp_client.cpp
+@@ -23,15 +23,16 @@ using namespace phosphor::logging;
+ using namespace sdbusplus::xyz::openbmc_project::Common::Error;
+ using Argument = xyz::openbmc_project::Common::InvalidArgument;
+ 
+-std::vector<std::string> supported_encryption{"AES128",};
++std::vector<std::string> supported_encryption{"AES","DES"};
+ std::vector<std::string> supported_algorithm{
+-	"SHA256",
+-	"SHA384",
+-	"SHA512",
++	"SHA",
++	"SHA-256",
++	"SHA-384",
++	"SHA-512",
+ };
+ 
+ Client::Client(sdbusplus::bus_t& bus, const char* objPath, ConfManager& parent,
+-               const std::string& address, uint16_t port, const std::string version, const std::string user) :
++               const std::string& address, uint16_t port, const std::string version, const std::string user, bool readonlypermission, const std::string password, const std::string algorithm, const std::string encryption) :
+     Ifaces(bus, objPath, Ifaces::action::defer_emit),
+     id(std::stol(std::filesystem::path(objPath).filename())), parent(parent)
+ {
+@@ -41,6 +42,42 @@ Client::Client(sdbusplus::bus_t& bus, const char* objPath, ConfManager& parent,
+                                 Client::TransportProtocol::UDP);
+     this->version(version);
+     this->user(user);
++    this->password(password);
++    this->readonlypermission(readonlypermission);
++    this->algorithm(algorithm);
++    this->encryption(encryption);
++
++		  std::string s_command = "AMI-snmp-create-v3-user ";
++          if(version == "v3")
++	  {
++		  if(readonlypermission == true)
++		  {
++			  s_command.append("-ro ");
++		  }
++		  s_command.append(" -A ");
++		  s_command.append(password);
++		  s_command.append(" -a ");
++		  s_command.append(algorithm);
++		  s_command.append(" -X ");
++		  s_command.append(password);
++		  s_command.append(" -x ");
++		  s_command.append(encryption);
++		  s_command.append(" ");
++		  s_command.append(user);
++		 
++		  if(system("systemctl stop snmpd.service") == -1)
++		  {
++			  lg2::error("Stopping the snmpd.service Failed ..");
++		  }
++		  if(system(s_command.c_str()) == -1)
++		  {
++			  lg2::error("net-snmp-create-v3 command Failed ...");
++		  }
++		  if(system("systemctl start snmpd.service") == -1)
++		  {
++			  lg2::error("Restarting the snmpd.service Failed....");
++		  }
++	  }
+     // Emit deferred signal.
+     emit_object_added();
+ }
+@@ -64,7 +101,7 @@ std::string Client::address(std::string value)
+                               Argument::ARGUMENT_VALUE(value.c_str()));
+     }
+ 
+-    parent.checkClientConfigured(value, port());
++    parent.checkClientConfigured(value, port(),user(),version());
+ 
+     auto addr = Ifaces::address(value);
+     serialize(id, *this, parent.dbusPersistentLocation);
+@@ -84,7 +121,7 @@ uint16_t Client::port(uint16_t value)
+         return value;
+     }
+ 
+-    parent.checkClientConfigured(address(), value);
++    parent.checkClientConfigured(address(), value, user(),version());
+ 
+     auto port = Ifaces::port(value);
+     serialize(id, *this, parent.dbusPersistentLocation);
+@@ -172,42 +209,100 @@ std::string Client::user(std::string value)
+   return username;
+ }
+ 
++std::string Client::password(std::string Password)
++{
++        if (Password == Ifaces::password())
++        {
++                return Password;
++        }
++        
++        if(version() != "v3")
++        {
++                lg2::error("password not supported");
++                elog<InvalidArgument>(Argument::ARGUMENT_NAME("password"),
++                                Argument::ARGUMENT_VALUE(Password.c_str()));
++        }
++
++	auto password = Ifaces::password(Password);
++        serialize(id, *this, parent.dbusPersistentLocation);
++        return password;
++}
++
++bool Client::readonlypermission(bool permissionbyte)
++{
++        if (permissionbyte == Ifaces::readonlypermission())
++        {
++                return permissionbyte;
++        }
++
++        if(version() != "v3")
++        {
++                lg2::error("readonlypermission not supported");
++                elog<InvalidArgument>(Argument::ARGUMENT_NAME("readonlypermission"),
++                                Argument::ARGUMENT_VALUE("Version was not supported"));
++        }
++
++        auto readonlypermission = Ifaces::readonlypermission(permissionbyte);
++        serialize(id, *this, parent.dbusPersistentLocation);
++        return readonlypermission;
++}
++
+ std::string Client::algorithm(std::string value)
+ {
++	int algorithmlen = strlen(value.c_str());
+ 
+   if (value == Ifaces::algorithm())
+     {
+       return value;
+     }
+ 
+-  if((std::find(supported_algorithm.begin(),supported_algorithm.end(),value) == supported_algorithm.end()) || (version() != "v3"))
+-    {
+-      lg2::error("Algorithm Type not supported");
+-      elog<InvalidArgument>(Argument::ARGUMENT_NAME("algorithm"),
+-			    Argument::ARGUMENT_VALUE(value.c_str()));
+-    }
+-  auto algorithm = Ifaces::algorithm(value);
+-  serialize(id, *this, parent.dbusPersistentLocation);
+-  return algorithm;
++	if(((version() == "v3")&&(algorithmlen==0)))
++	{
++		lg2::error("NULL Algorithm Type was not supported");
++		elog<InvalidArgument>(Argument::ARGUMENT_NAME("algorithm"),
++				Argument::ARGUMENT_VALUE(value.c_str()));
++	}
++
++	if (value == Ifaces::algorithm())
++	{
++		return value;
++	}
++
++	if((std::find(supported_algorithm.begin(),supported_algorithm.end(),value) == supported_algorithm.end()) || (version() != "v3"))
++	{
++		lg2::error("Algorithm Type not supported");
++		elog<InvalidArgument>(Argument::ARGUMENT_NAME("algorithm"),
++				Argument::ARGUMENT_VALUE(value.c_str()));
++	}
++	auto algorithm = Ifaces::algorithm(value);
++	serialize(id, *this, parent.dbusPersistentLocation);
++	return algorithm;
+ }
+   
+ std::string Client::encryption(std::string value)
+ {
++	int encryptionlen = strlen(value.c_str());
+ 
+-  if (value == Ifaces::encryption())
+-    {
+-      return value;
+-    }
+-  
+-    if((std::find(supported_encryption.begin(),supported_encryption.end(),value) == supported_encryption.end()) || (version() != "v3"))
+-      {
+-	lg2::error("Encryption Type not supported");
+-	elog<InvalidArgument>(Argument::ARGUMENT_NAME("encryption"),
+-			      Argument::ARGUMENT_VALUE(value.c_str()));
+-      }
+-    auto encryption = Ifaces::encryption(value);
+-    serialize(id, *this, parent.dbusPersistentLocation);
+-    return encryption;
++	if(((version() == "v3")&&(encryptionlen==0)))
++	{
++		lg2::error("NULL Encryption Type was not supported");
++		elog<InvalidArgument>(Argument::ARGUMENT_NAME("encryption"),
++				Argument::ARGUMENT_VALUE(value.c_str()));
++	}
++	if (value == Ifaces::encryption())
++	{
++		return value;
++	}
++
++	if((std::find(supported_encryption.begin(),supported_encryption.end(),value) == supported_encryption.end()) || (version() != "v3"))
++	{
++		lg2::error("Encryption Type not supported");
++		elog<InvalidArgument>(Argument::ARGUMENT_NAME("encryption"),
++				Argument::ARGUMENT_VALUE(value.c_str()));
++	}
++	auto encryption = Ifaces::encryption(value);
++	serialize(id, *this, parent.dbusPersistentLocation);
++	return encryption;
+ }
+ 
+ 
+diff --git a/snmp_client.hpp b/snmp_client.hpp
+index 442ff5f..92bca83 100644
+--- a/snmp_client.hpp
++++ b/snmp_client.hpp
+@@ -59,7 +59,7 @@ class Client : public Ifaces
+      *  @param[in] port - network port.
+      */
+     Client(sdbusplus::bus_t& bus, const char* objPath, ConfManager& parent,
+-           const std::string& address, uint16_t port, const std::string version, const std::string user);
++           const std::string& address, uint16_t port, const std::string version, const std::string user, bool readonlypermission, const std::string password, const std::string algorithm, const std::string encryption);
+ 
+     /** @brief Constructor to put object onto bus at a dbus path.
+      *  @param[in] bus - Bus to attach to.
+@@ -103,6 +103,22 @@ class Client : public Ifaces
+      */
+     std::string user(std::string value) override;
+ 
++    /** @brief Update the SNMP v3 user's password of the object.
++     *
++     *  @param[in] value - SNMP v3 password
++     *
++     *  @return On success the updated V3 user password
++     */
++    std::string password(std::string Password) override;
++
++    /** @brief Update the SNMP v3 readonlypermission of the object.
++     *
++     *  @param[in] value - SNMP v3 readonlypermission
++     *
++     *  @return On success the updated readonlypermission
++     */
++    bool readonlypermission(bool permissionbyte) override;
++
+     /** @brief Update the algorithm of the object.
+      *
+      *  @param[in] value - v3 algorithm
+@@ -126,6 +142,14 @@ class Client : public Ifaces
+     using sdbusplus::xyz::openbmc_project::Network::server::Client::version;
+ 
+     using sdbusplus::xyz::openbmc_project::Network::server::Client::user;
++
++    using sdbusplus::xyz::openbmc_project::Network::server::Client::password;
++
++    using sdbusplus::xyz::openbmc_project::Network::server::Client::readonlypermission;
++
++    using sdbusplus::xyz::openbmc_project::Network::server::Client::algorithm;
++
++    using sdbusplus::xyz::openbmc_project::Network::server::Client::encryption;
+   
+     /** @brief Delete this d-bus object.
+      */
+diff --git a/snmp_conf_manager.cpp b/snmp_conf_manager.cpp
+index e41a1c4..bc45b30 100644
+--- a/snmp_conf_manager.cpp
++++ b/snmp_conf_manager.cpp
+@@ -12,7 +12,7 @@
+ #include <phosphor-logging/lg2.hpp>
+ 
+ #include <filesystem>
+-
++bool IssameClient=false;
+ namespace phosphor
+ {
+ namespace network
+@@ -31,11 +31,17 @@ ConfManager::ConfManager(sdbusplus::bus_t& bus, const char* objPath) :
+     objectPath(objPath)
+ {}
+ 
+-std::string ConfManager::client(std::string address, uint16_t port, std::string version, std::string user)
++std::string ConfManager::client(std::string address, uint16_t port, std::string version, std::string user, bool readonlypermission, const std::string password, const std::string algorithm, const std::string encryption)
+ {
+-    // will throw exception if it is already configured.
+-    checkClientConfigured(address, port);
++        if((version == "v3")&&(password.empty()))
++        {
++		  lg2::error("NULL Password not allowed for version v3");
++                elog<InvalidArgument>(Argument::ARGUMENT_NAME("password"),
++                                Argument::ARGUMENT_VALUE(password.c_str()));
++        }
+ 
++    // will throw exception if it is already configured.
++    checkClientConfigured(address, port, user, version);
+     try
+     {
+         // just to check whether given address is valid or not.
+@@ -47,25 +53,37 @@ std::string ConfManager::client(std::string address, uint16_t port, std::string
+         elog<InvalidArgument>(Argument::ARGUMENT_NAME("Address"),
+                               Argument::ARGUMENT_VALUE(address.c_str()));
+     }
+-
+-    lastClientId++;
+-    // create the D-Bus object
++    
+     std::filesystem::path objPath;
+-    objPath /= objectPath;
+-    objPath /= std::to_string(lastClientId);
+-
+-    auto client = std::make_unique<phosphor::network::snmp::Client>(
+-        bus, objPath.string().c_str(), *this, address, port, version, user);
+-
+-    // save the D-Bus object
+-    serialize(lastClientId, *client, dbusPersistentLocation);
+-
+-    this->clients.emplace(lastClientId, std::move(client));
++    if(IssameClient)
++    {
++	    deleteSNMPClient(sameClientId);
++	    objPath /= objectPath;
++	    objPath /= std::to_string(sameClientId);
++
++	    auto client = std::make_unique<phosphor::network::snmp::Client>(
++			    bus, objPath.string().c_str(), *this, address, port, version, user, readonlypermission, password, algorithm, encryption);
++	    // save the D-Bus object
++	    serialize(sameClientId, *client, dbusPersistentLocation);
++	    this->clients.emplace(sameClientId, std::move(client));
++    }
++    else
++    {
++	    // create the D-Bus object
++	    objPath /= objectPath;
++	    objPath /= std::to_string(lastClientId);
++	    auto client = std::make_unique<phosphor::network::snmp::Client>(
++			    bus, objPath.string().c_str(), *this, address, port, version, user, readonlypermission, password, algorithm, encryption);
++	    // save the D-Bus object
++	    serialize(lastClientId, *client, dbusPersistentLocation);
++	    this->clients.emplace(lastClientId, std::move(client));
++	    lastClientId++;
++    }
+     return objPath.string();
+ }
+ 
+ void ConfManager::checkClientConfigured(const std::string& address,
+-                                        uint16_t port)
++                                        uint16_t port, const std::string user, const std::string version)
+ {
+     if (address.empty())
+     {
+@@ -74,19 +92,29 @@ void ConfManager::checkClientConfigured(const std::string& address,
+                               Argument::ARGUMENT_VALUE(address.c_str()));
+     }
+ 
+-    for (const auto& val : clients)
+-    {
+-        if (val.second.get()->address() == address &&
+-            val.second.get()->port() == port)
+-        {
+-            lg2::error("Client already exist");
+-            // TODO Add the error(Object already exist) in the D-Bus interface
+-            // then make the change here,meanwhile send the Internal Failure.
+-            elog<InvalidArgument>(
+-                Argument::ARGUMENT_NAME("ADDRESS"),
+-                Argument::ARGUMENT_VALUE("Client already exist."));
+-        }
+-    }
++	IssameClient=false;
++
++	for (const auto& val : clients)
++	{
++		if((version == "v3") && (val.second.get()->user() == user)) 
++		{
++			sameClientId = val.second.get()->id;
++			IssameClient=true;lastClientId--;
++			break;
++		}
++
++		if (val.second.get()->address() == address &&
++				val.second.get()->port() == port)
++		{
++			lg2::error("Client already exist");
++			// TODO Add the error(Object already exist) in the D-Bus interface
++			// then make the change here,meanwhile send the Internal Failure.
++			elog<InvalidArgument>(
++					Argument::ARGUMENT_NAME("ADDRESS"),
++					Argument::ARGUMENT_VALUE("Client already exist."));
++		}
++	}
++
+ }
+ 
+ void ConfManager::deleteSNMPClient(Id id)
+@@ -149,6 +177,7 @@ void ConfManager::restoreClients()
+             if (idNum > lastClientId)
+             {
+                 lastClientId = idNum;
++		lastClientId++;
+             }
+         }
+     }
+diff --git a/snmp_conf_manager.hpp b/snmp_conf_manager.hpp
+index 5750f92..c95a568 100644
+--- a/snmp_conf_manager.hpp
++++ b/snmp_conf_manager.hpp
+@@ -50,7 +50,7 @@ class ConfManager : public details::CreateIface
+      *  @param[in] port - network port.
+      *  @returns D-Bus object path
+      */
+-  std::string client(std::string address, uint16_t port, std::string version, std::string user) override;
++  std::string client(std::string address, uint16_t port, std::string version, std::string user, bool readonlypermission, const std::string password, const std::string algorithm, const std::string encryption) override;
+ 
+     /* @brief delete the D-Bus object of the given ID.
+      * @param[in] id - client identifier.
+@@ -69,7 +69,7 @@ class ConfManager : public details::CreateIface
+      *
+      *  @return throw exception if client is already configured.
+      */
+-    void checkClientConfigured(const std::string& address, uint16_t port);
++    void checkClientConfigured(const std::string& address, uint16_t port, const std::string user, const std::string version);
+ 
+     /** @brief location of the persisted D-Bus object.*/
+     fs::path dbusPersistentLocation;
+@@ -84,8 +84,11 @@ class ConfManager : public details::CreateIface
+     /** @brief map of SNMP Client dbus objects and their ID */
+     ClientList clients;
+ 
++    /** @brief Id of the SameClient SNMP manager entry */
++    Id sameClientId = 0;
++
+     /** @brief Id of the last SNMP manager entry */
+-    Id lastClientId = 0;
++    Id lastClientId = 1;
+ 
+     friend class TestSNMPConfManager;
+ };
+diff --git a/snmp_serialize.cpp b/snmp_serialize.cpp
+index b12db68..88afdb2 100644
+--- a/snmp_serialize.cpp
++++ b/snmp_serialize.cpp
+@@ -34,7 +34,7 @@ template <class Archive>
+ void save(Archive& archive, const Client& manager,
+           const std::uint32_t /*version*/)
+ {
+-  archive(manager.address(), manager.port(), manager.version(),manager.user());
++  archive(manager.address(), manager.port(), manager.version(),manager.user(),manager.readonlypermission(), manager.algorithm(), manager.encryption());
+ }
+ 
+ /** @brief Function required by Cereal to perform deserialization.
+@@ -51,13 +51,21 @@ void load(Archive& archive, Client& manager, const std::uint32_t /*version*/)
+     uint16_t port{};
+     std::string version{};
+     std::string user{};
++    std::string password{};
++    bool readonlypermission{};
++    std::string algorithm {};
++    std::string encryption{};
+ 
+-    archive(ipaddress, port, version, user);
++    archive(ipaddress, port, version, user, readonlypermission, algorithm, encryption);
+ 
+     manager.address(ipaddress);
+     manager.port(port);
+     manager.version(version);
+     manager.user(user);
++    manager.password(password);
++    manager.readonlypermission(readonlypermission);
++    manager.algorithm(algorithm);
++    manager.encryption(encryption);
+ }
+ 
+ fs::path serialize(Id id, const Client& manager, const fs::path& dir)
+diff --git a/snmp_util.cpp b/snmp_util.cpp
+index 3bd0263..2ac74a6 100644
+--- a/snmp_util.cpp
++++ b/snmp_util.cpp
+@@ -159,6 +159,8 @@ std::vector<struct mgrProperty> getManagers()
+             auto& address =
+                 std::get<std::string>(snmpClientProps.at("Address"));
+             auto& port = std::get<uint16_t>(snmpClientProps.at("Port"));
++	    auto& readonlypermission = std::get<bool>(snmpClientProps.at("Readonlypermission"));
++	    auto& password = std::get<std::string>(snmpClientProps.at("Password"));
+             auto& version = std::get<std::string>(snmpClientProps.at("Version"));
+             auto& user = std::get<std::string>(snmpClientProps.at("User"));
+             auto& encryption = std::get<std::string>(snmpClientProps.at("Encryption"));
+@@ -171,6 +173,8 @@ std::vector<struct mgrProperty> getManagers()
+                 mgr += std::to_string(port);
+             }
+ 	    mgrProps.user = user;
++	    mgrProps.password = password;
++	    mgrProps.readonlypermission = readonlypermission;
+             mgrProps.version = version;
+             mgrProps.encryption = encryption;
+             mgrProps.algorithm = algorithm;
+diff --git a/snmp_util.hpp b/snmp_util.hpp
+index ff7eedd..dacfa14 100644
+--- a/snmp_util.hpp
++++ b/snmp_util.hpp
+@@ -67,6 +67,8 @@ struct mgrProperty
+   std::string ipaddress;
+   std::string version;
+   std::string user;
++  std::string password;
++  bool readonlypermission;
+   std::string algorithm;
+   std::string encryption;
+ };
+-- 
+2.34.1
+
+

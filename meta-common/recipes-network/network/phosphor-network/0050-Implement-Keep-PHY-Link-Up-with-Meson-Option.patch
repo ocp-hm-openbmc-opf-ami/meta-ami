@@ -1,0 +1,90 @@
+From 2c36e7cd8a0050adee61ec58301bb1c2d3584956 Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Tue, 10 Dec 2024 20:32:22 +0800
+Subject: [PATCH] Implement Keep PHY Link Up with Meson Option
+
+---
+ meson.build                |  1 +
+ meson_options.txt          |  3 ++-
+ src/ncsi_configuration.cpp | 38 ++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 41 insertions(+), 1 deletion(-)
+
+diff --git a/meson.build b/meson.build
+index 20b0607..4c2eff8 100644
+--- a/meson.build
++++ b/meson.build
+@@ -22,6 +22,7 @@ conf_data.set(
+ conf_data.set('SYNC_MAC_FROM_INVENTORY', get_option('sync-mac'))
+ conf_data.set('PERSIST_MAC', get_option('persist-mac'))
+ conf_data.set10('FORCE_SYNC_MAC_FROM_INVENTORY', get_option('force-sync-mac'))
++conf_data.set10('NCSI_KEEP_PHY_LINK_UP', get_option('ncsi-keep-phy-link-up'))
+ conf_data.set('AMI_IP_ADVANCED_ROUTING_SUPPORT', get_option('enable-advanced-route'))
+ conf_data.set10('NCSI_FLOW_CONTROL', get_option('ncsi-flow-control'))
+ conf_data.set('AMI_NCSI_SUPPORT', get_option('enable-ncsi'))
+diff --git a/meson_options.txt b/meson_options.txt
+index ff96e65..6fddbf8 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -15,7 +15,8 @@ option('persist-mac', type: 'boolean',
+ option('force-sync-mac', type: 'boolean',
+        description: 'Force sync mac address no matter is first boot or not')
+ option('enable-advanced-route', type: 'boolean', description: 'Enable advanced route or not')
++option('ncsi-keep-phy-link-up', type: 'boolean', description: 'Enable NCSI Keep PHY link up or not')
+ option('ncsi-flow-control', type: 'boolean', description: 'Enable NCSI flow control or not')
+ option('enable-ncsi', type: 'boolean', description: 'Enable NCSI Feature or not')
+ option('default-ncsi-interface', type: 'string', description: 'Default NCSI interface')
+-option('enable-system-firewall', type: 'boolean', description: 'Enable system firewall rules or not')
+\ No newline at end of file
++option('enable-system-firewall', type: 'boolean', description: 'Enable system firewall rules or not')
+diff --git a/src/ncsi_configuration.cpp b/src/ncsi_configuration.cpp
+index 183f674..5d3ec78 100644
+--- a/src/ncsi_configuration.cpp
++++ b/src/ncsi_configuration.cpp
+@@ -64,6 +64,44 @@ Configuration::Configuration(sdbusplus::bus_t& bus, std::string_view path,
+         }
+     }
+ #endif
++
++    {
++        std::vector<std::tuple<uint16_t, std::vector<uint16_t>>> channelList;
++        std::vector<unsigned char> payload;
++        std::string byte(2, '\0');
++#if NCSI_KEEP_PHY_LINK_UP
++        std::string payloadStr = "00000157200001";
++#else
++        std::string payloadStr = "00000157200000";
++#endif
++        // Parse the payload string (e.g. "000001572100") to byte data
++        for (unsigned int i = 1; i < payloadStr.size(); i += 2)
++        {
++            byte[0] = payloadStr[i - 1];
++            byte[1] = payloadStr[i];
++
++            try
++            {
++                payload.push_back(stoi(byte, nullptr, 16));
++            }
++            catch (const std::exception& e)
++            {
++                log<level::INFO>("Payload invalid.\n");
++            }
++        }
++        getChannelList(eth.getIfIdx(), -1, channelList);
++        for (auto v : channelList)
++        {
++            auto [p, channels] = v;
++            for (auto c : channels)
++            {
++                ncsi::sendOemCommand(eth.getIfIdx(), p, c,
++                                     std::span<const unsigned char>(
++                                         payload.begin(), payload.end()));
++            }
++        }
++    }
++
+     emit_object_added();
+ }
+ 
+-- 
+2.34.1
+

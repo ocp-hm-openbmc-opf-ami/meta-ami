@@ -7,23 +7,14 @@
   - https://www.dmtf.org/sites/default/files/standards/documents/DSP0236_1.3.1.pdf
 - Management Component Transport Protocol (MCTP) PCIe VDM Transport Binding Specification
   - https://www.dmtf.org/sites/default/files/standards/documents/DSP0238_1.2.0.pdf
-- Facebook OpenBMC
-  - https://github.com/facebook/openbmc/tree/helium/common/recipes-lib/mctp
-  - https://github.com/facebook/openbmc/tree/helium/common/recipes-lib/obmc-mctp
-  - https://github.com/facebook/openbmc/tree/helium/common/recipes-core/mctp-util
 - Intel-BMC/libmctp
   - https://github.com/Intel-BMC/libmctp
-- Intel-BMC/pmci
-  - https://github.com/Intel-BMC/pmci
-- Intel-BMC/linux
-  - https://github.com/Intel-BMC/linux
 - OpenBMC/libmctp
   - https://github.com/openbmc/libmctp
 
 # Dependencies
-- It is required to use Intel-BMC/libmctp to build this test program. The reason are as following.
-  - Intel-BMC/libmctp has not been upstreamed to OpenBMC/libmctp, yet.
-  - OpenBMC/libmctp only supports linux kernel v5.15 and higher version. To fix conflict issue between Intel-BMC/libmctp and OpenBMC/libmctp, Intel-BMC/libmctp is only used
+- It is required to use Intel-BMC/libmctp to build this test program.
+  - Intel-BMC/libmctp has not been upstreamed to OpenBMC/libmctp, yet. To fix conflict issue between Intel-BMC/libmctp and OpenBMC/libmctp, Intel-BMC/libmctp is only used
 to build this test program. It will not install header files and static library of Intel-BMC/libmctp into image.
 
 # MCTP Message Type
@@ -204,7 +195,13 @@ The response data is:
 7c 00 03 05
 ```
 
-# MCTP over SMBUS
+# MCTP over SMBUS (Deprecated)
+It only supports old kernel version. If users kernel version is since v6.6, please use kernel mctp stack instead.
+- https://github.com/torvalds/linux/blob/master/Documentation/networking/mctp.rst
+- https://github.com/torvalds/linux/blob/master/Documentation/devicetree/bindings/net/mctp-i2c-controller.yaml
+- https://codeconstruct.com.au/docs/mctp-on-linux-introduction/
+
+
 ## MCTP packet encapsulation
 All MCTP transactions are based on the SMBus Block Write bus protocol. The first 8 bytes make up the packet header. The first three fields—Destination Slave Address, Command Code, and Length—map directly to SMBus functional fields. The remaining header and payload fields map to SMBus Block Write "Data Byte" fields.
 

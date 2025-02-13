@@ -20,9 +20,14 @@ UPDATE_PERCENT_SUCCESS=100
 UPDATE_PERCENT_FAIL=100
 SECURE_BOOT_STRAP_ENABLED=1
 update=/run/initramfs/update
-whitelist=/run/initramfs/whitelist
+SLOT_FILE=/run/media/slot
+BMC_PRESERVE_DIR=/tmp/bmc_preserve_dir
+TMP_OVERLAY=/tmp/.rwfs/.overlay
+TMP_RWFS=/tmp/.rwfs
 uboot_env_bin_file="uboot_env_data.bin"
+preserve_bios="/tmp/preserveBIOS.json"
 NON_INTEL_PLATFORMS_MODE=1
+is_Uboot_enabled=false
 immediate="xyz.openbmc_project.Software.ApplyTime.RequestedApplyTimes.Immediate"
 atMaintenanceWindowStart="xyz.openbmc_project.Software.ApplyTime.RequestedApplyTimes.AtMaintenanceWindowStart"
 
@@ -31,6 +36,14 @@ BMC_FW_UPDATING=1
 OTHER_FW_UPDATING=2
 RET_FAILED=1
 RET_NORMAL=0
+
+if test -x $update; then
+    whitelist=/run/initramfs/whitelist
+    is_intel_platform=false
+else
+    whitelist=/tmp/whitelist
+    is_intel_platform=true
+fi
 
 update_percentage() {
     if [ -n "$img_obj" ]; then
@@ -123,7 +136,7 @@ check_preserv_config() {
             log "BMC Full Flash - Start Preserve Config"
             if [[ "$applytime" == "$immediate" || "$applytime" == "$atMaintenanceWindowStart"  ]];then
                 #mount nv rwfs mtd partition
-                mount -t jffs2 -o sync,ro mtd:rwfs /tmp/.rwfs
+                mount -t jffs2 -o sync,ro mtd:rwfs $TMP_RWFS
                 #start nv sync  
                 systemctl start nv-sync.service
                 #stop nv sync to dump overlay files to nv storage
@@ -143,6 +156,176 @@ check_preserv_config() {
     else
         log "ClearConfig is not available"
     fi
+}
+
+Check_and_update_whitelist() {
+    service="xyz.openbmc_project.EntityManager"
+    interface="xyz.openbmc_project.Configuration.Preserve"
+    config_list=$(busctl tree --list $service | grep -o '.*Configuration/.*')
+
+    if [ -f $whitelist ]; then
+        truncate -s 0 "$whitelist"
+    fi
+
+    for config_obj in $config_list; do
+        isEnable=$(busctl get-property $service $config_obj $interface isEnable | awk '{print $2}')
+        if [[ -n "$isEnable" && "$isEnable" = "true" ]]; then
+            filespath=$(busctl get-property $service $config_obj $interface filepath | awk -F'"' '{for(i=2;i<=NF;i+=2) print $i}')
+            for file_path in $filespath; do
+                echo $file_path >> $whitelist
+            done
+
+            if [ "${config_obj##*/}" == "U_BOOT_ENV" ]; then
+                log "BMC Full Flash - Backup u-boot-env partition"
+                backup_uboot_env_data
+                is_Uboot_enabled=true
+            fi
+        fi
+    done
+}
+
+Backup_bmc_config() {
+    log "BMC Full Flash - Start Backup Configuration"
+
+    systemctl stop nv-sync.service
+    umount $TMP_RWFS
+
+    while read -r f
+    do
+        # Entries shall start with /, no trailing /.. or embedded /../
+        if test "/${f#/}" != "$f" -o "${f%/..}" != "${f#*/../}"
+        then
+            echo 1>&2 "WARNING: Skipping bad whitelist entry $f."
+            continue
+        fi
+        if ! test -e "$f"
+        then
+            continue
+        fi
+        d="$BMC_PRESERVE_DIR/$f"
+        while test "${d%/}" != "${d%/.}"
+        do
+            d="${d%/.}"
+            d="${d%/}"
+        done
+        mkdir -p "${d%/*}"
+        cp -rp "$f" "${d%/*}/"
+    done < $whitelist
+
+    log "BMC Full Flash - Backup Configuration Done" 
+}
+
+restore_bmc_config() {
+        log "BMC Full Flash - Start Restore Configuration"
+
+        rm -rf $TMP_OVERLAY
+        #mount rwfs partation to restore configs
+        mount -t jffs2 -o rw mtd:rwfs $TMP_RWFS
+
+        # copy required configs from backup dir to overlaydir
+        cp -rp "$BMC_PRESERVE_DIR" "$TMP_OVERLAY"
+
+        # unmount rwfs partation
+        umount $TMP_RWFS
+
+        log "BMC Full Flash - Restore Configuration Done"
+
+        if [ "$is_Uboot_enabled" == true ]; then
+            restore_uboot_env_data
+        fi
+
+        # Clear backup dir
+        rm -rf $BMC_PRESERVE_DIR
+}
+
+check_preserve_bios_config() {
+    value=$(busctl get-property xyz.openbmc_project.Software.BMC.Updater \
+            /xyz/openbmc_project/software \
+            xyz.openbmc_project.Software.ApplyOptions ClearConfig \
+            | awk '{print $2}' )
+    local mtdPart=$( cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"pnor\"" {print $1}')
+
+    if [ ! -f $preserve_bios ]; then
+        log "BIOS Full Flash - Preserve Configuration JSON not present"
+        return
+    fi
+
+    if [ -n "$value" ]; then
+        if [ "$value" = "true" ]; then
+            log "BIOS Full Flash - Not Preserved the Config"
+        else
+            log "BIOS Full Flash - Start Preserve Config"
+
+            json_data=$(cat $preserve_bios)
+
+            config_keys=$(echo "$json_data" | grep -o '"[^"]*": {' | awk -F'"' '{print $2}')
+
+            for key in $config_keys; do
+                block=$(echo "$json_data" | awk -v RS="}" "/\"$key\"/ {print \$0 RS}")
+
+                # Extract start, length value from the block
+                start=$(echo "$block" | grep -o '"start": *"[^"]*"' | awk -F'"' '{print $4}')
+                length=$(echo "$block" | grep -o '"length": *"[^"]*"' | awk -F'"' '{print $4}')
+
+                nanddump -s $start -l $length /dev/$mtdPart > /tmp/preserve_bios_$key
+                if [[ $? -eq 0 ]]; then
+                    log "BIOS $key Configs Preserved successfully"
+                else
+                    log "BIOS $key Configs Preserved failed"
+                fi
+
+            done
+        fi
+    else
+        log "ClearConfig is not available"
+    fi
+}
+
+restore_bios_configs() {
+    value=$(busctl get-property xyz.openbmc_project.Software.BMC.Updater \
+            /xyz/openbmc_project/software \
+            xyz.openbmc_project.Software.ApplyOptions ClearConfig \
+            | awk '{print $2}' )
+
+    if [ "$value" = "true" ]; then
+        # set clear configs to false
+        busctl set-property xyz.openbmc_project.Software.BMC.Updater \
+            /xyz/openbmc_project/software \
+            xyz.openbmc_project.Software.ApplyOptions ClearConfig \
+            b false
+        return
+    fi
+
+    if [ ! -f $preserve_bios ]; then
+        log "BIOS Full Flash - Preserve Configuration JSON not present"
+        return
+    fi
+
+    local mtdPart=$( cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"pnor\"" {print $1}')
+
+    json_data=$(cat $preserve_bios)
+
+    config_keys=$(echo "$json_data" | grep -o '"[^"]*": {' | awk -F'"' '{print $2}')
+
+    for key in $config_keys; do
+        block=$(echo "$json_data" | awk -v RS="}" "/\"$key\"/ {print \$0 RS}")
+
+        # Extract start, length value from the block
+        start=$(echo "$block" | grep -o '"start": *"[^"]*"' | awk -F'"' '{print $4}')
+
+        nandwrite -s $start /dev/${mtdPart} /tmp/preserve_bios_$key
+        if [[ $? -eq 0 ]]; then
+            log "BIOS Full Flash - restore $key Configs Preserved successfully"
+        else
+            log "BIOS Full Flash - restore $key Configs Preserved failed"
+        fi
+
+    done
+
+    for key in $config_keys; do
+        rm -rf /tmp/preserve_bios_$key
+    done
+
 }
 
 redfish_log_fw_evt() {
@@ -279,12 +462,15 @@ ifwi_full_flash() {
     fi
 
     # Flash: writing to BIOS SPI device
+    check_preserve_bios_config
     log "IFWI Full Flash - Starting the SPI write. It will take ~5 minutes...."
-    local rc=$(mtd-util -d /dev/$mtdPart c $LOCAL_PATH 0)
+    # local rc=$(mtd-util -d /dev/$mtdPart c $LOCAL_PATH 0)
+    local rc=$(flashcp $LOCAL_PATH /dev/$mtdPart)
     # Log Event: Update percentage and log event
     update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
     if [[ "$rc" -eq 0 ]]; then
         log "IFWI Full Flash - Image update successful"
+        restore_bios_configs
         redfish_log_fw_evt success
         update_percentage $UPDATE_PERCENT_SUCCESS         
         return 0
@@ -292,14 +478,14 @@ ifwi_full_flash() {
         log "IFWI Full Flash - Image update failed"
         redfish_log_abort " IFWI Full Flash - Image update failed"        
         update_percentage $UPDATE_PERCENT_FAIL
-	return 1
+	    return 1
     fi
 }
 
 backup_uboot_env_data() {
     local mtdPart=$( cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"u-boot-env\"" {print $1}')
     local mtd_size=$(printf "%x\n" $(cat /sys/class/mtd/${mtdPart}/size))
-    if test "$1" == "$NON_INTEL_PLATFORMS_MODE"; then
+    if [ "$is_intel_platform" != true ]; then
         local rc=$(mtd_debug read /dev/${mtdPart} 0 0x${mtd_size} /run/initramfs/${uboot_env_bin_file})
     else
         local rc=$(mtd_debug read /dev/${mtdPart} 0 0x${mtd_size} /tmp/${uboot_env_bin_file})
@@ -326,18 +512,22 @@ bmc_full_flash() {
     FWVER="NA"
 
     update_percentage $UPDATE_PERCENT_PRESTAGE_VERIFY_START
+    Check_and_update_whitelist
     # Use update script to update Firmware for non-intel platforms
     if test -x $update; then
-        if test -x $SLOT_FILE; then
+        if [ -f $SLOT_FILE ]; then
             SLOT_FILE="/run/media/slot"
             BOOT_SOURCE=$(cat "$SLOT_FILE")
-            check_preserv_config $NON_INTEL_PLATFORMS_MODE
+            # check_preserv_config $NON_INTEL_PLATFORMS_MODE
             local requestedactivationstate=$(get_requestedactivation_status bmc_bkup)
             local bmc_active_requestedactivationstate=$(get_requestedactivation_status bmc_active)
             if [[ "$bmc_active_requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" && "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
+                log "Start Update Both BMC Active and Backup  images. It will take ~20 minutes...."
                 regval=$(devmem 0x1e620064 )
                 bootmode=$(( ($regval >> 6) & 1 ))
+                log "BMC Full Flash - Starting the SPI write on active CS0 spi...."
                 cp $LOCAL_PATH /run/initramfs/
+                log "BMC Full Flash - Starting the SPI write on bkup CS1 spi...."
                 if [ "$bootmode" -eq 1 ]; then
                     cp $LOCAL_PATH /run/initramfs/image-alt-singleabr
                 else
@@ -345,6 +535,7 @@ bmc_full_flash() {
                     /usr/bin/reset-cs0-aspeed
                 fi
             elif [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
+                log "BMC Full Flash - Starting the SPI write on bkup CS1 spi...."
 		        regval=$(devmem 0x1e620064 )
                 bootmode=$(( ($regval >> 6) & 1 ))
                 if [ "$BOOT_SOURCE" -eq 0 ]; then
@@ -358,8 +549,10 @@ bmc_full_flash() {
                 fi
             else
                 if [ "$BOOT_SOURCE" -eq 0 ]; then
+                    log "BMC Full Flash - Starting the SPI write on active CS0 spi...."
                     cp $LOCAL_PATH /run/initramfs/
                 else
+                    log "BMC Full Flash - Starting the SPI write on bkup CS1 spi...."
                     cp $LOCAL_PATH /run/initramfs/image-alt-bmc
                     /usr/bin/reset-cs0-aspeed
                 fi
@@ -368,14 +561,15 @@ bmc_full_flash() {
             update_percentage $UPDATE_PERCENT_SUCCESS
             return 0
         else
-            check_preserv_config $NON_INTEL_PLATFORMS_MODE
+            log "BMC Full Flash - Starting the SPI write. It will take ~8 minutes...."
+            # check_preserv_config $NON_INTEL_PLATFORMS_MODE
             cp $LOCAL_PATH /run/initramfs/
             redfish_log_fw_evt success
             update_percentage $UPDATE_PERCENT_SUCCESS
             return 0
         fi  # This was missing
     else
-        if test -x $SLOT_FILE; then
+        if [ -f $SLOT_FILE ]; then
             SLOT_FILE="/run/media/slot"
             BOOT_SOURCE=$(cat "$SLOT_FILE")
             log "BMC Full Flash - Booted from CS$BOOT_SOURCE"
@@ -387,15 +581,14 @@ bmc_full_flash() {
                 log "Start Update Both BMC Active and Backup  images. It will take ~20 minutes...."
                 log "BMC Full Flash - Starting the SPI write on active CS0 spi. It will take ~8 minutes...."
                 local mtdPart=$(cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"bmc\"" {print $1}')
-                if [[ "$applytime" == "$immediate" || "$applytime" == "$atMaintenanceWindowStart"  ]];then
-                    # stop nv sync
-                    systemctl stop nv-sync.service
-                    # unmount rwfs
-                    umount /tmp/.rwfs
-                fi    
+                # if [[ "$applytime" == "$immediate" || "$applytime" == "$atMaintenanceWindowStart"  ]];then
+                #     # stop nv sync
+                #     systemctl stop nv-sync.service
+                #     # unmount rwfs
+                #     umount /tmp/.rwfs
+                # fi 
 
-                log "BMC Full Flash - Backup u-boot-env partition"
-                backup_uboot_env_data
+                Backup_bmc_config
 
                 local rc=$(mtd-util -d /dev/$mtdPart c $LOCAL_PATH 0)
 
@@ -441,11 +634,13 @@ bmc_full_flash() {
                     return 1
                 fi
                 update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
-                check_preserv_config
+                # check_preserv_config
+                restore_bmc_config
                 log "BMC Full Flash - Image updated successful on bkup spi"
                 redfish_log_fw_evt success
                 update_percentage $UPDATE_PERCENT_SUCCESS
                 sleep 5
+                return 0
             elif [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
                 regval=$(devmem 0x1e620064 )
                 bootmode=$(( ($regval >> 6) & 1 ))
@@ -463,15 +658,14 @@ bmc_full_flash() {
                     log "BMC Full Flash - Starting the SPI write on bkup CS1 spi. It will take ~8 minutes...."
                     local mtdPart=$(cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"bmc\"" {print $1}')
                     flashoffset=0
-                    if [[ "$applytime" == "$immediate" || "$applytime" == "$atMaintenanceWindowStart"  ]];then
-                        # stop nv sync
-                        systemctl stop nv-sync.service
-                        # unmount rwfs
-                        umount /tmp/.rwfs
-                    fi    
+                    # if [[ "$applytime" == "$immediate" || "$applytime" == "$atMaintenanceWindowStart"  ]];then
+                    #     # stop nv sync
+                    #     systemctl stop nv-sync.service
+                    #     # unmount rwfs
+                    #     umount /tmp/.rwfs
+                    # fi    
+                    Backup_bmc_config
 
-                    log "BMC Full Flash - Backup u-boot-env partition"
-                    backup_uboot_env_data
                 fi
                 echo "mtdPart=$mtdPart"
                 if [ -z "$mtdPart" ]; then
@@ -492,24 +686,25 @@ bmc_full_flash() {
                 fi
                 update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
                 if [ "$BOOT_SOURCE" -eq 1 ]; then
-                    check_preserv_config
+                    # check_preserv_config
+                    restore_bmc_config
                 fi
                 log "BMC Full Flash - Image update successful on bkup spi"
                 redfish_log_fw_evt success
                 update_percentage $UPDATE_PERCENT_SUCCESS
                 sleep 5
+                return 0
             else
                 if [ "$BOOT_SOURCE" -eq 0 ]; then
                     log "BMC Full Flash - Starting the SPI write on active CS0 spi. It will take ~8 minutes...."
                     local mtdPart=$(cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"bmc\"" {print $1}')
-                    if [[ "$applytime" == "$immediate" || "$applytime" == "$atMaintenanceWindowStart"  ]];then
-                        # stop nv sync
-                        systemctl stop nv-sync.service
-                        # unmount rwfs
-                        umount /tmp/.rwfs
-                    fi
-                    log "BMC Full Flash - Backup u-boot-env partition"
-                    backup_uboot_env_data
+                    # if [[ "$applytime" == "$immediate" || "$applytime" == "$atMaintenanceWindowStart"  ]];then
+                    #     # stop nv sync
+                    #     systemctl stop nv-sync.service
+                    #     # unmount rwfs
+                    #     umount /tmp/.rwfs
+                    # fi
+                    Backup_bmc_config
                 else
                     log "BMC Full Flash - Starting the SPI write on active CS0 spi. It will take ~8 minutes...."
                     local mtdPart=$(cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"alt-bmc\"" {print $1}')
@@ -527,7 +722,8 @@ bmc_full_flash() {
                 fi
                 log "BMC Full Flash - Image update successful"
                 if [ "$BOOT_SOURCE" -eq 0 ]; then
-                    check_preserv_config
+                    # check_preserv_config
+                    restore_bmc_config
                 else
                     ACCESS_CS0="/sys/class/spi_master/spi0/device/access_primary"
                     if [ -f "${ACCESS_CS0}" ]; then
@@ -541,14 +737,13 @@ bmc_full_flash() {
                 return 0
             fi
         fi
-        if [[ "$applytime" == "$immediate" || "$applytime" == "$atMaintenanceWindowStart"  ]];then
-            #stop nv sync
-            systemctl stop nv-sync.service
-            #unmount rwfs  
-            umount /tmp/.rwfs
-        fi
-        log "BMC Full Flash - Backup u-boot-env partition"
-        backup_uboot_env_data
+        # if [[ "$applytime" == "$immediate" || "$applytime" == "$atMaintenanceWindowStart"  ]];then
+        #     #stop nv sync
+        #     systemctl stop nv-sync.service
+        #     #unmount rwfs  
+        #     umount /tmp/.rwfs
+        # fi
+        Backup_bmc_config
 
         # Flash: writing to BMC SPI device
         log "BMC Full Flash - Starting the SPI write. It will take ~8 minutes...."
@@ -563,7 +758,8 @@ bmc_full_flash() {
             return 1
         fi
         log "BMC Full Flash - Image update successful"
-        check_preserv_config
+        # check_preserv_config
+        restore_bmc_config
         redfish_log_fw_evt success
         update_percentage $UPDATE_PERCENT_SUCCESS
         sleep 5
@@ -596,6 +792,9 @@ ping_pong_update() {
     if test -x $update
 	then
         find $(dirname "$METAFILE_PATH") -type f -name "image-*" ! -name "*.sig" -exec cp {} /run/initramfs/ \;
+        redfish_log_fw_evt success
+        update_percentage $UPDATE_PERCENT_SUCCESS
+        return 0
     fi
     # do a quick sanity check on the image
     if [ $(stat -c "%s" "$LOCAL_PATH") -lt 10000000 ]; then
@@ -630,6 +829,7 @@ ping_pong_update() {
     fi    
     redfish_log_fw_evt success
     update_percentage $UPDATE_PERCENT_SUCCESS
+    return 0
 }
 
 cpld_full_flash()
@@ -855,11 +1055,16 @@ if [ $# -eq 0 ]; then
     URI="$DEFURI"
 else
     echo "path=$1"
+    # clear cache before start firmware update
+    if [ ! -f $update ]; then
+        echo 3 > /proc/sys/vm/drop_caches
+    fi
     if [[ "$1" == *"/"* ]]; then
         URI=$1 # local file
         local_file=1 ;
         mkdir -p /tmp/updateImage;
         tar -xvf $1 -C "/tmp/updateImage";
+        rm -rf $1 #clear tar file after untar it
         URI="file:///tmp/updateImage/MANIFEST";
     else
         path=$(find / -name "$1")

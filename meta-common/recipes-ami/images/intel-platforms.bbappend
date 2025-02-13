@@ -1,15 +1,33 @@
 inherit obmc-phosphor-signining
 
+ROOTFS_POSTPROCESS_COMMAND:remove = "set_user_groupdo_populate_static_lic;"
+ROOTFS_POSTPROCESS_COMMAND:append = " set_user_group do_populate_static_lic "
 
-python() {
-    types = d.getVar('IMAGE_FSTYPES', True).split()
-    d.setVar('UBOOT_SEC_SIZE', str(1024*1024))
 
-    if not 'intel-pfr' in types:
-        d.setVar('FIT_SECTOR_SIZE', str(0x2C00000))
-        DTB_FULL_FIT_IMAGE_OFFSETS = [0x100000]
-        d.setVar('FLASH_RUNTIME_OFFSETS', ' '.join(
-            [str(int(x/1024)) for x in DTB_FULL_FIT_IMAGE_OFFSETS])
-            )
+write_flash_size_to_file() {
+    flash_size_kb="${FLASH_SIZE}"
+    image_size_bytes=$(expr "${flash_size_kb}" \* 1024)
+    image_size_hex=$(printf "0x%x" "${image_size_bytes}")
+    fw_size_file="${IMAGE_ROOTFS}/etc/FWSize"
+
+    if [ ! -d "${IMAGE_ROOTFS}/etc" ]; then
+        echo "Directory ${IMAGE_ROOTFS}/etc does not exist. Creating it."
+        mkdir -p "${IMAGE_ROOTFS}/etc"
+    fi
+
+    echo "${image_size_hex}" > "${fw_size_file}"
+}
+
+enable_radius_nsswitch() {
+    sed -i 's/\(\(passwd\|group\):\s*\).*/\1files systemd ldap radius/' \
+        "${IMAGE_ROOTFS}${sysconfdir}/nsswitch.conf"
+    sed -i 's/\(shadow:\s*\).*/\1files ldap radius/' \
+        "${IMAGE_ROOTFS}${sysconfdir}/nsswitch.conf"
+    sed -i 's/enable-cache\s*passwd\s*yes/enable-cache            passwd          no/' ${IMAGE_ROOTFS}/etc/nscd.conf
 
 }
+
+ROOTFS_POSTPROCESS_COMMAND += "${@bb.utils.contains('IMAGE_INSTALL', 'radiusclient-ng', 'enable_radius_nsswitch; ', '', d)}"
+
+ROOTFS_POSTPROCESS_COMMAND += "write_flash_size_to_file; "
+

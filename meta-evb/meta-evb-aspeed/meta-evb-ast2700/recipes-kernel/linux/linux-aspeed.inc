@@ -13,7 +13,7 @@ SRC_URI = "${KSRC}"
 
 LINUX_VERSION_EXTENSION ?= "-${SRCREV}"
 
-PV = "${LINUX_VERSION}+git${SRCPV}"
+PV = "${LINUX_VERSION}+git"
 inherit kernel
 require recipes-kernel/linux/linux-yocto.inc
 

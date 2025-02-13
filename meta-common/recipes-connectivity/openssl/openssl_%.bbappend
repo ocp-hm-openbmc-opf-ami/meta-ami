@@ -1,7 +1,5 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-
-
 # EXTRA_OECONF:append = " enable-fips enable-legacy"
 # PACKAGES =+ "${PN}-ossl-module-fips"
 # FILES:fips = "${libdir}/ossl-modules/fips.so"
@@ -25,6 +23,3 @@ do_install:append() {
     fi
 
 }
-
-
-

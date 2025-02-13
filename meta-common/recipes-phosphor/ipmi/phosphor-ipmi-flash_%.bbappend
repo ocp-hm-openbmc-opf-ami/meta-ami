@@ -7,6 +7,7 @@ SRC_URI += " \
        file://phosphor-ipmi-flash-bmc-prepare.target \
        file://phosphor-ipmi-flash-bmc-update.target \
        file://phosphor-ipmi-flash-bmc-verify.target \
+       file://preparefwupdinband.service \
        "
 
 do_install:append() {
@@ -20,3 +21,10 @@ do_install:append() {
   install -m 0644 ${WORKDIR}/config-tarball-bmc-reboot.json ${D}${datadir}/phosphor-ipmi-flash
 }
 
+SYSTEMD_SERVICE:${PN} += "preparefwupdinband.service"
+FILES:${PN}  += "${systemd_system_unitdir}/preparefwupdinband.service"
+
+do_install:append() {
+  install -d ${D}${systemd_system_unitdir}
+  install -m 0644 ${WORKDIR}/preparefwupdinband.service ${D}${systemd_system_unitdir}/preparefwupdinband.service
+}

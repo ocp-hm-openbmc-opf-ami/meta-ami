@@ -1,0 +1,103 @@
+From 20b6c27704ce4be4ac779f3748b3355725c4ced6 Mon Sep 17 00:00:00 2001
+From: ramsankarr <ramsankarr@ami.com>
+Date: Thu, 5 Dec 2024 16:00:40 +0530
+Subject: [PATCH 15/15] SNMP lock mode
+
+---
+ agent/snmp_agent.c | 66 +++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 65 insertions(+), 1 deletion(-)
+
+diff --git a/agent/snmp_agent.c b/agent/snmp_agent.c
+index b744743..bd57efc 100644
+--- a/agent/snmp_agent.c
++++ b/agent/snmp_agent.c
+@@ -46,7 +46,10 @@ SOFTWARE.
+  */
+ #include <net-snmp/net-snmp-config.h>
+ #include <net-snmp/net-snmp-features.h>
+-
++#include <stdbool.h>
++#include <systemd/sd-bus.h>
++#include <stdio.h>
++#include <string.h>
+ #include <sys/types.h>
+ #ifdef HAVE_LIMITS_H
+ #include <limits.h>
+@@ -135,6 +138,60 @@ static netsnmp_container *_pdu_stats = NULL;
+ static int _pdu_stats_max = 0;
+ static u_long _pdu_stats_threshold = 0;
+ static u_long _pdu_stats_current_lowest = 0;
++bool systemLockStatus = false;
++
++bool getSystemLockEnabled() {
++
++    sd_bus_error error = SD_BUS_ERROR_NULL;
++    sd_bus_message *reply = NULL;
++    sd_bus *bus = NULL;
++    int ret = -1;
++
++
++    ret = sd_bus_open_system(&bus);
++    if (ret < 0) {
++        snmp_log(LOG_ERR, "Failed to connect to system bus: %s\n", strerror(-ret));
++        goto cleanup;
++    }
++
++    ret = sd_bus_call_method(
++                bus,
++                "xyz.openbmc_project.Settings",
++                "/xyz/openbmc_project/control/systemlock",
++                "org.freedesktop.DBus.Properties",
++                "Get",
++                &error,
++                &reply,
++                "ss",
++                "xyz.openbmc_project.Control.Security.SystemLock",
++                "SystemLocked");
++    if (ret < 0) {
++        snmp_log(LOG_ERR, "Failed to call method: %s\n", error.message);
++        goto cleanup;
++    }
++
++    ret = sd_bus_message_enter_container(reply, 'v', "b");
++    if (ret < 0) {
++        snmp_log(LOG_ERR, "Failed to enter container: %s\n", strerror(-ret));
++        goto cleanup;
++    }
++
++    ret = sd_bus_message_read_basic(reply, 'b', &systemLockStatus);
++    if (ret < 0) {
++        snmp_log(LOG_ERR, "Failed to read boolean: %s\n", strerror(-ret));
++        goto cleanup;
++    }
++
++    return true;
++
++cleanup:
++    sd_bus_error_free(&error);
++    sd_bus_message_unref(reply);
++    sd_bus_unref(bus);
++    snmp_log(LOG_ERR, "END %d\n", __LINE__);
++    return false;
++}
++
+ 
+ netsnmp_container *
+ netsnmp_get_pdu_stats(void)
+@@ -2235,6 +2292,13 @@ handle_snmp_packet(int op, netsnmp_session * session, int reqid,
+         return netsnmp_wrap_up_request(asp, SNMP_ERR_NOTWRITABLE);
+     }
+ #endif /* NETSNMP_DISABLE_SET_SUPPORT && !NETSNMP_NO_WRITE_SUPPORT */
++    systemLockStatus = false; 
++        if(getSystemLockEnabled()){
++            if(systemLockStatus){
++                snmp_log(LOG_INFO, "System lock is currently enabled.\n");
++                return netsnmp_wrap_up_request(asp, SNMP_ERR_NOTWRITABLE);
++            }
++        }
+ 
+     if ((access_ret = check_access(asp->pdu)) != 0) {
+         if (access_ret == VACM_NOSUCHCONTEXT) {
+-- 
+2.25.1
+

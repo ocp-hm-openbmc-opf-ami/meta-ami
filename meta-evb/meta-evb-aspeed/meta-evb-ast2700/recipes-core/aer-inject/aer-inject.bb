@@ -9,7 +9,7 @@ SRC_URI = "git://git.kernel.org/pub/scm/linux/kernel/git/gong.chen/aer-inject.gi
 
 DEPENDS = "bison-native"
 
-PV = "1.0+git${SRCPV}"
+PV = "1.0+git"
 SRCREV = "9bd5e2c7886fca72f139cd8402488a2235957d41"
 
 S = "${WORKDIR}/git"

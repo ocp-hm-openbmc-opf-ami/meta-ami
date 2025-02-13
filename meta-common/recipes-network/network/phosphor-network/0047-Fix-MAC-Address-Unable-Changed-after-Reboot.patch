@@ -1,0 +1,87 @@
+From 96ab6c8808e142484e77b7d79da871894c1c23b7 Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Wed, 4 Sep 2024 11:51:21 +0800
+Subject: [PATCH] Fix MAC Address Unable Changed after Reboot
+
+---
+ src/ethernet_interface.cpp | 17 ++++++++++++++++-
+ src/util.cpp               | 13 +++++++++++++
+ src/util.hpp               |  2 ++
+ 3 files changed, 31 insertions(+), 1 deletion(-)
+
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index c21ddec..92915b5 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -266,6 +266,12 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+     {
+         addStaticNeigh(neigh);
+     }
++    if (std::string mac = getMAC(config); !mac.empty())
++    {
++        system::setNICUp(interfaceName(), false);
++        MacAddressIntf::macAddress(mac, true);
++        manager.get().reconfigLink(ifIdx);
++    }
+ 
+     signals = initSignals();
+     registerSignal(bus);
+@@ -277,7 +283,16 @@ void EthernetInterface::updateInfo(const InterfaceInfo& info, bool skipSignal)
+ {
+     ifIdx = info.idx;
+     EthernetInterfaceIntf::linkUp(info.flags & IFF_RUNNING, skipSignal);
+-    if (info.mac)
++    config::Parser config(
++        config::pathForIntfConf(manager.get().getConfDir(), interfaceName()));
++    if (std::string mac = getMAC(config);
++        !mac.empty() && MacAddressIntf::macAddress() != mac)
++    {
++        system::setNICUp(interfaceName(), false);
++        MacAddressIntf::macAddress(mac, true);
++        manager.get().reconfigLink(ifIdx);
++    }
++    else if (info.mac)
+     {
+         MacAddressIntf::macAddress(stdplus::toStr(*info.mac), skipSignal);
+     }
+diff --git a/src/util.cpp b/src/util.cpp
+index c9e7bde..1a34fca 100644
+--- a/src/util.cpp
++++ b/src/util.cpp
+@@ -266,6 +266,19 @@ std::string getIP6StaticRtrAddr(const config::Parser& config,
+     return str;
+ }
+ 
++std::string getMAC(const config::Parser& config)
++{
++    if (auto str = config.map.getLastValueString("Link", "MACAddress");
++        str == nullptr)
++    {
++        return "";
++    }
++    else
++    {
++        return *str;
++    }
++}
++
+ int getIP6StaticRtrPrefix(const config::Parser& config,
+                           const std::string& Router)
+ {
+diff --git a/src/util.hpp b/src/util.hpp
+index ef44ba5..9f4e374 100644
+--- a/src/util.hpp
++++ b/src/util.hpp
+@@ -169,6 +169,8 @@ std::string getIPv4BackupGateway(const config::Parser& config);
+ 
+ std::string getIPv4DefaultGateway(const config::Parser& config);
+ 
++std::string getMAC(const config::Parser& config);
++
+ /** @brief Get all the interfaces from the system.
+  *  @returns list of interface names.
+  */
+-- 
+2.43.0
+
+

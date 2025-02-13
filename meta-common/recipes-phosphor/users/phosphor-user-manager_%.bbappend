@@ -8,25 +8,32 @@ EXTRA_OECONF += "${@bb.utils.contains_any("IMAGE_FEATURES", [ 'debug-tweaks', 'a
 PACKAGECONFIG:append ="${@bb.utils.contains('FEATURE_OEM_PRIV', '1', ' oem-privilege', ' ', d)}"
 PACKAGECONFIG[oem-privilege] = "-Doem-privilege=enabled,-Doem-privilege=disabled"
 
-SRCREV = "40419f91ea6d57fe618516231e56cda7db98725b"
+#SRCREV = "af1594c90627b78d1a92bb16a0d826b12a0d182c"
+SRCREV = "e7d4559b0173596f29ceb5ba7da653b023067783"
 SRC_URI += " \
              file://0003-Add-Host-Interface-User-Support.patch \
              file://0012-passwordpolicy.patch \
 	     file://0015-passwordchangerequired.patch \
              file://0017-SSH-Active-User-Delete-Fix.patch \
-             file://0018-Added-group-user-for-host-interface.patch \
              file://0019-manual-lockout-fix.patch \
-             file://0020-add-media-group.patch \
-             file://0021-add-snmp-group.patch \
              file://0016-Restricting-the-asd-user-under-redfish.patch \
+             file://0018-add-snmp-media-group.patch \
+             file://0022-Fix-to-add-support-to-include-dot-.-in-username.patch \
+             file://0022-Added-chaanges-for-Pam-Reorder.patch \
+             file://0199-RadiusUserAccountService.patch \
+             file://0023-KerberosRelatedUserManagerChanges.patch \
+             file://0024-Kerberos-Config-User-Manager.patch \
+             file://0202-IPV6-Feature-enable-related-changes.patch \
            "
-
 #OEM Privilege
 SRC_URI_OEM_PRIV:append = "file://upgrade_media_group.sh \
                            file://xyz.openbmc_project.User.Manager-ami.service \
                           "
+
+SYSTEMD_SERVICE:${PN} += " phosphor-kerberos-config.service"
 SRC_URI:append = "${@bb.utils.contains('FEATURE_OEM_PRIV', '1',SRC_URI_OEM_PRIV, ' ', d)}"
 
+FILES:${PN}  += "${systemd_system_unitdir}/phosphor-kerberos-config.service "
 FILES:${PN} += "${datadir}/dbus-1/system.d/phosphor-nslcd-cert-config.conf"
 FILES:${PN} += "/usr/share/phosphor-certificate-manager/nslcd"
 FILES:${PN} += "\

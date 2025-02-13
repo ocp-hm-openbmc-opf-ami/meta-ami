@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/dbus-sensors.git;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "1a2a8f966bde8c9bc2606d03d6fa9976c841fb01"
+SRCREV_override = "8514ed10b2d6998e3f3db75bdcbf09605208da4f"
 
 SRC_URI_ast2600:append =  " \
             file://0001-ADCSensor-Fix-for-P3V3-sensor.patch \
@@ -26,6 +26,8 @@ PACKAGECONFIG[osstatus] = "-Dosstatus=enabled, -Dosstatus=disabled"
 PACKAGECONFIG[batterystatus] = "-Dbatterystatus=enabled, -Dbatterystatus=disabled"
 PACKAGECONFIG[acpidevicestatus] = "-Dacpidevice=enabled, -Dacpidevice=disabled"
 PACKAGECONFIG[digital] = "-Ddigital=enabled, -Ddigital=disabled"
+PACKAGECONFIG[bmcfirmwarehealth] = "-Dbmc-firmware-health=enabled, -Dbmc-firmware-health=disabled"
+PACKAGECONFIG[damagedsensor] = "-Ddamaged-sensor=enabled, -Ddamaged-sensor=disabled"
 
 PACKAGECONFIG:append = " processorstatus \
             systemsensor \
@@ -36,6 +38,8 @@ PACKAGECONFIG:append = " processorstatus \
             batterystatus \
             acpidevicestatus \
             digital \
+            bmcfirmwarehealth \
+            damagedsensor \
 "
 
 SYSTEMD_SERVICE:${PN}:append = " ${@bb.utils.contains('PACKAGECONFIG', 'processorstatus', \
@@ -74,5 +78,11 @@ SYSTEMD_SERVICE:${PN}:append = " ${@bb.utils.contains('PACKAGECONFIG', 'digital'
                                                'xyz.openbmc_project.digitaldiscrete.service', \
                                                '', d)}"
 
+SYSTEMD_SERVICE:${PN} += "${@bb.utils.contains('PACKAGECONFIG', 'bmcfirmwarehealth', \
+                                               'xyz.openbmc_project.bmcfirmwarehealth.service', \
+                                               '', d)}"
 
+SYSTEMD_SERVICE:${PN} += "${@bb.utils.contains('PACKAGECONFIG', 'damagedsensor', \
+                                               'xyz.openbmc_project.damagedsensor.service', \
+                                               '', d)}"
 

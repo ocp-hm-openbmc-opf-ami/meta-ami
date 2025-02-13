@@ -7,6 +7,7 @@ LIC_FILES_CHKSUM = "file://${AMIBASE}/COPYING.AMI;md5=33abf79b43490ccebfe76ef988
 SRC_URI += "file://fwupd-restricted.sh"
 SRC_URI += "file://apply-onreset.service"
 SRC_URI += "file://applyonreset.sh"
+SRC_URI += "file://usb-ctrl"
 
 
 # flash_eraseall
@@ -27,5 +28,8 @@ do_install:append() {
         install -d ${D}${bindir}
         install -m 0755 ${WORKDIR}/fwupd-restricted.sh ${D}${bindir}/fwupd.sh
         install -m 0755 ${WORKDIR}/applyonreset.sh ${D}${bindir}/applyonreset.sh
+	if ${@bb.utils.contains('OBMC_IMAGE_EXTRA_INSTALL','phosphor-misc-usb-ctrl','false','true',d)}; then
+                install -m 0755 ${WORKDIR}/usb-ctrl ${D}${bindir}/
+        fi
 }
 

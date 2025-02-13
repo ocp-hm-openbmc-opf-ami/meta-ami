@@ -15,38 +15,52 @@
 #include <map>
 #include <sdbusplus/asio/object_server.hpp>
 
-static constexpr const char* sessionMgrObj =
+static constexpr const char *sessionMgrObj =
     "/xyz/openbmc_project/SessionManager";
-static constexpr const char* sessionDbusNmae =
+static constexpr const char *sessionDbusNmae =
     "xyz.openbmc_project.SessionManager";
-static constexpr const char* interfaceKvm =
+static constexpr const char *interfaceKvm =
     "xyz.openbmc_project.SessionManager.Kvm";
-static constexpr const char* interfaceWeb =
+static constexpr const char *interfaceWeb =
     "xyz.openbmc_project.SessionManager.Web";
-static constexpr const char* interfaceVmedia =
+static constexpr const char *interfaceVmedia =
     "xyz.openbmc_project.SessionManager.Vmedia";
+static constexpr const char* interfaceSsh =
+    "xyz.openbmc_project.SessionManager.Ssh";
 
-static constexpr const char* kvmService = "start-ipkvm.service";
-static constexpr const char* vmediaService =
+static constexpr const char *kvmService = "start-ipkvm.service";
+static constexpr const char *vmediaService =
     "xyz.openbmc_project.VirtualMedia.service";
-static constexpr const char* webService = "bmcweb.service";
+static constexpr const char *webService = "bmcweb.service";
 
 std::shared_ptr<sdbusplus::asio::dbus_interface> kvmIface;
 std::shared_ptr<sdbusplus::asio::dbus_interface> webIface;
 std::shared_ptr<sdbusplus::asio::dbus_interface> vmediaIface;
+std::shared_ptr<sdbusplus::asio::dbus_interface> sshIface;
 
-using sessionInfo =
-    std::tuple<uint16_t, std::string, std::string, uint8_t, uint8_t, uint8_t>;
+// Session Information
+using SessionId = uint8_t;
+using IpAdress = std::string;
+using UserName = std::string;
+using SessionType = uint8_t;
+using Previlage = uint8_t;
+using UserId = uint8_t;
+using AdditionalConfigValue = std::string;
+
+using SessionInfo =
+    std::tuple<SessionId, IpAdress, UserName, SessionType, Previlage, UserId, AdditionalConfigValue>;
+
 constexpr auto reasonLogout = 0x01;
 constexpr auto reasonExpiry = 0x02;
 constexpr auto reasonUnknown = 0x03;
-constexpr auto maxSessionType = 2;
+constexpr auto maxSessionType = 3;
 
 enum sessionType
 {
     KVM = 0,
     WEB = 1,
-    VMEDIA = 2
+    VMEDIA = 2,
+    SSH = 3
 };
 const std::map<uint8_t, std::string> validPriv = {{0x1, "Callback"},
                                                   {0x2, "User"},
@@ -57,38 +71,45 @@ const std::map<uint8_t, std::string> validPriv = {{0x1, "Callback"},
 class SessionMgr
 {
 
-  public:
-    SessionMgr(sdbusplus::asio::object_server& objserver) : server(objserver)
+public:
+    SessionMgr(sdbusplus::asio::object_server &objserver) : server(objserver)
     {
         addKvmInterface(server);
         addWebInterface(server);
         addVmediaInterface(server);
+        addSshInterface(server);
     }
-    void addKvmInterface(sdbusplus::asio::object_server& server)
+    void addKvmInterface(sdbusplus::asio::object_server &server)
     {
         kvmIface = server.add_interface(sessionMgrObj, interfaceKvm);
         kvmIface->register_property("KvmSessionInfo", data);
         kvmIface->initialize();
     }
-    void addWebInterface(sdbusplus::asio::object_server& server)
+    void addWebInterface(sdbusplus::asio::object_server &server)
     {
         webIface = server.add_interface(sessionMgrObj, interfaceWeb);
         webIface->register_property("WebSessionInfo", data);
         webIface->initialize();
     }
-    void addVmediaInterface(sdbusplus::asio::object_server& server)
+    void addVmediaInterface(sdbusplus::asio::object_server &server)
     {
         vmediaIface = server.add_interface(sessionMgrObj, interfaceVmedia);
         vmediaIface->register_property("VmediaSessionInfo", data);
         vmediaIface->initialize();
     }
+    void addSshInterface(sdbusplus::asio::object_server& server)
+    {
+        sshIface = server.add_interface(sessionMgrObj, interfaceSsh);
+        sshIface->register_property("SshSessionInfo", data);
+        sshIface->initialize();
+    }
 
-  private:
-    std::vector<sessionInfo> data;
-    sdbusplus::asio::object_server& server;
+private:
+    std::vector<SessionInfo> data;
+    sdbusplus::asio::object_server &server;
 };
 
-bool findAndRemove(std::vector<sessionInfo>& data, uint8_t sessionId)
+bool findAndRemove(std::vector<SessionInfo> &data, uint8_t sessionId)
 {
 
     bool found = false;

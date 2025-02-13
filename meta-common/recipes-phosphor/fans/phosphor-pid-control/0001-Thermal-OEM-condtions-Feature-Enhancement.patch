@@ -1,6 +1,6 @@
-From f630a528953291ef082ef8a5f52c945f64ba9149 Mon Sep 17 00:00:00 2001
+From a037da48c5358b5f8da97e9ebfcb2f9d91086b7c Mon Sep 17 00:00:00 2001
 From: thrishalig <thrishalig@ami.com>
-Date: Fri, 15 Mar 2024 13:35:48 +0530
+Date: Thu, 16 May 2024 12:18:22 +0530
 Subject: [PATCH] Thermal OEM condtions Feature Enhancement
 
 1.One fan rotor failed:
@@ -38,17 +38,17 @@ Signed-off-by: thrishalig <thrishalig@ami.com>
  meson.build                |   1 +
  pid/actioncontroller.cpp   |  80 +++++++++++++
  pid/actioncontroller.hpp   | 231 +++++++++++++++++++++++++++++++++++++
- pid/builder.cpp            |   3 +-
+ pid/builder.cpp            |   2 +-
  pid/oemactions.hpp         | 188 ++++++++++++++++++++++++++++++
- pid/zone.cpp               |  19 ++-
+ pid/zone.cpp               |  18 ++-
  pid/zone.hpp               |  60 +++++++++-
- 10 files changed, 642 insertions(+), 9 deletions(-)
+ 10 files changed, 640 insertions(+), 9 deletions(-)
  create mode 100644 pid/actioncontroller.cpp
  create mode 100644 pid/actioncontroller.hpp
  create mode 100644 pid/oemactions.hpp
 
 diff --git a/conf.hpp b/conf.hpp
-index 265da09..e15154e 100644
+index 8a9ea38..4e024dc 100644
 --- a/conf.hpp
 +++ b/conf.hpp
 @@ -74,6 +74,20 @@ struct CycleTime
@@ -72,21 +72,21 @@ index 265da09..e15154e 100644
  struct ZoneConfig
  {
      /* The minimum set-point value we would ever want (typically in RPM) */
-@@ -84,6 +98,9 @@ struct ZoneConfig
- 
+@@ -85,6 +99,9 @@ struct ZoneConfig
      /* Customize time settings for every cycle */
      CycleTime cycleTime;
-+
+ 
 +    /*OEM conditions structure*/
 +    OemConfig oemconfig;
- };
- 
- using PIDConf = std::map<std::string, ControllerInfo>;
++
+     /* Enable accumulation of the output PWM of different controllers with same
+      * sensor */
+     bool accumulateSetPoint;
 diff --git a/dbus/dbusconfiguration.cpp b/dbus/dbusconfiguration.cpp
-index 2ca629c..ee48d56 100644
+index 06a660b..1e9d6df 100644
 --- a/dbus/dbusconfiguration.cpp
 +++ b/dbus/dbusconfiguration.cpp
-@@ -647,6 +647,45 @@ bool init(sdbusplus::bus_t& bus, boost::asio::steady_timer& timer,
+@@ -656,6 +656,45 @@ bool init(sdbusplus::bus_t& bus, boost::asio::steady_timer& timer,
                                  details.cycleTime.cycleIntervalTimeMS);
              getCycleTimeSetting(zone, index, "UpdateThermalsTimeMS",
                                  details.cycleTime.updateThermalsTimeMS);
@@ -129,9 +129,9 @@ index 2ca629c..ee48d56 100644
 +                        VariantToIntVisitor(), setMaxPwmFind->second);
 +                }
 +            }
-         }
-         auto findBase = configuration.second.find(pidConfigurationInterface);
-         // loop through all the PID configurations and fill out a sensor config
+ 
+             bool accumulateSetPoint = false;
+             auto findAccSetPoint = zone.find("AccumulateSetPoint");
 diff --git a/dbus/dbusutil.hpp b/dbus/dbusutil.hpp
 index 49ec859..2391c61 100644
 --- a/dbus/dbusutil.hpp
@@ -157,10 +157,10 @@ index 49ec859..2391c61 100644
  std::string getMatch(const std::string& path);
  void scaleSensorReading(const double min, const double max, double& value);
 diff --git a/meson.build b/meson.build
-index 552634e..99f244c 100644
+index 2a1b06c..ad92e00 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -120,6 +120,7 @@ libswampd_sources = [
+@@ -122,6 +122,7 @@ libswampd_sources = [
      'pid/zone.cpp',
      'pid/util.cpp',
      'pid/pidloop.cpp',
@@ -492,16 +492,15 @@ index 0000000..e947b44
 +}
 +} // namespace pid_control
 diff --git a/pid/builder.cpp b/pid/builder.cpp
-index 39d0076..13677b8 100644
+index d133662..3f8bf1c 100644
 --- a/pid/builder.cpp
 +++ b/pid/builder.cpp
-@@ -76,7 +76,8 @@ std::unordered_map<int64_t, std::shared_ptr<ZoneInterface>>
-         auto zone = std::make_shared<DbusPidZone>(
+@@ -77,7 +77,7 @@ std::unordered_map<int64_t, std::shared_ptr<ZoneInterface>>
              zoneId, zoneConf->second.minThermalOutput,
              zoneConf->second.failsafePercent, zoneConf->second.cycleTime, mgr,
--            modeControlBus, getControlPath(zoneId).c_str(), deferSignals);
-+            modeControlBus, getControlPath(zoneId).c_str(), deferSignals,
-+            zoneConf->second.oemconfig);
+             modeControlBus, getControlPath(zoneId).c_str(), deferSignals,
+-            zoneConf->second.accumulateSetPoint);
++            zoneConf->second.oemconfig, zoneConf->second.accumulateSetPoint);
  
          std::cerr << "Zone Id: " << zone->getZoneID() << "\n";
  
@@ -700,10 +699,10 @@ index 0000000..1c21134
 +
 +} // namespace pid_control
 diff --git a/pid/zone.cpp b/pid/zone.cpp
-index e5eddca..f9c5c0e 100644
+index 5332efe..22d85f3 100644
 --- a/pid/zone.cpp
 +++ b/pid/zone.cpp
-@@ -115,11 +115,13 @@ int64_t DbusPidZone::getZoneID(void) const
+@@ -115,9 +115,12 @@ int64_t DbusPidZone::getZoneID(void) const
  void DbusPidZone::addSetPoint(double setPoint, const std::string& name)
  {
      /* exclude disabled pidloop from _maximumSetPoint calculation*/
@@ -716,30 +715,28 @@ index e5eddca..f9c5c0e 100644
 +            return;
 +        }
      }
--
-     _SetPoints.push_back(setPoint);
-     /*
-      * if there are multiple thermal controllers with the same
-@@ -127,8 +129,15 @@ void DbusPidZone::addSetPoint(double setPoint, const std::string& name)
+ 
+     auto profileName = name;
+@@ -144,8 +147,15 @@ void DbusPidZone::addSetPoint(double setPoint, const std::string& name)
       */
-     if (_maximumSetPoint < setPoint)
+     if (_maximumSetPoint < _SetPoints[profileName])
      {
--        _maximumSetPoint = setPoint;
--        _maximumSetPointName = name;
+-        _maximumSetPoint = _SetPoints[profileName];
+-        _maximumSetPointName = profileName;
 +        if (setPoint < oem_setpoint)
 +        {
 +            _maximumSetPoint = oem_setpoint;
 +        }
 +        else
 +        {
-+            _maximumSetPoint = setPoint;
-+            _maximumSetPointName = name;
++            _maximumSetPoint = _SetPoints[profileName];
++            _maximumSetPointName = profileName;
 +        }
      }
  }
  
 diff --git a/pid/zone.hpp b/pid/zone.hpp
-index 464e672..152cef6 100644
+index 52180a5..379d4df 100644
 --- a/pid/zone.hpp
 +++ b/pid/zone.hpp
 @@ -1,5 +1,6 @@
@@ -762,7 +759,7 @@ index 464e672..152cef6 100644
  #include <sdbusplus/bus.hpp>
  #include <sdbusplus/server.hpp>
  #include <xyz/openbmc_project/Control/Mode/server.hpp>
-@@ -44,16 +51,17 @@ namespace pid_control
+@@ -44,17 +51,17 @@ namespace pid_control
   * control mode changes.  It primarily holds all PID loops and holds the sensor
   * value cache that's used per iteration of the PID loops.
   */
@@ -772,27 +769,27 @@ index 464e672..152cef6 100644
    public:
      DbusPidZone(int64_t zone, double minThermalOutput, double failSafePercent,
                  conf::CycleTime cycleTime, const SensorManager& mgr,
--                sdbusplus::bus_t& bus, const char* objPath, bool defer) :
-+                sdbusplus::bus_t& bus, const char* objPath, bool defer,
-+                conf::OemConfig oem) :
+                 sdbusplus::bus_t& bus, const char* objPath, bool defer,
+-                bool accumulateSetPoint) :
++                conf::OemConfig oem, bool accumulateSetPoint) :
          ModeObject(bus, objPath,
                     defer ? ModeObject::action::defer_emit
                           : ModeObject::action::emit_object_added),
 -        _zoneId(zone), _maximumSetPoint(),
 +        ActionOem(oem), _zoneId(zone), _maximumSetPoint(),
+         _accumulateSetPoint(accumulateSetPoint),
          _minThermalOutputSetPt(minThermalOutput),
          _zoneFailSafePercent(failSafePercent), _cycleTime(cycleTime), _mgr(mgr)
-     {
-@@ -63,6 +71,8 @@ class DbusPidZone : public ZoneInterface, public ModeObject
+@@ -64,7 +71,7 @@ class DbusPidZone : public ZoneInterface, public ModeObject
+             _log.open(loggingPath + "/zone_" + std::to_string(zone) + ".log");
          }
      }
- 
+-
 +    conf::OemConfig oem;
-+
      bool getManualMode(void) const override;
      /* Could put lock around this since it's accessed from two threads, but
       * only one reader/one writer.
-@@ -130,11 +140,55 @@ class DbusPidZone : public ZoneInterface, public ModeObject
+@@ -133,11 +140,56 @@ class DbusPidZone : public ZoneInterface, public ModeObject
      void processSensorInputs(const std::vector<std::string>& sensorInputs,
                               std::chrono::high_resolution_clock::time_point now)
      {
@@ -845,6 +842,7 @@ index 464e672..152cef6 100644
 +                    }
 +                }
 +            }
++
              int64_t timeout = sensor->getTimeout();
              std::chrono::high_resolution_clock::time_point then = r.updated;
  

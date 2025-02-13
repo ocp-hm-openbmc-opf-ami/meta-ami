@@ -1,0 +1,552 @@
+From 8acaa4eb583b31b19d8dac8b4d09668a2f2351de Mon Sep 17 00:00:00 2001
+From: vaibhavs <vaibhavs@ami.com>
+Date: Mon, 8 Jul 2024 21:01:46 +0530
+Subject: [PATCH] Support SLAAC Timing Configuration Parameters
+
+---
+ src/ethernet_interface.cpp | 438 +++++++++++++++++++++++++++++++++++++
+ src/ethernet_interface.hpp |  41 ++++
+ 2 files changed, 479 insertions(+)
+
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index 0c2c983..9e51ab7 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -30,6 +30,7 @@
+ #include <string>
+ #include <unordered_map>
+ #include <variant>
++
+ namespace phosphor
+ {
+ namespace network
+@@ -69,6 +70,12 @@ std::string arpResponseEnable = "echo 0 >";
+ 
+ constexpr auto VLAN_MAX_NUM = 2;
+ 
++const float SLAAC_Timing_Param[2 * MAX_SUPPORTED_SLAAC_TIMING_PARAMS] = {
++    /*Granularity        InitialValue*/
++    0.25, 0.25, 0.5,  0.5, 1, 1, 1, 0,    1,    1,   1,
++    1,    0.25, 0.25, 1,   1, 2, 2, 0.25, 0.25, 0.5, 0.5,
++};
++
+ const float DHCPv6_Timing_Param[2 * MAX_SUPPORTED_DHCPv6_TIMING_PARAMS] = {
+     /*Granularity       InitialValue*/
+     0.5, 0.5, 0.5, 0.5, 30, 30, 0.5, 0.5, 0.5, 15,  1,  0,
+@@ -167,6 +174,8 @@ EthernetInterface::EthernetInterface(stdplus::PinnedRef<sdbusplus::bus_t> bus,
+     EthernetInterfaceIntf::dhcpv6TimingConfParam(
+         dhcpv6TimingParamReadIfaceFile(ifaceConfig), true);
+ 
++    ipv6SLAACTimingConfParam(slaacTimingParamReadIfaceFile(ifaceConfig));
++
+     auto [ipv4List, ipv6List] = getIndexList(ifaceConfig);
+     if (!EthernetInterfaceIntf::dhcp4())
+     {
+@@ -1679,6 +1688,51 @@ void EthernetInterface::writeIfaceStateFile(std::string ifname)
+         }
+     }
+ 
++    {
++        std::vector<uint8_t> value =
++            EthernetInterfaceIntf::ipv6SLAACTimingConfParam();
++        if (!value.empty())
++        {
++            auto it = value.begin();
++
++            auto& slaacTimingConf =
++                IfaceState.map["SLAACTimingConf"].emplace_back();
++
++            slaacTimingConf["MaxRtrSolicitationDelay"].emplace_back(
++                fmt::format("{}", *it++));
++
++            slaacTimingConf["RtrSolicitationInterval"].emplace_back(
++                fmt::format("{}", *it++));
++
++            slaacTimingConf["MaxRtrSolicitations"].emplace_back(
++                fmt::format("{}", *it++));
++
++            slaacTimingConf["DupAddrDetectTransmits"].emplace_back(
++                fmt::format("{}", *it++));
++
++            slaacTimingConf["MaxMulticastSolicit"].emplace_back(
++                fmt::format("{}", *it++));
++
++            slaacTimingConf["MaxUnicastSolicit"].emplace_back(
++                fmt::format("{}", *it++));
++
++            slaacTimingConf["MaxAnycastDelayTime"].emplace_back(
++                fmt::format("{}", *it++));
++
++            slaacTimingConf["MaxNeighborAdvertisement"].emplace_back(
++                fmt::format("{}", *it++));
++
++            slaacTimingConf["ReachableTime"].emplace_back(
++                fmt::format("{}", *it++));
++
++            slaacTimingConf["RetransTimer"].emplace_back(
++                fmt::format("{}", *it++));
++
++            slaacTimingConf["DelayFirstProbeTime"].emplace_back(
++                fmt::format("{}", *it++));
++        }
++    }
++
+     IfaceState.writeFile(fs::path{
+         fmt::format("{}/{}", manager.get().ifaceConfDir.generic_string(),
+                     ifname)
+@@ -3636,5 +3690,389 @@ std::vector<uint8_t>
+     return value;
+ }
+ 
++std::vector<uint8_t> EthernetInterface::slaacTimingParamReadIfaceFile(
++    const config::Parser& config)
++{
++    std::vector<uint8_t> val;
++    std::string_view Section = "SLAACTimingConf";
++
++    const std::string* value;
++    value = config.map.getLastValueString(Section, "MaxRtrSolicitationDelay");
++    if (value == nullptr)
++    {
++        val.push_back(SLAACTimingParamDefault::MaxRtrSolicitationDelay);
++    }
++    else
++    {
++        val.push_back(static_cast<uint8_t>(std::stoul(*value, nullptr, 10)));
++    }
++
++    value = config.map.getLastValueString(Section, "RtrSolicitationInterval");
++    if (value == nullptr)
++    {
++        val.push_back(SLAACTimingParamDefault::RtrSolicitationInterval);
++    }
++    else
++    {
++        val.push_back(static_cast<uint8_t>(std::stoul(*value, nullptr, 10)));
++    }
++
++    value = config.map.getLastValueString(Section, "MaxRtrSolicitations");
++    if (value == nullptr)
++    {
++        val.push_back(SLAACTimingParamDefault::MaxRtrSolicitations);
++    }
++    else
++    {
++        val.push_back(static_cast<uint8_t>(std::stoul(*value, nullptr, 10)));
++    }
++
++    value = config.map.getLastValueString(Section, "DupAddrDetectTransmits");
++    if (value == nullptr)
++    {
++        val.push_back(SLAACTimingParamDefault::DupAddrDetectTransmits);
++    }
++    else
++    {
++        val.push_back(static_cast<uint8_t>(std::stoul(*value, nullptr, 10)));
++    }
++
++    value = config.map.getLastValueString(Section, "MaxMulticastSolicit");
++    if (value == nullptr)
++    {
++        val.push_back(SLAACTimingParamDefault::MaxMulticastSolicit);
++    }
++    else
++    {
++        val.push_back(static_cast<uint8_t>(std::stoul(*value, nullptr, 10)));
++    }
++
++    value = config.map.getLastValueString(Section, "MaxUnicastSolicit");
++    if (value == nullptr)
++    {
++        val.push_back(SLAACTimingParamDefault::MaxUnicastSolicit);
++    }
++    else
++    {
++        val.push_back(static_cast<uint8_t>(std::stoul(*value, nullptr, 10)));
++    }
++
++    value = config.map.getLastValueString(Section, "MaxAnycastDelayTime");
++    if (value == nullptr)
++    {
++        val.push_back(SLAACTimingParamDefault::MaxAnycastDelayTime);
++    }
++    else
++    {
++        val.push_back(static_cast<uint8_t>(std::stoul(*value, nullptr, 10)));
++    }
++
++    value = config.map.getLastValueString(Section, "MaxNeighborAdvertisement");
++    if (value == nullptr)
++    {
++        val.push_back(SLAACTimingParamDefault::MaxNeighborAdvertisement);
++    }
++    else
++    {
++        val.push_back(static_cast<uint8_t>(std::stoul(*value, nullptr, 10)));
++    }
++
++    value = config.map.getLastValueString(Section, "ReachableTime");
++    if (value == nullptr)
++    {
++        val.push_back(SLAACTimingParamDefault::ReachableTime);
++    }
++    else
++    {
++        val.push_back(std::stoul(*value, nullptr, 10));
++    }
++
++    value = config.map.getLastValueString(Section, "RetransTimer");
++    if (value == nullptr)
++    {
++        val.push_back(SLAACTimingParamDefault::RetransTimer);
++    }
++    else
++    {
++        val.push_back(static_cast<uint8_t>(std::stoul(*value, nullptr, 10)));
++    }
++
++    value = config.map.getLastValueString(Section, "DelayFirstProbeTime");
++    if (value == nullptr)
++    {
++        val.push_back(SLAACTimingParamDefault::DelayFirstProbeTime);
++    }
++    else
++    {
++        val.push_back(static_cast<uint8_t>(std::stoul(*value, nullptr, 10)));
++    }
++
++    return val;
++}
++
++static uint8_t convertSLAACTimingParamValueToActual(uint8_t value, int index)
++{
++    float val = 0;
++    val = static_cast<float>(
++        ((SLAAC_Timing_Param[(2 * index) + 1] - SLAAC_Timing_Param[2 * index]) +
++         (static_cast<float>(value) * SLAAC_Timing_Param[2 * index])));
++
++    uint32_t floatval = static_cast<uint32_t>(val);
++
++    float fractional = val - floatval;
++
++    if (fractional != 0.0)
++    {
++        val += 1;
++    }
++
++    return static_cast<uint8_t>(val);
++}
++
++/** Set value of IPv6SLAACTimingConfParam */
++std::vector<uint8_t>
++    EthernetInterface::ipv6SLAACTimingConfParam(std::vector<uint8_t> value)
++{
++    const std::string procConfLoc = "/proc/sys/net/ipv6/conf/";
++    const std::string procNeighLoc = "/proc/sys/net/ipv6/neigh/";
++
++    if (value.size() != MAX_SUPPORTED_SLAAC_TIMING_PARAMS)
++    {
++        log<level::ERR>(
++            fmt::format("Provided arguments data is not 11 bytes for {}.\n",
++                        interfaceName())
++                .c_str());
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("size"),
++            Argument::ARGUMENT_VALUE(std::to_string(value.size()).c_str()));
++    }
++
++    for (int i = 0; i < MAX_SUPPORTED_SLAAC_TIMING_PARAMS; i++)
++    {
++        if ((i == SLAACTimingParamIndex::MaxNeighborAdvertisement) ||
++            (i == SLAACTimingParamIndex::DupAddrDetectTransmits))
++        {
++            continue;
++        }
++        else if (value[i] == 0)
++        {
++            log<level::ERR>(
++                fmt::format(
++                    "Provided arguments value zero is not allowed for index {}.\n",
++                    i)
++                    .c_str());
++            elog<InvalidArgument>(
++                Argument::ARGUMENT_NAME("size"),
++
++                Argument::ARGUMENT_VALUE(std::to_string(value.size()).c_str()));
++        }
++    }
++    if ((value[SLAACTimingParamIndex::MaxRtrSolicitations] > 100) &&
++        (value[SLAACTimingParamIndex::MaxRtrSolicitations] < 255))
++    {
++        log<level::ERR>(
++            fmt::format("Invalid value for MaxRtrSolicitations on {}.\n",
++                        interfaceName())
++                .c_str());
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("MaxRtrSolicitations"),
++            Argument::ARGUMENT_VALUE(
++                std::to_string(
++                    value[SLAACTimingParamIndex::MaxRtrSolicitations])
++                    .c_str()));
++    }
++
++    if (value[SLAACTimingParamIndex::DupAddrDetectTransmits] > 101)
++    {
++        log<level::ERR>(
++            fmt::format(
++                "DupAddrDetectTransmits is above max acceptable value for {}.\n",
++                interfaceName())
++                .c_str());
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("DupAddrDetectTransmits"),
++            Argument::ARGUMENT_VALUE(
++                std::to_string(
++                    value[SLAACTimingParamIndex::DupAddrDetectTransmits])
++                    .c_str()));
++    }
++
++    if (value[SLAACTimingParamIndex::MaxMulticastSolicit] > 100)
++    {
++        log<level::ERR>(
++            fmt::format(
++                "MaxMulticastSolicit is above max acceptable value for {}.\n",
++                interfaceName())
++                .c_str());
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("MaxMulticastSolicit"),
++            Argument::ARGUMENT_VALUE(
++                std::to_string(
++                    value[SLAACTimingParamIndex::MaxMulticastSolicit])
++                    .c_str()));
++    }
++
++    if (value[SLAACTimingParamIndex::MaxUnicastSolicit] > 100)
++    {
++        log<level::ERR>(
++            fmt::format(
++                "MaxUnicastSolicit is above max acceptable value for {}.\n",
++                interfaceName())
++                .c_str());
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("MaxUnicastSolicit"),
++            Argument::ARGUMENT_VALUE(
++                std::to_string(value[SLAACTimingParamIndex::MaxUnicastSolicit])
++                    .c_str()));
++    }
++
++    if (value[SLAACTimingParamIndex::MaxNeighborAdvertisement] != 0)
++    {
++        log<level::ERR>(
++            fmt::format(
++                "MaxNeighborAdvertisement is not allowed to set for {}.\n",
++                interfaceName())
++                .c_str());
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("MaxNeighborAdvertisement"),
++            Argument::ARGUMENT_VALUE(
++                std::to_string(
++                    value[SLAACTimingParamIndex::MaxNeighborAdvertisement])
++                    .c_str()));
++    }
++
++    std::string ipv6conf;
++    constexpr uint16_t toMilliSec = 1000;
++
++    ipv6conf = procConfLoc + interfaceName().c_str() +
++               "/router_solicitation_delay";
++
++    std::system(
++        fmt::format("/bin/echo {} > {}",
++                    convertSLAACTimingParamValueToActual(
++                        value[SLAACTimingParamIndex::MaxRtrSolicitationDelay],
++                        SLAACTimingParamIndex::MaxRtrSolicitationDelay),
++                    ipv6conf)
++            .c_str());
++
++    ipv6conf = procConfLoc + interfaceName().c_str() +
++               "/router_solicitation_interval";
++
++    std::system(
++        fmt::format("/bin/echo {} > {}",
++                    convertSLAACTimingParamValueToActual(
++                        value[SLAACTimingParamIndex::RtrSolicitationInterval],
++                        SLAACTimingParamIndex::RtrSolicitationInterval),
++                    ipv6conf)
++            .c_str());
++
++    ipv6conf = procConfLoc + interfaceName().c_str() + "/router_solicitations";
++
++    if (value[SLAACTimingParamIndex::MaxRtrSolicitations] == 255)
++    {
++        std::system(fmt::format("/bin/echo -1 > {}", ipv6conf).c_str());
++    }
++    else
++    {
++        std::system(
++            fmt::format("/bin/echo {} > {}",
++                        convertSLAACTimingParamValueToActual(
++                            value[SLAACTimingParamIndex::MaxRtrSolicitations],
++                            SLAACTimingParamIndex::MaxRtrSolicitations),
++                        ipv6conf)
++                .c_str());
++    }
++
++    ipv6conf = procConfLoc + interfaceName().c_str() + "/dad_transmits";
++
++    std::system(
++        fmt::format("/bin/echo {} > {}",
++                    convertSLAACTimingParamValueToActual(
++                        value[SLAACTimingParamIndex::DupAddrDetectTransmits],
++                        SLAACTimingParamIndex::DupAddrDetectTransmits),
++                    ipv6conf)
++            .c_str());
++
++    ipv6conf = procNeighLoc + interfaceName().c_str() + "/mcast_solicit";
++
++    std::system(
++        fmt::format("/bin/echo {} > {}",
++                    convertSLAACTimingParamValueToActual(
++                        value[SLAACTimingParamIndex::MaxMulticastSolicit],
++                        SLAACTimingParamIndex::MaxMulticastSolicit),
++                    ipv6conf)
++            .c_str());
++
++    ipv6conf = procNeighLoc + interfaceName().c_str() + "/ucast_solicit";
++
++    std::system(fmt::format("/bin/echo {} > {}",
++                            convertSLAACTimingParamValueToActual(
++                                value[SLAACTimingParamIndex::MaxUnicastSolicit],
++                                SLAACTimingParamIndex::MaxUnicastSolicit),
++                            ipv6conf)
++                    .c_str());
++
++    ipv6conf = procNeighLoc + interfaceName().c_str() + "/anycast_delay";
++
++    std::system(
++        fmt::format("/bin/echo {} > {}",
++                    convertSLAACTimingParamValueToActual(
++                        value[SLAACTimingParamIndex::MaxAnycastDelayTime],
++                        SLAACTimingParamIndex::MaxAnycastDelayTime),
++                    ipv6conf)
++            .c_str());
++
++    ipv6conf = procNeighLoc + interfaceName().c_str() +
++               "/base_reachable_time_ms";
++
++    std::system(
++        fmt::format(
++            "/bin/echo {} > {}",
++            (static_cast<uint16_t>(
++                 ((SLAAC_Timing_Param
++                       [(2 * SLAACTimingParamIndex::ReachableTime) + 1] -
++                   SLAAC_Timing_Param[2 *
++                                      SLAACTimingParamIndex::ReachableTime]) +
++                  (static_cast<float>(
++                       value[SLAACTimingParamIndex::ReachableTime]) *
++                   SLAAC_Timing_Param[2 *
++                                      SLAACTimingParamIndex::ReachableTime]))) *
++             toMilliSec),
++            ipv6conf)
++            .c_str());
++
++    ipv6conf = procNeighLoc + interfaceName().c_str() + "/retrans_time_ms";
++
++    std::system(
++        fmt::format(
++            "/bin/echo {} > {}",
++            (static_cast<float>((
++                 (SLAAC_Timing_Param[(2 * SLAACTimingParamIndex::RetransTimer) +
++                                     1] -
++                  SLAAC_Timing_Param[2 * SLAACTimingParamIndex::RetransTimer]) +
++                 (static_cast<float>(
++                      value[SLAACTimingParamIndex::RetransTimer]) *
++                  SLAAC_Timing_Param[2 *
++                                     SLAACTimingParamIndex::RetransTimer]))) *
++             toMilliSec),
++            ipv6conf)
++            .c_str());
++
++    ipv6conf = procNeighLoc + interfaceName().c_str() +
++               "/delay_first_probe_time";
++
++    std::system(
++        fmt::format("/bin/echo {} > {}",
++                    convertSLAACTimingParamValueToActual(
++                        value[SLAACTimingParamIndex::DelayFirstProbeTime],
++                        SLAACTimingParamIndex::DelayFirstProbeTime),
++                    ipv6conf)
++            .c_str());
++
++    value = EthernetInterfaceIntf::ipv6SLAACTimingConfParam(value);
++    writeIfaceStateFile(interfaceName());
++    return value;
++}
++
+ } // namespace network
+ } // namespace phosphor
+diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
+index 4561d8f..e7b6571 100644
+--- a/src/ethernet_interface.hpp
++++ b/src/ethernet_interface.hpp
+@@ -108,6 +108,38 @@ enum class DHCPv6TimingParamIndex : uint8_t
+     INFMaxRt = 11,
+ };
+ 
++#define MAX_SUPPORTED_SLAAC_TIMING_PARAMS 11
++
++namespace SLAACTimingParamIndex
++{
++constexpr int MaxRtrSolicitationDelay = 0;
++constexpr int RtrSolicitationInterval = 1;
++constexpr int MaxRtrSolicitations = 2;
++constexpr int DupAddrDetectTransmits = 3;
++constexpr int MaxMulticastSolicit = 4;
++constexpr int MaxUnicastSolicit = 5;
++constexpr int MaxAnycastDelayTime = 6;
++constexpr int MaxNeighborAdvertisement = 7;
++constexpr int ReachableTime = 8;
++constexpr int RetransTimer = 9;
++constexpr int DelayFirstProbeTime = 10;
++}; // namespace SLAACTimingParamIndex
++
++namespace SLAACTimingParamDefault
++{
++constexpr uint8_t MaxRtrSolicitationDelay = 4;
++constexpr uint8_t RtrSolicitationInterval = 8;
++constexpr uint8_t MaxRtrSolicitations = 255;
++constexpr uint8_t DupAddrDetectTransmits = 2;
++constexpr uint8_t MaxMulticastSolicit = 3;
++constexpr uint8_t MaxUnicastSolicit = 3;
++constexpr uint8_t MaxAnycastDelayTime = 4;
++constexpr uint8_t MaxNeighborAdvertisement = 0;
++constexpr uint8_t ReachableTime = 15;
++constexpr uint8_t RetransTimer = 4;
++constexpr uint8_t DelayFirstProbeTime = 10;
++}; // namespace SLAACTimingParamDefault
++
+ /** @class EthernetInterface
+  *  @brief OpenBMC Ethernet Interface implementation.
+  *  @details A concrete implementation for the
+@@ -389,6 +421,14 @@ class EthernetInterface : public Ifaces
+     std::vector<uint8_t>
+         dhcpv6TimingParamReadIfaceFile(const config::Parser& config);
+ 
++    /** Set value of IPv6SLAACTimingConfParam */
++    std::vector<uint8_t>
++        ipv6SLAACTimingConfParam(std::vector<uint8_t> value) override;
++
++    /** Read slaac timing param from iface config file */
++    std::vector<uint8_t>
++        slaacTimingParamReadIfaceFile(const config::Parser& config);
++
+     using EthernetInterfaceIntf::interfaceName;
+     using EthernetInterfaceIntf::linkUp;
+     using EthernetInterfaceIntf::mtu;
+@@ -407,6 +447,7 @@ class EthernetInterface : public Ifaces
+     using EthernetInterfaceIntf::ipv4Enable;
+     using EthernetInterfaceIntf::ipv6Enable;
+     using EthernetInterfaceIntf::ipv6EnableStaticRtr;
++    using EthernetInterfaceIntf::ipv6SLAACTimingConfParam;
+     using EthernetInterfaceIntf::ipv6StaticRtr2Addr;
+     using EthernetInterfaceIntf::ipv6StaticRtrAddr;
+     using EthernetInterfaceIntf::linkLocalAutoConf;

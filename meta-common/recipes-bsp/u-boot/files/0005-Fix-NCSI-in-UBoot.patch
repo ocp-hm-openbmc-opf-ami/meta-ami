@@ -1,0 +1,126 @@
+From 3ec1e66df8522b41f2723287fed444729e4a2d97 Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Wed, 31 Jul 2024 11:42:49 +0800
+Subject: [PATCH] Fix NCSI in UBoot
+
+---
+ drivers/net/ftgmac100.c | 16 +++++++++++++++-
+ drivers/net/phy/ncsi.c  |  3 +++
+ drivers/net/phy/phy.c   |  4 +++-
+ net/net.c               | 28 ++++++++++++++++++++++------
+ 5 files changed, 44 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/net/ftgmac100.c b/drivers/net/ftgmac100.c
+index 999941de14..a72bf1c7c0 100644
+--- a/drivers/net/ftgmac100.c
++++ b/drivers/net/ftgmac100.c
+@@ -22,6 +22,15 @@
+ 
+ #include "ftgmac100.h"
+ #include "aspeed_mdio.h"
++#include <stdio.h>
++
++#include <linux/kernel.h>
++#include <linux/list.h>
++
++#ifdef CONFIG_PHY_NCSI
++extern char ncsi_interface_list[16][16] ;
++extern unsigned int ncsi_ifindex;
++#endif
+ 
+ /* Min frame ethernet frame size without FCS */
+ #define ETH_ZLEN			60
+@@ -597,7 +606,12 @@ static int ftgmac100_probe(struct udevice *dev)
+ 		goto out;
+ 
+ 	if (priv->ncsi_mode) {
+-		printf("%s - NCSI detected\n", __func__);
++		printf("\n%s - NCSI detected\n", __func__);
++#ifdef CONFIG_PHY_NCSI
++		memset(ncsi_interface_list[ncsi_ifindex], 0, sizeof(ncsi_interface_list[ncsi_ifindex]));
++		snprintf(ncsi_interface_list[ncsi_ifindex], sizeof(ncsi_interface_list[ncsi_ifindex]), "%s", dev->name);
++		ncsi_ifindex++;
++#endif
+ 	} else {
+ 		ret = ftgmac100_mdio_init(dev);
+ 		if (ret) {
+diff --git a/drivers/net/phy/ncsi.c b/drivers/net/phy/ncsi.c
+index 2496c90748..54023fb1aa 100644
+--- a/drivers/net/phy/ncsi.c
++++ b/drivers/net/phy/ncsi.c
+@@ -59,6 +59,9 @@ struct ncsi_channel {
+ 
+ };
+ 
++char ncsi_interface_list[16][16];
++unsigned int ncsi_ifindex = 0;
++
+ struct ncsi_package {
+ 	unsigned int		id;
+ 	unsigned int		n_channels;
+diff --git a/drivers/net/phy/phy.c b/drivers/net/phy/phy.c
+index daea26c451..73296b8182 100644
+--- a/drivers/net/phy/phy.c
++++ b/drivers/net/phy/phy.c
+@@ -932,7 +932,9 @@ struct phy_device *phy_connect(struct mii_dev *bus, int addr,
+ #endif
+ 
+ #ifdef CONFIG_PHY_NCSI
+-	phydev = phy_device_create(bus, 0, PHY_NCSI_ID, false, interface);
++	if (interface == PHY_INTERFACE_MODE_NCSI) {
++		phydev = phy_device_create(bus, 0, PHY_NCSI_ID, false, interface);
++	}
+ #endif
+ 
+ 	if (!phydev)
+diff --git a/net/net.c b/net/net.c
+index f0f9cd4d94..7784d9c55f 100644
+--- a/net/net.c
++++ b/net/net.c
+@@ -118,7 +118,13 @@
+ #if defined(CONFIG_CMD_WOL)
+ #include "wol.h"
+ #endif
++#include <stdio.h>
++#include <stdlib.h>
+ 
++#ifdef CONFIG_PHY_NCSI
++extern char ncsi_interface_list[16][16] ;
++extern unsigned int ncsi_ifindex ;
++#endif
+ /** BOOTP EXTENTIONS **/
+ 
+ /* Our subnet mask (0=unknown) */
+@@ -409,12 +415,22 @@ int net_loop(enum proto_t protocol)
+ 	debug_cond(DEBUG_INT_STATE, "--- net_loop Entry\n");
+ 
+ #ifdef CONFIG_PHY_NCSI
+-	if (protocol != NCSI && !ncsi_active()) {
+-		printf("Configuring NCSI\n");
+-		if (net_loop(NCSI) < 0)
+-			return ret;
+-		eth_init_state_only();
+-		goto restart;
++	eth_set_current();
++	bool is_ncsi_interface = false;
++	for (int i = 0; i < 16 && i < ncsi_ifindex;i++) {
++		if (strncmp(ncsi_interface_list[i], eth_get_name(), sizeof(ncsi_interface_list[i])) == 0) {
++			is_ncsi_interface = true;
++			break;
++		}
++	}
++	if (is_ncsi_interface) {
++		if (protocol != NCSI && !ncsi_active()) {
++			printf("Configuring NCSI\n");
++			if (net_loop(NCSI) < 0)
++				return ret;
++			eth_init_state_only();
++			goto restart;
++		}
+ 	}
+ #endif
+ 
+-- 
+2.34.1
+
+

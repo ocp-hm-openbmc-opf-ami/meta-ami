@@ -22,6 +22,11 @@ install_data(
     install_dir: systemd.get_variable('systemdsystemunitdir')
   )
 
+executable('dropbear-manager', 'dropbear_manager.cpp',
+    dependencies : [dependency('sdbusplus')],
+    install: true,
+)
+
 executable(
   'session-management',
   'session_management.cpp',

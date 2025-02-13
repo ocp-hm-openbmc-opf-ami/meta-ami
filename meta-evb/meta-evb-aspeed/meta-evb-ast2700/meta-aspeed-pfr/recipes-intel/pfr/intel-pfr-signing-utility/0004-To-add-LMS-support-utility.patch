@@ -1,0 +1,585 @@
+From 8a84fd25d828f08a31e3ce0b3ebb5f34404dec4f Mon Sep 17 00:00:00 2001
+From: Kane-Chen-AS <kane_chen@gerrit.aspeed.com>
+Date: Mon, 22 Jan 2024 10:01:02 +0800
+Subject: [PATCH] To add LMS support utility
+
+Signed-off-by: Kane-Chen-AS <kane_chen@gerrit.aspeed.com>
+---
+ CMakeLists.txt |   8 ++
+ blocks.h       |  20 ++++
+ blocksign.c    | 288 ++++++++++++++++++++++++++++++++++++++++++++++++-
+ 3 files changed, 315 insertions(+), 1 deletion(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 5b3f378..14e87da 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -33,6 +33,14 @@ add_compile_options(-g)
+ include_directories(${OPENSSL_INCLUDE_DIR})
+ include_directories(${LIBXML2_INCLUDE_DIRS})
+ add_executable(intel-pfr-signing-utility argparse.c cpld.c blocksign.c sslhelper.c main.c s_helpers.c log.c)
++add_executable(intel-pfr-signing-utility_lms argparse.c cpld.c blocksign.c sslhelper.c main.c s_helpers.c log.c)
++set_property(TARGET intel-pfr-signing-utility_lms PROPERTY COMPILE_DEFINITIONS LMS_SUPPORT)
++
+ target_link_libraries (intel-pfr-signing-utility ${OPENSSL_CRYPTO_LIBRARY})
+ target_link_libraries(intel-pfr-signing-utility xml2)
++target_link_libraries (intel-pfr-signing-utility_lms ${OPENSSL_CRYPTO_LIBRARY})
++target_link_libraries(intel-pfr-signing-utility_lms xml2)
++target_link_libraries(intel-pfr-signing-utility_lms hss_verify)
++target_link_libraries(intel-pfr-signing-utility_lms hss_lib)
+ install (TARGETS intel-pfr-signing-utility DESTINATION bin)
++install (TARGETS intel-pfr-signing-utility_lms DESTINATION bin)
+diff --git a/blocks.h b/blocks.h
+index 65162ce..3452643 100644
+--- a/blocks.h
++++ b/blocks.h
+@@ -22,12 +22,21 @@ typedef struct _CSK
+     uint32_t curve_magic;
+     int32_t permissions;
+     int32_t keyid;
++#ifdef LMS_SUPPORT
++    int32_t keylen;
++    uint8_t pubkey[100];
++    uint8_t reserved[12];
++    uint32_t sig_magic;
++    int32_t siglen;
++    uint8_t sig[2048];
++#else
+     uint8_t pubkey_x[48];
+     uint8_t pubkey_y[48];
+     uint8_t reserved1[20];
+     uint32_t sig_magic;
+     uint8_t sig_r[48];
+     uint8_t sig_s[48];
++#endif
+ } CSK;
+ 
+ typedef struct _RK
+@@ -36,17 +45,28 @@ typedef struct _RK
+     uint32_t curve_magic;
+     int32_t permissions;
+     int32_t keyid;
++#ifdef LMS_SUPPORT
++    int32_t keylen;
++    uint8_t pubkey[100];
++    uint8_t reserved[12];
++#else
+     uint8_t pubkey_x[48];
+     uint8_t pubkey_y[48];
+     uint8_t reserved1[20];
++#endif
+ } RK;
+ 
+ typedef struct _BLOCK0_SIG
+ {
+     uint32_t magic;
+     uint32_t sig_magic;
++#ifdef LMS_SUPPORT
++    int32_t siglen;
++    uint8_t sig[2048];
++#else
+     uint8_t sig_r[48];
+     uint8_t sig_s[48];
++#endif
+ } BLOCK0_SIG;
+ 
+ typedef struct _BLOCK_0
+diff --git a/blocksign.c b/blocksign.c
+index 7acb9e4..8838873 100644
+--- a/blocksign.c
++++ b/blocksign.c
+@@ -196,6 +196,179 @@ int doExternalSign(const unsigned char *dataRaw, const int rawLen,
+     return ret;
+ }
+ 
++#ifdef LMS_SUPPORT
++#include "hss.h"
++#include "hss_verify_inc.h"
++#include "hss_sign_inc.h"
++#include "hss_internal.h"
++
++void load_lms_pub_key(char *key, unsigned char *buf, int *buf_len)
++{
++    FILE *fp;
++    unsigned char tmp[100];
++    int total_len;
++
++    fp = fopen(key, "r");
++    if (fp)
++    {
++        total_len = fread(tmp, 1, sizeof(tmp), fp);
++        fclose(fp);
++        *buf_len = total_len;
++        memcpy(buf, tmp, total_len);
++    }
++    else
++    {
++        printf("Can't open %s\n", key);
++    }
++}
++
++static bool read_private_key( unsigned char *private_key,
++                              size_t len_private_key, void *filename) {
++    FILE *f = fopen( filename, "r" );
++    if (!f)
++    {
++        printf("read_private_key : can't open %s\n", (char *)filename);
++        return false;
++    }
++    if (1 != fread( private_key, len_private_key, 1, f ))
++    {
++        fclose(f);
++        return false;
++    }
++    fclose(f);
++    return true;
++}
++
++static bool update_private_key( unsigned char *private_key,
++                               size_t len_private_key, void *filename) {
++    FILE *fp = fopen( filename, "r+" );
++    if (!fp)
++    {
++        fp = fopen(filename, "w" );
++        if (fp == NULL)
++        {
++            return false;
++        }
++    }
++    if (1 != fwrite( private_key, len_private_key, 1, fp ))
++    {
++        fclose(fp);
++        return false;
++    }
++    if (0 != fclose(fp))
++    {
++        return false;
++    }
++    return true;
++}
++
++#if 0 //this function can be replaced the update_private_key for using key to sign data
++static bool ignore_update(unsigned char *private_key, size_t len, void *ctx) {
++    if (0)
++    {
++        printf("%s ", private_key);
++        printf("%ld ", len);
++        printf("%p \n", ctx);
++    }
++    return true;
++}
++#endif
++
++int LMSSign(char *key, unsigned char *hashBuffer, int size, unsigned char **sigout, int *sigSize)
++{
++
++    struct hss_working_key *w = hss_load_private_key(
++             read_private_key, key, /* How to load the */
++                                         /* private key */
++             0,                          /* Use minimal memory */
++             NULL, 0,                    /* The auxiliary data */
++             0);                         /* Use the defaults for extra info */
++    if (!w)
++    {
++        printf( "Error loading private key (%s)\n", key );
++        hss_free_working_key(w);
++        return 0;
++    }
++    printf( "Loaded private key\n" );
++    fflush(stdout);              /* gets a feel for how long this step took */
++    /* compared to the signing steps below */
++    /* Look up the signature length */
++    size_t sig_len;
++    sig_len = hss_get_signature_len_from_working_key(w);
++    if (sig_len == 0)
++    {
++        printf( "Error getting signature len\n" );
++        hss_free_working_key(w);
++        return 0;
++    }
++    *sigSize = sig_len;
++    *sigout = malloc(sig_len);
++    if (!*sigout)
++    {
++        printf( "Error during malloc\n" );
++        hss_free_working_key(w);
++        return 0;
++    }
++
++    struct hss_sign_inc ctx;
++    (void)hss_sign_init(
++        &ctx,                   /* Incremental signing context */
++        w,                      /* Working key */
++        update_private_key,     /* Routine to update the */
++        key,                    /* private key */
++        *sigout, sig_len,       /* Where to place the signature */
++        0);                     /* Use the defaults for extra info */
++
++    (void)hss_sign_update(
++        &ctx,                   /* Incremental signing context */
++        hashBuffer,             /* Next piece of the message */
++        size);                  /* Length of this piece */
++
++    bool status = hss_sign_finalize(
++        &ctx,                  /* Incremental signing context */
++        w,                     /* Working key */
++        *sigout,               /* Signature */
++        0);                    /* Use the defaults for extra info */
++
++    if (!status)
++    {
++        printf( "	 Unable to generate signature\n" );
++        hss_free_working_key(w);
++        return 0;
++    }
++
++    hss_free_working_key(w);
++    return 1;
++}
++
++int LMSVerify(unsigned char *pub, unsigned char *buf, int buf_len, unsigned char *sig, int sig_len)
++{
++    struct hss_validate_inc ctx;
++    (void)hss_validate_signature_init(
++        &ctx,                /* Incremental validate context */
++        pub,                 /* Public key */
++        sig, sig_len,        /* Signature */
++        0);                  /* Use the defaults for extra info */
++
++    (void)hss_validate_signature_update(
++        &ctx,                /* Incremental validate context */
++        buf,                 /* Next piece of the message */
++        buf_len);            /* Length of this piece */
++
++    bool status = hss_validate_signature_finalize(
++        &ctx,                 /* Incremental validate context */
++        sig,                  /* Signature */
++        0);                   /* Use the defaults for extra info */
++
++    if (status)
++        printf( "	 Signature verified\n" );
++    else
++        printf( "	 Signature NOT verified\n" );
++
++    return 1;
++}
++#endif
++
+ int parseBlocks(ARGUMENTS *args)
+ {
+     int i;
+@@ -211,8 +384,10 @@ int parseBlocks(ARGUMENTS *args)
+     unsigned char *hash = NULL;
+     int hashLen = 0;
+     unsigned char *sig = NULL;
++#ifndef LMS_SUPPORT
+     int sigLen = 0;
+     int verified = 0;
++#endif
+ 
+     ret = openFile(&fp, args->inputBinary, "r");
+     if (ret)
+@@ -435,6 +610,11 @@ int parseBlocks(ARGUMENTS *args)
+                        b1.root_key.permissions);
+                 printf("%s  Root Key Key ID:       %d\n", getNfo(),
+                        b1.root_key.keyid);
++#ifdef LMS_SUPPORT
++                printf("%s  Root Key Public (%d):\n", getNfo(), b1.root_key.keylen);
++                hexDump(b1.root_key.pubkey, b1.root_key.keylen, "    ", stdout, getNfo());
++                printf("%s\n", getNfo());
++#else
+                 printf("%s  Root Key Public (Qx):\n", getNfo());
+                 hexDump(b1.root_key.pubkey_x, 48, "    ", stdout, getNfo());
+                 printf("%s\n", getNfo());
+@@ -444,6 +624,7 @@ int parseBlocks(ARGUMENTS *args)
+                 printf("%s  Root Key Reserved1:\n", getNfo());
+                 hexDump(b1.root_key.reserved1, 20, "    ", stdout, getNfo());
+                 printf("%s\n", getNfo());
++#endif
+                 if (!(b0.pc_type & CANCELLATION_BIT))
+                 {
+                     printf("%s  CS Key Magic:          0x%08X\n", getNfo(),
+@@ -454,6 +635,17 @@ int parseBlocks(ARGUMENTS *args)
+                            b1.cs_key.permissions);
+                     printf("%s  CS Key Key ID:    %d\n", getNfo(),
+                            b1.cs_key.keyid);
++#ifdef LMS_SUPPORT
++                    printf("%s  CS Key Public (%d):\n", getNfo(), b1.cs_key.keylen);
++                    hexDump(b1.cs_key.pubkey, b1.cs_key.keylen, "    ", stdout,
++                            getNfo());
++                    printf("%s  CS KEY Sig Magic:      0x%08X\n", getNfo(),
++                           b1.cs_key.sig_magic);
++                    printf("%s  CS KEY Sig (%d):\n", getNfo(), b1.cs_key.siglen);
++                    hexDump(b1.cs_key.sig, b1.cs_key.siglen, "    ", stdout,
++                            getNfo());
++                    printf("%s\n", getNfo());
++#else
+                     printf("%s  CS Key Public (Qx):\n", getNfo());
+                     hexDump(b1.cs_key.pubkey_x, EC_POINT_MAX, "    ", stdout,
+                             getNfo());
+@@ -475,11 +667,20 @@ int parseBlocks(ARGUMENTS *args)
+                     hexDump(b1.cs_key.sig_s, EC_POINT_MAX, "    ", stdout,
+                             getNfo());
+                     printf("%s\n", getNfo());
+-
++#endif
+                     // If params have been loaded, attempt to verify signatures
+                     if (args->b1_args.root_key.pubkey != NULL &&
+                         args->b1_args.cskey.hashalg != UINT16_MAX)
+                     {
++#ifdef LMS_SUPPORT
++                        printf("%s  CS KEY Signature Verification\n", getNfo());
++                        calcSize = sizeof(b1.cs_key.curve_magic) +
++                                   sizeof(b1.cs_key.permissions) +
++                                   sizeof(b1.cs_key.keyid) +
++                                   sizeof(b1.cs_key.keylen) +
++                                   sizeof(b1.cs_key.reserved) +
++                                   sizeof(b1.cs_key.pubkey);
++#else
+                         printf("%s  CS KEY Signature Verification\n", getNfo());
+                         calcSize = sizeof(b1.cs_key.curve_magic) +
+                                    sizeof(b1.cs_key.permissions) +
+@@ -487,6 +688,7 @@ int parseBlocks(ARGUMENTS *args)
+                                    sizeof(b1.cs_key.pubkey_x) +
+                                    sizeof(b1.cs_key.pubkey_y) +
+                                    sizeof(b1.cs_key.reserved1);
++#endif
+                         buff = &(b1.cs_key.curve_magic);
+                         ret = HashBuffer(
+                             buff, calcSize,
+@@ -502,6 +704,12 @@ int parseBlocks(ARGUMENTS *args)
+                             printf("%s\n", getNfo());
+                             // do size calculation if 32-48 are 0x00, then we
+                             // assume 32
++#ifdef LMS_SUPPORT
++                            unsigned char pubkey[b1.root_key.keylen];
++                            int klen;
++                            load_lms_pub_key(args->b1_args.root_key.pubkey, pubkey, &klen);
++                            LMSVerify(pubkey, hash, hashLen, b1.cs_key.sig, b1.cs_key.siglen);
++#else
+                             int pointLen = EC_POINT_256;
+                             for (i = EC_POINT_256; i < EC_POINT_384; ++i)
+                             {
+@@ -559,6 +767,7 @@ int parseBlocks(ARGUMENTS *args)
+                                 ret = 0;
+                                 // failed to encode DER
+                             }
++#endif
+                         }
+                         if (hash != NULL)
+                         {
+@@ -584,12 +793,19 @@ int parseBlocks(ARGUMENTS *args)
+                        b1.block0_sig.magic);
+                 printf("%s  B0 Sig Magic:          0x%08X\n", getNfo(),
+                        b1.block0_sig.sig_magic);
++#ifdef LMS_SUPPORT
++                printf("%s  B0 Sig Len (%d):\n", getNfo(), b1.block0_sig.siglen);
++                printf("%s	B0 Sig Sig ():\n", getNfo());
++                hexDump(b1.block0_sig.sig, b1.block0_sig.siglen, "    ", stdout, getNfo());
++                printf("%s\n", getNfo());
++#else
+                 printf("%s  B0 Sig Sig (r):\n", getNfo());
+                 hexDump(b1.block0_sig.sig_r, 48, "    ", stdout, getNfo());
+                 printf("%s\n", getNfo());
+                 printf("%s  B0 Sig Sig (s):\n", getNfo());
+                 hexDump(b1.block0_sig.sig_s, 48, "    ", stdout, getNfo());
+                 printf("%s\n", getNfo());
++#endif
+                 // If params have been loaded, attempt to verify signatures
+                 if (args->b1_args.cskey.pubkey != NULL &&
+                     args->b1_args.b0sig.hashalg != UINT16_MAX)
+@@ -610,6 +826,12 @@ int parseBlocks(ARGUMENTS *args)
+                         printf("%s\n", getNfo());
+                         // do size calculation if 32-48 are 0x00, then we assume
+                         // 32
++#ifdef LMS_SUPPORT
++                        unsigned char pubkey[b1.cs_key.keylen];
++                        int klen;
++                        load_lms_pub_key(args->b1_args.cskey.pubkey, pubkey, &klen);
++                        LMSVerify(pubkey, hash, hashLen, b1.block0_sig.sig, b1.block0_sig.siglen);
++#else
+                         int pointLen = EC_POINT_256;
+                         for (i = EC_POINT_256; i < EC_POINT_384; ++i)
+                         {
+@@ -666,6 +888,7 @@ int parseBlocks(ARGUMENTS *args)
+                             ret = 0;
+                             // failed to encode DER
+                         }
++#endif
+                     }
+                     if (hash != NULL)
+                     {
+@@ -714,11 +937,15 @@ int generateBlocks(ARGUMENTS *args)
+     char *intermediateFile = NULL;
+     FILE *fp = NULL;
+     FILE *ifp = NULL;
++#ifndef LMS_SUPPORT
+     unsigned char *qx = NULL;
+     unsigned char *qy = NULL;
++#endif
+     uint8_t in[4];
+     uint8_t out[4];
++#ifndef LMS_SUPPORT
+     int externalSize = 0;
++#endif
+     void *buff; // generic pointer used for structs/offsets
+ 
+     // first we need to handle CPLD specific tasks (bytes swapping/svn)
+@@ -938,8 +1165,10 @@ int generateBlocks(ARGUMENTS *args)
+         int calcSize = 0;
+         unsigned char *sig = NULL;
+         int sigLen = 0;
++#ifndef LMS_SUPPORT
+         unsigned char *r = NULL;
+         unsigned char *s = NULL;
++#endif
+         if (args->b1_args.b0sig.hashalg == TPM_ALG_SHA256) {
+             ret = HashFile(targetFile, Sha256, &hashBuffer, &size);
+             if (ret)
+@@ -972,6 +1201,14 @@ int generateBlocks(ARGUMENTS *args)
+             {
+                 printf("%s  Generating Root Key structure.\n", getNfo());
+             }
++#ifdef LMS_SUPPORT
++            b1.root_key.curve_magic = args->b1_args.root_key.curve_magic;
++            b1.root_key.keyid = args->b1_args.root_key.keyid;
++            b1.root_key.magic = args->b1_args.root_key.magic;
++            b1.root_key.permissions = args->b1_args.root_key.permissions;
++            memset(b1.root_key.pubkey, 0, sizeof(b1.root_key.pubkey));
++            load_lms_pub_key(args->b1_args.root_key.pubkey, b1.root_key.pubkey, &b1.root_key.keylen);
++#else
+             b1.root_key.curve_magic = args->b1_args.root_key.curve_magic;
+             b1.root_key.keyid = args->b1_args.root_key.keyid;
+             b1.root_key.magic = args->b1_args.root_key.magic;
+@@ -1005,6 +1242,7 @@ int generateBlocks(ARGUMENTS *args)
+                 free(qy);
+                 qy = NULL;
+             }
++#endif
+         }
+         // BLOCK 1 CSKEY - Skip if KEY CANCELLATION
+         if (ret && !(b0.pc_type & CANCELLATION_BIT))
+@@ -1018,6 +1256,10 @@ int generateBlocks(ARGUMENTS *args)
+             b1.cs_key.keyid = args->b1_args.cskey.keyid;
+             b1.cs_key.magic = args->b1_args.cskey.magic;
+             b1.cs_key.permissions = args->b1_args.cskey.permissions;
++#ifdef LMS_SUPPORT
++            memset(b1.cs_key.pubkey, 0, sizeof(b1.cs_key.pubkey));
++            load_lms_pub_key(args->b1_args.cskey.pubkey, b1.cs_key.pubkey, &b1.cs_key.keylen);
++#else
+             ret = ExtractQxQyFromPubkey(args->b1_args.cskey.pubkey, &qx, &qy,
+                                         &size);
+             if (ret)
+@@ -1046,6 +1288,7 @@ int generateBlocks(ARGUMENTS *args)
+                 free(qy);
+                 qy = NULL;
+             }
++#endif
+             if (ret)
+             {
+                 b1.cs_key.sig_magic = args->b1_args.cskey.sig_magic;
+@@ -1059,6 +1302,13 @@ int generateBlocks(ARGUMENTS *args)
+                 }
+                 // calculate the size of the buffer that we should hash (this
+                 // should prevent accessing bad mem)
++#ifdef LMS_SUPPORT
++                calcSize = // sizeof(b1.cs_key.magic) +
++                    sizeof(b1.cs_key.curve_magic) +
++                    sizeof(b1.cs_key.permissions) + sizeof(b1.cs_key.keyid) +
++                    sizeof(b1.cs_key.pubkey) + sizeof(b1.cs_key.keylen)+
++                    sizeof(b1.cs_key.reserved) ;
++#else
+                 calcSize = // sizeof(b1.cs_key.magic) +
+                     sizeof(b1.cs_key.curve_magic) +
+                     sizeof(b1.cs_key.permissions) + sizeof(b1.cs_key.keyid) +
+@@ -1066,6 +1316,7 @@ int generateBlocks(ARGUMENTS *args)
+                     sizeof(b1.cs_key.reserved1); /* +
+                      sizeof(b1.cs_key.sig_magic);
+                  buff = &(b1.cs_key.magic);*/
++#endif
+                 buff = &(b1.cs_key.curve_magic);
+                 ret = HashBuffer(buff, calcSize,
+                                  getHashAlgFromTcg(args->b1_args.cskey.hashalg),
+@@ -1084,6 +1335,19 @@ int generateBlocks(ARGUMENTS *args)
+                             printf("%s    Signing hash with key %s.\n",
+                                    getNfo(), args->b1_args.cskey.sign_key);
+                         }
++#ifdef LMS_SUPPORT
++                        ret = LMSSign(args->b1_args.cskey.sign_key, hashBuffer, size, &sig, &sigLen);
++                        if (ret)
++                        {
++                            if (args->verbose)
++                                hexDump(sig, sigLen, "      ", stdout, getNfo());
++                            memset(&b1.cs_key.sig, 0, sizeof(b1.cs_key.sig));
++                            b1.cs_key.siglen = sigLen;
++                            memcpy(b1.cs_key.sig, sig, sigLen);
++                            free(sig);
++                            sig = NULL;
++                        }
++#else
+                         ret = SignData(
+                             args->b1_args.cskey.sign_key, EcDsa, hashBuffer,
+                             getHashAlgFromTcg(args->b1_args.cskey.hashalg),
+@@ -1129,9 +1393,11 @@ int generateBlocks(ARGUMENTS *args)
+                             }
+                             free(sig);
+                         }
++#endif
+                     }
+                     else
+                     {
++#ifndef LMS_SUPPORT
+                         ret =
+                             doExternalSign(buff, calcSize, hashBuffer, size,
+                                            args->b1_args.cskey.script_file, &r,
+@@ -1177,6 +1443,7 @@ int generateBlocks(ARGUMENTS *args)
+                             free(s);
+                             s = NULL;
+                         }
++#endif
+                     }
+                     free(hashBuffer);
+                     hashBuffer = NULL;
+@@ -1216,6 +1483,22 @@ int generateBlocks(ARGUMENTS *args)
+                         printf("%s    Signing hash with key %s\n", getNfo(),
+                                args->b1_args.b0sig.sign_key);
+                     }
++#ifdef LMS_SUPPORT
++                    ret = LMSSign(args->b1_args.b0sig.sign_key, hashBuffer, size, &sig, &sigLen);
++                    if (ret)
++                    {
++                        if (args->verbose)
++                        {
++                            printf("%s    LMS Sign dump (%d):\n", getNfo(), sigLen);
++                            hexDump(sig, sigLen, "		", stdout, getNfo());
++                        }
++                        memset(&b1.block0_sig.sig, 0, sizeof(b1.block0_sig.sig));
++                        b1.block0_sig.siglen = sigLen;
++                        memcpy(&b1.block0_sig.sig, sig, sigLen);
++                        free(sig);
++                        sig = NULL;
++                    }
++#else
+                     ret = SignData(
+                         args->b1_args.b0sig.sign_key, EcDsa, hashBuffer,
+                         getHashAlgFromTcg(args->b1_args.b0sig.hashalg), &sig,
+@@ -1256,9 +1539,11 @@ int generateBlocks(ARGUMENTS *args)
+                         }
+                         free(sig);
+                     }
++#endif
+                 }
+                 else
+                 {
++#ifndef LMS_SUPPORT
+                     ret = doExternalSign(buff, calcSize, hashBuffer, size,
+                                          args->b1_args.b0sig.script_file, &r,
+                                          &s, &externalSize, args->verbose);
+@@ -1302,6 +1587,7 @@ int generateBlocks(ARGUMENTS *args)
+                         free(s);
+                         s = NULL;
+                     }
++#endif
+                 }
+                 free(hashBuffer);
+                 hashBuffer = NULL;

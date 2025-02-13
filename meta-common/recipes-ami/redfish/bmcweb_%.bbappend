@@ -1,0 +1,20 @@
+# Extends the search path the OpenEmbedded build system uses when looking for files and patches as it processes recipes and append files
+FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
+
+# The list of source files — local or remote
+SRC_URI_EXT:append= " \
+	file://collection_ext.hpp;subdir=git/redfish-core/lib/ext \
+	file://storage_ext.hpp;subdir=git/redfish-core/lib/ext \
+"
+SRC_URI:append = "${@bb.utils.contains_any('IMAGE_INSTALL', 'raid-mscc nvme-mgmt nvmebasic-mgmt raid-mgmt', SRC_URI_EXT, '', d)}"
+
+EXTRA_OEMESON += "${@bb.utils.contains_any('IMAGE_INSTALL', 'nvme-mgmt nvmebasic-mgmt', ' -Dami-nvme=enabled','', d)}"
+EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'raid-mscc', ' -Dami-raidmscc=enabled','', d)}"
+EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'raid-mgmt', ' -Dami-raidbrcm=enabled','', d)}"
+EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'nic-mgmt', ' -Dami-nic=enabled','', d)}"
+EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'redfish-core', ' -Dami-rep=enabled','', d)}"
+EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'pciesw-service', ' -Dami-pciesw=enabled','', d)}"
+EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb-ast2600', ' -Dast2600-evb=enabled','', d)}"
+EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb-nuvoton-npcm845', ' -Darbel-nuvoton=enabled','', d)}"
+EXTRA_OEMESON += "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'nm-features', ' -Dami-nm=enabled', '', d)}"
+EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'google-authenticator-libpam', ' -Dami-2fa=enabled','', d)}"
