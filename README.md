@@ -40,6 +40,13 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 - TEMPLATECONF=meta-ami/meta-evb/meta-evb-aspeed/meta-evb-ast2700/meta-ast2700/conf/templates/default . openbmc-env
 - bitbake obmc-phosphor-image
 ```
+
+### 6) Axiado Snowbird Build Instruction
+```
+- meta-ami/github-gitlab-url.sh
+- TEMPLATECONF=meta-evb/meta-evb-axiado/meta-snowbird/conf/templates/default . openbmc-env
+- bitbake obmc-phosphor-image
+```
 ### Notes
 - By default root user is disabled in the stack except AST2600EVB
 - uncomment EXTRA_IMAGE_FEATURES += "debug-tweaks" in build/conf/local.conf to enable the root user access
