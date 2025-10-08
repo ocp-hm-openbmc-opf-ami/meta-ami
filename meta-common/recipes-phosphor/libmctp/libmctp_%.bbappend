@@ -1,6 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/libmctp.git;protocol=https;branch=main \
+SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/libmctp.git;protocol=https;branch=ocp \
            file://0002-add-npcmi3c-and-smbus-binding-test-tool.patch \
            file://default"
 SRCREV = "b3430b88504d629fa961a2eb5feb058bb7ebfcd0"

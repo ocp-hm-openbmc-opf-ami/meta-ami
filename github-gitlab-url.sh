@@ -27,7 +27,7 @@ sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/backup-restore.git;protoco
 
 sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/email-alert-manager.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/email-alert-manager.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/pef/mail-alert-manager.bb
 
-sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/libmctp.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/libmctp.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/libmctp/libmctp_%.bbappend 
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/libmctp.git;protocol=https;branch=ocp/git@github.com\/ocp-hm-openbmc-opf-ami\/libmctp.git;protocol=https;branch=ocp/g' meta-ami/meta-common/recipes-phosphor/libmctp/libmctp_%.bbappend 
 
 sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.virtual-media;branch=main;protocol=https/git@github.com\/ocp-hm-openbmc-opf-ami\/virtual-media.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/virtual-media/virtual-media.bbappend
 
