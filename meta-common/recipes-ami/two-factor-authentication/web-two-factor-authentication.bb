@@ -34,16 +34,13 @@ do_install() {
          
           install -d ${D}${bindir}
           install -d ${D}${systemd_system_unitdir}/
-          install -d ${D}/usr/lib/security
           install -d ${D}/etc/pam.d/
           install -m 0755 ${WORKDIR}/build/WebTwoFactorAuthentication ${D}${bindir}
           install -m 0755 ${S}/xyz.openbmc_project.TwoFactorAuthentication.WebTwoFactorAuthentication.service ${D}${systemd_system_unitdir}/
-          install -m 0755 ${S}/pam_google_authenticator.so ${D}/usr/lib/security/
           install -m 0755 ${S}/tfa ${D}/etc/pam.d/
 	
 }
 
 FILES:${PN}  += "${bindir}"
 FILES:${PN}  += "/etc/pam.d/tfa"
-FILES:${PN}  += "/usr/lib/security/pam_google_authenticator.so"
 FILES:${PN}  += "${systemd_system_unitdir}/xyz.openbmc_project.TwoFactorAuthentication.WebTwoFactorAuthentication.service"
