@@ -27,7 +27,19 @@ sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/backup-restore.git;protoco
 
 sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/email-alert-manager.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/email-alert-manager.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/pef/mail-alert-manager.bb
 
-sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.host-misc-comm-manager;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/host-misc-comm-manager;protocol=https;branch=main/g' meta-core/meta-common/recipes-intel/host-misc-comm-manager/host-misc-comm-manager_git.bb
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/libmctp.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/libmctp.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/libmctp/libmctp_%.bbappend 
+
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.virtual-media;branch=main;protocol=https/git@github.com\/ocp-hm-openbmc-opf-ami\/virtual-media.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/virtual-media/virtual-media.bbappend
+
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.spdmd.git;protocol=https;branch=LFMCTP/git@github.com\/ocp-hm-openbmc-opf-ami\/spdmd.git;protocol=https;branch=LFMCTP/g' meta-ami/meta-common/recipes-ami/spdm/spdmd_lfmctp.inc
+
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.libraries.spdmapplib.git;protocol=https;branch=LFMCTP/git@github.com\/ocp-hm-openbmc-opf-ami\/spdmd.git;protocol=https;branch=LFMCTP/g' meta-ami/meta-common/recipes-ami/spdm/spdmapplib_lfmctp.inc
+
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/two-factor-authentication.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/two-factor-authentication.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/two-factor-authentication/web-two-factor-authentication.bb 
+
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.libraries.spdmapplib.git;protocol=https;branch=LFMCTP/git@github.com\/ocp-hm-openbmc-opf-ami\/spdmapplib.git;protocol=https;branch=LFMCTP/g' meta-ami/meta-common/recipes-ami/spdm/spdmd_lfmctp.inc
+
+sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.host-misc-comm-manager;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/host-misc-comm-manager.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-intel/host-misc-comm-manager/host-misc-comm-manager_git.bb
 
 sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.psu-manager.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/psu-manager.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-intel/psu-manager/psu-manager.bb
 

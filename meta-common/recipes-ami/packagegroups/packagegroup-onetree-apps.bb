@@ -199,14 +199,6 @@ RDEPENDS:${PN}-acd = "  crashdump \
 SUPPORTED_VENDOR:${PN}-acd = "INTEL"
 #-----------------------------------#
 
-SUMMARY:${PN}-asd = "EP : ASD package contains the JTAG Transport"
-DESCRIPTION:${PN}-asd = "The Intel At-Scale Debug tool allows to use any host system to run the Debug tool stack while connecting to the target system across the network "
-RDEPENDS:${PN}-asd = " at-scale-debug \
-		       ami-asd-dbus \
-		   "
-SUPPORTED_VENDOR:${PN}-asd = "INTEL"
-#-----------------------------------#
-
 SUMMARY:${PN}-mrt = "EP : Intel Memory Resilience Technology"
 DESCRIPTION:${PN}-mrt = ""
 RDEPENDS:${PN}-mrt = " memory-error-collector  \
