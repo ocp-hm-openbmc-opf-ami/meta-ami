@@ -31,7 +31,7 @@ sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.host-misc
 
 sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.psu-manager.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/psu-manager.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-intel/psu-manager/psu-manager.bb
 
-sed -i 's/git.ami.com\/core\/ami-bmc\/base-tech\/linux-lf.git;protocol=https;branch=${KBRANCH}/git@github.com\/ocp-hm-openbmc-opf-ami\/linux.git;protocol=https;branch=${KBRANCH}/g' meta-core/meta-common/recipes-kernel/linux/linux-aspeed_%.bbappend
+sed -i 's/git.ami.com\/core\/ami-bmc\/base-tech\/linux-lf.git;protocol=https;branch=${KBRANCH}/git@github.com\/ocp-hm-openbmc-opf-ami\/linux.git;protocol=https;branch=${KBRANCH}/g' meta-ami/meta-common/recipes-kernel/linux/linux-onetree.bb
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.node-manager-proxy.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/node-manager-proxy.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-phosphor/ipmi/phosphor-node-manager-proxy_git.bb
 

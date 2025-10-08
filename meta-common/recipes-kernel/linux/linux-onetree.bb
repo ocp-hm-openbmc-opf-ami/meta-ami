@@ -10,7 +10,7 @@ KERNEL_VERSION_SANITY_SKIP="1"
 
 EXTRA_OEMAKE += "KCFLAGS=-DCONFIG_I3C_MCTP_HELPERS"
 
-KBRANCH = "onetree-dev-6.6"
+KBRANCH = "ocp"
 KSRC = "git://git.ami.com/core/ami-bmc/base-tech/linux-lf.git;protocol=https;branch=${KBRANCH}"
 
 # Include this as a comment only for downstream auto-bump
