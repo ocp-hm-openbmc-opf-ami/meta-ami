@@ -1,0 +1,55 @@
+From 420cd29a14857ffe76ba7005203e11bb4f866856 Mon Sep 17 00:00:00 2001
+From: Zhikui Ren <zhikui.ren@intel.com>
+Date: Mon, 22 Jan 2024 16:18:08 -0800
+Subject: [PATCH] psusensor: increment error count if read fail
+
+Increment the error count if sensor read function fails.
+This would allow sensor polling rate to be throtttled and reduce
+the repeated error messages in journal log.
+
+Tested:
+psu sensor service still respond to dbus calls when PMBus hangs.
+
+Signed-off-by: Zhikui Ren <zhikui.ren@intel.com>
+---
+ src/PSUSensor.cpp | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/src/PSUSensor.cpp b/src/PSUSensor.cpp
+index e3b035e..5d823c7 100644
+--- a/src/PSUSensor.cpp
++++ b/src/PSUSensor.cpp
+@@ -172,7 +172,14 @@ void PSUSensor::setupRead(void)
+ void PSUSensor::restartRead(void)
+ {
+     std::weak_ptr<PSUSensor> weakRef = weak_from_this();
+-    waitTimer.expires_after(std::chrono::milliseconds(sensorPollMs));
++    if (errCount >= errorThreshold)
++    {
++        waitTimer.expires_after(std::chrono::milliseconds(sensorPollMs*20));
++    }
++    else
++    {
++        waitTimer.expires_after(std::chrono::milliseconds(sensorPollMs));
++    }
+     waitTimer.async_wait([weakRef](const boost::system::error_code& ec) {
+         if (ec == boost::asio::error::operation_aborted)
+         {
+@@ -204,10 +211,12 @@ void PSUSensor::handleResponse(const boost::system::error_code& err,
+     }
+     if (err || bytesRead == 0)
+     {
+-        if (readingStateGood())
++        if (errCount < 2)
+         {
+-            std::cerr << name << " read failed\n";
++            std::cerr << name << " @ " << path << " BytesRead " << bytesRead << " err:" << err.value()
++                      << "\n";
+         }
++        incrementError();
+         restartRead();
+         return;
+     }
+-- 
+2.25.1
+

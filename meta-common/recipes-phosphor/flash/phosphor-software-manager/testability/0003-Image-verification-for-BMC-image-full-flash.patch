@@ -1,0 +1,164 @@
+From 29353c7b971f9053c935dd7ce228269ee85a4543 Mon Sep 17 00:00:00 2001
+From: V-Sanjana <sanjana.v@intel.com>
+Date: Thu, 30 Mar 2023 16:36:03 +0530
+Subject: [PATCH] Image verification for BMC image full flash
+
+Signed-off-by: V-Sanjana <sanjana.v@intel.com>
+Upstream-Status: Pending
+---
+ pfr_image_manager.cpp | 110 ++++++++++++++++++++++++++++++++++++++++++
+ pfr_image_manager.hpp |  10 ++++
+ 2 files changed, 120 insertions(+)
+
+diff --git a/pfr_image_manager.cpp b/pfr_image_manager.cpp
+index 8ab00c9..3bffdf4 100644
+--- a/pfr_image_manager.cpp
++++ b/pfr_image_manager.cpp
+@@ -272,6 +272,99 @@ int Manager::verifyImage(const std::filesystem::path imgPath,
+     return 0;
+ }
+ 
++int Manager::verifyBmcFullFlashImage(const std::filesystem::path imgPath,
++                                     std::string& version,
++                                     std::string& purposeString)
++{
++    static constexpr const uint32_t pfmOldLayoutOffset = 0x8000;
++    static constexpr const uint32_t pfmNewLayoutOffset = 0x100000;
++    static constexpr const uint32_t rcOldLayoutOffset = 0x02A00000;
++    static constexpr const uint32_t rcNewLayoutOffset = 0x02F00000;
++
++    // Currently, the BMC full image can be structured in 2 ways, OLD-FLASH layout
++    // or NEW-FLASH layout. In order to verify the image (to make sure the image
++    // is intact), PFM and recovery region can be checked to ensure the PFM magic
++    // and PC type is present at the correct offset (Old/New) (Block 0 check)
++    // Ensure the BMC magic and PC type is present at the correct offset
++    // (Old/New) (Block 0 check)
++
++    // Open the full image
++    std::ifstream imgFile(imgPath, std::ios::binary | std::ios::in);
++
++    if (!imgFile.good())
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Image file read failed");
++        return -1;
++    }
++
++    std::array<char, sizeof(pfrImgBlock0)> buffer = {};
++
++    // Default bmc RC region offset to new
++    uint32_t bmcBlk0Offset = rcNewLayoutOffset;
++
++    // Read PFM at new offset
++    imgFile.seekg(pfmNewLayoutOffset, std::ios::beg);
++    imgFile.read(buffer.data(), buffer.size());
++    auto* pfmBlock0Data = reinterpret_cast<pfrImgBlock0*>(buffer.data());
++
++    // Check for BLOCK 0 magic of PFM signed region
++    if (pfmBlock0Data->tag != fwupdateImageIdentifier)
++    {
++        // If the magic number is not present at new offset, move to old offset
++        bmcBlk0Offset = rcOldLayoutOffset;
++
++        // Read PFM at old offset
++        imgFile.seekg(pfmOldLayoutOffset, std::ios::beg);
++        imgFile.read(buffer.data(), buffer.size());
++        pfmBlock0Data = reinterpret_cast<pfrImgBlock0*>(buffer.data());
++    }
++
++    // If the magic number is not present at old offset as well, image is not
++    // valid
++    if (pfmBlock0Data->tag != fwupdateImageIdentifier)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "BMC full image - PFM Block 0 TAG verification failed");
++        return -1;
++    }
++
++    // Verify PC type -> must be PFM(0x03)
++    if (pfmBlock0Data->pcType[0] != pfrImgPCType::pfrBMCPFM)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "BMC full image - Invalid PFM Block 0 PC Type");
++        return -1;
++    }
++
++    // Read the BMC RC region (Old/New determined above)
++    imgFile.seekg(bmcBlk0Offset, std::ios::beg);
++    imgFile.read(buffer.data(), buffer.size());
++    auto* bmcBlock0Data = reinterpret_cast<pfrImgBlock0*>(buffer.data());
++
++    // Verify BLOCK 0 magic for RC region
++    if (bmcBlock0Data->tag != fwupdateImageIdentifier)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "BMC full image - RC Block 0 TAG verification failed");
++        return -1;
++    }
++
++    // Verify PC type -> must be BMC(0x04)
++    if (bmcBlock0Data->pcType[0] != pfrImgPCType::pfrBMCUpdateCap)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "BMC full image - Invalid BMC Block 0 PC Type");
++        return -1;
++    }
++
++    // Image is successfully verified.
++    version = "NA";
++    purposeString = "xyz.openbmc_project.Software.Version.VersionPurpose.BMC";
++
++    return 0;
++}
++
+ int Manager::processImage(const std::string& imgFilePath)
+ {
+ 
+@@ -306,6 +399,23 @@ int Manager::processImage(const std::string& imgFilePath)
+         purposeString =
+             "xyz.openbmc_project.Software.Version.VersionPurpose.Host";
+     }
++
++    // BMC Full flash support
++
++    else if (fSize == 128 * 1024 * 1024)
++    {
++        phosphor::logging::log<phosphor::logging::level::INFO>(
++            "BMC full flash update request");
++
++        if (0 != verifyBmcFullFlashImage(imgFilePath, ver, purposeString))
++        {
++            phosphor::logging::log<phosphor::logging::level::ERR>(
++                "Error verifying uploaded image");
++            std::filesystem::remove_all(imgFilePath);
++            return -1;
++        }
++    }
++
+     else if (0 != verifyImage(imgFilePath, ver, purposeString))
+     {
+         phosphor::logging::log<phosphor::logging::level::ERR>(
+diff --git a/pfr_image_manager.hpp b/pfr_image_manager.hpp
+index 046cace..a096d7f 100644
+--- a/pfr_image_manager.hpp
++++ b/pfr_image_manager.hpp
+@@ -164,6 +164,16 @@ class Manager
+      */
+     int verifyImage(const std::filesystem::path imgPath, std::string& version,
+                     std::string& purposeString);
++    /**
++     * @brief Verify the uploaded BMC full flash image type and return version
++     * and purpose
++     * @param[in]  - file path
++     * @param[out]  - version
++     * @param[out]  - purpose
++     */
++    int verifyBmcFullFlashImage(const std::filesystem::path imgPath,
++                                std::string& version,
++                                std::string& purposeString);
+     /** @brief Persistent map of Version dbus objects and their
+      * version id */
+     std::map<std::string, std::unique_ptr<Version>> versions;
+-- 
+2.17.1
+

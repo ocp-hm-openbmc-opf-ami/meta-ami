@@ -1,0 +1,311 @@
+From db0c76b55c4aadfbfa6f096e1e759deea513a390 Mon Sep 17 00:00:00 2001
+From: Prithvi A Pai <prithvi.a.pai@intel.com>
+Date: Mon, 27 Nov 2023 22:00:52 +0530
+Subject: [PATCH] Add FIPS Manager
+
+1. This patch helps FIPS enabling/disabling from REST interface.
+
+GET: /redfish/v1/Managers/bmc/SecurityPolicy
+GET on the SecurityPolicy exposes the Intel OEM properties which provides the following information.
+
+AvailableProviders - Contains all the available FIPS provider 2) Enabled - Tells if FIPS is Enabled/Disabled
+Version - Tells the version of FIPS provider
+BMCResetRequired - Tells if BMC reboot is needed for installation of
+FIPS.
+PATCH: /redfish/v1/Managers/bmc/SecurityPolicy
+PATCH on SecurityPolicy helps to Enable/Disable FIPS
+
+2. Add fix for patching FIPS Policy.
+3. Add fix for FIPS policy action in patch response
+
+Tested:
+Tried Enabling/Disabling FIPS and it works fine
+Able to patch FIPS Policy attributes successfully.
+
+Signed-off-by: Prithvi A Pai <prithvi.a.pai@intel.com>
+Signed-off-by: Jayaprakash Mutyala <mutyalax.jayaprakash@intel.com>
+---
+ redfish-core/lib/fips_manager.hpp | 271 ++++++++++++++++++++++++++++++
+ 1 file changed, 271 insertions(+)
+ create mode 100644 redfish-core/lib/fips_manager.hpp
+
+diff --git a/redfish-core/lib/fips_manager.hpp b/redfish-core/lib/fips_manager.hpp
+new file mode 100644
+index 00000000..f33b5934
+--- /dev/null
++++ b/redfish-core/lib/fips_manager.hpp
+@@ -0,0 +1,271 @@
++/*
++// Copyright (c) 2023 Intel Corporation
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//      http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++*/
++#pragma once
++
++#include "app.hpp"
++#include "dbus_utility.hpp"
++#include "error_messages.hpp"
++#include "openbmc_dbus_rest.hpp"
++#include "query.hpp"
++#include "registries/privilege_registry.hpp"
++#include "utils/dbus_utils.hpp"
++#include "utils/json_utils.hpp"
++
++#include <sdbusplus/asio/property.hpp>
++#include <sdbusplus/unpack_properties.hpp>
++
++#include <optional>
++#include <string>
++#include <vector>
++
++namespace redfish
++{
++inline void getFipsStatus(std::shared_ptr<bmcweb::AsyncResp> aResp)
++{
++    crow::connections::systemBus->async_method_call(
++        [aResp](const boost::system::error_code& ec,
++                const std::variant<bool>& enabledStatus) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("DBUS response error for Fips Status");
++            messages::internalError(aResp->res);
++            return;
++        }
++        const bool* value = std::get_if<bool>(&enabledStatus);
++        if (value == nullptr)
++        {
++            BMCWEB_LOG_DEBUG("Null value returned for Version");
++            messages::internalError(aResp->res);
++            return;
++        }
++        aResp->res.jsonValue["Oem"]["Intel"]["FIPSStatus"]["Enabled"] = *value;
++    },
++        "xyz.openbmc_project.SecurityManager", "/com/intel/fips",
++        "org.freedesktop.DBus.Properties", "Get", "com.intel.fips.status",
++        "Enabled");
++}
++
++inline void getFipsVersion(std::shared_ptr<bmcweb::AsyncResp> aResp)
++{
++    crow::connections::systemBus->async_method_call(
++        [aResp](const boost::system::error_code ec,
++                const std::variant<std::string>& version) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("DBUS response error for Fips Status");
++            messages::internalError(aResp->res);
++            return;
++        }
++        const std::string* value = std::get_if<std::string>(&version);
++        if (value == nullptr)
++        {
++            BMCWEB_LOG_DEBUG("Null value returned for Version");
++            messages::internalError(aResp->res);
++            return;
++        }
++        aResp->res.jsonValue["Oem"]["Intel"]["FIPSStatus"]["Version"] = *value;
++    },
++        "xyz.openbmc_project.SecurityManager", "/com/intel/fips",
++        "org.freedesktop.DBus.Properties", "Get", "com.intel.fips.status",
++        "Version");
++}
++
++inline void getAvailableProviders(std::shared_ptr<bmcweb::AsyncResp> aResp)
++{
++    crow::connections::systemBus->async_method_call(
++        [aResp](
++            const boost::system::error_code& ec,
++            const std::variant<std::vector<std::string>>& availableProviders) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("DBUS response error for Fips Status");
++            messages::internalError(aResp->res);
++            return;
++        }
++        const std::vector<std::string>* value =
++            std::get_if<std::vector<std::string>>(&availableProviders);
++        if (value == nullptr)
++        {
++            BMCWEB_LOG_DEBUG("Null value returned for Version");
++            messages::internalError(aResp->res);
++            return;
++        }
++        nlohmann::json::array_t availableProvidersList =
++            nlohmann::json::array();
++        for (std::string val : *value)
++        {
++            availableProvidersList.emplace_back(val);
++        }
++        aResp->res.jsonValue["Oem"]["Intel"]["FIPSStatus"]
++                            ["AvailableProviders"] = availableProvidersList;
++    },
++        "xyz.openbmc_project.SecurityManager", "/com/intel/fips",
++        "org.freedesktop.DBus.Properties", "Get", "com.intel.fips.providers",
++        "AvailableProviders");
++}
++
++inline void
++    handleSecurityPolicyGet(App& app, const crow::Request& req,
++                            const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++    {
++        return;
++    }
++
++    if (req.session == nullptr)
++    {
++        messages::internalError(asyncResp->res);
++        return;
++    }
++    asyncResp->res.jsonValue["@odata.id"] =
++        "/redfish/v1/Managers/bmc/SecurityPolicy";
++    asyncResp->res.jsonValue["@odata.type"] = "#SecurityPolicy."
++                                              "SecurityPolicy.v1_0_0";
++    asyncResp->res.jsonValue["Id"] = "SecurityPolicy";
++    asyncResp->res.jsonValue["Name"] = "Security Policy";
++    asyncResp->res.jsonValue["Description"] = "Security Policy";
++    getFipsStatus(asyncResp);
++    getFipsVersion(asyncResp);
++    getAvailableProviders(asyncResp);
++}
++
++inline void
++    handleFipsPolicyPatch(std::string version, bool enabledStatus,
++                          const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    auto fipsmodeChangeCb = [asyncResp,
++                             enabledStatus](const boost::system::error_code ec,
++                                            bool success) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("DBUS response error for Fips Patch Support");
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        if (!success)
++        {
++            BMCWEB_LOG_ERROR("DBUS response error for Fips Patch Support");
++            messages::unrecognizedRequestBody(asyncResp->res);
++            return;
++        }
++        asyncResp->res.result(boost::beast::http::status::accepted);
++        asyncResp->res.jsonValue["@odata.id"] =
++            "/redfish/v1/Managers/bmc/SecurityPolicy";
++        asyncResp->res.jsonValue["@odata.type"] = "#SecurityPolicy."
++                                                  "SecurityPolicy.v1_0_0";
++        asyncResp->res.jsonValue["Actions"]["#Manager.Reset"]["target"] =
++            "/redfish/v1/Managers/bmc/Actions/Manager.Reset";
++        asyncResp->res.jsonValue["Id"] = "SecurityPolicy";
++        asyncResp->res.jsonValue["Name"] = "Security Policy";
++        asyncResp->res.jsonValue["Description"] = "Security Policy";
++    };
++    if (!enabledStatus)
++    {
++        crow::connections::systemBus->async_method_call(
++            std::move(fipsmodeChangeCb), "xyz.openbmc_project.SecurityManager",
++            "/com/intel/fips", "com.intel.fips.mode", "DisableFips");
++    }
++    else
++    {
++        crow::connections::systemBus->async_method_call(
++            std::move(fipsmodeChangeCb), "xyz.openbmc_project.SecurityManager",
++            "/com/intel/fips", "com.intel.fips.mode", "EnableFips", version);
++    }
++}
++
++inline void handleSecurityPolicyPatch(
++    App& app, const crow::Request& req,
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++    {
++        return;
++    }
++    std::optional<nlohmann::json> oemObject;
++    if (!json_util::readJsonPatch(req, asyncResp->res, "Oem", oemObject))
++    {
++        messages::unrecognizedRequestBody(asyncResp->res);
++        BMCWEB_LOG_ERROR("Cannot read values from FIPSPolicy tag");
++        return;
++    }
++    if (oemObject == nullptr)
++    {
++        messages::internalError(asyncResp->res);
++        BMCWEB_LOG_ERROR("Cannot read values from FIPSPolicy tag");
++        return;
++    }
++    std::optional<nlohmann::json> oemIntelObject;
++    if (!json_util::readJson(*oemObject, asyncResp->res, "Intel",
++                             oemIntelObject))
++    {
++        messages::unrecognizedRequestBody(asyncResp->res);
++        BMCWEB_LOG_ERROR("Cannot read values from FIPSPolicy tag");
++        return;
++    }
++    std::optional<nlohmann::json> fipsPolicyObject;
++    if (oemIntelObject == nullptr)
++    {
++        messages::internalError(asyncResp->res);
++        BMCWEB_LOG_ERROR("Cannot read values from FIPSPolicy tag");
++        return;
++    }
++    if (!json_util::readJson(*oemIntelObject, asyncResp->res, "FIPSPolicy",
++                             fipsPolicyObject))
++    {
++        messages::unrecognizedRequestBody(asyncResp->res);
++        BMCWEB_LOG_ERROR("Cannot read values from FIPSPolicy tag");
++        return;
++    }
++    if (fipsPolicyObject == nullptr)
++    {
++        messages::internalError(asyncResp->res);
++        BMCWEB_LOG_ERROR("Cannot read values from FIPSPolicy tag");
++        return;
++    }
++    std::optional<std::string> fipsVersion;
++    std::optional<bool> enabledStatus;
++    if (!json_util::readJson(*fipsPolicyObject, asyncResp->res, "Version",
++                             fipsVersion, "Enabled", enabledStatus))
++    {
++        messages::unrecognizedRequestBody(asyncResp->res);
++        BMCWEB_LOG_ERROR("Cannot read values from FIPSPolicy tag");
++        return;
++    }
++    /* The version to Disable FIPS is always NA as it is default provider */
++    if ((!*enabledStatus && *fipsVersion != "na") ||
++        (*enabledStatus && *fipsVersion == "na"))
++    {
++        messages::unrecognizedRequestBody(asyncResp->res);
++        BMCWEB_LOG_ERROR("Incorrect value of FIPS version for Disable");
++        return;
++    }
++    handleFipsPolicyPatch(*fipsVersion, *enabledStatus, asyncResp);
++}
++
++inline void requestFipsManagerRoutes(App& app)
++{
++    BMCWEB_ROUTE(app, "/redfish/v1/Managers/bmc/SecurityPolicy/")
++        .privileges(redfish::privileges::getFIPS)
++        .methods(boost::beast::http::verb::get)(
++            std::bind_front(handleSecurityPolicyGet, std::ref(app)));
++
++    BMCWEB_ROUTE(app, "/redfish/v1/Managers/bmc/SecurityPolicy/")
++        .privileges(redfish::privileges::patchFIPS)
++        .methods(boost::beast::http::verb::patch)(
++            std::bind_front(handleSecurityPolicyPatch, std::ref(app)));
++}
++} // namespace redfish
+-- 
+2.34.1
+

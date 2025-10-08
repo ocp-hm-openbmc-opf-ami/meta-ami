@@ -1,0 +1,3 @@
+FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
+#SRCREV = "78c066f6078704fd202c8a4b02fcf73091481ef1"
+DEPENDS += "gtest"

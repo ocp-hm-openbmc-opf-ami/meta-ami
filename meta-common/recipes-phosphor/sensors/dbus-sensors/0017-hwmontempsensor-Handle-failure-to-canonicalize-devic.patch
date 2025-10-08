@@ -1,0 +1,67 @@
+From d7020cc761b13141e24788b68f1fcfdd1e672ac2 Mon Sep 17 00:00:00 2001
+From: Zhikui Ren <zhikui.ren@intel.com>
+Date: Tue, 2 Jan 2024 15:35:31 -0800
+Subject: [PATCH] hwmontempsensor: Handle failure to canonicalize device path
+
+std::filestream::canonical(const std::filesystem::path& p) can throw
+exception if the path does not exist. hwmontempsensor would crash with:
+what():  filesystem error: cannot make canonical path:
+No such file or directory [/sys/class/hwmon/hwmon38/device]
+
+Replace with canonical(const std::filesystem::path& p,
+std::error_code& ec) which captures error code without exception.
+
+This call still may throw std::bad_alloc if memory allocation fails.
+But there is no good way to resolve system OOM from this service,
+leave it unhandled and let the service exit.
+
+Tested:
+Same hwmontemp sensors are created with the change.
+
+Signed-off-by: Zhikui Ren <zhikui.ren@intel.com>
+Change-Id: I0cf98950faf44b35dc71387a653ba1feeb375cc1
+
+%% original patch: 0017-hwmontempsensor-Handle-failure-to-canonicalize-devic.patch
+---
+ src/HwmonTempMain.cpp | 19 ++++++++++++++++---
+ 1 file changed, 16 insertions(+), 3 deletions(-)
+
+diff --git a/src/HwmonTempMain.cpp b/src/HwmonTempMain.cpp
+index bb2f6a4..2c0b493 100644
+--- a/src/HwmonTempMain.cpp
++++ b/src/HwmonTempMain.cpp
+@@ -288,15 +288,28 @@ void createSensors(
+             fs::path device;
+ 
+             std::string deviceName;
++            std::error_code ec;
+             if (pathStr.starts_with("/sys/bus/iio/devices"))
+             {
+-                device = fs::canonical(directory);
++                device = fs::canonical(directory, ec);
++                if (ec)
++                {
++                    std::cerr << "Fail to find device in path [" << pathStr
++                              << "]\n";
++                    continue;
++                }
+                 deviceName = device.parent_path().stem();
+             }
+             else
+             {
+-                device = directory / "device";
+-                deviceName = fs::canonical(device).stem();
++                device = fs::canonical(directory / "device", ec);
++                if (ec)
++                {
++                    std::cerr << "Fail to find device in path [" << pathStr
++                              << "]\n";
++                    continue;
++                }
++                deviceName = device.stem();
+             }
+             auto findHyphen = deviceName.find('-');
+             if (findHyphen == std::string::npos)
+-- 
+2.25.1
+

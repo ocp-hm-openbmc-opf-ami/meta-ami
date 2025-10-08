@@ -1,0 +1,118 @@
+From 5e59e1691ee4e1fb446950dc825bbd93a4547a29 Mon Sep 17 00:00:00 2001
+From: P Dheeraj Srujan Kumar <p.dheeraj.srujan.kumar@intel.com>
+Date: Thu, 3 Aug 2023 01:13:52 +0530
+Subject: [PATCH] Default to enable all clock outputs
+
+In the current code flow, as and when Entity manager detects the
+HSBP config, and the hardware is initialized, the Clock Buffers are
+set to a default value, which is to disable all outputs. Even the IO
+controller is initialized to disable the clock output.
+This approach leads to two issues
+
+1. The code assumes HSBP is the only consumer of the MCIO port. In the
+event of attaching any other card to the MCIO port, the clock will be
+disabled by default which is incorrect.
+
+2. During the scenario when bmc goes for reboot, or even if
+entity-manager service reloads, the clock buffers are momentorily
+initialized to disable clocks until the code finds that there are
+drives connected. This leads to an issue when, HOST is accessing the
+drive and clock buffers are re-initialized, the HOST loses the control
+over the drive for that moment.
+
+This commit fixes both of these issues by defaulting the clocks to be
+enabled, and upon detection of HSBP, determine the drives connected and
+accordingly disable clocks which are not required.
+
+TESTED:
+ - Restarted Entity manager to simulate the bmc reboot scenario and
+   verified the Clock buffer status
+ - With older code, the buffer value was reset and then
+   re-initialized
+ - With the fix implmented, the buffer retained its value.
+ - On removing/inserting a drive, the corresponding clock was
+   enabled/disabled
+
+Signed-off-by: P Dheeraj Srujan Kumar <p.dheeraj.srujan.kumar@intel.com>
+---
+ hsbp-manager/src/hsbp_manager.cpp | 28 ++++++++++++++++++++--------
+ 1 file changed, 20 insertions(+), 8 deletions(-)
+
+diff --git a/src/hsbp_manager.cpp b/src/hsbp_manager.cpp
+index e281f64..f39edbb 100644
+--- a/src/hsbp_manager.cpp
++++ b/src/hsbp_manager.cpp
+@@ -118,9 +118,9 @@ class ClockBuffer
+     {
+         /* Execute below operation only when mode of operation is SMBus. By
+          * default the clock buffer is configured to follow OE pin output, so we
+-         * need to set the output value to 0 to disable the clock outputs. If
+-         * mode of operation is IO, then the IO value will determine the
+-         * disable/enable of clock output */
++         * need to set the output value to 0 to disable the clock outputs and 1
++         * to enable clock output. If mode of operation is IO, then the IO value
++         * will determine the disable/enable of clock output */
+         if (modeOfOperation == "SMBus")
+         {
+             if (file < 0)
+@@ -170,7 +170,7 @@ class ClockBuffer
+                 std::bitset<8> currByte(read);
+                 bool writeRequired = false;
+ 
+-                /* Set zero only at bit position that we have a NVMe drive (i.e.
++                /* Set 0/1 only at bit position that we have a NVMe drive (i.e.
+                  * ignore where byteMap is "-"). We do not want to touch other
+                  * bits */
+                 for (uint8_t bit = 0; bit < 8; bit++)
+@@ -178,7 +178,12 @@ class ClockBuffer
+                     if (byte->second.at(bit) != "-")
+                     {
+                         writeRequired = true;
+-                        currByte.reset(bit);
++                        /* Default to enabling the clock output and once the
++                         * HSBP's are detected the clocks will be
++                         * enabled/disabled depending on the drive status */
++                        /* TODO: This code might require a re-visit in case of
++                         * any signal integritty issues in the future */
++                        currByte.set(bit);
+                     }
+                 }
+ 
+@@ -345,7 +350,7 @@ class IoExpander
+     void initialize()
+     {
+         /* Initialize the IO expander Control register to configure the IO ports
+-         * as outputs and set the output to low by default */
++         * as outputs and set the output */
+         if (file < 0)
+         {
+             file = open(("/dev/i2c-" + std::to_string(bus)).c_str(),
+@@ -404,7 +409,7 @@ class IoExpander
+             std::bitset<8> currCtrlVal(read1);
+             std::bitset<8> currOutVal(read2);
+ 
+-            /* Set zero only at bit position that we have a NVMe drive (i.e.
++            /* Set 0/1 only at bit position that we have a NVMe drive (i.e.
+              * ignore where ioMap is "-"). We do not want to touch other
+              * bits */
+             for (uint8_t bit = 0; bit < 8; bit++)
+@@ -412,8 +417,15 @@ class IoExpander
+                 if (io->second.at(bit) != "-")
+                 {
+                     writeRequired = true;
++                    /* Reset the control value to configure the IO as ouput */
+                     currCtrlVal.reset(bit);
+-                    currOutVal.reset(bit);
++                    /* Set the Ouput register to drive the OE pin high therby
++                     * enabling the clock. Default to enabling the clock output
++                     * and once the HSBP's are detected the clocks will be
++                     * enabled/disabled depending on the drive status */
++                    /* TODO: This code might require a re-visit in case of any
++                     * signal integritty issues in the future */
++                    currOutVal.set(bit);
+                 }
+             }
+ 
+-- 
+2.17.1
+

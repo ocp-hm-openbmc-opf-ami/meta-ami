@@ -1,0 +1,83 @@
+From a71b4f38e61d7b60e188e843ede3e926f8854560 Mon Sep 17 00:00:00 2001
+From: Meera-Katta <meerax.katta@linux.intel.com>
+Date: Wed, 7 Jul 2021 13:19:09 +0000
+Subject: [PATCH] Redfish: Deny set AccountLockDuration to zero
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Issue: Redfish schema says, no lockout shall occur in case of Account
+LockoutDuration value is zero. But Linux PAM module documentation says, if
+account lockout value is zero, account will be locked out indefinitely
+after the number of failed login attempts. As per the current
+implementation user can write any value into the PAM module. If user tried
+to set unlock timeout value to zero, account will be locked out
+indefinitely until administrator explicitly reenables it.
+
+Workaround: Denying user to set AccountLockDuration to zero from Redfish.
+Setting ‘AccountLockDuration’ to 0 will be permitted only after
+‘AccountLockoutCounterResetEnabled’ support is added.
+Otherwise,account will be locked permanently after the AccountLockoutDuration
+if ‘AccountLockDuration’ is set to zero, while
+AccountLockoutThreshold is non zero. If someone wants no account lockout
+irrespective of number of failed login attempts, it can be still achieved by
+setting ‘AccountLockoutThreshold’ to zero
+(instead of trying to set ‘AccountLockDuration’ to zero.)
+
+Tested:
+1) Redfish Service Validator passed for this change.
+2) Verified from Redfish
+PATCH : https://<BMC IP>/redfish/v1/AccountService
+Body:
+{"AccountLockoutDuration":0}
+
+Response:
+{
+    "AccountLockoutDuration@Message.ExtendedInfo": [
+        {
+            "@odata.type": "#Message.v1_1_1.Message",
+            "Message": "The value unlockTimeout for the property
+             AccountLockoutDuration is not in the list of acceptable values.",
+            "MessageArgs": [
+                "unlockTimeout",
+                "AccountLockoutDuration"
+            ],
+            "MessageId": "Base.1.8.1.PropertyValueNotInList",
+            "MessageSeverity": "Warning",
+            "Resolution": "Choose a value from the enumeration list that the
+             implementation can support and resubmit the request if the
+             operation failed."
+        }
+    ]
+}
+
+Signed-off-by: Meera-Katta <meerax.katta@linux.intel.com>
+Upstream-Status: Pending
+---
+ redfish-core/lib/account_service.hpp | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/redfish-core/lib/account_service.hpp b/redfish-core/lib/account_service.hpp
+index 173de73e..7dc33a00 100644
+--- a/redfish-core/lib/account_service.hpp
++++ b/redfish-core/lib/account_service.hpp
+@@ -1631,6 +1631,16 @@ inline void handleAccountServicePatch(
+ 
+     if (unlockTimeout)
+     {
++        // Account will be locked permanently after the N number of failed login
++        // attempts if we set unlockTimeout value to be 0.
++        if (unlockTimeout.value() == 0)
++        {
++            BMCWEB_LOG_INFO("Unlock timeout value must be greater than zero");
++            messages::propertyValueNotInList(asyncResp->res, "unlockTimeout",
++                                             "AccountLockoutDuration");
++            return;
++        }
++
+         sdbusplus::asio::setProperty(
+             *crow::connections::systemBus, "xyz.openbmc_project.User.Manager",
+             "/xyz/openbmc_project/user",
+-- 
+2.25.1
+

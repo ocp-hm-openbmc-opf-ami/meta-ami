@@ -1,0 +1,354 @@
+From 8c8baed11544dee73a15818047959c2af167536e Mon Sep 17 00:00:00 2001
+From: Zhikui Ren <zhikui.ren@intel.com>
+Date: Mon, 24 Apr 2023 15:45:59 -0700
+Subject: [PATCH] intelcpusensor:use yield context in sensor polling
+
+When CPU is not responding to peci commands, each peci message takes
+0.7 seconds to timeout and return. intelcpusensor would queue up sensor
+reads and stuck in the busy loop sending peci messages. dbus calls to
+the service results in timeout. Use yield calls to address this issue.
+
+Tested:
+When peci is in a failed state, below busctl calls does not timeout
+busctl tree xyz.openbmc_project.IntelCPUSensor
+
+Signed-off-by: Zhikui Ren <zhikui.ren@intel.com>
+Upstream-Status: Pending
+---
+ meson.build                |  6 +++
+ src/IntelCPUSensor.cpp     | 58 +++++++++------------------
+ src/IntelCPUSensor.hpp     |  7 +---
+ src/IntelCPUSensorMain.cpp | 81 +++++++++++++++++++++++++++++++++++++-
+ 4 files changed, 106 insertions(+), 46 deletions(-)
+
+diff --git a/meson.build b/meson.build
+index 6c4b8ca..76f80e9 100644
+--- a/meson.build
++++ b/meson.build
+@@ -52,6 +52,11 @@ if not sdbusplus.found()
+   sdbusplus = sdbusplus.as_system('system')
+ endif
+ 
++boost_dep = dependency(
++    'boost',
++    modules: ['coroutine'],
++)
++
+ phosphor_logging_dep = dependency('phosphor-logging')
+ 
+ if cpp.has_header('nlohmann/json.hpp')
+@@ -80,6 +80,7 @@ endif
+
+ default_deps = [
+     boost,
++    boost_dep,
+     nlohmann_json_dep,
+     phosphor_logging_dep,
+     sdbusplus,
+diff --git a/src/IntelCPUSensor.cpp b/src/IntelCPUSensor.cpp
+index 7e8b2bf..66c6a6c 100644
+--- a/src/IntelCPUSensor.cpp
++++ b/src/IntelCPUSensor.cpp
+@@ -45,11 +45,10 @@ IntelCPUSensor::IntelCPUSensor(
+     Sensor(escapeName(sensorName), std::move(thresholdsIn), sensorConfiguration,
+            objectType, false, false, sensorProperties.max, sensorProperties.min,
+            conn, PowerState::on),
+-    objServer(objectServer), inputDev(io), waitTimer(io),
++    objServer(objectServer), inputDev(io),
+     nameTcontrol("Tcontrol CPU" + std::to_string(cpuId)), path(path),
+     privTcontrol(std::numeric_limits<double>::quiet_NaN()),
+-    dtsOffset(dtsOffset), show(show), pollTime(IntelCPUSensor::sensorPollMs),
+-    scaleFactor(sensorProperties.scaleFactor)
++    dtsOffset(dtsOffset), show(show), scaleFactor(sensorProperties.scaleFactor)
+ 
+ {
+     if (show)
+@@ -83,9 +82,9 @@ IntelCPUSensor::IntelCPUSensor(
+     const std::string& sensorConfiguration) :
+     Sensor(escapeName(sensorName), std::move(thresholdsIn), sensorConfiguration,
+            objectType, false, false, 0, 0, conn, PowerState::on),
+-    objServer(objectServer), inputDev(io), waitTimer(io),
++    objServer(objectServer), inputDev(io),
+     privTcontrol(std::numeric_limits<double>::quiet_NaN()), dtsOffset(0),
+-    show(true), pollTime(IntelCPUSensor::sensorPollMs), minMaxReadCounter(0)
++    show(true), minMaxReadCounter(0)
+ {
+     // assume it is a temperature sensor for now
+     // support for other type can be added later
+@@ -138,13 +137,15 @@ IntelCPUSensor::IntelCPUSensor(
+         operationalInterface->register_property("Functional", true);
+         operationalInterface->initialize();
+     }
++
++    // call setup always as not all sensors call setInitialProperties
++    setupPowerMatch(conn);
+ }
+ 
+ IntelCPUSensor::~IntelCPUSensor()
+ {
+     // close the input dev to cancel async operations
+     inputDev.close();
+-    waitTimer.cancel();
+     if (show)
+     {
+         for (const auto& iface : thresholdInterfaces)
+@@ -158,32 +159,17 @@ IntelCPUSensor::~IntelCPUSensor()
+     }
+ }
+ 
+-void IntelCPUSensor::restartRead(void)
+-{
+-    std::weak_ptr<IntelCPUSensor> weakRef = weak_from_this();
+-    waitTimer.expires_after(std::chrono::milliseconds(pollTime));
+-    waitTimer.async_wait([weakRef](const boost::system::error_code& ec) {
+-        if (ec == boost::asio::error::operation_aborted)
+-        {
+-            std::cerr << "Failed to reschedule\n";
+-            return;
+-        }
+-        std::shared_ptr<IntelCPUSensor> self = weakRef.lock();
+-
+-        if (self)
+-        {
+-            self->setupRead();
+-        }
+-    });
+-}
+-
+-void IntelCPUSensor::setupRead(void)
++void IntelCPUSensor::setupRead(boost::asio::yield_context yield)
+ {
+     if (readingStateGood())
+     {
+         inputDev.close();
+ 
+         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
++        if (path.empty())
++        {
++            return;
++        }
+         fd = open(path.c_str(), O_RDONLY | O_NONBLOCK);
+         if (fd < 0)
+         {
+@@ -197,20 +183,18 @@ void IntelCPUSensor::setupRead(void)
+     {
+         markAvailable(false);
+         updateValue(std::numeric_limits<double>::quiet_NaN());
+-        restartRead();
+         return;
+     }
+ 
+     std::weak_ptr<IntelCPUSensor> weakRef = weak_from_this();
++    boost::system::error_code ec;
+     inputDev.async_wait(boost::asio::posix::descriptor_base::wait_read,
+-                        [weakRef](const boost::system::error_code& ec) {
+-        std::shared_ptr<IntelCPUSensor> self = weakRef.lock();
+-
+-        if (self)
+-        {
+-            self->handleResponse(ec);
+-        }
+-    });
++                        yield[ec]);
++    std::shared_ptr<IntelCPUSensor> self = weakRef.lock();
++    if (self)
++    {
++        self->handleResponse(ec);
++    }
+ }
+ 
+ void IntelCPUSensor::updateMinMaxValues(void)
+@@ -284,7 +268,6 @@ void IntelCPUSensor::handleResponse(const boost::system::error_code& err)
+                 std::cerr << name << " interface down!\n";
+                 loggedInterfaceDown = true;
+             }
+-            pollTime = static_cast<size_t>(IntelCPUSensor::sensorPollMs) * 10U;
+             markFunctional(false);
+         }
+         return;
+@@ -293,7 +276,6 @@ void IntelCPUSensor::handleResponse(const boost::system::error_code& err)
+ 
+     if (err)
+     {
+-        pollTime = sensorFailedPollTimeMs;
+         incrementError();
+         return;
+     }
+@@ -378,10 +360,8 @@ void IntelCPUSensor::handleResponse(const boost::system::error_code& err)
+     }
+     else
+     {
+-        pollTime = sensorFailedPollTimeMs;
+         incrementError();
+     }
+-    restartRead();
+ }
+ 
+ void IntelCPUSensor::checkThresholds(void)
+diff --git a/src/IntelCPUSensor.hpp b/src/IntelCPUSensor.hpp
+index 82cb43c..104e062 100644
+--- a/src/IntelCPUSensor.hpp
++++ b/src/IntelCPUSensor.hpp
+@@ -48,22 +48,20 @@ class IntelCPUSensor :
+                    const std::string& sensorConfiguration);
+ 
+     ~IntelCPUSensor() override;
+-    static constexpr unsigned int sensorPollMs = 1000;
++    static constexpr unsigned int sensorScaleFactor = 1000;
+     static constexpr size_t warnAfterErrorCount = 10;
+     static constexpr const char* labelTcontrol = "Tcontrol";
+-    void setupRead(void);
++    void setupRead(boost::asio::yield_context yield);
+ 
+   private:
+     sdbusplus::asio::object_server& objServer;
+     boost::asio::streambuf readBuf;
+     boost::asio::posix::stream_descriptor inputDev;
+-    boost::asio::steady_timer waitTimer;
+     std::string nameTcontrol;
+     std::string path;
+     double privTcontrol;
+     double dtsOffset;
+     bool show;
+-    size_t pollTime;
+     bool loggedInterfaceDown = false;
+     uint8_t minMaxReadCounter{0};
+     int fd{};
+@@ -71,7 +69,6 @@ class IntelCPUSensor :
+     void handleResponse(const boost::system::error_code& err);
+     void checkThresholds(void) override;
+     void updateMinMaxValues(void);
+-    void restartRead(void);
+ };
+ 
+ extern boost::container::flat_map<std::string, std::shared_ptr<IntelCPUSensor>>
+diff --git a/src/IntelCPUSensorMain.cpp b/src/IntelCPUSensorMain.cpp
+index 9a442ea..af0bda4 100644
+--- a/src/IntelCPUSensorMain.cpp
++++ b/src/IntelCPUSensorMain.cpp
+@@ -29,7 +29,6 @@
+ #include <sdbusplus/bus/match.hpp>
+ 
+ #include <array>
+-#include <cerrno>
+ #include <filesystem>
+ #include <fstream>
+ #include <functional>
+@@ -52,6 +51,16 @@
+ // clang-format on
+ 
+ static constexpr bool debug = false;
++
++static std::unique_ptr<boost::asio::steady_timer> waitTimer = nullptr;
++static bool sensorMapUpdated = false;
++
++static constexpr size_t sensorPollLoopMs = 1000;
++static constexpr size_t sensorEmptyWaitMs = 10000;
++static constexpr size_t failSensorLimit =
++    5; // peci timeout is 700ms, 5 timeout would be 3.5seconds
++static constexpr size_t sensorFailThrottleMs = 3000;
++
+ static constexpr size_t fastPingSeconds = 1;
+ static constexpr size_t slowPingSeconds = 5;
+ static constexpr size_t failPingSeconds = 15;
+@@ -411,7 +420,7 @@ bool createSensors(boost::asio::io_context& io,
+                 inputPathStr, sensorType, objectServer, dbusConnection, io,
+                 sensorName, std::move(sensorThresholds), *interfacePath, cpuId,
+                 show, dtsOffset, prop);
+-            sensorPtr->setupRead();
++            sensorMapUpdated = true;
+             createdSensors.insert(sensorName);
+             if (debug)
+             {
+@@ -430,6 +439,69 @@ bool createSensors(boost::asio::io_context& io,
+     return true;
+ }
+ 
++bool doWait(boost::asio::yield_context yield, const size_t delay)
++{
++    boost::system::error_code ec;
++    waitTimer->expires_after(std::chrono::milliseconds(delay));
++    waitTimer->async_wait(yield[ec]);
++    if (ec == boost::asio::error::operation_aborted)
++    {
++        return false;
++    }
++    if (ec)
++    {
++        std::cerr << "Timer failed\n";
++        return false;
++    }
++    return true;
++}
++
++void pollCPUSensors(boost::asio::yield_context yield)
++{
++    size_t failSensorCnt = 0;
++    while (true)
++    {
++        sensorMapUpdated = false;
++
++        size_t sensorCnt = gCpuSensors.size();
++        if (sensorCnt == 0)
++        {
++            if (!doWait(yield, sensorEmptyWaitMs))
++            {
++                throw std::runtime_error("Wait timer failed");
++            }
++            continue;
++        }
++
++        size_t waitMs = sensorPollLoopMs / sensorCnt;
++        for (auto& [name, sensor] : gCpuSensors)
++        {
++            sensor->setupRead(yield);
++            if (!std::isfinite(sensor->value))
++            {
++                failSensorCnt++;
++            }
++            if (failSensorCnt >= failSensorLimit)
++            {
++                waitMs = sensorFailThrottleMs;
++                failSensorCnt = 0;
++            }
++            else
++            {
++                waitMs = sensorPollLoopMs / sensorCnt;
++            }
++            if (!doWait(yield, waitMs))
++            {
++                throw std::runtime_error("Wait timer failed");
++            }
++            if (sensorMapUpdated)
++            {
++                break;
++            }
++        }
++    }
++}
++
+ bool exportDevice(const CPUConfig& config)
+ {
+     std::ostringstream hex;
+@@ -920,6 +992,7 @@ int main()
+     boost::asio::steady_timer pingTimer(io);
+     boost::asio::steady_timer creationTimer(io);
+     boost::asio::steady_timer filterTimer(io);
++    waitTimer = std::make_unique<boost::asio::steady_timer>(io);
+     ManagedObjectType sensorConfigs;
+ 
+     filterTimer.expires_after(std::chrono::seconds(1));
+@@ -974,6 +1047,10 @@ int main()
+     systemBus->request_name("xyz.openbmc_project.IntelCPUSensor");
+ 
+     setupManufacturingModeMatch(*systemBus);
++
++    boost::asio::spawn(
++        io, [](boost::asio::yield_context yield) { pollCPUSensors(yield); });
++
+     io.run();
+     return 0;
+ }
+-- 
+2.25.1
+

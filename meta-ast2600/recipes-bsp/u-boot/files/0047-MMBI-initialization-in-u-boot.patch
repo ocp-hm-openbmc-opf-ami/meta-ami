@@ -1,0 +1,229 @@
+From 23bb69f1a694309473c0a2ec97451474b8760047 Mon Sep 17 00:00:00 2001
+From: AppaRao Puli <apparao.puli@linux.intel.com>
+Date: Thu, 29 Jul 2021 17:05:48 +0000
+Subject: [PATCH] MMBI initialization in u-boot
+
+This commit initializes the MMBI controller
+ - Carve out 64KB memory from BMC SRAM to make
+   sure, it is not used by kernel.
+ - Initializes ESPI and MMBI controller registers.
+
+Tested:
+ - ESPI and MMBI register are set as expected.
+
+Signed-off-by: AppaRao Puli <apparao.puli@linux.intel.com>
+Upstream-Status: Pending
+---
+ arch/arm/mach-aspeed/ast2600/ast-espi.c     | 106 ++++++++++++++++++++
+ arch/arm/mach-aspeed/ast2600/board_common.c |  11 +-
+ board/aspeed/ast2600_intel/Kconfig          |   4 +
+ board/aspeed/ast2600_intel/intel.c          |   3 +
+ 4 files changed, 123 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm/mach-aspeed/ast2600/ast-espi.c b/arch/arm/mach-aspeed/ast2600/ast-espi.c
+index 04afdf4f6b..d25582c355 100644
+--- a/arch/arm/mach-aspeed/ast2600/ast-espi.c
++++ b/arch/arm/mach-aspeed/ast2600/ast-espi.c
+@@ -21,6 +21,13 @@
+ #define DBG_ESPI(...)
+ #endif
+ 
++#define DEBUG_MMBI_ENABLED		0
++#if DEBUG_MMBI_ENABLED
++#define DBG_MMBI printf
++#else
++#define DBG_MMBI(...)
++#endif
++
+ /* eSPI controller registers */
+ #define ESPI000 0x000 /* Engine Control. */
+ #define ESPI004 0x004 /* Engine Status. */
+@@ -116,6 +123,8 @@
+ #define AST_ESPI_ENABLE_WRITE_PROTECTION_ESPI080_BIT6	BIT(7)
+ #define AST_ESPI_ENABLE_AUTO_ACK_SL_BT_DONE		BIT(8)
+ #define AST_ESPI_ENABLE_AUTO_ACK_SL_BT_STATUS	BIT(9)
++#define AST_ESPI_DISABLE_PERICHN_MEMORY_WRITE_AFTER_WDT	BIT(10)
++#define AST_ESPI_DISABLE_PERICHN_MEMORY_READ_AFTER_WDT	BIT(11)
+ 
+ /* ESPI098 and ESPI11C bits */
+ #define AST_ESPI_OOB_RST_WARN		BIT(6)
+@@ -142,6 +151,26 @@
+ #define SPI_CE_CONTROL_REG 		0x004	/* SPI Control register */
+ #define SPI_CE0_ADDRESS_MODE_SEL 	BIT(0)
+ 
++/* MMBI controller registers */
++#define AST_MMBI_BASE			0x1e6ee800
++
++#define MMBI_CTRL_REG			0x000 /*  MMBI Control register */
++#define MMBI_IRQ_STATUS_REG		0x008 /*  MMBI Interrupt status */
++#define MMBI_IRQ_ENABLE_REG		0x00C /*  MMBI Interrupt enable */
++
++/* Paltform specific - BIOS can configure different LGMR address */
++#ifdef CONFIG_ESPI_LGMR_ADDR
++#define MMBI_BIOS_BASE_ADDRESS		CONFIG_ESPI_LGMR_ADDR
++#else
++#define MMBI_BIOS_BASE_ADDRESS		0xFE0B0000
++#endif
++
++#define MMBI_BMC_RAM_BASE_ADDRESS	0x9EFF0000
++#define MMBI_ADDR_MASK			0xFFFF0000
++
++#define MMBI_CONTROL_REG_VALUE		0x301  /* TODO: Split it */
++#define MMBI_INTERRUPT_ENABLE		0x00  /* disable interrupts */
++
+ static void espi_handshake_ack(void)
+ {
+ 	/* IRQ only serviced if strapped, so no strap check */
+@@ -311,3 +340,80 @@ void espi_init(void)
+ 		DBG_ESPI("No espi strap\n");
+ 	}
+ }
++
++void mmbi_init(void)
++{
++	/* Check Enable LPC Mode(SCU510[6]) bit - 0: eSPI Mode */
++	if (~readl(AST_SCU_BASE + AST_SCU_HW_STRAP2) &
++	    SCU_HW_STRAP_ESPI_ENABLED) {
++		uint32_t v;
++
++		DBG_MMBI("MMBI init\n");
++
++		/* Force enable ESPI peripheral channel, if its not. */
++		v = readl(AST_SCU_BASE + AST_SCU_DEBUG_CTRL2);
++		v &= ~(SCU_DISABLE_ESPI_PERIPHERAL);
++		writel(v, AST_SCU_BASE + AST_SCU_DEBUG_CTRL2);
++
++		/* ESPI registers - ESPI080: Engine Control 2 */
++		v = readl(AST_ESPI_BASE + ESPI080);
++
++		/*
++		 * Peripheral channel memory R/W should NOT be disabled after WDT reset
++		 * So Set ESPI080[10]=0 & ESPI080[11]=0
++		 */
++		v &= ~(AST_ESPI_DISABLE_PERICHN_MEMORY_WRITE_AFTER_WDT |
++		       AST_ESPI_DISABLE_PERICHN_MEMORY_READ_AFTER_WDT);
++
++		/*
++		 * Don't disable Peripheral channel memory R/W cycles
++		 * So Set ESPI080[4]=0 & ESPI080[6]=0
++		 */
++		v &= ~(AST_ESPI_DISABLE_PERIPHERAL_MEMORY_WRITE |
++		       AST_ESPI_DISABLE_PERIPHERAL_MEMORY_READ);
++
++		/*
++		 * Enable write protection of ESPI080[4] & ESPI080[6]
++		 * So Set ESPI080[5]=0 & ESPI080[7]=0
++		 */
++		v &= ~(AST_ESPI_ENABLE_WRITE_PROTECTION_ESPI080_BIT4 |
++		       AST_ESPI_ENABLE_WRITE_PROTECTION_ESPI080_BIT6);
++
++		/* Write the data to ESPI080 */
++		writel(v, AST_ESPI_BASE + ESPI080);
++
++		/*
++		 * Set BIOS LGMR memory mapped base address
++		 * BMC mapped memory base address and mask
++		 */
++		writel(MMBI_ADDR_MASK, AST_ESPI_BASE + ESPI08C);
++		writel(MMBI_BMC_RAM_BASE_ADDRESS, AST_ESPI_BASE + ESPI088);
++		writel(MMBI_BIOS_BASE_ADDRESS, AST_ESPI_BASE + ESPI084);
++
++		DBG_MMBI("ESPI Register - ESPI080=0x%x, ESPI084=0x%x, "
++			"ESPI088=0x%x, ESPI08C=0x%x\n",
++			readl(AST_ESPI_BASE + ESPI080),
++			readl(AST_ESPI_BASE + ESPI084),
++			readl(AST_ESPI_BASE + ESPI088),
++			readl(AST_ESPI_BASE + ESPI08C));
++
++		/*
++		 * Initalize the MMBI registers, Supports only single instance
++		 * MMBI Instance size - 64KB
++		 * Total MMBI Size - 64KB
++		 * Enable MMBI function
++		 */
++		writel(MMBI_CONTROL_REG_VALUE, AST_MMBI_BASE + MMBI_CTRL_REG);
++
++		/* Don't enable IRQ in u-boot, Which is not supported. */
++		writel(MMBI_INTERRUPT_ENABLE, AST_MMBI_BASE + MMBI_IRQ_ENABLE_REG);
++
++		DBG_MMBI("MMBI Registers - MMBI_CTRL_REG=0x%x, "
++			 "MMBI_IRQ_STATUS_REG=0x%x, MMBI_IRQ_ENABLE_REG=0x%x\n",
++			 readl(AST_MMBI_BASE + MMBI_CTRL_REG),
++			 readl(AST_MMBI_BASE + MMBI_IRQ_STATUS_REG),
++			 readl(AST_MMBI_BASE + MMBI_IRQ_ENABLE_REG));
++	} else {
++		DBG_MMBI("No espi strap - Skipping MMBI init\n");
++	}
++}
+diff --git a/arch/arm/mach-aspeed/ast2600/board_common.c b/arch/arm/mach-aspeed/ast2600/board_common.c
+index 53870dd71d..f9efe83ae1 100644
+--- a/arch/arm/mach-aspeed/ast2600/board_common.c
++++ b/arch/arm/mach-aspeed/ast2600/board_common.c
+@@ -14,12 +14,16 @@
+ 
+ DECLARE_GLOBAL_DATA_PTR;
+ 
++/* Total MMBI size which is used for eSPI memory mapping */
++#define TOTAL_MMBI_SIZE		(1024 * 64)
++
+ /*
+  * RMII daughtercard workaround
+  */
+ //#define ASPEED_RMII_DAUGHTER_CARD
+ 
+ #ifdef ASPEED_RMII_DAUGHTER_CARD
++
+ /**
+  * @brief	workaround for RMII daughtercard, reset PHY manually
+  *
+@@ -112,7 +116,12 @@ __weak int dram_init(void)
+ 		return ret;
+ 	}
+ 
+-	gd->ram_size = ram.size;
++	/*
++	 * MMBI uses the 64KB of memory from BMC's DRAM.
++	 * This memory should be reserved from being used by kernel
++	 * So reduce the available size for kernel memory
++	 */
++	gd->ram_size = ram.size - TOTAL_MMBI_SIZE;
+ 	return 0;
+ }
+ 
+diff --git a/board/aspeed/ast2600_intel/Kconfig b/board/aspeed/ast2600_intel/Kconfig
+index b841dab60c..fa4469b126 100644
+--- a/board/aspeed/ast2600_intel/Kconfig
++++ b/board/aspeed/ast2600_intel/Kconfig
+@@ -10,4 +10,8 @@ config SYS_CONFIG_NAME
+ 	string "board configuration name"
+ 	default "ast2600_intel"
+ 
++config ESPI_LGMR_ADDR
++	hex "ESPI LGMR Address"
++	default 0
++
+ endif
+diff --git a/board/aspeed/ast2600_intel/intel.c b/board/aspeed/ast2600_intel/intel.c
+index ec1101a942..10aaf3536a 100644
+--- a/board/aspeed/ast2600_intel/intel.c
++++ b/board/aspeed/ast2600_intel/intel.c
+@@ -630,6 +630,7 @@ extern void espi_init(void);
+ extern void kcs_init(void);
+ extern void timer_enable(int n, u32 interval_us, interrupt_handler_t *handler,
+ 			 void *cookie);
++extern void mmbi_init(void);
+ int board_late_init(void)
+ {
+ #define ONE_SEC_IN_USEC		1000000
+@@ -670,6 +671,8 @@ int board_late_init(void)
+ 		kcs_init();
+ 	}
+ 
++	mmbi_init();
++
+ 	return 0;
+ }
+ 
+-- 
+2.25.1
+

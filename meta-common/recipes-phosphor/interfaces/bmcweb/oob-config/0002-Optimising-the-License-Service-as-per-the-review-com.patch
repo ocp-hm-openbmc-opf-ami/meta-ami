@@ -1,0 +1,1355 @@
+From 1f9c5b1b9704f07ef4e25aeb6ae329b8fc40627b Mon Sep 17 00:00:00 2001
+From: Arun Lal K M <arun.lal@intel.com>
+Date: Tue, 12 Sep 2023 08:54:53 +0000
+Subject: [PATCH] Optimising the License Service as per the review comments 
+ from upstream PR.
+
+Raising all the changes done for addressing the review comments in the Upstream PR.
+Link to upstream PR: https://gerrit.openbmc.org/c/openbmc/bmcweb/+/54037
+Combined the Patches for LicenService and Meter State Datat URI's into a single Patch.
+
+Other changes
+1) Give redfish response as "Pending" if task is still in execution.
+
+Tested: Verified the functionalities for all License Service URI's and meter state URI's and are working fine as expected
+
+Signed-off-by: Arun Thomas Baby <arunx.thomas.baby.baby.mathew@intel.com>
+Signed-off-by: Arun Lal K M <arun.lal@intel.com>
+---
+ redfish-core/include/ondemand_helper.hpp      |  78 ++
+ redfish-core/include/redfish.hpp              |   5 +
+ .../include/registries/privilege_registry.hpp |  24 +
+ redfish-core/lib/license_service.hpp          | 678 ++++++++++++++++++
+ redfish-core/lib/meterstatedata.hpp           | 445 ++++++++++++
+ redfish-core/lib/processor.hpp                |   1 +
+ redfish-core/lib/service_root.hpp             |   2 +
+ redfish-core/lib/task.hpp                     |   4 +
+ 8 files changed, 1237 insertions(+)
+ create mode 100644 redfish-core/include/ondemand_helper.hpp
+ create mode 100644 redfish-core/lib/license_service.hpp
+ create mode 100644 redfish-core/lib/meterstatedata.hpp
+
+diff --git a/redfish-core/include/ondemand_helper.hpp b/redfish-core/include/ondemand_helper.hpp
+new file mode 100644
+index 00000000..3679be8d
+--- /dev/null
++++ b/redfish-core/include/ondemand_helper.hpp
+@@ -0,0 +1,78 @@
++/*
++// Copyright (c) 2022 Intel Corporation
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//      http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++*/
++
++/**
++ * This file contains all error codes for OnDemand dbus-responses and OnDemand
++ * helper functions.
++ */
++
++#pragma once
++
++namespace redfish
++{
++
++enum class OnDemandResponseCode
++{
++    ondemandFailure = 0,
++    ondemandSuccess,
++    ondemandMethodInProgress,
++    ondemandUnableToOpenFd
++};
++inline void fillOnDemandOemObject(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
++                                  const std::string& processorId)
++{
++    crow::connections::systemBus->async_method_call(
++        [asyncResp,
++         processorId](boost::system::error_code ec,
++                      const dbus::utility::MapperGetSubTreeResponse& subtree) {
++        if (ec)
++        {
++            return;
++        }
++        for (const auto& [objectPath, serviceMap] : subtree)
++        {
++            // Ignore any configs without ending with desired cpu name
++            if (!objectPath.ends_with(processorId) || serviceMap.empty())
++            {
++                continue;
++            }
++            nlohmann::json& oem = asyncResp->res.jsonValue["Oem"];
++            nlohmann::json& oemIntel = oem["Intel"];
++            oemIntel["@odata.type"] = "#OemProcessor.v1_0_0.Processor";
++            oemIntel["MeteringFeature"]["@odata.id"] =
++                "/redfish/v1/Systems/system/Processors/" + processorId +
++                "/Oem/Intel/MeteringFeature";
++            oemIntel["StateFeature"]["@odata.id"] =
++                "/redfish/v1/Systems/system/Processors/" + processorId +
++                "/Oem/Intel/StateFeature";
++            oemIntel["ProvisionFeature"]["@odata.id"] =
++                "/redfish/v1/Systems/system/Processors/" + processorId +
++                "/Oem/Intel/ProvisionFeature";
++            oemIntel["DynamicFeature"]["@odata.id"] =
++                "/redfish/v1/Systems/system/Processors/" + processorId +
++                "/Oem/Intel/DynamicFeature";
++        }
++        return;
++    },
++        "xyz.openbmc_project.ObjectMapper",
++        "/xyz/openbmc_project/object_mapper",
++        "xyz.openbmc_project.ObjectMapper", "GetSubTree",
++        "/xyz/openbmc_project/ondemand", 0,
++        std::array<const std::string, 1>{
++            "xyz.openbmc_project.CPU.FeatureEnable"});
++}
++
++} // namespace redfish
+diff --git a/redfish-core/include/redfish.hpp b/redfish-core/include/redfish.hpp
+index 03ccd2ce..6cce758f 100644
+--- a/redfish-core/include/redfish.hpp
++++ b/redfish-core/include/redfish.hpp
+@@ -28,11 +28,13 @@
+ #include "fabric_adapters.hpp"
+ #include "fan_from_sensor.hpp"
+ #include "hypervisor_system.hpp"
++#include "license_service.hpp"
+ #include "log_services.hpp"
+ #include "manager_diagnostic_data.hpp"
+ #include "managers.hpp"
+ #include "memory.hpp"
+ #include "message_registries.hpp"
++#include "meterstatedata.hpp"
+ #include "metric_report.hpp"
+ #include "metric_report_definition.hpp"
+ #include "network_protocol.hpp"
+@@ -265,6 +267,9 @@ class RedfishService
+         requestRoutesTriggerCollection(app);
+         requestRoutesTrigger(app);
+ 
++        requestLicenseServiceRoutes(app);
++        requestRoutesMeterStateData(app);
++
+         // Note, this must be the last route registered
+         requestRoutesRedfish(app);
+     }
+diff --git a/redfish-core/include/registries/privilege_registry.hpp b/redfish-core/include/registries/privilege_registry.hpp
+index 57c9e024..49afa7a1 100644
+--- a/redfish-core/include/registries/privilege_registry.hpp
++++ b/redfish-core/include/registries/privilege_registry.hpp
+@@ -1605,5 +1605,29 @@ const static auto& postZoneCollection = privilegeSetConfigureComponents;
+ const static auto& putZoneCollection = privilegeSetConfigureComponents;
+ const static auto& deleteZoneCollection = privilegeSetConfigureComponents;
+ 
++// LicenseService
++const static auto& getLicenseService = privilegeSetLogin;
++const static auto& headLicenseService = privilegeSetLogin;
++const static auto& patchLicenseService = privilegeSetConfigureComponents;
++const static auto& putLicenseService = privilegeSetConfigureComponents;
++const static auto& deleteLicenseService = privilegeSetConfigureComponents;
++const static auto& postLicenseService = privilegeSetConfigureComponents;
++
++//LicenseCollection
++const static auto& getLicenseCollection = privilegeSetLogin;
++const static auto& headLicenseCollection = privilegeSetLogin;
++const static auto& patchLicenseCollection = privilegeSetConfigureComponents;
++const static auto& putLicenseCollection = privilegeSetConfigureComponents;
++const static auto& deleteLicenseCollection = privilegeSetConfigureComponents;
++const static auto& postLicenseCollection = privilegeSetConfigureComponents;
++
++//License
++const static auto& getLicense = privilegeSetLogin;
++const static auto& headLicense = privilegeSetLogin;
++const static auto& patchLicense = privilegeSetConfigureComponents;
++const static auto& putLicense = privilegeSetConfigureComponents;
++const static auto& deleteLicense = privilegeSetConfigureComponents;
++const static auto& postLicense = privilegeSetConfigureComponents;
++
+ } // namespace redfish::privileges
+ // clang-format on
+diff --git a/redfish-core/lib/license_service.hpp b/redfish-core/lib/license_service.hpp
+new file mode 100644
+index 00000000..b1b2162c
+--- /dev/null
++++ b/redfish-core/lib/license_service.hpp
+@@ -0,0 +1,678 @@
++#pragma once
++
++#include "ondemand_helper.hpp"
++#include "registries.hpp"
++#include "registries/base_message_registry.hpp"
++#include "registries/openbmc_message_registry.hpp"
++#include "task.hpp"
++
++#include <app.hpp>
++#include <boost/convert.hpp>
++#include <boost/convert/strtol.hpp>
++#include <boost/url/format.hpp>
++#include <boost/url/parse_path.hpp>
++#include <dbus_utility.hpp>
++
++#include <regex>
++
++// new License Service
++
++namespace redfish
++{
++namespace licenseService
++{
++static const std::string featureEnableInterfaceName =
++    "xyz.openbmc_project.CPU.FeatureEnable";
++static const std::string ondemandObjectPath = "/xyz/openbmc_project/ondemand/";
++// Interfaces which imply a D-Bus object represents a Processor
++constexpr std::array<const char*, 1> cpuLicenseInterfaces = {
++    "xyz.openbmc_project.CPU.FeatureEnable"};
++
++inline std::string getLicenseTypeFromMethod(std::string_view method)
++{
++    if (method == "GetProvisionState")
++    {
++        return "ProvisionLicense";
++    }
++    else
++    {
++        return "DynamicLicense";
++    }
++}
++
++inline void fillCPULicenseCollection(
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++    const std::string& objectPath, const std::string& method,
++    const std::string& cpuInstance, const std::string& service)
++{
++    crow::connections::systemBus->async_method_call(
++        [asyncResp, cpuInstance, method](const boost::system::error_code ec,
++                                         bool feature_enable) {
++        if (ec)
++        {
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        if (feature_enable)
++        {
++            nlohmann::json::object_t member;
++            member["@odata.id"] = boost::urls::format(
++                "/redfish/v1/LicenseService/Licenses/{}",
++                std::string(getLicenseTypeFromMethod(method)) + cpuInstance);
++
++            (asyncResp->res.jsonValue["Members"]).push_back(std::move(member));
++            asyncResp->res.jsonValue["Members@odata.count"] =
++                (asyncResp->res.jsonValue["Members"]).size();
++        }
++    },
++        service, objectPath, featureEnableInterfaceName, method);
++}
++inline void fillCPULicenseInstance(
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++    const std::string& objectPath, const std::string& method,
++    const std::string& processorId, const std::string& licenseType,
++    const std::string& service)
++{
++    crow::connections::systemBus->async_method_call(
++        [asyncResp, processorId,
++         licenseType](const boost::system::error_code ec, bool feature_enable) {
++        if (ec)
++        {
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        if (!feature_enable)
++        {
++            messages::resourceNotFound(asyncResp->res, "Licenses",
++                                       licenseType + processorId);
++            return;
++        }
++        asyncResp->res.jsonValue["@odata.id"] =
++            "/redfish/v1/LicenseService/Licenses/" + licenseType + processorId;
++        asyncResp->res.jsonValue["@odata.type"] = "#License.v1_0_0.License";
++        asyncResp->res.jsonValue["Id"] = licenseType + processorId;
++        asyncResp->res.jsonValue["Name"] = licenseType + " for " + processorId;
++        asyncResp->res.jsonValue["AuthorizationScope"] = "Device";
++        nlohmann::json::array_t authorizedeDevices;
++        nlohmann::json::object_t authDevice;
++        authDevice["@odata.id"] = "/redfish/v1/Systems/system/Processors/" +
++                                  processorId;
++        authorizedeDevices.push_back(std::move(authDevice));
++
++        asyncResp->res.jsonValue["Links"]["AuthorizedDevices"] =
++            std::move(authorizedeDevices);
++
++        if (licenseType == "ProvisionLicense")
++        {
++            asyncResp->res.jsonValue["Oem"]["Intel"]["Links"]
++                                    ["AuthorizedFeature"]["@odata.id"] =
++                "/redfish/v1/Systems/system/Processors/" + processorId +
++                "/Oem/Intel/ProvisionFeature";
++        }
++        else
++        {
++            asyncResp->res.jsonValue["Oem"]["Intel"]["Links"]
++                                    ["AuthorizedFeature"]["@odata.id"] =
++                "/redfish/v1/Systems/system/Processors/" + processorId +
++                "/Oem/Intel/DynamicFeature";
++        }
++        asyncResp->res.jsonValue["Oem"]["Intel"]["@odata.type"] =
++            "#OemLicense.v1_0_0.License";
++    },
++        service, objectPath, featureEnableInterfaceName, method);
++}
++
++inline void createCPULicense(
++    task::Payload&& payload,
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++    const std::string& objectPath, const std::string& processorId,
++    const std::string& reqFeature, const std::string& licenseString,
++    const std::string& service)
++{
++    std::string signalMatchStr, method;
++    if (reqFeature == "ProvisionFeature")
++    {
++        signalMatchStr = "type='signal',interface='";
++        signalMatchStr += featureEnableInterfaceName;
++        signalMatchStr += "',member='";
++        signalMatchStr += "ProvisionValid";
++        signalMatchStr += "', path='";
++        signalMatchStr += ondemandObjectPath;
++        signalMatchStr += processorId;
++        signalMatchStr += "'";
++        method = "Provision";
++    }
++    else
++    {
++        signalMatchStr = "type='signal',interface='";
++        signalMatchStr += featureEnableInterfaceName;
++        signalMatchStr += "',member='";
++        signalMatchStr += "FeaturesValid";
++        signalMatchStr += "', path='";
++        signalMatchStr += ondemandObjectPath;
++        signalMatchStr += processorId;
++        signalMatchStr += "'";
++        method = "EnableFeatures";
++    }
++
++    auto createCPULicenseTaskCallback =
++        [asyncResp, signalMatchStr, payload](const boost::system::error_code ec,
++                                             int ondemandresponsecode) {
++        if (ec)
++        {
++            messages::internalError(asyncResp->res);
++            return;
++        }
++
++        if (static_cast<redfish::OnDemandResponseCode>(ondemandresponsecode) ==
++            redfish::OnDemandResponseCode::ondemandSuccess)
++        {
++            std::shared_ptr<task::TaskData> task = task::TaskData::createTask(
++                [](boost::system::error_code err, sdbusplus::message::message&,
++                   const std::shared_ptr<task::TaskData>& taskData) {
++                if (!err)
++                {
++                    taskData->messages.emplace_back(messages::taskCompletedOK(
++                        std::to_string(taskData->index)));
++                    taskData->state = "Completed";
++                }
++                return task::completed;
++            },
++                signalMatchStr);
++            task->startTimer(std::chrono::minutes(5));
++            task->populateResp(asyncResp->res);
++            task->payload.emplace(std::move(payload));
++        }
++        else if (static_cast<redfish::OnDemandResponseCode>(
++                     ondemandresponsecode) ==
++                 redfish::OnDemandResponseCode::ondemandMethodInProgress)
++        {
++            messages::serviceTemporarilyUnavailable(asyncResp->res, "60");
++            return;
++        }
++        else
++        {
++            messages::internalError(asyncResp->res);
++            return;
++        }
++    };
++    crow::connections::systemBus->async_method_call(
++        std::move(createCPULicenseTaskCallback), service, objectPath,
++        featureEnableInterfaceName, method, licenseString);
++}
++
++inline bool getLicenseTypeAndProcessorId(const std::string& reqFeature,
++                                         std::string& getMethod,
++                                         std::string& licenseType,
++                                         std::string& processorId)
++{
++    const std::regex provisionLicenseExpr("ProvisionLicensecpu([^/]+)");
++    const std::regex dynamicLicenseExpr("DynamicLicensecpu([^/]+)");
++
++    std::cmatch match;
++
++    if (std::regex_match(reqFeature.c_str(), match, provisionLicenseExpr))
++    {
++        processorId = "cpu" + std::string(match[1].first);
++        licenseType = "ProvisionLicense";
++        getMethod = "GetProvisionState";
++        return true;
++    }
++    if (std::regex_match(reqFeature.c_str(), match, dynamicLicenseExpr))
++    {
++        processorId = "cpu" + std::string(match[1].first);
++        licenseType = "DynamicLicense";
++        getMethod = "GetFeatureState";
++        return true;
++    }
++    return false;
++}
++
++inline void addProcessorFeatureLicenses(
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    crow::connections::systemBus->async_method_call(
++        [asyncResp](const boost::system::error_code ec,
++                    const dbus::utility::MapperGetObject& getObjectType) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("ObjectMapper::GetObject call failed: {}", ec);
++            messages::internalError(asyncResp->res);
++
++            return;
++        }
++        std::string service = getObjectType.begin()->first;
++        BMCWEB_LOG_DEBUG("GetObjectType: {}", service);
++        crow::connections::systemBus->async_method_call(
++            [asyncResp,
++             service](boost::system::error_code ec2,
++                      const dbus::utility::MapperGetSubTreeResponse& subtree) {
++            if (ec2)
++            {
++                messages::internalError(asyncResp->res);
++                return;
++            }
++            nlohmann::json& members = asyncResp->res.jsonValue["Members"];
++            members = nlohmann::json::array();
++            std::string cpuinstance;
++            for (const auto& [objectPath, serviceMap] : subtree)
++            {
++                // Ignore any configs without ending with desired cpu name
++                if (objectPath.empty() || serviceMap.empty())
++                {
++                    continue;
++                }
++                cpuinstance = std::string(
++                    (boost::urls::parse_path(objectPath).value()).back());
++                fillCPULicenseCollection(asyncResp, objectPath,
++                                         "GetProvisionState", cpuinstance,
++                                         service);
++                fillCPULicenseCollection(asyncResp, objectPath,
++                                         "GetFeatureState", cpuinstance,
++                                         service);
++            }
++        },
++            "xyz.openbmc_project.ObjectMapper",
++            "/xyz/openbmc_project/object_mapper",
++            "xyz.openbmc_project.ObjectMapper", "GetSubTree",
++            ondemandObjectPath, 0,
++            std::array<const char*, 1>{
++                "xyz.openbmc_project.CPU.FeatureEnable"});
++    },
++        "xyz.openbmc_project.ObjectMapper",
++        "/xyz/openbmc_project/object_mapper",
++        "xyz.openbmc_project.ObjectMapper", "GetObject",
++        "/xyz/openbmc_project/ondemand", std::array<const char*, 0>());
++}
++
++inline bool readAuthFeature(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                            nlohmann::json& oemObject, std::string& authFeature)
++{
++    if (nlohmann::json oemIntelObject;
++        !oemObject.empty() &&
++        json_util::readJson(oemObject, asyncResp->res, "Intel", oemIntelObject))
++    {
++        if (nlohmann::json linkObject;
++            !oemIntelObject.empty() &&
++            json_util::readJson(oemIntelObject, asyncResp->res, "Links",
++                                linkObject))
++        {
++            if (nlohmann::json authFeatureObject;
++                !linkObject.empty() &&
++                json_util::readJson(linkObject, asyncResp->res,
++                                    "AuthorizedFeature", authFeatureObject))
++            {
++                if (json_util::readJson(authFeatureObject, asyncResp->res,
++                                        "@odata.id", authFeature))
++                {
++                    return true;
++                }
++            }
++        }
++    }
++    return false;
++}
++
++inline bool getLicenseTypeFromAuthDevices(
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++    std::vector<std::string>& authDevices, std::string& licenseType)
++{
++    std::string authDevice;
++    for (const std::string& authdev : authDevices)
++    {
++        authDevice =
++            std::string((boost::urls::parse_path(authdev).value()).back());
++        if (boost::urls::format("/redfish/v1/Systems/system/Processors/{}",
++                                authDevice)
++                .buffer() == authdev)
++        {
++            if (authDevices.size() > 1)
++            {
++                messages::propertyValueFormatError(
++                    asyncResp->res,
++                    "array of " + std::to_string(authDevices.size()) +
++                        " objects",
++                    "#Links/AuthorizedDevices");
++                return false;
++            }
++            licenseType = "cpuLicense";
++            return true;
++        }
++        messages::propertyValueNotInList(asyncResp->res, authdev,
++                                         "Links/AuthororizedDevices/0");
++        return false;
++    }
++    return false;
++}
++
++inline void addCPULicense(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                          const crow::Request& req,
++                          const std::string& authFeature,
++                          const std::string& authDevice,
++                          const std::string& licenseString)
++{
++    std::string processorId;
++    processorId =
++        std::string((boost::urls::parse_path(authDevice).value()).back());
++    std::string oemAuthFeatureType, method;
++    oemAuthFeatureType =
++        std::string((boost::urls::parse_path(authFeature).value()).back());
++
++    if (!((oemAuthFeatureType == "ProvisionFeature") ||
++          (oemAuthFeatureType == "DynamicFeature")))
++    {
++        messages::propertyValueNotInList(asyncResp->res, authFeature,
++                                         "AuthorizedFeature");
++        return;
++    }
++
++    // authdevice + /Oem/Intel/featuretype must be equal to authfeature.
++    if (!((authDevice + "/Oem/Intel/" + oemAuthFeatureType) == authFeature))
++    {
++        messages::propertyValueNotInList(asyncResp->res, authFeature,
++                                         "Oem/Intel/Links/AuthorizedFeature");
++        return;
++    }
++    crow::connections::systemBus->async_method_call(
++        [asyncResp, req, processorId, oemAuthFeatureType, licenseString,
++         authDevice](const boost::system::error_code ec,
++                     const dbus::utility::MapperGetObject& getObjectType) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("ObjectMapper::GetObject call failed: {}", ec);
++            messages::internalError(asyncResp->res);
++
++            return;
++        }
++        std::string service = getObjectType.begin()->first;
++        BMCWEB_LOG_DEBUG("GetObjectType: {}", service);
++
++        crow::connections::systemBus->async_method_call(
++            [asyncResp, payload(task::Payload(req)), processorId,
++             oemAuthFeatureType, licenseString, authDevice,
++             service](boost::system::error_code ec2,
++                      const dbus::utility::MapperGetSubTreeResponse&
++                          subtree) mutable {
++            if (ec2)
++            {
++                BMCWEB_LOG_WARNING("D-Bus error: {}, {}", ec2, ec2.message());
++                messages::internalError(asyncResp->res);
++                return;
++            }
++            // validate the cpu instance to make sure resource exists and throw
++            // 404 if not.
++            for (const auto& [objectPath, serviceMap] : subtree)
++            {
++                // Ignore any configs without ending with desired cpu name
++                if (!objectPath.ends_with(processorId) || serviceMap.empty())
++                {
++                    continue;
++                }
++                bool found = false;
++                for (const auto& [serviceName, interfaceList] : serviceMap)
++                {
++                    if (std::find_first_of(
++                            interfaceList.begin(), interfaceList.end(),
++                            licenseService::cpuLicenseInterfaces.begin(),
++                            licenseService::cpuLicenseInterfaces.end()) !=
++                        interfaceList.end())
++                    {
++                        found = true;
++                        break;
++                    }
++                }
++                if (!found)
++                {
++                    continue;
++                }
++                createCPULicense(std::move(payload), asyncResp, objectPath,
++                                 processorId, oemAuthFeatureType, licenseString,
++                                 service);
++                return;
++            }
++            messages::propertyValueNotInList(asyncResp->res, authDevice,
++                                             "Links/0/AuthorizedDevices");
++        },
++            "xyz.openbmc_project.ObjectMapper",
++            "/xyz/openbmc_project/object_mapper",
++            "xyz.openbmc_project.ObjectMapper", "GetSubTree",
++            ondemandObjectPath, 0,
++            std::array<const char*, 1>{
++                "xyz.openbmc_project.CPU.FeatureEnable"});
++    },
++        "xyz.openbmc_project.ObjectMapper",
++        "/xyz/openbmc_project/object_mapper",
++        "xyz.openbmc_project.ObjectMapper", "GetObject",
++        "/xyz/openbmc_project/ondemand", std::array<const char*, 0>());
++}
++} // namespace licenseService
++
++inline void
++    handleLicenseServiceGet(App& app, const crow::Request& req,
++                            const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++    {
++        return;
++    }
++    asyncResp->res.jsonValue["@odata.type"] =
++        "#LicenseService.v1_0_0.LicenseService";
++    asyncResp->res.jsonValue["@odata.id"] = "/redfish/v1/LicenseService";
++    asyncResp->res.jsonValue["Id"] = "LicenseService";
++    asyncResp->res.jsonValue["Name"] = "License Service";
++    asyncResp->res.jsonValue["Description"] =
++        "Actions available to manage Licenses";
++    asyncResp->res.jsonValue["ServiceEnabled"] = true;
++    asyncResp->res.jsonValue["Licenses"]["@odata.id"] =
++        "/redfish/v1/LicenseService/Licenses";
++
++} // requestRoutesLicenseService
++
++inline void handleLicenseCollectionGet(
++    App& app, const crow::Request& req,
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++    {
++        return;
++    }
++    asyncResp->res.jsonValue["@odata.type"] =
++        "#LicenseCollection.LicenseCollection";
++    asyncResp->res.jsonValue["Name"] = "License Collection";
++    asyncResp->res.jsonValue["@odata.id"] =
++        "/redfish/v1/LicenseService/Licenses/";
++
++    licenseService::addProcessorFeatureLicenses(asyncResp);
++}
++
++inline void handleLicenseCollectionPost(
++    App& app, const crow::Request& req,
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++    {
++        return;
++    }
++    std::string licenseString, authScope, authFeature, processorId;
++    std::optional<nlohmann::json> oemObject;
++    std::vector<nlohmann::json> linksAuthDevArray;
++    std::vector<std::string> authDevices;
++
++    if (!redfish::json_util::readJsonPatch(req, asyncResp->res, "LicenseString",
++                                           licenseString, "AuthorizationScope",
++                                           authScope, "Links/AuthorizedDevices",
++                                           linksAuthDevArray, "Oem", oemObject))
++    {
++        return;
++    }
++
++    if ((authScope != "Device") && (authScope != "Capacity") &&
++        (authScope != "Service"))
++    {
++        messages::propertyValueNotInList(asyncResp->res, authScope,
++                                         "AuthorizationScope");
++        return;
++    }
++
++    if (linksAuthDevArray.empty())
++    {
++        messages::propertyValueTypeError(asyncResp->res, "[]",
++                                         "/Links/AuthorizedDevices/");
++        return;
++    }
++
++    for (nlohmann::json authDevObj : linksAuthDevArray)
++    {
++        std::string authDev;
++        if (!json_util::readJson(authDevObj, asyncResp->res, "@odata.id",
++                                 authDev))
++
++        {
++            return;
++        }
++        authDevices.push_back(authDev);
++    }
++
++    std::string licenseType;
++    if (!licenseService::getLicenseTypeFromAuthDevices(asyncResp, authDevices,
++                                                       licenseType))
++    {
++        return;
++    }
++    if (licenseType == "cpuLicense")
++    {
++        std::string authDevice = authDevices[0];
++        if (authScope != "Device")
++        {
++            messages::propertyValueNotInList(asyncResp->res, authScope,
++                                             "AuthorizationScope");
++            return;
++        }
++        if (!oemObject || !(licenseService::readAuthFeature(
++                              asyncResp, *oemObject, authFeature)))
++        {
++            messages::propertyMissing(asyncResp->res,
++                                      "Oem/Intel/Links/AuthorizedFeature");
++            return;
++        }
++        licenseService::addCPULicense(asyncResp, req, authFeature, authDevice,
++                                      licenseString);
++    }
++}
++
++// Handler for License Instance
++inline void
++    handleLicenseGet(App& app, const crow::Request& req,
++                     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                     const std::string& param)
++{
++    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++    {
++        return;
++    }
++    std::string licenseType, processorId, getMethod;
++    if (!licenseService::getLicenseTypeAndProcessorId(param, getMethod,
++                                                      licenseType, processorId))
++    {
++        // Handle license for other resoures here.
++        messages::resourceNotFound(asyncResp->res, "Licenses", param);
++        return;
++    }
++
++    // Handle Provision and Dynamic Licenses for CPU
++
++    crow::connections::systemBus->async_method_call(
++        [asyncResp, licenseType, processorId, getMethod,
++         param](const boost::system::error_code ec,
++                const dbus::utility::MapperGetObject& getObjectType) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("ObjectMapper::GetObject call failed: {}", ec);
++            messages::internalError(asyncResp->res);
++
++            return;
++        }
++        std::string service = getObjectType.begin()->first;
++        BMCWEB_LOG_DEBUG("GetObjectType: {}", service);
++
++        crow::connections::systemBus->async_method_call(
++            [asyncResp, processorId, licenseType, param, getMethod,
++             service](boost::system::error_code ec2,
++                      const dbus::utility::MapperGetSubTreeResponse& subtree) {
++            if (ec2)
++            {
++                BMCWEB_LOG_WARNING("D-Bus error: {}, {}", ec2, ec2.message());
++                messages::internalError(asyncResp->res);
++                return;
++            }
++
++            for (const auto& [objectPath, serviceMap] : subtree)
++            {
++                // Ignore any configs without ending with desired cpu name
++                if (!boost::ends_with(objectPath, processorId) ||
++                    serviceMap.empty())
++                {
++                    continue;
++                }
++
++                bool found = false;
++                for (const auto& [serviceName, interfaceList] : serviceMap)
++                {
++                    if (std::find_first_of(
++                            interfaceList.begin(), interfaceList.end(),
++                            licenseService::cpuLicenseInterfaces.begin(),
++                            licenseService::cpuLicenseInterfaces.end()) !=
++                        interfaceList.end())
++                    {
++                        found = true;
++                        break;
++                    }
++                }
++                if (!found)
++                {
++                    continue;
++                }
++                licenseService::fillCPULicenseInstance(asyncResp, objectPath,
++                                                       getMethod, processorId,
++                                                       licenseType, service);
++                return;
++            }
++            messages::resourceNotFound(asyncResp->res, "Licenses", param);
++        },
++            "xyz.openbmc_project.ObjectMapper",
++            "/xyz/openbmc_project/object_mapper",
++            "xyz.openbmc_project.ObjectMapper", "GetSubTree",
++            licenseService::ondemandObjectPath, 0,
++            std::array<const char*, 1>{
++                "xyz.openbmc_project.CPU.FeatureEnable"});
++    },
++        "xyz.openbmc_project.ObjectMapper",
++        "/xyz/openbmc_project/object_mapper",
++        "xyz.openbmc_project.ObjectMapper", "GetObject",
++        "/xyz/openbmc_project/ondemand", std::array<const char*, 0>());
++}
++
++inline void requestLicenseServiceRoutes(App& app)
++{
++    BMCWEB_ROUTE(app, "/redfish/v1/LicenseService/")
++        .privileges(redfish::privileges::getLicenseService)
++        .methods(boost::beast::http::verb::get)(
++            std::bind_front(handleLicenseServiceGet, std::ref(app)));
++
++    BMCWEB_ROUTE(app, "/redfish/v1/LicenseService/Licenses/")
++        .privileges(redfish::privileges::getLicenseCollection)
++        .methods(boost::beast::http::verb::get)(
++            std::bind_front(handleLicenseCollectionGet, std::ref(app)));
++
++    BMCWEB_ROUTE(app, "/redfish/v1/LicenseService/Licenses/")
++        .privileges(redfish::privileges::postLicenseCollection)
++        .methods(boost::beast::http::verb::post)(
++            std::bind_front(handleLicenseCollectionPost, std::ref(app)));
++
++    BMCWEB_ROUTE(app, "/redfish/v1/LicenseService/Licenses/<str>/")
++        .privileges(redfish::privileges::getLicense)
++        .methods(boost::beast::http::verb::get)(
++            std::bind_front(handleLicenseGet, std::ref(app)));
++}
++
++} // namespace redfish
+diff --git a/redfish-core/lib/meterstatedata.hpp b/redfish-core/lib/meterstatedata.hpp
+new file mode 100644
+index 00000000..e2f2e213
+--- /dev/null
++++ b/redfish-core/lib/meterstatedata.hpp
+@@ -0,0 +1,445 @@
++/*
++// Copyright (c) 2022 Intel Corporation
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//      http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++*/
++
++#pragma once
++
++#include "ondemand_helper.hpp"
++#include "registries.hpp"
++#include "registries/base_message_registry.hpp"
++#include "registries/openbmc_message_registry.hpp"
++#include "task.hpp"
++
++#include <app.hpp>
++#include <dbus_utility.hpp>
++
++namespace redfish
++{
++namespace ondemand
++{
++static const std::string ondemandService = "xyz.openbmc_project.ondemand";
++static const std::string ondemandPath = "/xyz/openbmc_project/ondemand/";
++static const std::string stateDataInterface =
++    "xyz.openbmc_project.CPU.StateData";
++static const std::string meterDataInterface =
++    "xyz.openbmc_project.CPU.MeteredData";
++static const std::string featureEnableInterfaceName =
++    "xyz.openbmc_project.CPU.FeatureEnable";
++
++class Fd
++{
++  private:
++    std::optional<int> fd;
++
++  public:
++    Fd() = default;
++    explicit Fd(int fdIn) : fd(fdIn) {}
++    Fd(const Fd&) = delete;
++    Fd(Fd&& other)
++    {
++        std::swap(fd, other.fd);
++    }
++
++    ~Fd()
++    {
++        reset();
++    }
++
++    Fd& operator=(const Fd&) = delete;
++    Fd& operator=(Fd&& other)
++    {
++        reset();
++        std::swap(fd, other.fd);
++        return *this;
++    }
++
++    void reset()
++    {
++        if (fd)
++        {
++            ::close(*fd);
++            fd.reset();
++        }
++    }
++
++    explicit operator bool() const
++    {
++        return static_cast<bool>(fd);
++    }
++    int operator*() const
++    {
++        return *fd;
++    }
++};
++
++struct ondemandData
++{
++    int fd;
++    bool fdStatus;
++    bool methodSuccess;
++    bool signalResponseSuccess;
++    std::shared_ptr<task::TaskData> task;
++};
++boost::container::flat_map<std::string, ondemandData> ondemandList;
++
++inline void
++    getCPUMeterState(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                     const std::string& processorId,
++                     const std::string& reqFeature,
++                     const std::string& featureData)
++{
++    asyncResp->res.jsonValue["@odata.type"] =
++        "#MeterStateFeature.v1_0_0.MeterStateFeature";
++    asyncResp->res.jsonValue["@odata.id"] =
++        "/redfish/v1/Systems/system/Processors/" + processorId + "/Oem/Intel/" +
++        reqFeature;
++    asyncResp->res.jsonValue["FeatureAuthDevice"]["@odata.id"] =
++        "/redfish/v1/Systems/system/Processors/" + processorId;
++    asyncResp->res.jsonValue["Name"] = reqFeature;
++    asyncResp->res.jsonValue["Id"] = processorId + reqFeature;
++
++    if (!featureData.empty())
++    {
++        std::string ondemandListIdentifier = processorId + reqFeature;
++        ondemandData ondemandObject = ondemandList[ondemandListIdentifier];
++        if (ondemandObject.signalResponseSuccess)
++        {
++            asyncResp->res.jsonValue["FeatureStatus"] = "Enabled";
++        }
++        else
++        {
++            asyncResp->res.jsonValue["FeatureStatus"] = "Disabled";
++        }
++        asyncResp->res.jsonValue["FeatureData"] = featureData;
++    }
++    else
++    {
++        asyncResp->res.jsonValue["FeatureStatus"] = "Disabled";
++        asyncResp->res.jsonValue["FeatureData"] = "";
++    }
++}
++
++inline void
++    getCPUProvisionDynamic(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                           const std::string& processorId,
++                           const std::string& reqFeature,
++                           const bool featureEnabled)
++{
++    asyncResp->res.jsonValue["@odata.type"] =
++        "#ProvisionDynamicFeature.v1_0_0.ProvisionDynamicFeature";
++    asyncResp->res.jsonValue["@odata.id"] =
++        "/redfish/v1/Systems/system/Processors/" + processorId + "/Oem/Intel/" +
++        reqFeature;
++    asyncResp->res.jsonValue["FeatureAuthDevice"]["@odata.id"] =
++        "/redfish/v1/Systems/system/Processors/" + processorId;
++    asyncResp->res.jsonValue["Name"] = reqFeature;
++    asyncResp->res.jsonValue["Id"] = processorId + reqFeature;
++
++    if (featureEnabled)
++    {
++        asyncResp->res.jsonValue["FeatureStatus"] = "Enabled";
++        asyncResp->res.jsonValue["FeatureAuthLicense"]["@odata.id"] =
++            "/redfish/v1/LicenseService/Licenses/" +
++            std::string((reqFeature == "ProvisionFeature") ? "ProvisionLicense"
++                                                           : "DynamicLicense") +
++            processorId;
++    }
++    else
++    {
++        asyncResp->res.jsonValue["FeatureStatus"] = "Disabled";
++    }
++}
++
++inline void
++    createMeterStateData(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                         const std::string& processorId,
++                         const std::string& reqFeature)
++{
++    std::string ondemandListIdentifier = processorId + reqFeature;
++    std::string signalMatchStr, method, obj, iface;
++    if (reqFeature == "MeteringFeature")
++    {
++        method = "GetMeteredData";
++        obj = ondemandPath + processorId + "/metered_data";
++        iface = meterDataInterface;
++        signalMatchStr = "type='signal',interface='";
++        signalMatchStr += iface;
++        signalMatchStr += "',member='";
++        signalMatchStr += "GetMeteredDataComplete";
++        signalMatchStr += "', path='";
++        signalMatchStr += obj;
++        signalMatchStr += "'";
++    }
++    else if (reqFeature == "StateFeature")
++    {
++        method = "GetStateData";
++        obj = ondemandPath + processorId + "/state_data";
++        iface = stateDataInterface;
++        signalMatchStr = "type='signal',interface='";
++        signalMatchStr += iface;
++        signalMatchStr += "',member='";
++        signalMatchStr += "GetStateDataComplete";
++        signalMatchStr += "', path='";
++        signalMatchStr += obj;
++        signalMatchStr += "'";
++    }
++    else
++    {
++        messages::resourceNotFound(asyncResp->res, "OnDemandFeature",
++                                   reqFeature);
++        return;
++    }
++    auto createFeaureTaskCallback =
++        [asyncResp, ondemandListIdentifier, signalMatchStr, processorId,
++         reqFeature](const boost::system::error_code ec,
++                     std::tuple<sdbusplus::message::unix_fd, int> response) {
++        if (ec)
++        {
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        int ondemandResponse = std::get<1>(response);
++        if (ondemandResponse ==
++            static_cast<int>(redfish::OnDemandResponseCode::ondemandSuccess))
++        {
++            int fdDup = dup(std::get<0>(response));
++            if (fdDup == -1)
++            {
++                getCPUMeterState(asyncResp, processorId, reqFeature, "");
++                return;
++            }
++
++            std::shared_ptr<task::TaskData> task = task::TaskData::createTask(
++                [ondemandListIdentifier](
++                    boost::system::error_code err, sdbusplus::message_t& msg,
++                    const std::shared_ptr<task::TaskData>& taskData) {
++                auto ondemandListObj =
++                    ondemandList.find(ondemandListIdentifier);
++                if (!err)
++                {
++                    taskData->messages.emplace_back(messages::taskCompletedOK(
++                        std::to_string(taskData->index)));
++                    taskData->state = "Completed";
++                    int onDemandSignalResponse = static_cast<int>(
++                        redfish::OnDemandResponseCode::ondemandFailure);
++                    msg.read(onDemandSignalResponse);
++                    if (ondemandListObj != ondemandList.end())
++                    {
++                        ondemandListObj->second.fdStatus = true;
++                        ondemandListObj->second.methodSuccess = true;
++                        if (onDemandSignalResponse ==
++                            static_cast<int>(
++                                redfish::OnDemandResponseCode::ondemandSuccess))
++                        {
++                            ondemandListObj->second.signalResponseSuccess =
++                                true;
++                        }
++                    }
++                }
++                else
++                {
++                    if (ondemandListObj != ondemandList.end())
++                    {
++                        ondemandListObj->second.fdStatus = true;
++                    }
++                }
++                return task::completed;
++            },
++                signalMatchStr);
++            task->startTimer(std::chrono::minutes(1));
++            task->populateResp(asyncResp->res);
++
++            task->state = "Pending";
++
++            ondemandData ondemandVal = {fdDup, false, false, false, task};
++            ondemandList[ondemandListIdentifier] = ondemandVal;
++
++            return;
++        }
++        else if (ondemandResponse ==
++                 static_cast<int>(
++                     redfish::OnDemandResponseCode::ondemandMethodInProgress))
++        {
++            messages::serviceTemporarilyUnavailable(asyncResp->res, "60");
++            return;
++        }
++        else
++        {
++            messages::internalError(asyncResp->res);
++            return;
++        }
++    };
++    crow::connections::systemBus->async_method_call(
++        std::move(createFeaureTaskCallback), ondemandService, obj, iface,
++        method);
++}
++
++inline void
++    readMeterStateData(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                       Fd fd, const std::string& processorId,
++                       const std::string& reqFeature)
++{
++    std::vector<char> data;
++    std::array<char, 1024> chunk;
++    long long int rc = 0;
++    if (lseek(*fd, 0, SEEK_SET) == -1)
++    {
++        getCPUMeterState(asyncResp, processorId, reqFeature, "");
++        return;
++    }
++    while ((rc = read(*fd, chunk.data(), chunk.max_size())) > 0)
++    {
++        data.insert(std::end(data), std::begin(chunk), std::begin(chunk) + rc);
++    }
++    // TODO: Uncomment the below pieces of code when file size is confirmed from
++    // backend constexpr int maxFileSize = 4096;   //4KB
++    if (data.size() == 0 /*|| data.size() > maxFileSize*/ || rc != 0)
++    {
++        getCPUMeterState(asyncResp, processorId, reqFeature, "");
++    }
++    else
++    {
++        getCPUMeterState(asyncResp, processorId, reqFeature,
++                         std::string(data.cbegin(), data.cend()));
++    }
++}
++
++inline void getMeterStateFeatureData(
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++    const std::string& processorId, const std::string& reqFeature)
++
++{
++    auto ondemandObject = ondemandList.find(processorId + reqFeature);
++    if (ondemandObject == ondemandList.end())
++    {
++        createMeterStateData(asyncResp, processorId, reqFeature);
++    }
++    else
++    {
++        if (!ondemandObject->second.fdStatus)
++        {
++            ondemandObject->second.task->populateResp(asyncResp->res);
++            return;
++        }
++        Fd fd{ondemandObject->second.fd};
++        if (!ondemandObject->second.methodSuccess)
++        {
++            getCPUMeterState(asyncResp, processorId, reqFeature, "");
++            ondemandList.erase(ondemandObject);
++            return;
++        }
++
++        readMeterStateData(asyncResp, std::move(fd), processorId, reqFeature);
++        ondemandList.erase(ondemandObject);
++    }
++}
++
++inline void getProvisionDyamicFeatureData(
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++    const std::string& objectPath, const std::string& processorId,
++    const std::string& reqFeature)
++{
++    std::string method;
++    if (reqFeature == "ProvisionFeature")
++    {
++        method = "GetProvisionState";
++    }
++    else
++    {
++        method = "GetFeatureState";
++    }
++
++    crow::connections::systemBus->async_method_call(
++        [asyncResp, processorId, reqFeature,
++         method](const boost::system::error_code ec, bool featureEnabled) {
++        if (ec)
++        {
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        getCPUProvisionDynamic(asyncResp, processorId, reqFeature,
++                               featureEnabled);
++    },
++        ondemandService, objectPath, featureEnableInterfaceName, method);
++}
++} // namespace ondemand
++
++inline void requestRoutesMeterStateData(App& app)
++{
++    BMCWEB_ROUTE(app,
++                 "/redfish/v1/Systems/system/Processors/<str>/Oem/Intel/<str>")
++        .privileges(redfish::privileges::privilegeSetConfigureComponents)
++        .methods(boost::beast::http::verb::get)(
++            [&app](const crow::Request& req,
++                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                   const std::string& processorId,
++                   const std::string& reqFeature) {
++        if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++        {
++            return;
++        }
++        if (reqFeature.empty())
++        {
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        crow::connections::systemBus->async_method_call(
++            [&req, asyncResp, processorId, reqFeature](
++                boost::system::error_code ec,
++                const dbus::utility::MapperGetSubTreeResponse& subtree) {
++            if (ec)
++            {
++                BMCWEB_LOG_WARNING("D-Bus error: {}, {}", ec, ec.message());
++                messages::internalError(asyncResp->res);
++                return;
++            }
++            for (const auto& [objectPath, serviceMap] : subtree)
++            {
++                // Ignore any configs without ending with desired cpu name
++                if (!objectPath.ends_with(processorId) || serviceMap.empty())
++                {
++                    continue;
++                }
++                if ((reqFeature == "MeteringFeature") ||
++                    (reqFeature == "StateFeature"))
++                {
++                    ondemand::getMeterStateFeatureData(asyncResp, processorId,
++                                                       reqFeature);
++                }
++                else if ((reqFeature == "ProvisionFeature") ||
++                         (reqFeature == "DynamicFeature"))
++                {
++                    ondemand::getProvisionDyamicFeatureData(
++                        asyncResp, objectPath, processorId, reqFeature);
++                }
++                else
++                {
++                    break;
++                }
++                return;
++            }
++            messages::resourceNotFound(asyncResp->res, "OnDemandFeature",
++                                       reqFeature);
++        },
++            "xyz.openbmc_project.ObjectMapper",
++            "/xyz/openbmc_project/object_mapper",
++            "xyz.openbmc_project.ObjectMapper", "GetSubTree",
++            "/xyz/openbmc_project/ondemand", 0,
++            std::array<const std::string, 1>{
++                "xyz.openbmc_project.CPU.FeatureEnable"});
++    });
++}
++
++} // namespace redfish
+diff --git a/redfish-core/lib/processor.hpp b/redfish-core/lib/processor.hpp
+index 6ddc9017..376062bb 100644
+--- a/redfish-core/lib/processor.hpp
++++ b/redfish-core/lib/processor.hpp
+@@ -898,6 +898,7 @@ inline void
+             }
+         }
+     }
++    fillOnDemandOemObject(asyncResp, processorId);
+ }
+ 
+ /**
+diff --git a/redfish-core/lib/service_root.hpp b/redfish-core/lib/service_root.hpp
+index 6ae16c37..d9cdd476 100644
+--- a/redfish-core/lib/service_root.hpp
++++ b/redfish-core/lib/service_root.hpp
+@@ -86,6 +86,8 @@ inline void handleServiceRootGetImpl(
+     asyncResp->res.jsonValue["TelemetryService"]["@odata.id"] =
+         "/redfish/v1/TelemetryService";
+     asyncResp->res.jsonValue["Cables"]["@odata.id"] = "/redfish/v1/Cables";
++    asyncResp->res.jsonValue["LicenseService"]["@odata.id"] =
++        "/redfish/v1/LicenseService";
+ 
+     asyncResp->res.jsonValue["Links"]["ManagerProvidingService"]["@odata.id"] =
+         "/redfish/v1/Managers/bmc";
+diff --git a/redfish-core/lib/task.hpp b/redfish-core/lib/task.hpp
+index 136412c3..44a2552a 100644
+--- a/redfish-core/lib/task.hpp
++++ b/redfish-core/lib/task.hpp
+@@ -432,6 +432,10 @@ inline void requestRoutesTask(App& app)
+             asyncResp->res.jsonValue["Payload"]["JsonBody"] = p.jsonBody.dump(
+                 2, ' ', true, nlohmann::json::error_handler_t::replace);
+         }
++        else
++        {
++            asyncResp->res.jsonValue["HidePayload"] = true;
++        }
+         asyncResp->res.jsonValue["PercentComplete"] = ptr->percentComplete;
+     });
+ }
+-- 
+2.25.1
+

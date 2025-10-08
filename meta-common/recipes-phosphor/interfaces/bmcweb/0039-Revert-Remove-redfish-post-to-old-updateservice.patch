@@ -1,0 +1,99 @@
+From 007f7e15995e16ebb7710993982f4e5e878a293b Mon Sep 17 00:00:00 2001
+From: "Jason M. Bills" <jason.m.bills@intel.com>
+Date: Fri, 19 May 2023 11:26:35 -0700
+Subject: [PATCH] Revert "Remove redfish-post-to-old-updateservice"
+
+This reverts commit 4a40441f944aaff8d7bb2040e4d88ebfcebbab11.
+
+Change-Id: I8094e64ef817c484aa8d34d2f68a906e1f123578
+Upstream-Status: Pending
+---
+ meson.build                         |  1 +
+ meson_options.txt                   | 10 ++++++++++
+ redfish-core/lib/update_service.hpp | 30 +++++++++++++++++++++++++++++
+ 3 files changed, 41 insertions(+)
+
+diff --git a/meson.build b/meson.build
+index a4315f0e..31616c4b 100644
+--- a/meson.build
++++ b/meson.build
+@@ -87,6 +87,7 @@ feature_map = {
+   'redfish-new-powersubsystem-thermalsubsystem' : '-DBMCWEB_NEW_POWERSUBSYSTEM_THERMALSUBSYSTEM',
+   'redfish-oem-manager-fan-data'                : '-DBMCWEB_ENABLE_REDFISH_OEM_MANAGER_FAN_DATA',
+   'redfish-provisioning-feature'                : '-DBMCWEB_ENABLE_REDFISH_PROVISIONING_FEATURE',
++  'redfish-post-to-old-updateservice'           : '-DBMCWEB_ENABLE_REDFISH_UPDATESERVICE_OLD_POST_URL',
+   'redfish'                                     : '-DBMCWEB_ENABLE_REDFISH',
+   'rest'                                        : '-DBMCWEB_ENABLE_DBUS_REST',
+   'session-auth'                                : '-DBMCWEB_ENABLE_SESSION_AUTHENTICATION',
+diff --git a/meson_options.txt b/meson_options.txt
+index b67c28fd..c2aa7d75 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -235,6 +235,16 @@ option(
+                     condition is allowing the old Power / Thermal.'''
+ )
+ 
++option(
++    'redfish-post-to-old-updateservice',
++    type: 'feature',
++    value: 'disabled',
++    description: '''Allows POST to /redfish/v1/UpdateService, counter to
++                    the redfish specification.  Option provided to allow
++                    potential users to move away from using this endpoint.
++                    Option will be removed Q2 2023.'''
++)
++
+ option(
+     'redfish-oem-manager-fan-data',
+     type: 'feature',
+diff --git a/redfish-core/lib/update_service.hpp b/redfish-core/lib/update_service.hpp
+index bbf7d38e..722b253d 100644
+--- a/redfish-core/lib/update_service.hpp
++++ b/redfish-core/lib/update_service.hpp
+@@ -868,6 +868,15 @@ inline void requestRoutesUpdateService(App& app)
+         asyncResp->res.jsonValue["Description"] = "Service for Software Update";
+         asyncResp->res.jsonValue["Name"] = "Update Service";
+ 
++#ifdef BMCWEB_ENABLE_REDFISH_UPDATESERVICE_OLD_POST_URL
++        // See note about later on in this file about why this is neccesary
++        // This is "Wrong" per the standard, but is done temporarily to
++        // avoid noise in failing tests as people transition to having this
++        // option disabled
++        asyncResp->res.addHeader(boost::beast::http::field::allow,
++                                 "GET, PATCH, HEAD");
++#endif
++
+         asyncResp->res.jsonValue["HttpPushUri"] =
+             "/redfish/v1/UpdateService/update";
+         asyncResp->res.jsonValue["MultipartHttpPushUri"] =
+@@ -1130,6 +1139,27 @@ inline void requestRoutesUpdateService(App& app)
+         }
+     });
+ 
++// The "old" behavior of the update service URI causes redfish-service validator
++// failures when the Allow header is supported, given that in the spec,
++// UpdateService does not allow POST.  in openbmc, we unfortunately reused that
++// resource as our HttpPushUri as well.  A number of services, including the
++// openbmc tests, and documentation have hardcoded that erroneous API, instead
++// of relying on HttpPushUri as the spec requires.  This option will exist
++// temporarily to allow the old behavior until Q4 2022, at which time it will be
++// removed.
++#ifdef BMCWEB_ENABLE_REDFISH_UPDATESERVICE_OLD_POST_URL
++    BMCWEB_ROUTE(app, "/redfish/v1/UpdateService/")
++        .privileges(redfish::privileges::postUpdateService)
++        .methods(boost::beast::http::verb::post)(
++            [&app](const crow::Request& req,
++                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp) {
++        asyncResp->res.addHeader(
++            boost::beast::http::field::warning,
++            "299 - \"POST to /redfish/v1/UpdateService is deprecated. Use "
++            "the value contained within HttpPushUri.\"");
++        handleUpdateServicePost(app, req, asyncResp);
++    });
++#endif
+     BMCWEB_ROUTE(app, "/redfish/v1/UpdateService/update/")
+         .privileges(redfish::privileges::postUpdateService)
+         .methods(boost::beast::http::verb::post)(
+-- 
+2.25.1
+

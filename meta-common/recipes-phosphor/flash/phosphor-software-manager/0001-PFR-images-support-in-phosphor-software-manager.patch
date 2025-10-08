@@ -1,0 +1,805 @@
+From f10008171880e289171e1d16ce2cb0e5c883db61 Mon Sep 17 00:00:00 2001
+From: Jason Messer <jasonm@ami.com>
+Date: Tue, 23 Jan 2024 01:08:16 +0000
+Subject: [PATCH] Recreating Intel patch 0001-PFR-images-support-in-phosphor-software-manager.patch
+
+From 50204e98ab7199bd4e168868efe5e26e1fe94b91 Mon Sep 17 00:00:00 2001
+From: Hardik Panchal <hardikx.panchal@intel.com>
+Date: Mon, 14 Nov 2022 12:47:22 +0000
+Subject: [PATCH] PFR images support in phosphor-software-manager
+
+1. Adds support for handling the PFR images upload and processing.
+   Testing:
+   Tested PFR image uploads and updates
+2. Adds HASH verification on PFR images uploaded for firmware updates
+   Tested: tested firmware update with good and bad HASH images.
+   A)
+   1. Upload the corrupted image for fw update.
+   2. Image present in /tmp/images/
+   -rw-r--r--    1 root     root      22969344 Jun  3 09:27
+   5dea710b-8b85-4065-8af7-3149ada81edf
+   3. image deleted from /tmp/images/
+
+   B)
+   1. Upload the correct image.
+   POST: https://<BMC_IP>/redfish/v1/UpdateService/
+         with <BMC_signed_cap> binary file
+   2. Image verification is success and proceeds with update.
+   {
+     "@odata.id": "/redfish/v1/TaskService/Tasks/0",
+     "@odata.type": "#Task.v1_4_3.Task",
+     "Id": "0",
+     "TaskState": "Running",
+     "TaskStatus": "OK"
+   }
+
+3. Uses report functionality to update error return status for
+   redfish updates.
+   Tested: Got 400 error with different messages based on failure type
+   {
+       "error": {
+           "@Message.ExtendedInfo": [
+               {
+                   "@odata.type": "/redfish/v1/$metadata#Message.v1_0_0.Message",
+                   "Message": "Invalid file uploaded to /redfish/v1/UpdateService: invalid archive.",
+                   "MessageArgs": [
+                       "/redfish/v1/UpdateService",
+                       "invalid archive"
+                   ],
+                   "MessageId": "OpenBMC.0.1.0.InvalidFile",
+                   "Resolution": "None.",
+                   "Severity": "Warning"
+               }
+           ],
+           "code": "OpenBMC.0.1.0.InvalidFile",
+           "message": "Invalid file uploaded to /redfish/v1/UpdateService: invalid archive."
+       }
+   }
+
+   {
+       "error": {
+           "@Message.ExtendedInfo": [
+               {
+                   "@odata.type": "/redfish/v1/$metadata#Message.v1_0_0.Message",
+                   "Message": "Invalid file uploaded to /redfish/v1/UpdateService: invalid image format.",
+                   "MessageArgs": [
+                       "/redfish/v1/UpdateService",
+                       "invalid image format"
+                   ],
+                   "MessageId": "OpenBMC.0.1.0.InvalidFile",
+                   "Resolution": "None.",
+                   "Severity": "Warning"
+               }
+           ],
+           "code": "OpenBMC.0.1.0.InvalidFile",
+           "message": "Invalid file uploaded to /redfish/v1/UpdateService: invalid image format."
+       }
+   }
+
+   {
+       "error": {
+           "@Message.ExtendedInfo": [
+               {
+                   "@odata.type": "#Message.v1_0_0.Message",
+                   "Message": "The resource /redfish/v1/UpdateService was unable to satisfy the request due to unavailability of resources.",
+                   "MessageArgs": [
+                       "/redfish/v1/UpdateService"
+                   ],
+                   "MessageId": "Base.1.4.0.ResourceExhaustion",
+                   "Resolution": "Ensure that the resources are available and resubmit the request.",
+                   "Severity": "Critical"
+               }
+           ],
+           "code": "Base.1.4.0.ResourceExhaustion",
+           "message": "The resource /redfish/v1/UpdateService was unable to satisfy the request due to unavailability of resources."
+       }
+   }
+
+4. Add support verify the complete fw image by using mtd-util repo's
+   pfr_authenticate function.
+   Tested.
+   1. Upload the corrupted image.
+   POST: https://<BMC_IP>/redfish/v1/UpdateService/
+         with <Corrupted BMC_signed_cap> binary file
+   Response:
+   {
+     "error": {
+       "@Message.ExtendedInfo": [
+         {
+           "@odata.type": "/redfish/v1/$metadata#Message.v1_0_0.Message",
+           "Message": "Invalid file uploaded to /redfish/v1/UpdateService:
+           Invalid image format.",
+           "MessageArgs": [
+             "/redfish/v1/UpdateService",
+             "Invalid image format"
+           ],
+           "MessageId": "OpenBMC.0.1.0.InvalidUpload",
+           "Resolution": "None.",
+           "Severity": "Warning"
+         }
+       ],
+       "code": "OpenBMC.0.1.0.InvalidUpload",
+       "message": "Invalid file uploaded to /redfish/v1/UpdateService:
+        Invalid image format."
+     }
+   }
+
+   2. Upload the correct image.
+   POST: https://<BMC_IP>/redfish/v1/UpdateService/
+         with <BMC_signed_cap> binary file
+
+   Image verified and firmware updated.
+   {
+     "@odata.id": "/redfish/v1/TaskService/Tasks/0",
+     "@odata.type": "#Task.v1_4_3.Task",
+     "Id": "0",
+     "TaskState": "Running",
+     "TaskStatus": "OK"
+   }
+
+   Command:
+   GET: https://<BMC_IP>/redfish/v1/Systems/system/LogServices/EventLog/
+        Entries
+
+   Response:
+   {
+         "@odata.id": "/redfish/v1/Systems/system/LogServices/EventLog/
+          Entries/1596082187",
+         "@odata.type": "#LogEntry.v1_4_0.LogEntry",
+         "Created": "2020-07-30T04:09:47+00:00",
+         "EntryType": "Event",
+         "Id": "1596082187",
+         "Message": "BMC firmware update to version 00.72 completed
+                     successfully.",
+         "MessageArgs": [
+           "BMC",
+           "00.72"
+         ],
+         "MessageId": "OpenBMC.0.1.FirmwareUpdateCompleted",
+         "Name": "System Event Log Entry",
+         "Severity": "OK"
+       }
+
+5. Log redfish errors on all pfr image auth failures
+   Previous code was doing a 'mtd-util pfr authenticate' prior to manually
+   calculating and comparing the hashes. This is incorrect behavior. There
+   is no need to manually calculate hashes since that is part of the pfr
+   authentication process.
+
+   An unintended side effect of this is that if pfr authenticate fails for
+   some reason other than hash compare, the redfish log does not happen.
+
+   Tested: phosphor-version-software-mananger logs a redfish log on rom id
+           mismatch as expected.
+
+   Jun 01 05:33:38 intel-obmc phosphor-version-software-manager[430]:
+   Firmware image authentication failed
+   Jun 01 05:33:38 intel-obmc phosphor-version-software-manager[430]:
+   Error verifying uploaded image
+
+Signed-off-by: Vikram Bodireddy <vikram.bodireddy@intel.com>
+Signed-off-by: Chalapathi Venkataramashetty <chalapathix.venkataramashetty@intel.com>
+Signed-off-by: Vernon Mauery <vernon.mauery@intel.com>
+Signed-off-by: Hardik Panchal <hardikx.panchal@intel.com>
+Upstream-Status: Pending
+---
+ dbus_helpers.hpp      |  31 +++++
+ item_updater.cpp      |   7 +-
+ meson.build           |   8 +-
+ meson.options         |   2 +
+ pfr_image_manager.cpp | 305 ++++++++++++++++++++++++++++++++++++++++++
+ pfr_image_manager.hpp | 176 ++++++++++++++++++++++++
+ 6 files changed, 525 insertions(+), 4 deletions(-)
+ create mode 100644 dbus_helpers.hpp
+ create mode 100644 pfr_image_manager.cpp
+ create mode 100644 pfr_image_manager.hpp
+
+diff --git a/dbus_helpers.hpp b/dbus_helpers.hpp
+new file mode 100644
+index 0000000..dd811ea
+--- /dev/null
++++ b/dbus_helpers.hpp
+@@ -0,0 +1,31 @@
++#pragma once
++
++#include "config.h"
++
++#include <sdbusplus/bus.hpp>
++inline bool isFwupdScriptRunning(sdbusplus::bus::bus& bus)
++{
++    using ObjectPath = sdbusplus::message::object_path;
++    // type is ssssssouso
++    using ListUnitsType =
++        std::tuple<std::string, std::string, std::string, std::string,
++                   std::string, std::string, ObjectPath, uint32_t, std::string,
++                   ObjectPath>;
++    auto method = bus.new_method_call(SYSTEMD_BUSNAME, SYSTEMD_PATH,
++                                      SYSTEMD_INTERFACE, "ListUnits");
++
++    auto reply = bus.call(method);
++    std::vector<ListUnitsType> resp;
++    reply.read(resp);
++
++    for (const auto& unit : resp)
++    {
++        if (std::get<0>(unit).find("fwupd@") != std::string::npos &&
++            std::get<3>(unit) != "failed")
++        {
++            return true;
++        }
++    }
++    return false;
++}
++
+diff --git a/item_updater.cpp b/item_updater.cpp
+index bea8c5e..0ad71a0 100644
+--- a/item_updater.cpp
++++ b/item_updater.cpp
+@@ -69,10 +69,10 @@ void ItemUpdater::createActivation(sdbusplus::message_t& msg)
+                     auto value = SVersion::convertVersionPurposeFromString(
+                         std::get<std::string>(property.second));
+                     if (value == VersionPurpose::BMC ||
+-#ifdef HOST_BIOS_UPGRADE
++#if defined(HOST_BIOS_UPGRADE) || defined(PFR_UPDATE)
+                         value == VersionPurpose::Host ||
+ #endif
+-                        value == VersionPurpose::System)
++                        value == VersionPurpose::Other)
+                     {
+                         purpose = value;
+                     }
+@@ -471,6 +471,7 @@ void ItemUpdater::deleteAll()
+ ItemUpdater::ActivationStatus
+     ItemUpdater::validateSquashFSImage(const std::string& filePath)
+ {
++#ifndef PFR_UPDATE
+     bool valid = true;
+ 
+     // Record the images which are being updated
+@@ -488,7 +489,7 @@ ItemUpdater::ActivationStatus
+             return ItemUpdater::ActivationStatus::invalid;
+         }
+     }
+-
++#endif
+     return ItemUpdater::ActivationStatus::ready;
+ }
+ 
+diff --git a/meson.build b/meson.build
+index c7f5528..84116c8 100644
+--- a/meson.build
++++ b/meson.build
+@@ -69,6 +69,7 @@ conf.set('MMC_LAYOUT', get_option('bmc-layout').contains('mmc'))
+ conf.set('HOST_BIOS_UPGRADE', get_option('host-bios-upgrade').allowed())
+ conf.set('WANT_SIGNATURE_VERIFY', get_option('verify-signature').allowed())
+ conf.set('FWUPD_SCRIPT', get_option('fwupd-script').allowed())
++conf.set('PFR_UPDATE', get_option('pfr-update').enabled())
+ 
+ # Configurable variables
+ conf.set('ACTIVE_BMC_MAX_ALLOWED', get_option('active-bmc-max-allowed'))
+@@ -255,10 +256,15 @@ executable(
+     install: true
+ )
+ 
++image_manager_source = files('image_manager.cpp')
++if get_option('pfr-update').enabled()
++    image_manager_source = files('pfr_image_manager.cpp')
++endif
++
+ executable(
+     'phosphor-version-software-manager',
+-    'image_manager.cpp',
+     'image_manager_main.cpp',
++    image_manager_source,
+     'version.cpp',
+     'watch.cpp',
+     dependencies: [deps, ssl],
+diff --git a/meson.options b/meson.options
+index c4e3294..2575155 100644
+--- a/meson.options
++++ b/meson.options
+@@ -33,5 +33,8 @@ option(
+ option('fwupd-script', type: 'feature', value: 'enabled',
+     description: 'Enable fwupd script support.')
+ 
++option('pfr-update', type: 'feature',
++    description: 'Enable PFR image support.')
++
+ # Variables
+ option(
+diff --git a/pfr_image_manager.cpp b/pfr_image_manager.cpp
+new file mode 100644
+index 0000000..7529829
+--- /dev/null
++++ b/pfr_image_manager.cpp
+@@ -0,0 +1,305 @@
++#include "config.h"
++#include "pfr_image_manager.hpp"
++#include "dbus_helpers.hpp"
++#include "version.hpp"
++#include "watch.hpp"
++#include <array>
++#include <fcntl.h>
++#include <openssl/err.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <sys/stat.h>
++#include <sys/wait.h>
++#include <time.h>
++#include <unistd.h>
++#include <boost/process/child.hpp>
++#include <phosphor-logging/elog-errors.hpp>
++#include <xyz/openbmc_project/Software/Image/error.hpp>
++#include <algorithm>
++#include <cstring>
++#include <filesystem>
++#include <fstream>
++#include <iomanip>
++#include <set>
++#include <sstream>
++#include <string>
++namespace phosphor
++{
++namespace software
++{
++namespace manager
++{
++
++using namespace sdbusplus::xyz::openbmc_project::Software::Image::Error;
++namespace Software = phosphor::logging::xyz::openbmc_project::Software;
++using UnTarFail = Software::Image::UnTarFailure;
++using ImageFail = Software::Image::ImageFailure;
++using BusyFail = Software::Image::BusyFailure;
++
++static constexpr const uint32_t pfmPos = 2054;
++static constexpr const uint32_t fwupdateImageIdentifier = 0xB6EAFD19;
++static constexpr const uint32_t lengthBlk0Blk1 = 1024;
++
++int Manager::verifyPFRImage(const std::filesystem::path imgPath,
++                            std::string& version, std::string& purposeString)
++{
++    uint8_t imgType {};
++    uint32_t imgMagic {};
++    std::array<uint8_t, 2> verData {};
++    struct pfrImgBlock0 block0Data {};
++
++    std::string verPurpose {"xyz.openbmc_project.Software.Version.VersionPurpose."};
++
++    if (std::filesystem::exists(imgPath))
++    {
++        try
++        {
++            std::ifstream imgFile(imgPath, std::ios::binary | std::ios::in);
++
++            if (!imgFile.good())
++            {
++                phosphor::logging::log<phosphor::logging::level::ERR>(
++                    "Image file read failed");
++                return -1;
++            }
++
++            imgFile.read(reinterpret_cast<char*>(&block0Data),
++                         sizeof(block0Data));
++
++            imgMagic = block0Data.tag;
++
++            if (imgMagic != fwupdateImageIdentifier)
++            {
++                phosphor::logging::log<phosphor::logging::level::ERR>(
++                    "Image magic number match failed",
++                    phosphor::logging::entry("IMAGEMAGIC=0x%x", imgMagic));
++                phosphor::logging::report<UnTarFailure>(
++                    UnTarFail::PATH(imgPath.c_str()));
++                return -1;
++            }
++
++            imgType = block0Data.pcType[0];
++
++            phosphor::logging::log<phosphor::logging::level::INFO>(
++                "Image Type", phosphor::logging::entry(
++                                  "IMAGETYPE=0x%x", static_cast<int>(imgType)));
++
++            if (imgType == pfrBMCUpdateCap || imgType == pfrBMCPFM)
++            {
++                purposeString = verPurpose + "BMC";
++            }
++            else if (imgType == pfrPCHUpdateCap || imgType == pfrPCHPFM ||
++                     imgType == seamlessPCHUpdCap)
++            {
++                purposeString = verPurpose + "Host";
++            }
++            else if (imgType == pfrCPLDUpdateCap || imgType == pfrAFMUpdateCap ||
++                     imgType == pfrCmpstCPLDUpdCap)
++            {
++                purposeString = verPurpose + "Other";
++            }
++            else
++            {
++                purposeString = verPurpose + "Unknown";
++
++                phosphor::logging::log<phosphor::logging::level::ERR>(
++                    "Unknown image type");
++                phosphor::logging::report<ImageFailure>(
++                    ImageFail::FAIL("Unknown image type"),
++                    ImageFail::PATH(imgPath.c_str()));
++                return -1;
++            }
++
++            // Verify the complete image
++            std::string mtdUtilfile = "/usr/bin/mtd-util";
++            std::vector<std::string> mtdUtilCmd = {"p", "a"};
++            mtdUtilCmd.push_back(imgPath);
++
++            boost::process::child execProg(mtdUtilfile, mtdUtilCmd);
++            execProg.wait();
++            if (execProg.exit_code())
++            {
++                phosphor::logging::log<phosphor::logging::level::ERR>(
++                    "Image authentication failed");
++                phosphor::logging::report<ImageFailure>(
++                    ImageFail::FAIL(
++                        "Security violation: image authentication failure"),
++                    ImageFail::PATH(imgPath.c_str()));
++
++                constexpr const char* redfishMsgID =
++                    "OpenBMC.0.1.GeneralFirmwareSecurityViolation";
++                sd_journal_send("MESSAGE=%s",
++                                "Firmware image authentication failed",
++                                "PRIORITY=%i", LOG_ERR, "REDFISH_MESSAGE_ID=%s",
++                                redfishMsgID, "REDFISH_MESSAGE_ARGS=%s",
++                                "Image authentication check fail", NULL);
++                return -1;
++            }
++
++            phosphor::logging::log<phosphor::logging::level::INFO>(
++                "PFR image",
++                phosphor::logging::entry("PCType=%d", block0Data.pcType[0]),
++                phosphor::logging::entry("VERSION=%s", version.c_str()));
++
++            version =
++                std::to_string(verData[0]) + "." + std::to_string(verData[1]);
++        }
++        catch (std::exception& e)
++        {
++            phosphor::logging::log<phosphor::logging::level::ERR>(e.what());
++            phosphor::logging::report<ImageFailure>(
++                ImageFail::FAIL("Unhandled exception"),
++                ImageFail::PATH(imgPath.c_str()));
++            return -1;
++        }
++    }
++
++    return 0;
++}
++
++int Manager::processImage(const std::string& imgFilePath)
++{
++
++    std::filesystem::path imgPath(imgFilePath);
++
++    if (!std::filesystem::exists(imgPath))
++        return -1;
++
++    if (isFwupdScriptRunning(bus))
++    {
++        phosphor::logging::report<BusyFailure>(BusyFail::PATH(imgPath.c_str()));
++        return -1;
++    }
++
++    int retry = 3;
++    std::string ver;
++    std::string extVer;
++    std::string purposeString;
++
++    if (0 != verifyPFRImage(imgFilePath, ver, purposeString))
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Error verifying uploaded image");
++        std::filesystem::remove_all(imgFilePath);
++        return -1;
++    }
++
++    if (ver.empty())
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Empty version from image file");
++        return -1;
++    }
++
++    sdbusplus::xyz::openbmc_project::Software::server::Version::VersionPurpose
++        purpose = Version::VersionPurpose::Unknown;
++    try
++    {
++        purpose = Version::convertVersionPurposeFromString(purposeString);
++    }
++    catch (const sdbusplus::exception::InvalidEnumString& e)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Error: Failed to convert purpose to enum."
++            " Setting to Unknown.");
++    }
++
++    // Compute id
++    std::string id = Version::getId(ver);
++
++    // Append a random number after the original version hash
++    // This will allow forcing image update onto the same version
++    // with 3 retries on random number generation.
++    do
++    {
++        srand(time(NULL));
++        id = id + "_" + std::to_string(rand());
++    } while ((versions.find(id) != versions.end()) && retry--);
++
++    if (versions.find(id) != versions.end())
++    {
++        phosphor::logging::log<phosphor::logging::level::INFO>(
++            "Software Object with the same version already exists, exiting "
++            "the update",
++            phosphor::logging::entry("VERSION_ID=%s", id.c_str()));
++
++        return -1;
++    }
++
++    std::filesystem::path imageDirPath(IMG_UPLOAD_DIR);
++    imageDirPath /= id;
++    try
++    {
++        std::filesystem::create_directory(imageDirPath);
++    }
++    catch (const std::filesystem::filesystem_error& fsErr)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            fsErr.what());
++    }
++
++    std::filesystem::path newFileName = imageDirPath / "image-runtime";
++    try
++    {
++        std::filesystem::rename(imgFilePath, newFileName);
++    }
++    catch (const std::filesystem::filesystem_error& fsErr)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            fsErr.what());
++    }
++
++    // Create Version object
++    std::string objPath = std::string{SOFTWARE_OBJPATH} + '/' + id;
++
++    auto versionPtr = std::make_unique<Version>(
++        bus, objPath, ver, purpose, extVer, imageDirPath.string(),
++        std::vector<std::string>(),
++        std::bind(&Manager::erase, this, std::placeholders::_1));
++    versionPtr->deleteObject =
++        std::make_unique<phosphor::software::manager::Delete>(bus, objPath,
++                                                              *versionPtr);
++    versions.insert(std::make_pair(id, std::move(versionPtr)));
++
++    return 0;
++}
++
++void Manager::erase(std::string entryId)
++{
++    auto it = versions.find(entryId);
++    if (it == versions.end())
++    {
++        return;
++    }
++
++    if (it->second->isFunctional())
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            ("Error: Version " + entryId +
++             " is currently running on the BMC."
++             " Unable to remove.")
++                .c_str());
++        return;
++    }
++
++    // Delete image dir
++    std::filesystem::path imageDirPath = it->second->path();
++    if (std::filesystem::exists(imageDirPath))
++    {
++        std::filesystem::remove_all(imageDirPath);
++    }
++    this->versions.erase(entryId);
++}
++
++CustomMap Manager::mapFile(const std::filesystem::path& path, size_t size)
++{
++
++    CustomFd fd(open(path.c_str(), O_RDONLY));
++
++    return CustomMap(mmap(nullptr, size, PROT_READ, MAP_PRIVATE, fd(), 0),
++                     size);
++}
++} // namespace manager
++} // namespace software
++} // namespace phosphor
++
+diff --git a/pfr_image_manager.hpp b/pfr_image_manager.hpp
+new file mode 100644
+index 0000000..6e7e820
+--- /dev/null
++++ b/pfr_image_manager.hpp
+@@ -0,0 +1,176 @@
++#pragma once
++#include "version.hpp"
++#include <openssl/evp.h>
++#include <openssl/pem.h>
++#include <openssl/rsa.h>
++#include <sys/mman.h>
++#include <unistd.h>
++#include <sdbusplus/server.hpp>
++#include <filesystem>
++
++namespace phosphor
++{
++namespace software
++{
++namespace manager
++{
++
++enum pfrImgPCType
++{
++    pfrCPLDUpdateCap = 0x00,
++    pfrPCHPFM = 0x01,
++    pfrPCHUpdateCap = 0x02,
++    pfrBMCPFM = 0x03,
++    pfrBMCUpdateCap = 0x04,
++    seamlessPCHUpdCap = 0x05,
++    pfrAFMUpdateCap = 0x06,
++    pfrCmpstCPLDUpdCap = 0x07
++};
++
++/* PFR image block 0 - As defined in HAS */
++struct pfrImgBlock0
++{
++    uint32_t tag;
++    uint8_t pcLength[4];
++    uint8_t pcType[4];
++    uint8_t reserved1[4];
++    uint8_t hash256[32];
++    uint8_t hash384[48];
++    uint8_t reserved2[32];
++} __attribute__((packed));
++
++/** @struct CustomFd
++ *
++ *  RAII wrapper for file descriptor.
++ */
++struct CustomFd
++{
++  public:
++    CustomFd() = delete;
++    CustomFd(const CustomFd&) = delete;
++    CustomFd& operator=(const CustomFd&) = delete;
++    CustomFd(CustomFd&&) = default;
++    CustomFd& operator=(CustomFd&&) = default;
++    /** @brief Saves File descriptor and uses it to do file operation
++     *
++     *  @param[in] fileDescriptor - File descriptor
++     */
++    CustomFd(int fileDescriptor) : fd(fileDescriptor)
++    {}
++
++    ~CustomFd()
++    {
++        if (fd >= 0)
++        {
++            close(fd);
++        }
++    }
++
++    int operator()() const
++    {
++        return fd;
++    }
++
++  private:
++    /** @brief File descriptor */
++    int fd = -1;
++};
++
++/** @struct CustomMap
++ *
++ *  RAII wrapper for mmap.
++ */
++struct CustomMap
++{
++  private:
++    /** @brief starting address of the map   */
++    void* addr;
++
++    /** @brief length of the mapping   */
++    size_t length;
++
++  public:
++    CustomMap() = delete;
++    CustomMap(const CustomMap&) = delete;
++    CustomMap& operator=(const CustomMap&) = delete;
++    CustomMap(CustomMap&&) = default;
++    CustomMap& operator=(CustomMap&&) = default;
++
++    /** @brief Saves starting address of the map and
++     *         and length of the file.
++     *  @param[in]  mapAddress - Starting address of the map
++     *  @param[in]  mapLength - length of the map
++     */
++    CustomMap(void* mapAddress, size_t mapLength) : addr(mapAddress), length(mapLength)
++    {}
++
++    ~CustomMap()
++    {
++        munmap(addr, length);
++    }
++
++    void* operator()() const
++    {
++        return addr;
++    }
++};
++
++/** @class Manager
++ *  @brief Contains a map of Version dbus objects.
++ *  @details The software image manager class that contains the Version dbus
++ *           objects and their version ids.
++ */
++class Manager
++{
++  public:
++    /** @brief Constructs Manager Class
++     *
++     * @param[in] bus - The Dbus bus object
++     */
++    Manager(sdbusplus::bus::bus& bus) : bus(bus){};
++
++    /**
++     * @brief Verify the image and provide the image to updater.
++     *        Create and populate the version and file path interfaces.
++     *
++     * @param[in]  uploaded image.
++     * @param[out] result          - 0 if successful.
++     */
++    int processImage(const std::string& imageFilePath);
++
++    /**
++     * @brief Erase specified entry d-bus object
++     *        and deletes the image file.
++     *
++     * @param[in] entryId - unique identifier of the entry
++     */
++    void erase(std::string entryId);
++
++  private:
++    /**
++     * @brief Memory map the  file
++     * @param[in]  - file path
++     * @param[in]  - file size
++     * @param[out] - Custom Mmap address
++     */
++    CustomMap mapFile(const std::filesystem::path& path, size_t size);
++
++    /**
++     * @brief Verify the PFR image and return version and purpose
++     * @param[in]  - file path
++     * @param[out]  - version
++     * @param[out]  - purpose
++     */
++    int verifyPFRImage(const std::filesystem::path imgPath,
++                       std::string& version, std::string& purposeString);
++    /** @brief Persistent map of Version dbus objects and their
++     * version id */
++    std::map<std::string, std::unique_ptr<Version>> versions;
++
++    /** @brief Persistent sdbusplus DBus bus connection. */
++    sdbusplus::bus::bus& bus;
++};
++
++} // namespace manager
++} // namespace software
++} // namespace phosphor
+-- 
+2.34.1
+

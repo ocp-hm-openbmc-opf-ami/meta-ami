@@ -1,0 +1,128 @@
+From 14cccf76faeece07d6eab96e19e5de07f9a580ae Mon Sep 17 00:00:00 2001
+From: sonan <sonan@ami.com>
+Date: Thu, 12 Sep 2024 17:51:34 +0530
+Subject: [PATCH 55/55] Support-unique-i2c-address-to-BMC
+
+Recreated below patch:
+  Modified the ipmbBmcSlaveAddress, getBmcSlaveAddress to
+ipmbBmcTargetAddress and getBmcTargetAddress
+
+From f2f55081cf1014d142264d95f18917df6ac1f34a Mon Sep 17 00:00:00 2001
+From: Anjaliintel-21 <anjali.ray@intel.com>
+Date: Mon, 25 Sep 2023 03:07:28 +0000
+Subject: [PATCH] Support unique i2c address to BMC
+
+Added support to handle unique i2c address in BMC in modular
+system as BMC was having same i2c address.
+i2cdetect was showing only one port used in all the BMC.
+We alloted different i2c addresses to all the BMC's.
+We have additional changes in modular-system to support the same:
+intel-collab/firmware.bmc.openbmc.applications.modular-system#12
+
+Tested:
+Before the changes:
+i2cdetect -y 13
+0 1 2 3 4 5 6 7 8 9 a b c d e f
+00: -- -- -- -- -- -- -- --
+10: UU -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+20: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+30: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+40: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+50: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+60: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+70: -- -- -- -- -- -- -- --
+
+After the changes:
+i2cdetect -y 13
+0 1 2 3 4 5 6 7 8 9 a b c d e f
+00: -- -- -- -- -- -- -- --
+10: UU 11 12 13 -- -- -- -- -- -- -- -- -- -- -- --
+20: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+30: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+40: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+50: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+60: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+70: -- -- -- -- -- -- -- --
+
+Signed-off-by: sonan <sonan@ami.com>
+---
+ ipmbbridged.cpp | 35 ++++++++++++++++++++++++++++-------
+ 1 file changed, 28 insertions(+), 7 deletions(-)
+
+diff --git a/ipmbbridged.cpp b/ipmbbridged.cpp
+index b4acd9e..5e97ae4 100644
+--- a/ipmbbridged.cpp
++++ b/ipmbbridged.cpp
+@@ -564,7 +564,7 @@ int IpmbChannel::ipmbChannelInit(const char* ipmbI2cTarget)
+             "/sys/bus/i2c/devices/i2c-" + busStr + "/new_device";
+         std::ostringstream param;
+         param << "ipmb-dev 0x" << std::hex
+-              << static_cast<uint16_t>(0x1000 | (ipmbBmcSlaveAddress >> 1));
++              << static_cast<uint16_t>(0x1000 | (ipmbBmcTargetAddress >> 1));
+         std::string para(param.str());
+         std::fstream deviceFile;
+         deviceFile.open(deviceFileName, std::ios::out);
+@@ -1079,7 +1079,7 @@ auto slotIpmbHandleRequest =
+             return returnStatus(ipmbResponseStatus::busy);
+         }
+ 
+-        uint8_t bmcTargetAddress = channel->getBmcSlaveAddress();
++        uint8_t bmcTargetAddress = channel->getBmcTargetAddress();
+         uint8_t rqTargetAddress = targetAddr;
+ 
+         // construct the request to add it to outstanding request list
+@@ -1096,9 +1096,12 @@ auto slotIpmbHandleRequest =
+         return channel->slotRequestAdd(yield, request, slotNumber);
+     };
+ 
+-auto ipmbHandleRequest =
+-    [](boost::asio::yield_context yield, uint8_t reqChannel, uint8_t netfn,
+-       uint8_t lun, uint8_t cmd, std::vector<uint8_t> dataReceived) {
++auto ipmbHandleRequest(boost::asio::yield_context yield, uint8_t reqChannel,
++                       uint8_t netfn, uint8_t lun, uint8_t cmd,
++                       std::vector<uint8_t> dataReceived,
++                       std::optional<uint8_t> targetAddr = std::nullopt)
++{
++
+         IpmbChannel* channel = getChannel(reqChannel);
+ 
+         if (channel == nullptr)
+@@ -1119,7 +1122,9 @@ auto ipmbHandleRequest =
+         }
+ 
+         uint8_t bmcTargetAddress = channel->getBmcTargetAddress();
+-        uint8_t rqTargetAddress = channel->getRqTargetAddress();
++        uint8_t rqTargetAddress = targetAddr ? *targetAddr
++                                         : channel->getRqTargetAddress();
++
+ 
+         // construct the request to add it to outstanding request list
+         std::shared_ptr<IpmbRequest> request = std::make_shared<IpmbRequest>(
+@@ -1241,7 +1246,23 @@ int main()
+     std::shared_ptr<sdbusplus::asio::dbus_interface> ipmbIface =
+         server.add_interface(ipmbObj, ipmbDbusIntf);
+ 
+-    ipmbIface->register_method("sendRequest", std::move(ipmbHandleRequest));
++     ipmbIface->register_method(
++        "sendRequest",
++        [](boost::asio::yield_context yield, uint8_t reqChannel, uint8_t netfn,
++           uint8_t lun, uint8_t cmd, std::vector<uint8_t> dataReceived) {
++            return ipmbHandleRequest(yield, reqChannel, netfn, lun, cmd,
++                                     dataReceived);
++        });
++
++    ipmbIface->register_method(
++        "sendRequestTarget",
++        [](boost::asio::yield_context yield, uint8_t reqChannel,
++           uint8_t targetAddr, uint8_t netfn, uint8_t lun, uint8_t cmd,
++           std::vector<uint8_t> dataReceived) {
++            return ipmbHandleRequest(yield, reqChannel, netfn, lun, cmd,
++                                     dataReceived, targetAddr);
++        });
++
+     ipmbIface->register_method("SlotIpmbRequest",
+                                std::move(slotIpmbHandleRequest));
+ 
+-- 
+2.25.1
+

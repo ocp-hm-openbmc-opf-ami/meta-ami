@@ -1,0 +1,66 @@
+From 7b2ae4cc2ab422939f0a8d60c1d9633cdc1db25b Mon Sep 17 00:00:00 2001
+From: Zhikui Ren <zhikui.ren@intel.com>
+Date: Mon, 23 Oct 2023 17:42:30 -0700
+Subject: [PATCH] psusensor: add filter for VR temperature sensor
+
+Add filter to ignore first 0 reading for VR tempertures.
+Consecutive zero readings will still assert low thresholds.
+
+Signed-off-by: Zhikui Ren <zhikui.ren@intel.com>
+---
+ src/PSUSensor.cpp | 15 ++++++++++++++-
+ src/PSUSensor.hpp |  5 ++++-
+ 2 files changed, 18 insertions(+), 2 deletions(-)
+
+diff --git a/src/PSUSensor.cpp b/src/PSUSensor.cpp
+index e3b035e..7776f68 100644
+--- a/src/PSUSensor.cpp
++++ b/src/PSUSensor.cpp
+@@ -55,6 +55,11 @@ PSUSensor::PSUSensor(const std::string& path, const std::string& objectType,
+ {
+     buffer = std::make_shared<std::array<char, 128>>();
+     std::string unitPath = sensor_paths::getPathForUnits(sensorUnits);
++    //enable filterZero for VR temp sensors
++    if ( unitPath == "temperature" && (name.find("CPU") != std::string::npos))
++    {
++        filterZero = true;
++    }
+     if constexpr (debug)
+     {
+         std::cerr << "Constructed sensor: path " << path << " type "
+@@ -219,7 +224,15 @@ void PSUSensor::handleResponse(const boost::system::error_code& err,
+     try
+     {
+         rawValue = std::stod(bufferRef.data());
+-        updateValue((rawValue / sensorFactor) + sensorOffset);
++        if (filterZero && rawValue == 0 && value != 0)
++        {
++            value = 0;
++            std::cerr << "INFO: Temperature " << name << " ignore first zero\n";
++        }
++        else
++        {
++            updateValue((rawValue / sensorFactor) + sensorOffset);
++        }
+     }
+     catch (const std::invalid_argument&)
+     {
+diff --git a/src/PSUSensor.hpp b/src/PSUSensor.hpp
+index 69f365b..b44da4d 100644
+--- a/src/PSUSensor.hpp
++++ b/src/PSUSensor.hpp
+@@ -55,7 +55,10 @@ class PSUSensor : public Sensor, public std::enable_shared_from_this<PSUSensor>
+     void handleResponse(const boost::system::error_code& err, size_t bytesRead);
+     void checkThresholds(void) override;
+     unsigned int sensorPollMs = defaultSensorPollMs;
+-
++    //Sometimes VR Temperature sensor read returns false zero degree reading
++    //It is not a real concern for VRs, add a filter to only assert thresholds
++    //if more than one zero are read in consecutive polling cycles
++    bool filterZero = false;
+     static constexpr size_t warnAfterErrorCount = 10;
+ 
+   public:
+-- 
+2.25.1
+

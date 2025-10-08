@@ -1,0 +1,233 @@
+From 20a0a614fc4493d2a0bfd4abb495f65e5d5da2f0 Mon Sep 17 00:00:00 2001
+From: Anjaliintel-21 <anjali.ray@intel.com>
+Date: Fri, 14 Jul 2023 18:03:06 +0000
+Subject: [PATCH] Add Support for getting PowerSuplies under PowerSubsystem
+
+Power Suplies The "Power" and "Thermal" properties under
+"Chassis" redfish schema are deprecated in favor of "PowerSubsystem" and
+"ThermalSubsytem". Power supply information was used to present under this
+"Power" node which is removed during migration to "PowerSubsystem" DTMF
+redfish schema implementation.
+
+This commit implement the "PowerSupplyCollections" & "PowerSupply" redfish schema
+under the "PowerSubssystem" as per new Redfish specification.
+
+Below functionalities implemented in this commit.
+
+Get power supplies collections URIs
+Get power supplies info
+
+Tested:
+verified the power subsystem collections
+
+Get session details from Redfish GET:https://redfish/v1/Chassis/BNC_Baseboard/PowerSubsystem/PowerSupplies response:
+"@odata.type": "#PowerSupplyCollection.PowerSupplyCollection",
+"Members": [
+{
+"@odata.id": "/redfish/v1/Chassis/AVC_Baseboard/PowerSubsystem/PowerSupplies/SOLUM_CO_IS162F22_PSU1"
+},
+{
+"@odata.id": "/redfish/v1/Chassis/AVC_Baseboard/PowerSubsystem/PowerSupplies/SOLUM_CO_IS162F22_PSU2"
+}
+"Members@odata.count": 2,
+"Name": "Power Supply Collection"
+After getting collection URIs
+
+     GET: "/redfish/v1/Chassis/BNC_Baseboard/PowerSubsytem/PowerSupplies/SOLUM_CO_IS162F22_PSU1",
+     "Id": "SOLUM CO IS162F22 PSU1",
+     "Manufacturer": "SOLUM CO., LTD.                  ",
+     "MemberId": "SOLUM_CO_IS162F22_PSU1",
+     "Model": "IS162F22",
+     "Name": "SOLUM CO IS162F22 PSU1",
+     "PartNumber": "G36234-019",
+     "PowerInputWatts": 294.5,
+     "PowerOutputWatts": 334.5,
+     "SerialNumber": "PSSF162202ACNS1622A4BN1H0123",
+     "Status": {
+         "Health": "OK",
+         "State": "Enabled"
+     }
+ }
+
+Signed-off-by: Kondiboina, VengaiahX <vengaiahx.kondiboina@intel.com>
+Signed-off-by: AppaRao Puli <apparao.puli@intel.com>
+Signed-off-by: Anjaliintel-21 <anjali.ray@intel.com>
+Upstream-Status: Pending
+---
+ redfish-core/lib/power_supply.hpp | 20 +++++++++--
+ redfish-core/lib/sensors.hpp      | 55 ++++++++++++++++++++++---------
+ 2 files changed, 57 insertions(+), 18 deletions(-)
+
+diff --git a/redfish-core/lib/power_supply.hpp b/redfish-core/lib/power_supply.hpp
+index 0035b118..c8fc5527 100644
+--- a/redfish-core/lib/power_supply.hpp
++++ b/redfish-core/lib/power_supply.hpp
+@@ -67,8 +67,6 @@ inline void
+         "/redfish/v1/Chassis/{}/PowerSubsystem/PowerSupplies", chassisId);
+     asyncResp->res.jsonValue["Description"] =
+         "The collection of PowerSupply resource instances.";
+-    asyncResp->res.jsonValue["Members"] = nlohmann::json::array();
+-    asyncResp->res.jsonValue["Members@odata.count"] = 0;
+ 
+     std::string powerPath = *validChassisPath + "/powered_by";
+     dbus::utility::getAssociatedSubTreePaths(
+@@ -132,6 +130,24 @@ inline void handlePowerSupplyCollectionGet(
+         std::bind_front(doPowerSupplyCollection, asyncResp, chassisId));
+ }
+ 
++inline void doPowerSupply(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                          const std::string& chassisId,
++                          const std::optional<std::string>& validChassisPath)
++{
++    if (!validChassisPath)
++    {
++        messages::resourceNotFound(asyncResp->res, "Chassis", chassisId);
++        return;
++    }
++
++    auto sensorAsyncResp = std::make_shared<SensorsAsyncResp>(
++        asyncResp, chassisId, sensors::dbus::powerPaths, sensors::node::power);
++
++    getChassisData(sensorAsyncResp);
++
++    return;
++}
++
+ inline void requestRoutesPowerSupplyCollection(App& app)
+ {
+     BMCWEB_ROUTE(app, "/redfish/v1/Chassis/<str>/PowerSubsystem/PowerSupplies/")
+diff --git a/redfish-core/lib/sensors.hpp b/redfish-core/lib/sensors.hpp
+index 042a3b2d..0c3cc779 100644
+--- a/redfish-core/lib/sensors.hpp
++++ b/redfish-core/lib/sensors.hpp
+@@ -62,7 +62,6 @@ static constexpr std::string_view thermal = "Thermal";
+ namespace dbus
+ {
+ constexpr auto powerPaths = std::to_array<std::string_view>({
+-    "/xyz/openbmc_project/sensors/voltage",
+     "/xyz/openbmc_project/sensors/power"
+ });
+ 
+@@ -483,15 +482,12 @@ inline void reduceSensorList(
+ inline void populateChassisNode(nlohmann::json& jsonValue,
+                                 std::string_view chassisSubNode)
+ {
+-    if (chassisSubNode == sensors::node::power)
+-    {
+-        jsonValue["@odata.type"] = "#Power.v1_5_2.Power";
+-    }
+-    else if (chassisSubNode == sensors::node::thermal)
++    if (chassisSubNode == sensors::node::thermal)
+     {
+         jsonValue["@odata.type"] = "#Thermal.v1_4_0.Thermal";
+         jsonValue["Fans"] = nlohmann::json::array();
+         jsonValue["Temperatures"] = nlohmann::json::array();
++        jsonValue["Id"] = chassisSubNode;
+     }
+     else if (chassisSubNode == sensors::node::sensors)
+     {
+@@ -501,11 +497,10 @@ inline void populateChassisNode(nlohmann::json& jsonValue,
+         jsonValue["Members@odata.count"] = 0;
+     }
+ 
+-    if (chassisSubNode != sensors::node::sensors)
++    if (chassisSubNode != sensors::node::power)
+     {
+-        jsonValue["Id"] = chassisSubNode;
++        jsonValue["Name"] = chassisSubNode;
+     }
+-    jsonValue["Name"] = chassisSubNode;
+ }
+ 
+ /**
+@@ -562,8 +557,11 @@ void getChassis(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+         }
+         populateChassisNode(asyncResp->res.jsonValue, chassisSubNode);
+ 
+-        asyncResp->res.jsonValue["@odata.id"] = boost::urls::format(
+-            "/redfish/v1/Chassis/{}/{}", chassisIdStr, chassisSubNode);
++        if (chassisSubNode != sensors::node::power)
++        {
++            asyncResp->res.jsonValue["@odata.id"] = boost::urls::format(
++                "/redfish/v1/Chassis/{}/{}", chassisIdStr, chassisSubNode);
++        }
+ 
+         // Get the list of all sensors for this Chassis element
+         std::string sensorPath = *chassisPath + "/all_sensors";
+@@ -2209,10 +2207,10 @@ inline nlohmann::json& getPowerSupply(nlohmann::json& powerSupplyArray,
+                                       const std::string& chassisId)
+ {
+     // Check if matching PowerSupply object already exists in JSON array
++
+     for (nlohmann::json& powerSupply : powerSupplyArray)
+     {
+-        if (powerSupply["Name"] ==
+-            boost::replace_all_copy(inventoryItem.name, "_", " "))
++        if (powerSupply["Id"] == inventoryItem.name)
+         {
+             return powerSupply;
+         }
+@@ -2224,7 +2222,11 @@ inline nlohmann::json& getPowerSupply(nlohmann::json& powerSupplyArray,
+     boost::urls::url url = boost::urls::format("/redfish/v1/Chassis/{}/Power",
+                                                chassisId);
+     url.set_fragment(("/PowerSupplies"_json_pointer).to_string());
+-    powerSupply["@odata.id"] = std::move(url);
++    powerSupply["@odata.id"] = "/redfish/v1/Chassis/" + chassisId +
++                               "/PowerSubsystem/PowerSupplies/" +
++                               inventoryItem.name;
++    powerSupply["@odata.type"] = "#PowerSupply.v1_5_0.PowerSupply";
++    powerSupply["Id"] = inventoryItem.name;
+     powerSupply["Name"] = boost::replace_all_copy(inventoryItem.name, "_", " ");
+     powerSupply["Manufacturer"] = inventoryItem.manufacturer;
+     powerSupply["Model"] = inventoryItem.model;
+@@ -2241,7 +2243,6 @@ inline nlohmann::json& getPowerSupply(nlohmann::json& powerSupplyArray,
+     powerSupply["Status"]["State"] = getState(&inventoryItem);
+     const char* health = inventoryItem.isFunctional ? "OK" : "Critical";
+     powerSupply["Status"]["Health"] = health;
+-
+     return powerSupply;
+ }
+ 
+@@ -2383,7 +2384,16 @@ inline void getSensorData(
+                         else if ((inventoryItem != nullptr) &&
+                                  (inventoryItem->isPowerSupply))
+                         {
+-                            fieldName = "PowerSupplies";
++                            if (inventoryItem->name ==
++                                std::string(sensorsAsyncResp->asyncResp->res
++                                                .jsonValue["Id"]))
++                            {
++                                fieldName = "PowerSupplies";
++                            }
++                            else
++                            {
++                                continue;
++                            }
+                         }
+                         else
+                         {
+@@ -2476,8 +2486,21 @@ inline void getSensorData(
+                     sensorsAsyncResp->addMetadata(*sensorJson, path);
+                 }
+             }
++
+             if (sensorsAsyncResp.use_count() == 1)
+             {
++                if (sensorsAsyncResp->chassisSubNode == sensors::node::power)
++                {
++                    // nlohmann::json& tempArray =
++                    // sensorsAsyncResp->asyncResp->res.jsonValue
++                    if (sensorsAsyncResp->asyncResp->res
++                            .jsonValue["PowerSupplies"] != nullptr)
++                    {
++                        sensorsAsyncResp->asyncResp->res.jsonValue =
++                            sensorsAsyncResp->asyncResp->res
++                                .jsonValue["PowerSupplies"][0];
++                    }
++                }
+                 sortJSONResponse(sensorsAsyncResp);
+                 if (sensorsAsyncResp->chassisSubNode ==
+                         sensors::node::sensors &&
+-- 
+2.25.1
+

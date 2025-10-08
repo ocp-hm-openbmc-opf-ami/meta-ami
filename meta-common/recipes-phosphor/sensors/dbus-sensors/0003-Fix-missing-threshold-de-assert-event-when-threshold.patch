@@ -1,0 +1,145 @@
+From 331745784ee169ff0e8547cd155538d609590a53 Mon Sep 17 00:00:00 2001
+From: Zhikui Ren <zhikui.ren@intel.com>
+Date: Tue, 22 Jun 2021 11:35:12 -0700
+Subject: [PATCH] Fix missing de-assert event when threshold changes
+
+Issue:
+Sensor can be re-constructed when sensor configuration changes
+like a new threshold value. Threshold deassert can be missed
+if the new threshold value fixes the alarm because the
+default state for new threshold interface is de-asserted.
+
+Resolution:
+Add a member variable hadValidSensor that is initialized to false
+for new sensor. When hadValidSensor is false, threshold property changed
+message will be emitted even if threshold property did not change,
+If the previous sensor instance had the threshold raised,
+Phosphor-sel-logger would notice the change and log a de-assert event.
+If the previous sensor instance did not have the threshold raised,
+Phosphor-sel-logger would notice this is not a change and not create
+new SEL log.
+Set hadValidSensor to true when sensor value is updated with a value
+that is not NaN. This is done after threshold property changed message
+is emitted.
+
+Tested:
+1. Change threshold value for a voltage sensor to force a SEL.
+   ipmitool raw 0x04 0x26 0x60 0x1b 0x95 0x6b 0x00 0x99 0xa6 0x00
+
+2. Verify SEL logged threshold assert event as expected
+   ipmitool sel list
+   1 |  Pre-Init  |0000007277| Voltage #0x60 | Upper Non-critical going high | Asserted
+
+3. Use ipmitool to change threshold value back to normal
+   ipmitool raw 0x04 0x26 0x60 0x1b 0x95 0x6b 0x00 0xa4 0xa6 0x00
+
+4. Verify SEL logged threshold de-assert event as expected
+   ipmitool sel list
+   1 |  Pre-Init  |0000007277| Voltage #0x60 | Upper Non-critical going high | Asserted
+   2 |  Pre-Init  |0000007304| Voltage #0x60 | Upper Non-critical going high | Deasserted
+
+Signed-off-by: Zhikui Ren <zhikui.ren@intel.com>
+Upstream-Status: Pending
+---
+ src/Thresholds.cpp | 21 +++++++++++++++++----
+ src/Thresholds.hpp |  2 +-
+ src/sensor.hpp     |  2 ++
+ 3 files changed, 20 insertions(+), 5 deletions(-)
+
+diff --git a/src/Thresholds.cpp b/src/Thresholds.cpp
+index b751c67..b9762ff 100644
+--- a/src/Thresholds.cpp
++++ b/src/Thresholds.cpp
+@@ -380,10 +380,19 @@ bool checkThresholds(Sensor* sensor)
+ {
+     bool status = true;
+     std::vector<ChangeParam> changes = checkThresholds(sensor, sensor->value);
++
++    // Sensor can be reconstructed when sensor configuration changes
++    // like a new threshold value. Threshold deassert can be missed
++    // if the new threshold value fixes the alarm because
++    // default state for new threshold interface is de-asserted.
++    // force sending assert/de-assert message when a not NaN value is updated
++    // for the first time even when threshold property did not change.
++    bool forceAssert = !sensor->hadValidValue;
+     for (const auto& change : changes)
+     {
+         assertThresholds(sensor, change.assertValue, change.threshold.level,
+-                         change.threshold.direction, change.asserted);
++                         change.threshold.direction, change.asserted,
++                         forceAssert);
+         if (change.threshold.level == thresholds::Level::CRITICAL &&
+             change.asserted)
+         {
+@@ -405,6 +414,7 @@ void checkThresholdsPowerDelay(const std::weak_ptr<Sensor>& weakSensor,
+ 
+     Sensor* sensor = sensorPtr.get();
+     std::vector<ChangeParam> changes = checkThresholds(sensor, sensor->value);
++    bool forceAssert = !sensor->hadValidValue;
+     for (const auto& change : changes)
+     {
+         // When CPU is powered off, some volatges are expected to
+@@ -429,13 +439,14 @@ void checkThresholdsPowerDelay(const std::weak_ptr<Sensor>& weakSensor,
+             }
+         }
+         assertThresholds(sensor, change.assertValue, change.threshold.level,
+-                         change.threshold.direction, change.asserted);
++                         change.threshold.direction, change.asserted,
++                         forceAssert);
+     }
+ }
+ 
+ void assertThresholds(Sensor* sensor, double assertValue,
+                       thresholds::Level level, thresholds::Direction direction,
+-                      bool assert)
++                      bool assert, bool force)
+ {
+     std::shared_ptr<sdbusplus::asio::dbus_interface> interface =
+         sensor->getThresholdInterface(level);
+@@ -452,7 +463,9 @@ void assertThresholds(Sensor* sensor, double assertValue,
+         std::cout << "Alarm property is empty \n";
+         return;
+     }
+-    if (interface->set_property<bool, true>(property, assert))
++    bool propertyChanged =
++        interface->set_property<bool, true>(property, assert);
++    if (force || propertyChanged)
+     {
+         try
+         {
+diff --git a/src/Thresholds.hpp b/src/Thresholds.hpp
+index a89c1dc..7b45276 100644
+--- a/src/Thresholds.hpp
++++ b/src/Thresholds.hpp
+@@ -54,7 +54,7 @@ struct Threshold
+ 
+ void assertThresholds(Sensor* sensor, double assertValue,
+                       thresholds::Level level, thresholds::Direction direction,
+-                      bool assert);
++                      bool assert, bool force = false);
+ 
+ struct TimerUsed
+ {
+diff --git a/src/sensor.hpp b/src/sensor.hpp
+index d2ba8af..4097b38 100644
+--- a/src/sensor.hpp
++++ b/src/sensor.hpp
+@@ -99,6 +99,7 @@ struct Sensor
+     std::shared_ptr<sdbusplus::asio::dbus_interface> valueMutabilityInterface;
+     double value = std::numeric_limits<double>::quiet_NaN();
+     double rawValue = std::numeric_limits<double>::quiet_NaN();
++    bool hadValidValue = false;
+     bool overriddenState = false;
+     bool internalSet = false;
+     double hysteresisTrigger;
+@@ -507,6 +508,7 @@ struct Sensor
+         {
+             markFunctional(true);
+             markAvailable(true);
++            hadValidValue = true;
+         }
+     }
+ 
+-- 
+2.25.1
+

@@ -1,0 +1,101 @@
+From 05c9a02cdd383157b41a864eb66c6d16e4379857 Mon Sep 17 00:00:00 2001
+From: AppaRao Puli <apparao.puli@intel.com>
+Date: Fri, 19 May 2023 17:13:35 +0000
+Subject: [PATCH] Adopt upstream ConnectionPolicy
+
+Upstream contributors made some rework on Connection
+policy for all subscriptions. This change is not
+not adopted in local patches which caused the bmcweb
+crash when Event/MetricReport subscriptions are made
+on EventService.
+
+Corrected the code to initailize the ConnectionPolicy
+while constructing the HtppClient.
+
+Tested:
+Created Events subscription and observed events on Listener.
+
+Created MRD's and subscribed them to EventService - Observed
+Reports sent to EventListener as expected.
+
+Created SSE subscription and Observed that Events are shown
+on browser as expected.
+
+Signed-off-by: AppaRao Puli <apparao.puli@intel.com>
+Upstream-Status: Pending
+---
+ http/http_client.hpp                          | 11 +++++-----
+ .../include/event_service_manager.hpp         | 21 ++++++++++++++++++-
+ 2 files changed, 26 insertions(+), 6 deletions(-)
+
+diff --git a/http/http_client.hpp b/http/http_client.hpp
+index 597b0d6f..06d8db2b 100644
+--- a/http/http_client.hpp
++++ b/http/http_client.hpp
+@@ -623,10 +623,11 @@ class ConnectionInfo : public std::enable_shared_from_this<ConnectionInfo>
+     }
+ 
+   public:
+-    explicit ConnectionInfo(boost::asio::io_context& iocIn,
+-                            const std::string& idIn,
+-                            boost::urls::url_view hostIn, bool verifyCertIn,
+-                            unsigned int connIdIn) :
++    explicit ConnectionInfo(
++        boost::asio::io_context& iocIn, const std::string& idIn,
++        const std::shared_ptr<ConnectionPolicy>& connPolicyIn,
++        boost::urls::url_view hostIn, bool verifyCertIn,
++        unsigned int connIdIn) :
+         subId(idIn), connPolicy(connPolicyIn), host(hostIn),
+         verifyCert(verifyCertIn), connId(connIdIn), resolver(iocIn),
+         conn(iocIn), timer(iocIn)
+@@ -813,7 +814,7 @@ class ConnectionPool : public std::enable_shared_from_this<ConnectionPool>
+         unsigned int newId = static_cast<unsigned int>(connections.size());
+ 
+         auto& ret = connections.emplace_back(std::make_shared<ConnectionInfo>(
+-            ioc, id, destIP, verifyCert, newId));
++            ioc, id, connPolicy, destIP, verifyCert, newId));
+ 
+         BMCWEB_LOG_DEBUG("Added connection {} to pool {}",
+                          connections.size() - 1, id);
+diff --git a/redfish-core/include/event_service_manager.hpp b/redfish-core/include/event_service_manager.hpp
+index fa53d0bd..04681b5e 100644
+--- a/redfish-core/include/event_service_manager.hpp
++++ b/redfish-core/include/event_service_manager.hpp
+@@ -351,6 +351,25 @@ inline bool
+     return true;
+ }
+ 
++inline boost::system::error_code subRetryHandler(unsigned int respCode)
++{
++    // Allow all response codes because we want to surface Listener
++    // issue to the client
++    BMCWEB_LOG_DEBUG("Received {} response from Listener", respCode);
++    return boost::system::errc::make_error_code(boost::system::errc::success);
++}
++
++constexpr unsigned int subReadBodyLimit = 4 * 1024 * 1024; // 4MB
++inline crow::ConnectionPolicy getSubPolicy()
++{
++    return {.maxRetryAttempts = 1,
++            .requestByteLimit = subReadBodyLimit,
++            .maxConnections = 20,
++            .retryPolicyAction = "TerminateAfterRetries",
++            .retryIntervalSecs = std::chrono::seconds(30),
++            .invalidResp = subRetryHandler};
++}
++
+ class Subscription : public persistent_data::UserSubscription
+ {
+   public:
+@@ -360,7 +379,7 @@ class Subscription : public persistent_data::UserSubscription
+     Subscription& operator=(Subscription&&) = delete;
+ 
+     Subscription(boost::urls::url_view url, boost::asio::io_context& ioc) :
+-        policy(std::make_shared<crow::ConnectionPolicy>())
++        policy(std::make_shared<crow::ConnectionPolicy>(getSubPolicy()))
+     {
+         destinationUrl = url;
+         client.emplace(ioc, policy);
+-- 
+2.25.1
+

@@ -1,0 +1,383 @@
+From 85daca0c9ad2f2dd2edb95877b182202488139d1 Mon Sep 17 00:00:00 2001
+From: Yaswanth <yaswanthsai@ami.com>
+Date: Tue, 23 Jan 2024 14:59:57 +0530
+Subject: [PATCH 1/1] Add single /dev/peci-i3c node abstraction
+
+With peci-i3c each CPU is exposed as individual PECI controller and
+userspace does not have control over CPU address.
+
+To make peci-i3c compatible with existing interfaces, add a simple wrapper
+that translates strings "/dev/peci-i3c" to actual paths based on
+information that can be queried over sysfs.
+
+Also includes peci_cmds usage helper update for -d option.
+
+Signed-off-by: Iwona Winiarska <iwona.winiarska@intel.com>
+Signed-off-by: Smriti-Ayushi <smriti.ayushi@intel.com>
+Upstream-Status: Pending
+---
+ peci.c      | 258 ++++++++++++++++++++++++++++++++++++++++++++++++++--
+ peci.h      |   1 +
+ peci_cmds.c |   5 +-
+ 3 files changed, 256 insertions(+), 8 deletions(-)
+
+diff --git a/peci.c b/peci.c
+index bd34b07fc..9c984a8c0 100644
+--- a/peci.c
++++ b/peci.c
+@@ -13,12 +13,17 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ */
++#include <dirent.h>
+ #include <errno.h>
+ #include <fcntl.h>
++#include <limits.h>
+ #include <peci.h>
++#include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+ #include <sys/ioctl.h>
++#include <sys/stat.h>
++#include <sys/sysmacros.h>
+ #include <syslog.h>
+ #include <time.h>
+ #include <unistd.h>
+@@ -27,6 +32,17 @@
+ #pragma GCC diagnostic ignored "-Wvariadic-macros"
+ #include <linux/peci-ioctl.h>
+ #pragma GCC diagnostic pop
++// To support distinct handles for multiple peci_Open() calls - limited to 64
++#define PECI_I3C_HANDLE_CNT 64
++#define PECI_I3C_HANDLE_MAX INT_MAX
++#define PECI_I3C_HANDLE_MIN (PECI_I3C_HANDLE_MAX - PECI_I3C_HANDLE_CNT + 1)
++
++int* peci_i3c_fds[PECI_I3C_HANDLE_CNT];
++
++#define PID_INSTANCE_ID_SHIFT 12
++#define PID_INSTANCE_ID_MASK 0xf
++#define I3C_PID_TO_CPU(x)                                                      \
++    (((x) >> PID_INSTANCE_ID_SHIFT) & PID_INSTANCE_ID_MASK)
+ 
+ EPECIStatus peci_GetDIB_seq(uint8_t target, uint64_t* dib, int peci_fd);
+ 
+@@ -76,10 +92,224 @@ static void init()
+  *------------------------------------------------------------------------*/
+ void peci_Unlock(int peci_fd)
+ {
+-    if (close(peci_fd) != 0)
++    if (peci_fd >= PECI_I3C_HANDLE_MIN && peci_fd <= PECI_I3C_HANDLE_MAX)
++    {
++        int fd_index = PECI_I3C_HANDLE_MAX - peci_fd;
++
++        for (int i = 0; i < MAX_CPUS; i++)
++        {
++            int fd = peci_i3c_fds[fd_index][i];
++
++            if (fd < 0)
++            {
++                continue;
++            }
++
++            if (close(fd) != 0)
++            {
++                syslog(LOG_ERR, "PECI device failed to unlock.\n");
++            }
++        }
++        free(peci_i3c_fds[fd_index]);
++        peci_i3c_fds[fd_index] = NULL;
++    }
++    else
++    {
++        if (close(peci_fd) != 0)
++        {
++            syslog(LOG_ERR, "PECI device failed to unlock.\n");
++        }
++    }
++}
++
++static int peci_chardev_filter(const struct dirent* d)
++{
++    if (strncmp(d->d_name, "peci-", 5) == 0)
++    {
++        return 1;
++    }
++
++    return 0;
++}
++
++int peci_i3c_chardev_to_cpu(const char* name)
++{
++    struct stat st;
++    char path[38];
++    char* lpath;
++    size_t lpath_size = PATH_MAX;
++    char* subpath;
++    int dirfd;
++    int chardev_dirfd;
++    int pidfd;
++    int ret;
++    long long int pid;
++    char pid_buf[20]; // %llx + \0
++
++    dirfd = open("/dev", O_DIRECTORY);
++    if (dirfd < 0)
+     {
+-        syslog(LOG_ERR, "PECI device failed to unlock.\n");
++        return -errno;
+     }
++
++    ret = fstatat(dirfd, name, &st, 0);
++    if (ret)
++    {
++        goto err;
++    }
++
++    snprintf(path, sizeof(path), "/sys/dev/char/%d:%d", major(st.st_rdev),
++             minor(st.st_rdev));
++
++    lpath = malloc(lpath_size);
++    if (!lpath)
++    {
++        ret = -ENOMEM;
++        goto err;
++    }
++
++    ret = (int) readlink(path, lpath, lpath_size);
++    if (ret < 0)
++    {
++        goto err_free;
++    }
++
++    subpath = strstr(lpath, "peci-i3c");
++    if (!subpath)
++    {
++        ret = -EINVAL;
++        goto err_free;
++    }
++    strncpy(subpath, "pid", lpath_size - (size_t)(subpath - lpath));
++
++    chardev_dirfd = open("/sys/dev/char", O_DIRECTORY);
++    if (chardev_dirfd < 0)
++    {
++        ret = -errno;
++        goto err_free;
++    }
++
++    pidfd = openat(chardev_dirfd, lpath, O_RDONLY);
++    if (pidfd < 0)
++    {
++        ret = -errno;
++        goto err_close_chardev;
++    }
++    ret = (int) read(pidfd, pid_buf, sizeof(pid_buf));
++    if (ret < 0)
++    {
++        goto err_close_pidfd;
++    }
++
++    pid = strtoll(pid_buf, NULL, 16);
++
++    ret = I3C_PID_TO_CPU(pid);
++
++err_close_pidfd:
++    close(pidfd);
++err_close_chardev:
++    close(chardev_dirfd);
++err_free:
++    free(lpath);
++err:
++    close(dirfd);
++
++    return ret;
++}
++
++static int peci_i3c_open(char* name, int idx)
++{
++    int dirfd;
++    int cpu;
++
++    dirfd = open("/dev", O_DIRECTORY);
++    if (dirfd < 0)
++    {
++        return -errno;
++    }
++
++    cpu = peci_i3c_chardev_to_cpu(name);
++    if (cpu < 0)
++    {
++        close(dirfd);
++        return cpu;
++    }
++
++    if (peci_i3c_fds[idx][cpu] == -1)
++    {
++        peci_i3c_fds[idx][cpu] = openat(dirfd, name, O_RDWR | O_CLOEXEC);
++    }
++
++    close(dirfd);
++
++    return 0;
++}
++
++static int peci_device_i3c_open(void)
++{
++    struct dirent** namelist;
++    int if_any = 0;
++    int idx = -1;
++    int n;
++
++    for (int i = 0; i < PECI_I3C_HANDLE_CNT; i++)
++    {
++        if (!peci_i3c_fds[i])
++        {
++            idx = i;
++            break;
++        }
++    }
++
++    if (idx == -1)
++    {
++        return -1;
++    }
++
++    peci_i3c_fds[idx] = malloc(MAX_CPUS * sizeof(int));
++    if (!peci_i3c_fds[idx])
++    {
++        return -1;
++    }
++
++    memset(peci_i3c_fds[idx], -1, MAX_CPUS * sizeof(int));
++
++    n = scandir("/dev", &namelist, &peci_chardev_filter, alphasort);
++    if (n == -1)
++    {
++        goto err_free;
++    }
++
++    while (n--)
++    {
++        if (peci_i3c_open(namelist[n]->d_name, idx) == 0)
++        {
++            if_any = 1;
++        }
++        free(namelist[n]);
++    }
++    free(namelist);
++
++    if (!if_any)
++    {
++        goto err_free;
++    }
++
++    return PECI_I3C_HANDLE_MAX - idx;
++
++err_free:
++    free(peci_i3c_fds[idx]);
++    peci_i3c_fds[idx] = NULL;
++    return -1;
++}
++
++static int peci_device_open(char* peci_device)
++{
++    if (strncmp(peci_device, "/dev/peci-i3c", DEV_NAME_SIZE) == 0)
++    {
++        return peci_device_i3c_open();
++    }
++    return open(peci_device, O_RDWR | O_CLOEXEC);
+ }
+ 
+ /*-------------------------------------------------------------------------
+@@ -100,11 +330,11 @@ EPECIStatus peci_Lock(int* peci_fd, int timeout_ms)
+     }
+ 
+     // Open the PECI driver with the specified timeout
+-    *peci_fd = open(peci_device, O_RDWR | O_CLOEXEC);
++    *peci_fd = peci_device_open(peci_device);
+     if (*peci_fd == -1 && errno == ENOENT && peci_device_list[1])
+     {
+         peci_device = peci_device_list[1];
+-        *peci_fd = open(peci_device, O_RDWR | O_CLOEXEC);
++        *peci_fd = peci_device_open(peci_device);
+     }
+     switch (timeout_ms)
+     {
+@@ -114,7 +344,7 @@ EPECIStatus peci_Lock(int* peci_fd, int timeout_ms)
+             while (-1 == *peci_fd)
+             {
+                 nanosleep(&sRequest, NULL);
+-                *peci_fd = open(peci_device, O_RDWR | O_CLOEXEC);
++                *peci_fd = peci_device_open(peci_device);
+             }
+             break;
+         default:
+@@ -122,14 +352,16 @@ EPECIStatus peci_Lock(int* peci_fd, int timeout_ms)
+             {
+                 nanosleep(&sRequest, NULL);
+                 timeout_count += PECI_TIMEOUT_RESOLUTION_MS;
+-                *peci_fd = open(peci_device, O_RDWR | O_CLOEXEC);
++                *peci_fd = peci_device_open(peci_device);
+             }
+     }
++
+     if (-1 == *peci_fd)
+     {
+         syslog(LOG_ERR, " >>> PECI Device Busy <<< \n");
+         return PECI_CC_DRIVER_ERR;
+     }
++
+     return PECI_CC_SUCCESS;
+ }
+ 
+@@ -166,7 +398,19 @@ static EPECIStatus HW_peci_issue_cmd(unsigned int cmd, char* cmdPtr,
+         return PECI_CC_INVALID_REQ;
+     }
+ 
+-    if (ioctl(peci_fd, cmd, cmdPtr) != 0)
++    int cpu = cmdPtr[0] - MIN_CLIENT_ADDR;
++    int fd;
++
++    if (peci_fd >= PECI_I3C_HANDLE_MIN && peci_fd <= PECI_I3C_HANDLE_MAX)
++    {
++        fd = peci_i3c_fds[PECI_I3C_HANDLE_MAX - peci_fd][cpu];
++    }
++    else
++    {
++        fd = peci_fd;
++    }
++
++    if (ioctl(fd, cmd, cmdPtr) != 0)
+     {
+         if (errno == ETIMEDOUT)
+         {
+diff --git a/peci.h b/peci.h
+index 3a13d981f..a012771aa 100644
+--- a/peci.h
++++ b/peci.h
+@@ -500,6 +500,7 @@ EPECIStatus peci_Ping_seq(uint8_t target, int peci_fd);
+ EPECIStatus peci_GetCPUID(const uint8_t clientAddr, CPUModel* cpuModel,
+                           uint8_t* stepping, uint8_t* cc);
+ void peci_SetDevName(char* peci_dev);
++int peci_i3c_chardev_to_cpu(const char* name);
+ 
+ #ifdef __cplusplus
+ }
+diff --git a/peci_cmds.c b/peci_cmds.c
+index 408630fb7..871bafab6 100644
+--- a/peci_cmds.c
++++ b/peci_cmds.c
+@@ -71,7 +71,10 @@ void Usage(char* progname)
+            "Size of data to read or write in bytes. Accepted values are 1, 2, "
+            "4, 8, and 16. Default is 4");
+     printf("\t%-12s%s\n", "-d",
+-           "Set PECI device name, for example \"-d /dev/peci-0\"");
++           "Set PECI interface. Supported interfaces:\n"
++           "\t\t\t-d /dev/peci-wire for PECI wire.\n"
++           "\t\t\t-d /dev/peci-mctp for PECI over MCTP over PCIe.\n"
++           "\t\t\t-d /dev/peci-i3c for PECI over MCTP over I3C.");
+     printf("Commands:\n");
+     printf("\t%-28s%s\n", "Ping", "Ping the target");
+     printf("\t%-28s%s\n", "GetTemp", "Get the temperature");
+-- 
+2.34.1
+
