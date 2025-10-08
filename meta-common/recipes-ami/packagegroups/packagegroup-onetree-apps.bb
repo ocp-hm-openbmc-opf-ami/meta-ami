@@ -52,6 +52,7 @@ PACKAGES = "\
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-slpd', '${PN}-slpd', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-lldpd', '${PN}-lldpd', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-bootlogo', '${PN}-bootlogo', '', d)} \
+		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-2fa', '${PN}-2fa', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-prov-mode-mgr', '${PN}-prov-mode-mgr', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-rbc-mgr', '${PN}-rbc-mgr', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-ipmi-blobs', '${PN}-ipmi-blobs', '', d)} \
@@ -447,6 +448,13 @@ DESCRIPTION:${PN}-bootlogo = " Displays a custom logo during bmc boot "
 RDEPENDS:${PN}-bootlogo = " psplash \
 			    bootlogo "
 SUPPORTED_VENDOR:${PN}-bootlogo = "EVB"
+#-----------------------------------#
+
+SUMMARY:${PN}-2fa = "AMI Core Features: Two Factor Authentication"
+DESCRIPTION:${PN}-2fa = " Multifactor authentication which addional authentication while login"
+RDEPENDS:${PN}-2fa = " google-authenticator-libpam \
+                        web-two-factor-authentication"
+SUPPORTED_VENDOR:${PN}-2fa = "ALL"
 #-----------------------------------#
 
 SUMMARY:${PN}-prov-mode-mgr = "AMI Core Features: Provosioning Mode Manager"
