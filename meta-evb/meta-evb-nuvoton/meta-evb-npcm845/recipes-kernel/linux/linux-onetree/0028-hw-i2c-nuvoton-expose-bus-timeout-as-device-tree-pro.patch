@@ -1,0 +1,74 @@
+From 86372f4217af871812b54941584ccccf5870b8b0 Mon Sep 17 00:00:00 2001
+From: saikumaru <saikumaru@ami.com>
+Date: Fri, 19 Sep 2025 10:12:06 +0530
+Subject: [PATCH] hw/i2c:nuvoton: expose bus timeout as device tree property
+
+Exposed the I2C bus timeout and retries as a device tree property to allow for
+fine tuning the max time allowed per I2C transaction.
+
+Signed-off-by: saikumaru <saikumaru@ami.com>
+---
+ drivers/i2c/busses/i2c-npcm7xx.c | 19 +++++++++++++++----
+ 1 file changed, 15 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/i2c/busses/i2c-npcm7xx.c b/drivers/i2c/busses/i2c-npcm7xx.c
+index 5789ea9eeec2..57c8425d4d92 100644
+--- a/drivers/i2c/busses/i2c-npcm7xx.c
++++ b/drivers/i2c/busses/i2c-npcm7xx.c
+@@ -2211,7 +2211,7 @@ static int npcm_i2c_master_xfer(struct i2c_adapter *adap, struct i2c_msg *msgs,
+ 		return -EINVAL;
+ 	}
+ 
+-	time_left = jiffies + bus->adap.timeout / bus->adap.retries + 1;
++	time_left = jiffies + bus->adap.timeout + 1;
+ 	do {
+ 		/*
+ 		 * we must clear slave address immediately when the bus is not
+@@ -2279,7 +2279,7 @@ static int npcm_i2c_master_xfer(struct i2c_adapter *adap, struct i2c_msg *msgs,
+ 		 * 9: bits per transaction (including the ack/nack)
+ 		 */
+ 		timeout_usec = (2 * 9 * USEC_PER_SEC / bus->bus_freq) * (2 + nread + nwrite);
+-		timeout = max_t(unsigned long, bus->adap.timeout / bus->adap.retries,
++		timeout = max_t(unsigned long, bus->adap.timeout,
+ 				usecs_to_jiffies(timeout_usec));
+ 		time_left = wait_for_completion_timeout(&bus->cmd_complete,
+ 							timeout);
+@@ -2393,6 +2393,9 @@ static int npcm_i2c_probe_bus(struct platform_device *pdev)
+ 	struct clk *i2c_clk;
+ 	int irq;
+ 	int ret;
++	int bus_timeout;
++	int bus_retries;
++
+ 
+ 	bus = devm_kzalloc(&pdev->dev, sizeof(*bus), GFP_KERNEL);
+ 	if (!bus)
+@@ -2430,8 +2433,6 @@ static int npcm_i2c_probe_bus(struct platform_device *pdev)
+ 
+ 	adap = &bus->adap;
+ 	adap->owner = THIS_MODULE;
+-	adap->retries = 3;
+-	adap->timeout = 2 * HZ;
+ 	adap->algo = &npcm_i2c_algo;
+ 	adap->quirks = &npcm_i2c_quirks;
+ 	adap->algo_data = bus;
+@@ -2439,6 +2440,16 @@ static int npcm_i2c_probe_bus(struct platform_device *pdev)
+ 	adap->dev.of_node = pdev->dev.of_node;
+ 	adap->nr = pdev->id;
+ 
++	ret = of_property_read_s32(pdev->dev.of_node,
++				   "bus-timeout-ms", &bus_timeout);
++	// default is 2 seconds (HZ == # of jiffies per second)
++	adap->timeout = (ret < 0) ? 2 * HZ : msecs_to_jiffies(bus_timeout);
++
++	ret = of_property_read_s32(pdev->dev.of_node,
++				   "bus-retries", &bus_retries);
++	adap->retries = (ret < 0) ? 3 : bus_retries;
++
++
+ 	irq = platform_get_irq(pdev, 0);
+ 	if (irq < 0)
+ 		return irq;
+-- 
+2.47.1
+

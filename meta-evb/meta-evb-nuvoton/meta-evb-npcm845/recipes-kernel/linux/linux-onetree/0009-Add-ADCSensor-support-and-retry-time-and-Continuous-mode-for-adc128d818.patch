@@ -1,0 +1,84 @@
+From bc5da4ecaded82be244361cf58db0575cb01cffc Mon Sep 17 00:00:00 2001
+From: saikumaru <saikumaru@ami.com>
+Date: Tue, 9 Sep 2025 11:28:58 +0530
+Subject: [PATCH] For adc128d818: 1.Add ADCSensor support  2.Continuous
+ Conversion Mode 3.Add read IN register retry time
+
+Modifications introduced in this commit:
+1. Add iio_hwmon_adc128d to compatible table.
+2. Add a new continuous-conversion-mode flag.
+   When the DTS includes continuous-conversion-mode flag,
+   Conversion Rate register will set to Continuous Conversion Mode.
+3. Added retry time for reading the IN register (register 0x20~0x27).
+   When the last 4 bits of the read value are not 0 then retry to read.
+
+Signed-off-by: saikumaru <saikumaru@ami.com>
+---
+ drivers/hwmon/adc128d818.c | 23 +++++++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/drivers/hwmon/adc128d818.c b/drivers/hwmon/adc128d818.c
+index 73fd96799847..dfb12dbaac72 100644
+--- a/drivers/hwmon/adc128d818.c
++++ b/drivers/hwmon/adc128d818.c
+@@ -56,6 +56,10 @@ static const unsigned short normal_i2c[] = {
+ /* Voltage inputs visible per operation mode */
+ static const u8 num_inputs[] = { 7, 8, 4, 6 };
+ 
++/* read IN registers 0x20~0x27 Max retry time*/
++static const int retryMax = 3;
++
++
+ struct adc128_data {
+ 	struct i2c_client *client;
+ 	struct regulator *regulator;
+@@ -82,6 +86,7 @@ static struct adc128_data *adc128_update_device(struct device *dev)
+ 	struct i2c_client *client = data->client;
+ 	struct adc128_data *ret = data;
+ 	int i, rv;
++	int retryCount = 0;
+ 
+ 	mutex_lock(&data->update_lock);
+ 
+@@ -91,6 +96,15 @@ static struct adc128_data *adc128_update_device(struct device *dev)
+ 							 ADC128_REG_IN(i));
+ 			if (rv < 0)
+ 				goto abort;
++
++
++			if ((rv & 0xF) != 0 && retryCount < retryMax) {
++				dev_err(&client->dev, "Error reading register 0x%X with value: 0x%X. Try to read again.\n", ADC128_REG_IN(i), rv);
++				retryCount++;
++				goto retry;
++			}
++
++
+ 			data->in[0][i] = rv >> 4;
+ 
+ 			rv = i2c_smbus_read_byte_data(client,
+@@ -419,6 +433,14 @@ static int adc128_init_client(struct adc128_data *data)
+ 			return err;
+ 	}
+ 
++	/* Set Conversion Rate register to Continuous Conversion Mode */
++	if (device_property_read_bool(&client->dev, "continuous-conversion-mode")) {
++		err = i2c_smbus_write_byte_data(client, ADC128_REG_CONV_RATE, 0x01);
++		if (err)
++			return err;
++	}
++
++
+ 	/* Start monitoring */
+ 	err = i2c_smbus_write_byte_data(client, ADC128_REG_CONFIG, 0x01);
+ 	if (err)
+@@ -511,6 +533,7 @@ MODULE_DEVICE_TABLE(i2c, adc128_id);
+ 
+ static const struct of_device_id __maybe_unused adc128_of_match[] = {
+ 	{ .compatible = "ti,adc128d818" },
++	{ .compatible = "iio_hwmon_adc128d" },
+ 	{ },
+ };
+ MODULE_DEVICE_TABLE(of, adc128_of_match);
+-- 
+2.47.1
+

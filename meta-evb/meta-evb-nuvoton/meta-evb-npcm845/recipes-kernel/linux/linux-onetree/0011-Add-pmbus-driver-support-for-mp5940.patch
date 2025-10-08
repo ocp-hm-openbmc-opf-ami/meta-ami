@@ -1,0 +1,238 @@
+From 37bffe0555a479eb3a75ee3b4290e0a7f276b798 Mon Sep 17 00:00:00 2001
+From: saikumaru <saikumaru@ami.com>
+Date: Tue, 9 Sep 2025 12:05:36 +0530
+Subject: [PATCH] Add pmbus driver support for mp5940
+
+Signed-off-by: saikumaru <saikumaru@ami.com>
+---
+ drivers/hwmon/pmbus/Kconfig  |  10 ++
+ drivers/hwmon/pmbus/Makefile |   1 +
+ drivers/hwmon/pmbus/mp5940.c | 183 +++++++++++++++++++++++++++++++++++
+ 3 files changed, 194 insertions(+)
+ create mode 100644 drivers/hwmon/pmbus/mp5940.c
+
+diff --git a/drivers/hwmon/pmbus/Kconfig b/drivers/hwmon/pmbus/Kconfig
+index 0fc15130a4ea..bd85d71e4fbe 100644
+--- a/drivers/hwmon/pmbus/Kconfig
++++ b/drivers/hwmon/pmbus/Kconfig
+@@ -370,6 +370,16 @@ config SENSORS_MP5023
+ 	  This driver can also be built as a module. If so, the module will
+ 	  be called mp5023.
+ 
++config SENSORS_MP5940
++	tristate "MPS MP5940"
++	help
++	  If you say yes here you get hardware monitoring support for MPS
++	  MP5940.
++
++	  This driver can also be built as a module. If so, the module will
++	  be called mp5940.
++
++
+ config SENSORS_MP5990
+ 	tristate "MPS MP5990"
+ 	help
+diff --git a/drivers/hwmon/pmbus/Makefile b/drivers/hwmon/pmbus/Makefile
+index 25fbd8c4435f..84def7502d6e 100644
+--- a/drivers/hwmon/pmbus/Makefile
++++ b/drivers/hwmon/pmbus/Makefile
+@@ -38,6 +38,7 @@ obj-$(CONFIG_SENSORS_MP2856)	+= mp2856.o
+ obj-$(CONFIG_SENSORS_MP2888)	+= mp2888.o
+ obj-$(CONFIG_SENSORS_MP2975)	+= mp2975.o
+ obj-$(CONFIG_SENSORS_MP5023)	+= mp5023.o
++obj-$(CONFIG_SENSORS_MP5940)	+= mp5940.o
+ obj-$(CONFIG_SENSORS_MP5990)	+= mp5990.o
+ obj-$(CONFIG_SENSORS_MPQ7932)	+= mpq7932.o
+ obj-$(CONFIG_SENSORS_PLI1209BC)	+= pli1209bc.o
+diff --git a/drivers/hwmon/pmbus/mp5940.c b/drivers/hwmon/pmbus/mp5940.c
+new file mode 100644
+index 000000000000..5889f5c5ff47
+--- /dev/null
++++ b/drivers/hwmon/pmbus/mp5940.c
+@@ -0,0 +1,183 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Hardware monitoring driver for mp5940 and compatible chips.
++ *
++ * Copyright (c) 2019 Facebook Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ */
++#include <linux/err.h>
++#include <linux/i2c.h>
++#include <linux/init.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/pmbus.h>
++#include "pmbus.h"
++
++#define MAX_DATA_SIZE                    32
++
++enum chips { mp5940 };
++
++
++static struct pmbus_driver_info mp5940_info[] = {
++	[mp5940] = {
++		.pages = 1,
++		.format[PSC_VOLTAGE_IN] = direct,
++		.format[PSC_VOLTAGE_OUT] = direct,
++		.format[PSC_CURRENT_OUT] = direct,
++		.format[PSC_POWER] = direct,
++		.format[PSC_TEMPERATURE] = direct,
++		.m[PSC_VOLTAGE_IN] = 448.9,
++		.b[PSC_VOLTAGE_IN] = 0,
++		.R[PSC_VOLTAGE_IN] = -1,
++		.m[PSC_VOLTAGE_OUT] = 448.9,
++		.b[PSC_VOLTAGE_OUT] = 0,
++		.R[PSC_VOLTAGE_OUT] = -1,
++		.m[PSC_CURRENT_OUT] = 18455.94,
++		.b[PSC_CURRENT_OUT] = 0,
++		.R[PSC_CURRENT_OUT] = -2,
++		.m[PSC_POWER] = 32362.42,
++		.b[PSC_POWER] = 0,
++		.R[PSC_POWER] = -3,
++		.m[PSC_TEMPERATURE] = 1388,
++		.b[PSC_TEMPERATURE] = -26200,
++		.R[PSC_TEMPERATURE] = -2,
++		.func[0] = PMBUS_HAVE_VIN  | PMBUS_HAVE_VOUT |
++			PMBUS_HAVE_IOUT | PMBUS_HAVE_POUT |
++					PMBUS_HAVE_TEMP,
++	},
++};
++
++static const struct i2c_device_id mp5940_id[] = {
++		{"mp5940", mp5940},
++        { }
++};
++
++static int mp5940_probe(struct i2c_client *client, const struct i2c_device_id *id)
++{
++	struct device *dev =  &client->dev;
++	u8 buf[I2C_SMBUS_BLOCK_MAX];
++	const struct i2c_device_id *mid;
++	struct pmbus_driver_info *pmbus_info;
++	u32 pmbus_sensor_coefficient[3];
++	int ret;
++
++	if (!i2c_check_functionality(client->adapter,
++				     I2C_FUNC_SMBUS_READ_WORD_DATA))
++		return -ENODEV;
++
++	ret = i2c_smbus_read_block_data(client, PMBUS_MFR_ID,buf);
++	if (ret < 0) {
++		dev_err(dev, "Failed to read MFR ID\n");
++		return ret;
++	}
++
++	if (ret != 3 || strncmp(buf, "MPS", strlen("MPS"))) {
++		dev_err(&client->dev, "MFR_ID unrecognised\n");
++		return -ENODEV;
++	}
++
++	ret = i2c_smbus_read_block_data(client, PMBUS_MFR_MODEL, buf);
++	if (ret < 0) {
++		dev_err(dev, "Failed to read PMBUS_MFR_MODEL\n");
++		return ret;
++	}
++
++	for (mid = mp5940_id; mid->name[0]; mid++) {
++		if (!strncasecmp(mid->name, buf, strlen(mid->name)))
++			break;
++	}
++
++	if (!mid->name[0]) {
++		dev_err(&client->dev, "Unsupported device\n");
++		return -ENODEV;
++	}
++
++	pmbus_info = devm_kzalloc(&client->dev, sizeof(struct pmbus_driver_info), GFP_KERNEL);
++	memcpy(pmbus_info,&mp5940_info[mid->driver_data],sizeof(struct pmbus_driver_info));
++
++	if(!of_property_read_u32_array(client->dev.of_node, "voltage-in-coefficient",
++					 &pmbus_sensor_coefficient[0], ARRAY_SIZE(pmbus_sensor_coefficient)))
++	{
++		pmbus_info->m[PSC_VOLTAGE_IN] = pmbus_sensor_coefficient[0];
++		pmbus_info->b[PSC_VOLTAGE_IN] = pmbus_sensor_coefficient[1];
++		pmbus_info->R[PSC_VOLTAGE_IN] = pmbus_sensor_coefficient[2];
++		printk("update %s coefficients with M:%d B:%d R:%d \n","VIN",
++			pmbus_sensor_coefficient[0],pmbus_sensor_coefficient[1],pmbus_sensor_coefficient[2]);
++	}
++
++	if(!of_property_read_u32_array(client->dev.of_node, "voltage-out-coefficient",
++					 &pmbus_sensor_coefficient[0], ARRAY_SIZE(pmbus_sensor_coefficient)))
++	{
++		pmbus_info->m[PSC_VOLTAGE_OUT] = pmbus_sensor_coefficient[0];
++		pmbus_info->b[PSC_VOLTAGE_OUT] = pmbus_sensor_coefficient[1];
++		pmbus_info->R[PSC_VOLTAGE_OUT] = pmbus_sensor_coefficient[2];
++		printk("update %s coefficients with M:%d B:%d R:%d \n","VOUT",
++			pmbus_sensor_coefficient[0],pmbus_sensor_coefficient[1],pmbus_sensor_coefficient[2]);
++	}
++
++	if(!of_property_read_u32_array(client->dev.of_node, "current-out-coefficient",
++					 &pmbus_sensor_coefficient[0], ARRAY_SIZE(pmbus_sensor_coefficient)))
++	{
++		pmbus_info->m[PSC_CURRENT_OUT] = pmbus_sensor_coefficient[0];
++		pmbus_info->b[PSC_CURRENT_OUT] = pmbus_sensor_coefficient[1];
++		pmbus_info->R[PSC_CURRENT_OUT] = pmbus_sensor_coefficient[2];
++		printk("update %s coefficients with M:%d B:%d R:%d \n","IOUT",
++			pmbus_sensor_coefficient[0],pmbus_sensor_coefficient[1],pmbus_sensor_coefficient[2]);
++	}
++
++	if(!of_property_read_u32_array(client->dev.of_node, "power-coefficient",
++					 &pmbus_sensor_coefficient[0], ARRAY_SIZE(pmbus_sensor_coefficient)))
++	{
++		pmbus_info->m[PSC_POWER] = pmbus_sensor_coefficient[0];
++		pmbus_info->b[PSC_POWER] = pmbus_sensor_coefficient[1];
++		pmbus_info->R[PSC_POWER] = pmbus_sensor_coefficient[2];
++		printk("update %s coefficients with M:%d B:%d R:%d \n","POUT",
++			pmbus_sensor_coefficient[0],pmbus_sensor_coefficient[1],pmbus_sensor_coefficient[2]);
++	}
++
++	if(!of_property_read_u32_array(client->dev.of_node, "temperature-coefficient",
++					 &pmbus_sensor_coefficient[0], ARRAY_SIZE(pmbus_sensor_coefficient)))
++	{
++		pmbus_info->m[PSC_TEMPERATURE] = pmbus_sensor_coefficient[0];
++		pmbus_info->b[PSC_TEMPERATURE] = pmbus_sensor_coefficient[1];
++		pmbus_info->R[PSC_TEMPERATURE] = pmbus_sensor_coefficient[2];
++		printk("update %s coefficients with M:%d B:%d R:%d \n","TEMP",
++			pmbus_sensor_coefficient[0],pmbus_sensor_coefficient[1],pmbus_sensor_coefficient[2]);
++	}
++
++	ret = pmbus_do_probe(client, pmbus_info);
++	if (ret)
++		return ret;
++
++	return 0;
++}
++
++static const struct of_device_id mp5940_of_match[] = {
++        { .compatible = "mps,mp5940" },
++};
++
++MODULE_DEVICE_TABLE(i2c, mp5940_id);
++
++static struct i2c_driver mp5940_driver = {
++        .driver = {
++		.name = "mp5940",
++		.of_match_table = mp5940_of_match,
++        },
++        .probe = mp5940_probe,
++        .id_table = mp5940_id,
++};
++module_i2c_driver(mp5940_driver);
++
++MODULE_AUTHOR("Tony Ao <tony_ao@wiwynn.com>");
++MODULE_DESCRIPTION("PMBus driver for MP5940");
++MODULE_LICENSE("GPL");
++
+-- 
+2.47.1
+
