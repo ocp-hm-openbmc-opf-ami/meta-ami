@@ -1,0 +1,371 @@
+From a3bb6fd9a7e604d874f9d3a06125f7ab71e3b397 Mon Sep 17 00:00:00 2001
+From: Vijaysankar R <vijaysankarr@ami.com>
+Date: Tue, 15 Jul 2025 23:09:34 +0530
+Subject: [PATCH 206/206] Rename-Sync-Snmp-User
+
+---
+ mainapp.cpp  |  90 ++++++++++++++++++++++++++---
+ user_mgr.cpp | 160 ++++++++++++++++++++++++++++++++++++++++++++++++++-
+ user_mgr.hpp |  28 +++++++--
+ 3 files changed, 265 insertions(+), 13 deletions(-)
+
+diff --git a/mainapp.cpp b/mainapp.cpp
+index b54e2cb..b03e9e3 100644
+--- a/mainapp.cpp
++++ b/mainapp.cpp
+@@ -2,22 +2,98 @@
+ 
+ #include "user_mgr.hpp"
+ 
++#include <phosphor-logging/elog-errors.hpp>
++#include <phosphor-logging/log.hpp>
+ #include <sdbusplus/bus.hpp>
+ #include <sdbusplus/server/manager.hpp>
++#include <xyz/openbmc_project/Common/error.hpp>
++
++using namespace phosphor::logging;
++using InternalFailure =
++    sdbusplus::xyz::openbmc_project::Common::Error::InternalFailure;
+ 
+ // D-Bus root for user manager
+ constexpr auto userManagerRoot = "/xyz/openbmc_project/user";
+ 
+ int main(int /*argc*/, char** /*argv*/)
+ {
+-    auto bus = sdbusplus::bus::new_default();
+-    sdbusplus::server::manager_t objManager(bus, userManagerRoot);
++    try
++    {
++        /* Create a new default sdbusplus bus object */
++        sdbusplus::bus::bus bus = sdbusplus::bus::new_default();
++
++        /* Create an I/O context for Boost.Asio */
++        boost::asio::io_context io;
++
++        /* Create an asynchronous D-Bus connection shared pointer */
++        auto asyncBus = std::make_shared<sdbusplus::asio::connection>(io);
++
++        /* Create a sdbusplus server object manager */
++        sdbusplus::server::manager_t objManager(bus, userManagerRoot);
+ 
+-    phosphor::user::UserMgr userMgr(bus, userManagerRoot);
++        phosphor::user::UserMgr userMgr(asyncBus.get(), bus, userManagerRoot);
+ 
+-    // Claim the bus now
+-    bus.request_name(USER_MANAGER_BUSNAME);
++        // Claim the bus now
++        bus.request_name(USER_MANAGER_BUSNAME);
+ 
+-    // Wait for client request
+-    bus.process_loop();
++        /* Run the Boost.Asio I/O event loop */
++        io.run();
++    }
++    catch (const InternalFailure& e)
++    {
++        lg2::error("Internal Failure in User Manager service: {ERROR}", "ERROR",
++                   e.what());
++        elog<InternalFailure>();
++        return -1;
++    }
++    catch (const sdbusplus::exception::SdBusError& e)
++    {
++        lg2::error("Failed to initialize User Manager service: {ERROR}",
++                   "ERROR", e.what());
++        elog<InternalFailure>();
++        return -1;
++    }
++    catch (const boost::system::system_error& e)
++    {
++        lg2::error("Boost System Error: {ERROR}", "ERROR", e.what());
++        elog<InternalFailure>();
++        return -1;
++    }
++    catch (const boost::asio::invalid_service_owner& e)
++    {
++        lg2::error("Invalid Service Owner: {ERROR}", "ERROR", e.what());
++        elog<InternalFailure>();
++        return -1;
++    }
++    catch (const boost::asio::execution::bad_executor& e)
++    {
++        lg2::error("Bad Executor Error: {ERROR}", "ERROR", e.what());
++        elog<InternalFailure>();
++        return -1;
++    }
++    catch (const std::invalid_argument& e)
++    {
++        lg2::error("Invalid Argument: {ERROR}", "ERROR", e.what());
++        elog<InternalFailure>();
++        return -1;
++    }
++    catch (const std::runtime_error& e)
++    {
++        lg2::error("Runtime Error: {ERROR}", "ERROR", e.what());
++        elog<InternalFailure>();
++        return -1;
++    }
++    catch (const std::exception& e)
++    {
++        lg2::error("Failed to initialize User Manager service: {ERROR}",
++                   "ERROR", e.what());
++        elog<InternalFailure>();
++        return -1;
++    }
++    catch (...)
++    {
++        lg2::error("Unhandled unknown exception in main()");
++        elog<InternalFailure>();
++        return -1;
++    }
+ }
+diff --git a/user_mgr.cpp b/user_mgr.cpp
+index 24d15ea..356d720 100644
+--- a/user_mgr.cpp
++++ b/user_mgr.cpp
+@@ -571,6 +571,144 @@ void UserMgr::setPasswordExpired(std::string userName, bool isExpired)
+     }
+ }
+ 
++bool objectExists(sdbusplus::bus::bus& bus, const std::string& service,
++                  const std::string& objectPath)
++{
++    try
++    {
++        auto method = bus.new_method_call(service.c_str(), objectPath.c_str(),
++                                          "org.freedesktop.DBus.Introspectable",
++                                          "Introspect");
++
++        auto reply = bus.call(method);
++        std::string xml;
++        reply.read(xml);
++
++        return !xml.empty(); /* Object exists if introspection data is returned
++                              */
++    }
++    catch (const sdbusplus::exception::SdBusError& e)
++    {
++        lg2::debug("objectExists failed for path {PATH}: {ERROR}", "PATH",
++                   objectPath, "ERROR", e.what());
++        return false;
++    }
++}
++
++void UserMgr::renameSnmpUser(const std::string& userName,
++                             const std::string& newUserName)
++{
++    constexpr const char* snmpBasePath =
++        "/xyz/openbmc_project/snmp/UserManager/";
++    std::string objPathOld = std::string(snmpBasePath) + userName;
++    constexpr const char* service = "xyz.openbmc_project.Snmp.Conf";
++    constexpr const char* propertyInterface =
++        "xyz.openbmc_project.Snmp.UserManager";
++    constexpr const char* createInterface =
++        "xyz.openbmc_project.Snmp.UserManager.Create";
++    constexpr const char* managerObjPath =
++        "/xyz/openbmc_project/snmp/UserManager";
++    constexpr const char* userServiceName = "xyz.openbmc_project.User.Manager";
++    constexpr const char* userInterface = "xyz.openbmc_project.User.Attributes";
++    constexpr const char* SnmpPropertyName = "SNMPAccessEnableStatus";
++    constexpr const char* userObjPath = "/xyz/openbmc_project/user/";
++    std::string newuserObjPath = std::string(userObjPath) + newUserName;
++
++    if (!objectExists(bus, service, objPathOld))
++    {
++        lg2::info("SNMP user '{USER}' does not exist, skipping rename.", "USER",
++                  userName);
++        return;
++    }
++
++    std::map<std::string, std::variant<std::string>> propertyMap;
++
++    try
++    {
++        const std::vector<std::string> propertyNames = {
++            "Algorithm", "Encryption", "Password", "ReadWritePermission",
++            "UserName"};
++
++        for (const auto& property : propertyNames)
++        {
++            auto method =
++                bus.new_method_call(service, objPathOld.c_str(),
++                                    "org.freedesktop.DBus.Properties", "Get");
++            method.append(propertyInterface, property);
++            auto reply = bus.call(method);
++            std::variant<std::string> value;
++            reply.read(value);
++            propertyMap[property] = value;
++        }
++
++        /* Delete old SNMP user object */
++        auto deleteCall =
++            bus.new_method_call(service, objPathOld.c_str(),
++                                "xyz.openbmc_project.Object.Delete", "Delete");
++        auto reply = bus.call(deleteCall);
++        if (reply.is_method_error())
++        {
++            lg2::error("Failed to delete SNMP user object at {OBJPATH}: {ERR}",
++                       "OBJPATH", objPathOld, "ERR",
++                       reply.get_error()->message);
++            return;
++        }
++
++        /*Set SNMPAccessEnableStatus to true before creating a snmp user*/
++        systemBus->async_method_call(
++            [newUserName](const boost::system::error_code& ec) {
++                if (ec)
++                {
++                    lg2::error(
++                        "Failed to set SNMPAccessEnableStatus for '{USER}': {ERROR}",
++                        "USER", newUserName, "ERROR", ec.message());
++                    elog<InternalFailure>();
++                    return;
++                }
++
++                lg2::info("SNMPAccessEnableStatus set for user '{USER}'",
++                          "USER", newUserName);
++            },
++            userServiceName, newuserObjPath, "org.freedesktop.DBus.Properties",
++            "Set", userInterface, SnmpPropertyName, std::variant<bool>{true});
++
++        /* Create new SNMP user object */
++        std::string password = std::get<std::string>(propertyMap["Password"]);
++        std::string encryption =
++            std::get<std::string>(propertyMap["Encryption"]);
++        std::string algorithm = std::get<std::string>(propertyMap["Algorithm"]);
++        std::string rwPermission =
++            std::get<std::string>(propertyMap["ReadWritePermission"]);
++
++        systemBus->async_method_call(
++            [newUserName](const boost::system::error_code& ec) {
++                if (ec)
++                {
++                    lg2::error("SNMP user creation failed: {ERROR}", "ERROR",
++                               ec.message());
++                    elog<InternalFailure>();
++                    return;
++                }
++                lg2::info("SNMP user '{USER}' successfully created.", "USER",
++                          newUserName);
++            },
++            service, managerObjPath, createInterface, "Client", newUserName,
++            password, encryption, algorithm, rwPermission);
++    }
++    catch (const InternalFailure& e)
++    {
++        lg2::error("Rename '{USERNAME}' to '{NEWUSERNAME}' failed", "USERNAME",
++                   userName, "NEWUSERNAME", newUserName);
++        elog<InternalFailure>();
++    }
++    catch (const std::exception& e)
++    {
++        lg2::error("SNMP user rename failed with exception: '{EXCEPTION}'",
++                   "EXCEPTION", e.what());
++        elog<InternalFailure>();
++    }
++}
++
+ void UserMgr::renameUser(std::string userName, std::string newUserName)
+ {
+     // All user management lock has to be based on /etc/shadow
+@@ -604,6 +742,10 @@ void UserMgr::renameUser(std::string userName, std::string newUserName)
+     usersList.emplace(newUserName, std::make_unique<phosphor::user::Users>(
+                                        bus, newUserObj.c_str(), groupNames,
+                                        priv, enabled, *this));
++
++    /* If the user is named and identified as an SNMP user, it also needs to be
++     * renamed */
++    renameSnmpUser(userName, newUserName);
+     return;
+ }
+ 
+@@ -1832,8 +1974,22 @@ void UserMgr::initUserObjects(void)
+     }
+ }
+ 
+-UserMgr::UserMgr(sdbusplus::bus_t& bus, const char* path) :
+-    Ifaces(bus, path, Ifaces::action::defer_emit), bus(bus), path(path),
++/**
++ * @brief Constructs UserMgr object using an asynchronous D-Bus connection.
++ *
++ * @param[in] asyncBus - Pointer to the sdbusplus Boost.Asio connection.
++ * @param[in] syncBus  - Reference to the synchronous sdbusplus bus handler.
++ * @param[in] path     - The D-Bus object path for this manager.
++ */
++UserMgr::UserMgr(sdbusplus::asio::connection* asyncBus,
++                 sdbusplus::bus::bus& syncBus, const std::string& path) :
++    /* Initialize the base class (Ifaces) with the asynchronous bus connection
++     */
++    Ifaces(*asyncBus, path.c_str(), Ifaces::action::defer_emit),
++    /*Initialize, 'systemBus' member with the provided asynchronous bus pointer,
++       'bus' member with the reference to the synchronous bus, 'path' member
++       with the provided D-Bus object path */
++    systemBus(asyncBus), bus(syncBus), path(path),
+     faillockConfigFile(defaultFaillockConfigFile),
+     pwHistoryConfigFile(defaultPWHistoryConfigFile),
+     pwQualityConfigFile(defaultPWQualityConfigFile)
+diff --git a/user_mgr.hpp b/user_mgr.hpp
+index eab8fdc..4b2e5c2 100644
+--- a/user_mgr.hpp
++++ b/user_mgr.hpp
+@@ -21,6 +21,7 @@
+ #include <phosphor-logging/elog-errors.hpp>
+ #include <phosphor-logging/elog.hpp>
+ #include <phosphor-logging/lg2.hpp>
++#include <sdbusplus/asio/connection.hpp>
+ #include <sdbusplus/bus.hpp>
+ #include <sdbusplus/server/object.hpp>
+ #include <xyz/openbmc_project/Common/error.hpp>
+@@ -122,10 +123,14 @@ class UserMgr : public Ifaces
+ 
+     /** @brief Constructs UserMgr object.
+      *
+-     *  @param[in] bus  - sdbusplus handler
++     *  @param[in] asyncBus - Pointer to the sdbusplus Boost.Asio connection for
++     * asynchronous D-Bus operations.
++     *  @param[in] syncBus  - Reference to the sdbusplus bus handler for
++     * synchronous D-Bus operations
+      *  @param[in] path - D-Bus path
+      */
+-    UserMgr(sdbusplus::bus_t& bus, const char* path);
++    UserMgr(sdbusplus::asio::connection* asyncBus, sdbusplus::bus::bus& syncBus,
++            const std::string& path);
+ 
+     /** @brief create user method.
+      *  This method creates a new user as requested
+@@ -146,6 +151,16 @@ class UserMgr : public Ifaces
+      */
+     void setPasswordExpired(std::string userName, bool isExpired) override;
+ 
++    /** @brief Renames an SNMP user.
++     * This method renames a specific SNMP user as requested.
++     *
++     * @param[in] userName    - The current name of the SNMP user.
++     * @param[in] newUserName - The new name to which the SNMP user should be
++     * renamed.
++     */
++    void renameSnmpUser(const std::string& userName,
++                        const std::string& newUserName);
++
+     /** @brief rename user method.
+      *  This method renames the user as requested
+      *
+@@ -462,8 +477,13 @@ class UserMgr : public Ifaces
+     void checkAndThrowForDisallowedGroupCreation(const std::string& groupName);
+ 
+   private:
+-    /** @brief sdbusplus handler */
+-    sdbusplus::bus_t& bus;
++    /** @brief Pointer to the sdbusplus Boost.Asio connection for asynchronous
++     * D-Bus operations */
++    sdbusplus::asio::connection* systemBus = nullptr;
++
++    /** @brief Reference to the sdbusplus bus handler for synchronous D-Bus
++     * operations */
++    sdbusplus::bus::bus& bus;
+ 
+     /** @brief object path */
+     const std::string path;
+-- 
+2.43.0
+

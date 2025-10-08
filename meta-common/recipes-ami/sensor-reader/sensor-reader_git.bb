@@ -1,10 +1,11 @@
 SUMMARY = "Sensor History Reader"
 DESCRIPTION = "collecting of all the sensor values every given interval"
 
-LICENSE = "CLOSED"
+LICENSE = "Proprietary"
+LIC_FILES_CHKSUM = "file://${AMIBASE}/COPYING.AMI;md5=65a69a674f34a9f30737c9f0abd4fc5c"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/sensor-history-reader.git;protocol=https;branch=master"
-SRCREV = "aea185136a9fd9a52b7c3fcab5ab86cad60611ef"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/sensor-history-reader.git;protocol=https;branch=master"
+SRCREV = "ae0782c7b817a338dca803f0c40f82babe26019d"
 
 PV = "0.0+git${SRCPV}"
 
@@ -31,7 +32,6 @@ DEPENDS += " \
 
 do_install:append() {
 
-        install -d ${D}/etc/sensor-reader
-        install -m 0644 ${S}/configuredsensors ${D}/etc/sensor-reader/
-        install -m 0644 ${S}/configuredsensors ${D}/etc/sensor-reader/
+        install -d ${D}/etc/sensor-reader-conf
+        install -m 0644 ${S}/configuredsensors ${D}/etc/sensor-reader-conf/
 }

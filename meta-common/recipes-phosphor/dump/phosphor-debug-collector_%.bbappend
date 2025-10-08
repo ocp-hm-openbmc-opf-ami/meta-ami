@@ -22,6 +22,7 @@ SRC_URI += "file://plugins.d/arpcntlconf \
 	    file://plugins.d/softIRQs  \
 	    file://plugins.d/tmpfilelist  \
 	    file://plugins.d/varfilelist  \
+	    file://0001-Added-a-fix-for-creating-a-dump-entry-when-terminating-services.patch \
 	   "
 
 do_install:append() {

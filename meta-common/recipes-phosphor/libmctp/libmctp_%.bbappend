@@ -1,9 +1,9 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/libmctp.git;protocol=https;branch=develop \
-           file://0001-extract-tag-owner.patch \
+SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/libmctp.git;protocol=https;branch=main \
+           file://0002-add-npcmi3c-and-smbus-binding-test-tool.patch \
            file://default"
-SRCREV = "7683752b4ff32dd7703efa5a9e1f43701a208881"
+SRCREV = "b3430b88504d629fa961a2eb5feb058bb7ebfcd0"
 
 inherit obmc-phosphor-dbus-service obmc-phosphor-systemd
 inherit meson

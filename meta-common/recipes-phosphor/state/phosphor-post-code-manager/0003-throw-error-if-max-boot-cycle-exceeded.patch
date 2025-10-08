@@ -1,0 +1,196 @@
+From af3fd7c3286d0bc2966ec27ae242794a5d7afe3d Mon Sep 17 00:00:00 2001
+From: saravananm <saravananm@ami.com>
+Date: Sat, 24 May 2025 20:36:17 +0530
+Subject: [PATCH] throw-error-if-max-boot-cycle-exceeded.patch
+
+Tested and verified. working as expected.
+
+Signed-off-by: saravananm <saravananm@ami.com>
+---
+ inc/post_code.hpp | 82 ++++++++++++++++++++++++++---------------------
+ src/post_code.cpp | 19 +++++++----
+ 2 files changed, 58 insertions(+), 43 deletions(-)
+
+diff --git a/inc/post_code.hpp b/inc/post_code.hpp
+index f146008..ddbd594 100644
+--- a/inc/post_code.hpp
++++ b/inc/post_code.hpp
+@@ -19,6 +19,7 @@
+ #include <unistd.h>
+ 
+ #include <phosphor-logging/elog-errors.hpp>
++#include <phosphor-logging/elog.hpp>
+ #include <sdbusplus/timer.hpp>
+ #include <xyz/openbmc_project/Collection/DeleteAll/server.hpp>
+ #include <xyz/openbmc_project/Common/error.hpp>
+@@ -53,6 +54,11 @@ using EventPtr = std::unique_ptr<sd_event, EventDeleter>;
+ using primarycode_t = uint64_t;
+ using secondarycode_t = std::vector<uint8_t>;
+ using postcode_t = std::tuple<primarycode_t, secondarycode_t>;
++using ::phosphor::logging::elog;
++using ::sdbusplus::xyz::openbmc_project::Common::Error::InvalidArgument;
++using Argument =
++    ::phosphor::logging::xyz::openbmc_project::Common::InvalidArgument;
++
+ namespace fs = std::filesystem;
+ namespace StateServer = sdbusplus::xyz::openbmc_project::State::server;
+ 
+@@ -65,8 +71,8 @@ struct PostCode : sdbusplus::server::object_t<post_code, delete_all>
+ {
+     PostCode(sdbusplus::bus_t& bus, const char* path, EventPtr& event,
+              int nodeIndex) :
+-        sdbusplus::server::object_t<post_code, delete_all>(bus, path),
+-        bus(bus), event(event), node(nodeIndex),
++        sdbusplus::server::object_t<post_code, delete_all>(bus, path), bus(bus),
++        event(event), node(nodeIndex),
+         postCodeListPath(PostCodeListPathPrefix + std::to_string(node)),
+         propertiesChangedSignalRaw(
+             bus,
+@@ -74,47 +80,49 @@ struct PostCode : sdbusplus::server::object_t<post_code, delete_all>
+                 PostCodePath + std::to_string(node),
+                 "xyz.openbmc_project.State.Boot.Raw"),
+             [this](sdbusplus::message_t& msg) {
+-        std::string intfName;
+-        std::map<std::string, std::variant<postcode_t>> msgData;
+-        msg.read(intfName, msgData);
+-        // Check if it was the Value property that changed.
+-        auto valPropMap = msgData.find("Value");
+-        if (valPropMap != msgData.end())
+-        {
+-            this->savePostCodes(std::get<postcode_t>(valPropMap->second));
+-        }
+-    }),
++                std::string intfName;
++                std::map<std::string, std::variant<postcode_t>> msgData;
++                msg.read(intfName, msgData);
++                // Check if it was the Value property that changed.
++                auto valPropMap = msgData.find("Value");
++                if (valPropMap != msgData.end())
++                {
++                    this->savePostCodes(
++                        std::get<postcode_t>(valPropMap->second));
++                }
++            }),
+         propertiesChangedSignalCurrentHostState(
+             bus,
+             sdbusplus::bus::match::rules::propertiesChanged(
+                 HostStatePathPrefix + std::to_string(node),
+                 "xyz.openbmc_project.State.Host"),
+             [this](sdbusplus::message_t& msg) {
+-        std::string intfName;
+-        std::map<std::string, std::variant<std::string>> msgData;
+-        msg.read(intfName, msgData);
+-        // Check if it was the Value property that changed.
+-        auto valPropMap = msgData.find("CurrentHostState");
+-        if (valPropMap != msgData.end())
+-        {
+-            StateServer::Host::HostState currentHostState =
+-                StateServer::Host::convertHostStateFromString(
+-                    std::get<std::string>(valPropMap->second));
+-            if (currentHostState == StateServer::Host::HostState::Off)
+-            {
+-                if (this->postCodes.empty())
+-                {
+-                    std::cerr << "HostState changed to OFF. Empty "
+-                                 "postcode log, keep boot cycle at "
+-                              << this->currentBootCycleIndex << std::endl;
+-                }
+-                else
++                std::string intfName;
++                std::map<std::string, std::variant<std::string>> msgData;
++                msg.read(intfName, msgData);
++                // Check if it was the Value property that changed.
++                auto valPropMap = msgData.find("CurrentHostState");
++                if (valPropMap != msgData.end())
+                 {
+-                    this->postCodes.clear();
++                    StateServer::Host::HostState currentHostState =
++                        StateServer::Host::convertHostStateFromString(
++                            std::get<std::string>(valPropMap->second));
++                    if (currentHostState == StateServer::Host::HostState::Off)
++                    {
++                        if (this->postCodes.empty())
++                        {
++                            std::cerr
++                                << "HostState changed to OFF. Empty "
++                                   "postcode log, keep boot cycle at "
++                                << this->currentBootCycleIndex << std::endl;
++                        }
++                        else
++                        {
++                            this->postCodes.clear();
++                        }
++                    }
+                 }
+-            }
+-        }
+-    })
++            })
+     {
+         phosphor::logging::log<phosphor::logging::level::INFO>(
+             "PostCode is created");
+@@ -129,8 +137,8 @@ struct PostCode : sdbusplus::server::object_t<post_code, delete_all>
+     ~PostCode() {}
+ 
+     std::vector<postcode_t> getPostCodes(uint16_t index) override;
+-    std::map<uint64_t, postcode_t>
+-        getPostCodesWithTimeStamp(uint16_t index) override;
++    std::map<uint64_t, postcode_t> getPostCodesWithTimeStamp(
++        uint16_t index) override;
+     void deleteAll() override;
+ 
+   private:
+diff --git a/src/post_code.cpp b/src/post_code.cpp
+index 6acd2b9..c89fef5 100644
+--- a/src/post_code.cpp
++++ b/src/post_code.cpp
+@@ -39,6 +39,12 @@ void PostCode::deleteAll()
+ 
+ std::vector<postcode_t> PostCode::getPostCodes(uint16_t index)
+ {
++    if (index > maxBootCycleNum() || index == 0)
++    {
++        elog<InvalidArgument>(Argument::ARGUMENT_NAME("MAXBOOTCYCLECOUNT"),
++                              Argument::ARGUMENT_VALUE(
++                                  std::to_string(maxBootCycleNum()).c_str()));
++    }
+     std::vector<postcode_t> codesVec;
+     if (1 == index && !postCodes.empty())
+     {
+@@ -58,8 +64,8 @@ std::vector<postcode_t> PostCode::getPostCodes(uint16_t index)
+     return codesVec;
+ }
+ 
+-std::map<uint64_t, postcode_t>
+-    PostCode::getPostCodesWithTimeStamp(uint16_t index)
++std::map<uint64_t, postcode_t> PostCode::getPostCodesWithTimeStamp(
++    uint16_t index)
+ {
+     if (1 == index && !postCodes.empty())
+     {
+@@ -76,8 +82,9 @@ void PostCode::savePostCodes(postcode_t code)
+ {
+     if (!timer)
+     {
+-        timer = std::make_unique<sdbusplus::Timer>(
+-            event.get(), [this]() { serialize(postCodeListPath); });
++        timer = std::make_unique<sdbusplus::Timer>(event.get(), [this]() {
++            serialize(postCodeListPath);
++        });
+     }
+ 
+     // steady_clock is a monotonic clock that is guaranteed to never be adjusted
+@@ -121,8 +128,8 @@ void PostCode::savePostCodes(postcode_t code)
+ 
+     if (strlen(POSTCODE_DISPLAY_PATH) > 0)
+     {
+-        std::string postCodeDisplayPath = POSTCODE_DISPLAY_PATH +
+-                                          std::to_string(node);
++        std::string postCodeDisplayPath =
++            POSTCODE_DISPLAY_PATH + std::to_string(node);
+ 
+         std::ofstream postCodeDisplayFile(postCodeDisplayPath);
+         postCodeDisplayFile << "0x" << std::setfill('0') << std::setw(2)
+-- 
+2.34.1
+

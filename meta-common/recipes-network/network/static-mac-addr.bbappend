@@ -2,6 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI:append = " \
              file://mac-check \
+	     file://static-mac-addr.service \
            "
 
 do_install:append() {

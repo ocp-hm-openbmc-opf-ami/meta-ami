@@ -1,0 +1,525 @@
+From a7df7f3fa2827511a4ec259589f3e09470a195bb Mon Sep 17 00:00:00 2001
+From: SonaN <sonan@ami.com>
+Date: Sat, 24 May 2025 11:14:23 +0530
+Subject: [PATCH] MSFT Phosphor pid control Intergration
+
+Signed-off-by: SonaN <sonan@ami.com>
+---
+ dbus/dbusactiveread.cpp            |  2 +-
+ dbus/dbuspassive.cpp               | 38 +++++++++++++++++++-----------
+ dbus/dbuspassive.hpp               |  2 +-
+ experiments/drive.cpp              |  8 +++----
+ interfaces.hpp                     |  2 +-
+ pid/ec/logging.cpp                 |  2 +-
+ pid/pidcontroller.hpp              |  1 +
+ pid/zone.cpp                       | 20 ++++++++++++----
+ pid/zone.hpp                       |  7 ++++--
+ pid/zone_interface.hpp             |  1 +
+ sensors/host.cpp                   |  2 +-
+ sensors/host.hpp                   |  2 +-
+ sysfs/sysfsread.cpp                |  2 +-
+ test/pid_zone_unittest.cpp         | 36 ++++++++++++++--------------
+ test/sensor_host_unittest.cpp      |  4 ++--
+ test/sensor_pluggable_unittest.cpp |  2 +-
+ 16 files changed, 79 insertions(+), 52 deletions(-)
+
+diff --git a/dbus/dbusactiveread.cpp b/dbus/dbusactiveread.cpp
+index 3d0ed79..b2975ca 100644
+--- a/dbus/dbusactiveread.cpp
++++ b/dbus/dbusactiveread.cpp
+@@ -39,7 +39,7 @@ ReadReturn DbusActiveRead::read(void)
+      * Technically it might not be a value from now, but there's no timestamp
+      * on Sensor.Value yet.
+      */
+-    ReadReturn r = {value, std::chrono::high_resolution_clock::now()};
++    ReadReturn r = {value, std::chrono::steady_clock::now()};
+ 
+     return r;
+ }
+diff --git a/dbus/dbuspassive.cpp b/dbus/dbuspassive.cpp
+index aa4cbaf..f440425 100644
+--- a/dbus/dbuspassive.cpp
++++ b/dbus/dbuspassive.cpp
+@@ -127,7 +127,7 @@ void DbusPassive::setValue(double value, double unscaled)
+ 
+     _value = value;
+     _unscaled = unscaled;
+-    _updated = std::chrono::high_resolution_clock::now();
++    _updated = std::chrono::steady_clock::now();
+ }
+ 
+ void DbusPassive::setValue(double value)
+@@ -282,28 +282,38 @@ int handleSensorValue(sdbusplus::message_t& msg, DbusPassive* owner)
+             owner->updateValue(value, false);
+         }
+     }
+-    else if (msgSensor == "xyz.openbmc_project.Sensor.Threshold.Critical")
++    else if ((msgSensor == "xyz.openbmc_project.Sensor.Threshold.Critical") ||
++	    (msgSensor == "xyz.openbmc_project.Sensor.Threshold.NonRecoverable"))
+     {
+         auto criticalAlarmLow = msgData.find("CriticalAlarmLow");
+         auto criticalAlarmHigh = msgData.find("CriticalAlarmHigh");
+-        if (criticalAlarmHigh == msgData.end() &&
+-            criticalAlarmLow == msgData.end())
++
++
++        auto NonRecoverableAlarmLow  =  msgData.find("NonRecoverableAlarmLow");
++       auto NonRecoverableAlarmHigh =  msgData.find("NonRecoverableAlarmHigh");
++
++        if ((criticalAlarmHigh == msgData.end() &&
++            criticalAlarmLow == msgData.end()) &&
++           (NonRecoverableAlarmHigh == msgData.end() && NonRecoverableAlarmLow == msgData.end()))
+         {
+             return 0;
+         }
+ 
+         bool asserted = false;
+-        if (criticalAlarmLow != msgData.end())
+-        {
+-            asserted = std::get<bool>(criticalAlarmLow->second);
+-        }
+ 
+-        // checking both as in theory you could de-assert one threshold and
+-        // assert the other at the same moment
+-        if (!asserted && criticalAlarmHigh != msgData.end())
+-        {
+-            asserted = std::get<bool>(criticalAlarmHigh->second);
+-        }
++	asserted |= (criticalAlarmLow != msgData.end())
++                        ? std::get<bool>(criticalAlarmLow->second)
++                        : asserted;
++        asserted |= (criticalAlarmHigh != msgData.end())
++                        ? std::get<bool>(criticalAlarmHigh->second)
++                        : asserted;
++        asserted |= (NonRecoverableAlarmLow != msgData.end())
++                        ? std::get<bool>(NonRecoverableAlarmLow->second)
++                        : asserted;
++        asserted |= (NonRecoverableAlarmHigh != msgData.end())
++                        ? std::get<bool>(NonRecoverableAlarmHigh->second)
++                       : asserted;
++
+         owner->setFailed(asserted);
+     }
+ #ifdef UNC_FAILSAFE
+diff --git a/dbus/dbuspassive.hpp b/dbus/dbuspassive.hpp
+index 3813622..9aa63c1 100644
+--- a/dbus/dbuspassive.hpp
++++ b/dbus/dbuspassive.hpp
+@@ -93,7 +93,7 @@ class DbusPassive : public ReadInterface
+     std::string path;
+     std::shared_ptr<DbusPassiveRedundancy> redundancy;
+     /* The last time the value was refreshed, not necessarily changed. */
+-    std::chrono::high_resolution_clock::time_point _updated;
++    std::chrono::steady_clock::time_point _updated;
+ };
+ 
+ int handleSensorValue(sdbusplus::message_t& msg, DbusPassive* owner);
+diff --git a/experiments/drive.cpp b/experiments/drive.cpp
+index 15ce05a..5773328 100644
+--- a/experiments/drive.cpp
++++ b/experiments/drive.cpp
+@@ -28,7 +28,7 @@
+ namespace pid_control
+ {
+ 
+-using tstamp = std::chrono::high_resolution_clock::time_point;
++using tstamp = std::chrono::steady_clock::time_point;
+ 
+ #define DRIVE_TIME 1
+ #define DRIVE_GOAL 2
+@@ -89,7 +89,7 @@ static void driveGoal(int64_t& seriesCnt, int64_t setPwm, int64_t goal,
+         int64_t n0 = static_cast<int64_t>(r0.value);
+         int64_t n1 = static_cast<int64_t>(r1.value);
+ 
+-        tstamp t1 = std::chrono::high_resolution_clock::now();
++        tstamp t1 = std::chrono::steady_clock::now();
+ 
+         series.push_back(std::make_tuple(t1, n0, n1));
+         seriesCnt += 1;
+@@ -154,7 +154,7 @@ static void driveTime([[maybe_unused]] int64_t& seriesCnt, int64_t setPwm,
+         ReadReturn r1 = fan1->read();
+         int64_t n0 = static_cast<int64_t>(r0.value);
+         int64_t n1 = static_cast<int64_t>(r1.value);
+-        tstamp t1 = std::chrono::high_resolution_clock::now();
++        tstamp t1 = std::chrono::steady_clock::now();
+ 
+         series.push_back(std::make_tuple(t1, n0, n1));
+ 
+@@ -211,7 +211,7 @@ int driveMain(void)
+     r1 = fan1->read();
+     int64_t fan0_start = r0.value;
+     int64_t fan1_start = r1.value;
+-    tstamp t1 = std::chrono::high_resolution_clock::now();
++    tstamp t1 = std::chrono::steady_clock::now();
+ 
+     /*
+      * I've done experiments, and seen 9080,10243 as a starting point
+diff --git a/interfaces.hpp b/interfaces.hpp
+index 7f4b4cd..e04a453 100644
+--- a/interfaces.hpp
++++ b/interfaces.hpp
+@@ -8,7 +8,7 @@ namespace pid_control
+ struct ReadReturn
+ {
+     double value = std::numeric_limits<double>::quiet_NaN();
+-    std::chrono::high_resolution_clock::time_point updated;
++    std::chrono::steady_clock::time_point updated;
+     double unscaled = value;
+ 
+     bool operator==(const ReadReturn& rhs) const
+diff --git a/pid/ec/logging.cpp b/pid/ec/logging.cpp
+index 57f1e7e..ea44b28 100644
+--- a/pid/ec/logging.cpp
++++ b/pid/ec/logging.cpp
+@@ -279,7 +279,7 @@ void LogContext(PidCoreLog& pidLog, const std::chrono::milliseconds& msNow,
+ 
+ std::chrono::milliseconds LogTimestamp(void)
+ {
+-    auto clockNow = std::chrono::high_resolution_clock::now();
++    auto clockNow = std::chrono::steady_clock::now();
+     auto msNow = std::chrono::duration_cast<std::chrono::milliseconds>(
+         clockNow.time_since_epoch());
+     return msNow;
+diff --git a/pid/pidcontroller.hpp b/pid/pidcontroller.hpp
+index 91147d9..92ea911 100644
+--- a/pid/pidcontroller.hpp
++++ b/pid/pidcontroller.hpp
+@@ -41,6 +41,7 @@ class PIDController : public Controller
+         _pid_info.slewPos = static_cast<double>(0.0);
+         _pid_info.negativeHysteresis = static_cast<double>(0.0);
+         _pid_info.positiveHysteresis = static_cast<double>(0.0);
++	_pid_info.lastError = static_cast<double>(0.0);
+     }
+ 
+     virtual ~PIDController() {}
+diff --git a/pid/zone.cpp b/pid/zone.cpp
+index d201157..f055a29 100644
+--- a/pid/zone.cpp
++++ b/pid/zone.cpp
+@@ -34,7 +34,7 @@
+ #include <sstream>
+ #include <string>
+ 
+-using tstamp = std::chrono::high_resolution_clock::time_point;
++using tstamp = std::chrono::steady_clock::time_point;
+ using namespace std::literals::chrono_literals;
+ 
+ // Enforces minimum duration between events
+@@ -92,6 +92,10 @@ void DbusPidZone::setManualMode(bool mode)
+ 
+ bool DbusPidZone::getFailSafeMode(void) const
+ {
++	if (true == _forceFailSafeMode)
++    {
++        return true;
++    }
+     // If any keys are present at least one sensor is in fail safe mode.
+     return !_failSafeSensors.empty();
+ }
+@@ -293,7 +297,7 @@ static bool fileParseRpm(const std::string& fileName, double& rpmValue)
+     // The file is optional, intentionally not an error if file not found
+     if (!(errText.empty()))
+     {
+-        tstamp now = std::chrono::high_resolution_clock::now();
++        tstamp now = std::chrono::steady_clock::now();
+         if (allowThrottle(now, throttlePace))
+         {
+             std::cerr << "Unable to read from '" << fileName << "': " << errText
+@@ -440,7 +444,7 @@ void DbusPidZone::updateFanTelemetry(void)
+      * is disabled?  I think it's a waste to try and log things even if the
+      * data is just being dropped though.
+      */
+-    const auto now = std::chrono::high_resolution_clock::now();
++    const auto now = std::chrono::steady_clock::now();
+     if (loggingEnabled)
+     {
+         _log << std::chrono::duration_cast<std::chrono::milliseconds>(
+@@ -467,7 +471,7 @@ void DbusPidZone::updateFanTelemetry(void)
+ void DbusPidZone::updateSensors(void)
+ {
+     processSensorInputs</* fanSensorLogging */ false>(
+-        _thermalInputs, std::chrono::high_resolution_clock::now());
++        _thermalInputs, std::chrono::steady_clock::now());
+ 
+     return;
+ }
+@@ -557,6 +561,14 @@ bool DbusPidZone::failSafe() const
+     return getFailSafeMode();
+ }
+ 
++bool DbusPidZone::forceFailSafe(bool modeStatus)
++{
++    std::cerr << "force fail-safe: " << modeStatus << std::endl;
++    _forceFailSafeMode = modeStatus;
++    //return ModeObject::forceFailSafe(modeStatus);
++    return true;
++}
++
+ void DbusPidZone::addPidControlProcess(std::string name, std::string type,
+                                        double setpoint, sdbusplus::bus_t& bus,
+                                        std::string objPath, bool defer)
+diff --git a/pid/zone.hpp b/pid/zone.hpp
+index 379d4df..12d102c 100644
+--- a/pid/zone.hpp
++++ b/pid/zone.hpp
+@@ -120,6 +120,8 @@ class DbusPidZone : public ZoneInterface, public ModeObject, public ActionOem
+     bool manual(bool value) override;
+     /* Method for reading whether in fail-safe mode over dbus */
+     bool failSafe() const override;
++    /* Method for setting the force fail-safe mode over dbus */
++    bool forceFailSafe(bool modeStatus) override;
+     /* Method for recording the maximum SetPoint PID config name */
+     std::string leader() const override;
+     /* Method for control process for each loop at runtime */
+@@ -138,7 +140,7 @@ class DbusPidZone : public ZoneInterface, public ModeObject, public ActionOem
+   private:
+     template <bool fanSensorLogging>
+     void processSensorInputs(const std::vector<std::string>& sensorInputs,
+-                             std::chrono::high_resolution_clock::time_point now)
++                             std::chrono::steady_clock::time_point now)
+     {
+         uint8_t readFailureCnt = 0;
+         boost::asio::io_context io;
+@@ -191,7 +193,7 @@ class DbusPidZone : public ZoneInterface, public ModeObject, public ActionOem
+             }
+ 
+             int64_t timeout = sensor->getTimeout();
+-            std::chrono::high_resolution_clock::time_point then = r.updated;
++            std::chrono::steady_clock::time_point then = r.updated;
+ 
+             auto duration =
+                 std::chrono::duration_cast<std::chrono::seconds>(now - then)
+@@ -265,6 +267,7 @@ class DbusPidZone : public ZoneInterface, public ModeObject, public ActionOem
+     bool _manualMode = false;
+     bool _redundantWrite = false;
+     bool _accumulateSetPoint = false;
++    bool _forceFailSafeMode = false;
+     const double _minThermalOutputSetPt;
+     // Current fail safe Percent.
+     double _failSafePercent;
+diff --git a/pid/zone_interface.hpp b/pid/zone_interface.hpp
+index 52639f8..70832f7 100644
+--- a/pid/zone_interface.hpp
++++ b/pid/zone_interface.hpp
+@@ -118,6 +118,7 @@ class ZoneInterface
+     virtual void updateThermalPowerDebugInterface(
+         std::string pidName, std::string leader, double input,
+         double output) = 0;
++    virtual bool forceFailSafe(bool modeStatus) = 0;
+ };
+ 
+ } // namespace pid_control
+diff --git a/sensors/host.cpp b/sensors/host.cpp
+index 51d38a4..5d64520 100644
+--- a/sensors/host.cpp
++++ b/sensors/host.cpp
+@@ -74,7 +74,7 @@ ValueType HostSensor::value(ValueType value)
+ {
+     std::lock_guard<std::mutex> guard(_lock);
+ 
+-    _updated = std::chrono::high_resolution_clock::now();
++    _updated = std::chrono::steady_clock::now();
+     _value = value * pow(10, getScale(this)); /* scale value */
+ 
+     return ValueObject::value(value);
+diff --git a/sensors/host.hpp b/sensors/host.hpp
+index b97b137..f3d82f3 100644
+--- a/sensors/host.hpp
++++ b/sensors/host.hpp
+@@ -63,7 +63,7 @@ class HostSensor : public Sensor, public ValueObject
+      * together.
+      */
+     std::mutex _lock;
+-    std::chrono::high_resolution_clock::time_point _updated;
++    std::chrono::steady_clock::time_point _updated;
+     double _value = 0;
+ };
+ 
+diff --git a/sysfs/sysfsread.cpp b/sysfs/sysfsread.cpp
+index deb533a..881355f 100644
+--- a/sysfs/sysfsread.cpp
++++ b/sysfs/sysfsread.cpp
+@@ -33,7 +33,7 @@ ReadReturn SysFsRead::read(void)
+     ifs.close();
+ 
+     ReadReturn r = {static_cast<double>(value),
+-                    std::chrono::high_resolution_clock::now()};
++                    std::chrono::steady_clock::now()};
+ 
+     return r;
+ }
+diff --git a/test/pid_zone_unittest.cpp b/test/pid_zone_unittest.cpp
+index 3e8077c..9e10870 100644
+--- a/test/pid_zone_unittest.cpp
++++ b/test/pid_zone_unittest.cpp
+@@ -389,12 +389,12 @@ TEST_F(PidZoneTest, ThermalInputs_FailsafeToValid_ReadsSensors)
+ 
+     ReadReturn r1;
+     r1.value = 10.0;
+-    r1.updated = std::chrono::high_resolution_clock::now();
++    r1.updated = std::chrono::steady_clock::now();
+     EXPECT_CALL(*sensor_ptr1, read()).WillOnce(Return(r1));
+ 
+     ReadReturn r2;
+     r2.value = 11.0;
+-    r2.updated = std::chrono::high_resolution_clock::now();
++    r2.updated = std::chrono::steady_clock::now();
+     EXPECT_CALL(*sensor_ptr2, read()).WillOnce(Return(r2));
+ 
+     // Read the sensors, this will put the values into the cache.
+@@ -438,12 +438,12 @@ TEST_F(PidZoneTest, FanInputTest_VerifiesFanValuesCached)
+ 
+     ReadReturn r1;
+     r1.value = 10.0;
+-    r1.updated = std::chrono::high_resolution_clock::now();
++    r1.updated = std::chrono::steady_clock::now();
+     EXPECT_CALL(*sensor_ptr1, read()).WillOnce(Return(r1));
+ 
+     ReadReturn r2;
+     r2.value = 11.0;
+-    r2.updated = std::chrono::high_resolution_clock::now();
++    r2.updated = std::chrono::steady_clock::now();
+     EXPECT_CALL(*sensor_ptr2, read()).WillOnce(Return(r2));
+ 
+     // Method under test will read through each fan sensor for the zone and
+@@ -488,12 +488,12 @@ TEST_F(PidZoneTest, ThermalInput_ValueTimeoutEntersFailSafeMode)
+ 
+     ReadReturn r1;
+     r1.value = 10.0;
+-    r1.updated = std::chrono::high_resolution_clock::now();
++    r1.updated = std::chrono::steady_clock::now();
+     EXPECT_CALL(*sensor_ptr1, read()).WillOnce(Return(r1));
+ 
+     ReadReturn r2;
+     r2.value = 11.0;
+-    r2.updated = std::chrono::high_resolution_clock::now();
++    r2.updated = std::chrono::steady_clock::now();
+     EXPECT_CALL(*sensor_ptr2, read()).WillOnce(Return(r2));
+ 
+     zone->updateSensors();
+@@ -503,7 +503,7 @@ TEST_F(PidZoneTest, ThermalInput_ValueTimeoutEntersFailSafeMode)
+     // sensor1 will have an updated field older than its timeout value, but
+     // sensor2 will be fine. :D
+     r1.updated -= std::chrono::seconds(3);
+-    r2.updated = std::chrono::high_resolution_clock::now();
++    r2.updated = std::chrono::steady_clock::now();
+ 
+     EXPECT_CALL(*sensor_ptr1, read()).WillOnce(Return(r1));
+     EXPECT_CALL(*sensor_ptr2, read()).WillOnce(Return(r2));
+@@ -556,7 +556,7 @@ TEST_F(PidZoneTest, ThermalInput_MissingIsAcceptableNoFailSafe)
+ 
+     ReadReturn r2;
+     r2.value = 11.0;
+-    r2.updated = std::chrono::high_resolution_clock::now();
++    r2.updated = std::chrono::steady_clock::now();
+     EXPECT_CALL(*sensor_ptr2, read()).WillOnce(Return(r2));
+ 
+     zone->updateSensors();
+@@ -566,7 +566,7 @@ TEST_F(PidZoneTest, ThermalInput_MissingIsAcceptableNoFailSafe)
+     EXPECT_FALSE(zone->getFailSafeMode());
+ 
+     r1.value = 10.0;
+-    r1.updated = std::chrono::high_resolution_clock::now();
++    r1.updated = std::chrono::steady_clock::now();
+ 
+     EXPECT_CALL(*sensor_ptr1, read()).WillOnce(Return(r1));
+     EXPECT_CALL(*sensor_ptr2, read()).WillOnce(Return(r2));
+@@ -579,7 +579,7 @@ TEST_F(PidZoneTest, ThermalInput_MissingIsAcceptableNoFailSafe)
+     // sensor1 will have an updated field older than its timeout value, but
+     // sensor2 will be fine. :D
+     r1.updated -= std::chrono::seconds(3);
+-    r2.updated = std::chrono::high_resolution_clock::now();
++    r2.updated = std::chrono::steady_clock::now();
+ 
+     EXPECT_CALL(*sensor_ptr1, read()).WillOnce(Return(r1));
+     EXPECT_CALL(*sensor_ptr2, read()).WillOnce(Return(r2));
+@@ -591,7 +591,7 @@ TEST_F(PidZoneTest, ThermalInput_MissingIsAcceptableNoFailSafe)
+ 
+     // Do the same thing, but for the opposite sensors: r1 is good,
+     // but r2 is set to some time in the past.
+-    r1.updated = std::chrono::high_resolution_clock::now();
++    r1.updated = std::chrono::steady_clock::now();
+     r2.updated -= std::chrono::seconds(3);
+ 
+     EXPECT_CALL(*sensor_ptr1, read()).WillOnce(Return(r1));
+@@ -602,8 +602,8 @@ TEST_F(PidZoneTest, ThermalInput_MissingIsAcceptableNoFailSafe)
+     // have MissingIsAcceptable set true, it is still subject to failsafe.
+     EXPECT_TRUE(zone->getFailSafeMode());
+ 
+-    r1.updated = std::chrono::high_resolution_clock::now();
+-    r2.updated = std::chrono::high_resolution_clock::now();
++    r1.updated = std::chrono::steady_clock::now();
++    r2.updated = std::chrono::steady_clock::now();
+ 
+     EXPECT_CALL(*sensor_ptr1, read()).WillOnce(Return(r1));
+     EXPECT_CALL(*sensor_ptr2, read()).WillOnce(Return(r2));
+@@ -647,12 +647,12 @@ TEST_F(PidZoneTest, FanInputTest_FailsafeToValid_ReadsSensors)
+ 
+     ReadReturn r1;
+     r1.value = 10.0;
+-    r1.updated = std::chrono::high_resolution_clock::now();
++    r1.updated = std::chrono::steady_clock::now();
+     EXPECT_CALL(*sensor_ptr1, read()).WillOnce(Return(r1));
+ 
+     ReadReturn r2;
+     r2.value = 11.0;
+-    r2.updated = std::chrono::high_resolution_clock::now();
++    r2.updated = std::chrono::steady_clock::now();
+     EXPECT_CALL(*sensor_ptr2, read()).WillOnce(Return(r2));
+ 
+     // Method under test will read through each fan sensor for the zone and
+@@ -700,12 +700,12 @@ TEST_F(PidZoneTest, FanInputTest_ValueTimeoutEntersFailSafeMode)
+ 
+     ReadReturn r1;
+     r1.value = 10.0;
+-    r1.updated = std::chrono::high_resolution_clock::now();
++    r1.updated = std::chrono::steady_clock::now();
+     EXPECT_CALL(*sensor_ptr1, read()).WillOnce(Return(r1));
+ 
+     ReadReturn r2;
+     r2.value = 11.0;
+-    r2.updated = std::chrono::high_resolution_clock::now();
++    r2.updated = std::chrono::steady_clock::now();
+     EXPECT_CALL(*sensor_ptr2, read()).WillOnce(Return(r2));
+ 
+     // Method under test will read through each fan sensor for the zone and
+@@ -716,7 +716,7 @@ TEST_F(PidZoneTest, FanInputTest_ValueTimeoutEntersFailSafeMode)
+     EXPECT_FALSE(zone->getFailSafeMode());
+ 
+     r1.updated -= std::chrono::seconds(3);
+-    r2.updated = std::chrono::high_resolution_clock::now();
++    r2.updated = std::chrono::steady_clock::now();
+ 
+     EXPECT_CALL(*sensor_ptr1, read()).WillOnce(Return(r1));
+     EXPECT_CALL(*sensor_ptr2, read()).WillOnce(Return(r2));
+diff --git a/test/sensor_host_unittest.cpp b/test/sensor_host_unittest.cpp
+index e9800cf..c079063 100644
+--- a/test/sensor_host_unittest.cpp
++++ b/test/sensor_host_unittest.cpp
+@@ -97,8 +97,8 @@ TEST(HostSensorTest, VerifyWriteThenReadMatches)
+                 return 0;
+             }));
+ 
+-    std::chrono::high_resolution_clock::time_point t1 =
+-        std::chrono::high_resolution_clock::now();
++    std::chrono::steady_clock::time_point t1 =
++        std::chrono::steady_clock::now();
+ 
+     hs->value(new_value);
+     r = hs->read();
+diff --git a/test/sensor_pluggable_unittest.cpp b/test/sensor_pluggable_unittest.cpp
+index ffd08cd..ba2cac5 100644
+--- a/test/sensor_pluggable_unittest.cpp
++++ b/test/sensor_pluggable_unittest.cpp
+@@ -52,7 +52,7 @@ TEST(PluggableSensorTest, TryReadingTest)
+ 
+     ReadReturn r;
+     r.value = 0.1;
+-    r.updated = std::chrono::high_resolution_clock::now();
++    r.updated = std::chrono::steady_clock::now();
+ 
+     EXPECT_CALL(*rip, read()).WillOnce(Invoke([&](void) { return r; }));
+ 
+-- 
+2.43.0
+

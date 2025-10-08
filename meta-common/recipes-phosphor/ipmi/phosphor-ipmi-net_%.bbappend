@@ -9,6 +9,9 @@ SRC_URI += " \
            file://0001-Fixed-the-coredump-issue-in-rmcpping.patch \
            file://0018-Support-IPv4-and-IPv6-Header-Parameters.patch \
            file://0308-CheckLockStatus-For-IpmiUsers.patch \
+           file://0309-Cipher-Suite-Privilege-Limit.patch \
+           file://0310-Add-RemoteMACAddr-support.patch \
+           file://0310-Added-the-generic-code-change-related-to-channel-sec.patch \
            "
 
 python Add_DefaultUser_if_debugtweaks_not_enabled() {

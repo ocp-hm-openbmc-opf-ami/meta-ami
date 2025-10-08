@@ -1,0 +1,227 @@
+From 3a5fbb03e1837d7cfa8b9404d8c2d5116a6cc3b0 Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Tue, 1 Apr 2025 14:54:16 +0800
+Subject: [PATCH] Fix NCSI Linkup Issue
+
+---
+ drivers/net/bonding/bond_main.c          | 35 +++++++++++-------------
+ drivers/net/ethernet/faraday/ftgmac100.c | 16 +++++++++--
+ net/ethtool/ioctl.c                      | 11 +++++++-
+ net/ncsi/ncsi-manage.c                   | 11 ++++++--
+ 4 files changed, 48 insertions(+), 25 deletions(-)
+
+diff --git a/drivers/net/bonding/bond_main.c b/drivers/net/bonding/bond_main.c
+index 13e6d967f7e8..638d915f5a01 100644
+--- a/drivers/net/bonding/bond_main.c
++++ b/drivers/net/bonding/bond_main.c
+@@ -658,6 +658,12 @@ int bond_set_carrier(struct bonding *bond)
+ 	bond_for_each_slave(bond, slave, iter) {
+ 		if (slave->link == BOND_LINK_UP) {
+ 			if (!netif_carrier_ok(bond->dev)) {
++				if (rtnl_trylock()) {
++					call_netdevice_notifiers(NETDEV_UP, bond->dev);
++					rtnl_unlock();
++				}
++				else
++					call_netdevice_notifiers(NETDEV_UP, bond->dev);
+ 				netif_carrier_on(bond->dev);
+ 				return 1;
+ 			}
+@@ -667,6 +673,12 @@ int bond_set_carrier(struct bonding *bond)
+ 
+ down:
+ 	if (netif_carrier_ok(bond->dev)) {
++		if (rtnl_trylock()) {
++			call_netdevice_notifiers(NETDEV_DOWN, bond->dev);
++			rtnl_unlock();
++		}
++		else
++			call_netdevice_notifiers(NETDEV_DOWN, bond->dev);
+ 		netif_carrier_off(bond->dev);
+ 		return 1;
+ 	}
+@@ -749,14 +761,14 @@ static int bond_check_dev_link(struct bonding *bond,
+ 	if (!reporting && !netif_running(slave_dev))
+ 		return 0;
+ 
+-	if (bond->params.use_carrier)
+-		return netif_carrier_ok(slave_dev) ? BMSR_LSTATUS : 0;
+-
+ 	/* Try to get link status using Ethtool first. */
+ 	if (slave_dev->ethtool_ops->get_link)
+ 		return slave_dev->ethtool_ops->get_link(slave_dev) ?
+ 			BMSR_LSTATUS : 0;
+ 
++	if (bond->params.use_carrier)
++		return netif_carrier_ok(slave_dev) ? BMSR_LSTATUS : 0;
++
+ 	/* Ethtool can't be used, fallback to MII ioctls. */
+ 	ioctl = slave_ops->ndo_eth_ioctl;
+ 	if (ioctl) {
+@@ -923,7 +935,7 @@ static int bond_set_dev_addr(struct net_device *bond_dev,
+ {
+ 	int err;
+ 
+-	slave_dbg(bond_dev, slave_dev, "bond_dev=%p slave_dev=%p slave_dev->addr_len=%d\n",
++	slave_info(bond_dev, slave_dev, "bond_dev=%p slave_dev=%p slave_dev->addr_len=%d\n",
+ 		  bond_dev, slave_dev, slave_dev->addr_len);
+ 	err = dev_pre_changeaddr_notify(bond_dev, slave_dev->dev_addr, NULL);
+ 	if (err)
+@@ -1044,22 +1056,8 @@ static struct slave *bond_choose_primary_or_current(struct bonding *bond)
+ {
+ 	struct slave *prim = rtnl_dereference(bond->primary_slave);
+ 	struct slave *curr = rtnl_dereference(bond->curr_active_slave);
+-	struct slave *slave, *hprio = NULL;
+-	struct list_head *iter;
+ 
+ 	if (!prim || prim->link != BOND_LINK_UP) {
+-		bond_for_each_slave(bond, slave, iter) {
+-			if (slave->link == BOND_LINK_UP) {
+-				hprio = hprio ?: slave;
+-				if (slave->prio > hprio->prio)
+-					hprio = slave;
+-			}
+-		}
+-
+-		if (hprio && hprio != curr) {
+-			prim = hprio;
+-			goto link_reselect;
+-		}
+ 
+ 		if (!curr || curr->link != BOND_LINK_UP)
+ 			return NULL;
+@@ -1071,7 +1069,6 @@ static struct slave *bond_choose_primary_or_current(struct bonding *bond)
+ 		return prim;
+ 	}
+ 
+-link_reselect:
+ 	if (!curr || curr->link != BOND_LINK_UP)
+ 		return prim;
+ 
+diff --git a/drivers/net/ethernet/faraday/ftgmac100.c b/drivers/net/ethernet/faraday/ftgmac100.c
+index 872a6d24512a..7a9c5af8e159 100644
+--- a/drivers/net/ethernet/faraday/ftgmac100.c
++++ b/drivers/net/ethernet/faraday/ftgmac100.c
+@@ -28,6 +28,7 @@
+ #include <net/ncsi.h>
+ 
+ #include "ftgmac100.h"
++#include "../../net/ncsi/internal.h"
+ 
+ #define DRV_NAME	"ftgmac100"
+ 
+@@ -1163,9 +1164,18 @@ int ftgmac100_ethtool_get_link_ksettings(struct net_device *netdev,
+ 	if (phydev) {
+ 		phy_ethtool_ksettings_get(phydev, cmd);
+ 	} else if (priv->use_ncsi) {
+-		cmd->base.speed = priv->cur_speed;
+-		cmd->base.duplex = priv->cur_duplex;
+-		cmd->base.autoneg = 0;
++		struct ncsi_dev *nd;
++		nd = ncsi_find_dev(netdev);
++		if (!nd->link_up) {
++			cmd->base.speed = SPEED_UNKNOWN;
++			cmd->base.duplex = DUPLEX_UNKNOWN;
++			cmd->base.autoneg = 0;
++		}
++		else {
++			cmd->base.speed = priv->cur_speed;
++			cmd->base.duplex = priv->cur_duplex;
++			cmd->base.autoneg = 0;
++		}
+ 	} else {
+ 		retval = -ENODEV;
+ 	}
+diff --git a/net/ethtool/ioctl.c b/net/ethtool/ioctl.c
+index 7cb23bcf8ef7..0f07e50aabe6 100644
+--- a/net/ethtool/ioctl.c
++++ b/net/ethtool/ioctl.c
+@@ -32,6 +32,8 @@
+ #include <net/flow_offload.h>
+ #include <linux/ethtool_netlink.h>
+ #include <generated/utsrelease.h>
++#include <net/ncsi.h>
++#include "../ncsi/internal.h"
+ #include "common.h"
+ 
+ /* State held across locks and calls for commands which have devlink fallback */
+@@ -58,7 +60,14 @@ static struct devlink *netdev_to_devlink_get(struct net_device *dev)
+ 
+ u32 ethtool_op_get_link(struct net_device *dev)
+ {
+-	return netif_carrier_ok(dev) ? 1 : 0;
++	struct ncsi_dev *nd;
++	nd = ncsi_find_dev(dev);
++	if (nd) {
++		return nd->link_up;
++	}
++	else {
++		return netif_carrier_ok(dev) ? 1 : 0;
++	}
+ }
+ EXPORT_SYMBOL(ethtool_op_get_link);
+ 
+diff --git a/net/ncsi/ncsi-manage.c b/net/ncsi/ncsi-manage.c
+index 9ae749383160..2d798e234fd8 100644
+--- a/net/ncsi/ncsi-manage.c
++++ b/net/ncsi/ncsi-manage.c
+@@ -25,6 +25,8 @@
+ LIST_HEAD(ncsi_dev_list);
+ DEFINE_SPINLOCK(ncsi_dev_lock);
+ 
++static int initCompleted;
++
+ bool ncsi_channel_has_link(struct ncsi_channel *channel)
+ {
+ 	return !!(channel->modes[NCSI_MODE_LINK].data[2] & 0x1);
+@@ -54,6 +56,7 @@ void ncsi_report_link(struct ncsi_dev_priv *ndp, bool force_down)
+ 	struct ncsi_package *np;
+ 	struct ncsi_channel *nc;
+ 	unsigned long flags;
++	int state=0;
+ 
+ 	nd->state = ncsi_dev_state_functional;
+ 	if (force_down) {
+@@ -83,12 +86,13 @@ void ncsi_report_link(struct ncsi_dev_priv *ndp, bool force_down)
+ 	}
+ 
+ report:
++	state = nd->link_up ? NETDEV_UP : NETDEV_DOWN ;
+ 	if(rtnl_trylock()){
+-		call_netdevice_notifiers(NETDEV_CHANGE,nd->dev);
++		call_netdevice_notifiers(state,nd->dev);
+ 		rtnl_unlock();
+ 	}
+ 	else
+-		call_netdevice_notifiers(NETDEV_CHANGE,nd->dev);
++		call_netdevice_notifiers(state,nd->dev);
+ 	nd->handler(nd);
+ }
+ 
+@@ -1307,6 +1311,7 @@ static int ncsi_choose_active_channel(struct ncsi_dev_priv *ndp)
+ 	} else if (!found) {
+ 		netdev_warn(ndp->ndev.dev,
+ 			    "NCSI: No channel found to configure!\n");
++		netif_carrier_off(ndp->ndev.dev);
+ 		ncsi_report_link(ndp, true);
+ 		return -ENODEV;
+ 	}
+@@ -1555,6 +1560,7 @@ int ncsi_process_next_channel(struct ncsi_dev_priv *ndp)
+ 				    struct ncsi_channel, link);
+ 	if (!nc) {
+ 		spin_unlock_irqrestore(&ndp->lock, flags);
++		initCompleted = 1;
+ 		goto out;
+ 	}
+ 
+@@ -1801,6 +1807,7 @@ struct ncsi_dev *ncsi_register_dev(struct net_device *dev,
+ 			ndp->mlx_multi_host = true;
+ 	}
+ 
++	initCompleted = 0;
+ 	return nd;
+ }
+ EXPORT_SYMBOL_GPL(ncsi_register_dev);
+-- 
+2.25.1
+

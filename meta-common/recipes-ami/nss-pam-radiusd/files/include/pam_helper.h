@@ -114,6 +114,7 @@ typedef struct {
   char srcq[QUEUE_NAME];
   int ret;
   pamusr_t usr;
+  unsigned int checksum;
 } __attribute__((packed)) pamusrpkt_t;
 
 int pipe_open(const char *pathname, int flags);
@@ -126,4 +127,5 @@ extern int post_pam_userinfo(pamusrpkt_t *pu, char *queue);
 extern int get_pam_userinfo(pamusrpkt_t *pu, char *queue, int handle,
                             unsigned int num_ms);
 extern void remove_pam_user(char *uname, int table);
+unsigned int calculate_checksum(const pamusrpkt_t *pkt);
 #endif /* LIBPAM_HELPER_ */

@@ -1,0 +1,409 @@
+From 52fbe68e0b8b2800294b75b2eeae1889a3693bd9 Mon Sep 17 00:00:00 2001
+From: Vijaysankar R <vijaysankarr@ami.com>
+Date: Wed, 6 Aug 2025 12:04:23 +0530
+Subject: [PATCH 2013/2013] Coverity-Fix
+
+---
+ common/expr.c     |  4 ++++
+ nslcd/attmap.c    |  4 +++-
+ nslcd/cfg.c       | 35 +++++++++++++++++++++++------
+ nslcd/daemonize.c | 56 ++++++++++++++++++++++++++++-------------------
+ nslcd/myldap.c    | 47 ++++++++++++++++++++++-----------------
+ nslcd/passwd.c    | 19 ++++++++++++++--
+ pam/pam.c         | 24 +++++++++++++++++---
+ 7 files changed, 134 insertions(+), 55 deletions(-)
+
+diff --git a/common/expr.c b/common/expr.c
+index a5691b5..d7260f7 100644
+--- a/common/expr.c
++++ b/common/expr.c
+@@ -308,6 +308,10 @@ MUST_USE static const char *parse_expression(
+           return NULL;
+         j = strlen(buffer);
+         break;
++        /* coverity[unterminated_case : FALSE] */
++        /* Intentional fallthrough: escaped characters like '\\' are consumed,
++           then processed as normal text through the default case to avoid code
++           duplication. No break is needed*/
+       case '\\': /* escaped character, unescape */
+         (*ptr)++;
+       default: /* just copy the text */
+diff --git a/nslcd/attmap.c b/nslcd/attmap.c
+index 5aad41f..cab28d6 100644
+--- a/nslcd/attmap.c
++++ b/nslcd/attmap.c
+@@ -304,6 +304,8 @@ SET *attmap_add_attributes(SET *set, const char *attr)
+   if (attr[0] != '\"')
+     set_add(set, attr);
+   else
+-    expr_vars(attr, set);
++  {
++      set = expr_vars(attr, set);
++  }
+   return set;
+ }
+diff --git a/nslcd/cfg.c b/nslcd/cfg.c
+index 530ab28..bb620ee 100644
+--- a/nslcd/cfg.c
++++ b/nslcd/cfg.c
+@@ -425,19 +425,23 @@ static void add_uris_from_dns(const char *filename, int lnr,
+ {
+   int rc;
+   char *hostlist = NULL, *nxt;
++  char* original_hostlist = NULL;
+   char buf[HOST_NAME_MAX + sizeof("ldap://")];
+   log_log(LOG_DEBUG, "query %s for SRV records", domain);
+   rc = ldap_domain2hostlist(domain, &hostlist);
++  original_hostlist = hostlist;
+   if (rc != LDAP_SUCCESS)
+   {
+     log_log(LOG_ERR, "%s:%d: no servers found in DNS zone %s: %s",
+             filename, lnr, domain, ldap_err2string(rc));
++    free(original_hostlist);
+     exit(EXIT_FAILURE);
+   }
+   if ((hostlist == NULL) || (*hostlist == '\0'))
+   {
+     log_log(LOG_ERR, "%s:%d: no servers found in DNS zone %s",
+             filename, lnr, domain);
++    free(original_hostlist);
+     exit(EXIT_FAILURE);
+   }
+   /* hostlist is a space-separated list of host names that we use to build
+@@ -459,6 +463,7 @@ static void add_uris_from_dns(const char *filename, int lnr,
+       {
+         log_log(LOG_ERR, "add_uris_from_dns(): buf buffer too small (%lu required)",
+                 (unsigned long) strlen(hostlist) + 8);
++        free(original_hostlist);
+         exit(EXIT_FAILURE);
+       }
+     }
+@@ -471,6 +476,7 @@ static void add_uris_from_dns(const char *filename, int lnr,
+       {
+         log_log(LOG_ERR, "add_uris_from_dns(): buf buffer too small (%lu required)",
+                 (unsigned long) strlen(hostlist) + 7);
++        free(original_hostlist);
+         exit(EXIT_FAILURE);
+       }
+     }
+@@ -479,6 +485,7 @@ static void add_uris_from_dns(const char *filename, int lnr,
+     /* get next entry from list */
+     hostlist = nxt;
+   }
++  free(original_hostlist);
+ }
+ #endif /* HAVE_LDAP_DOMAIN2HOSTLIST */
+ 
+@@ -680,6 +687,7 @@ static void handle_base(const char *filename, int lnr,
+ #else /* not HAVE_LDAP_DOMAIN2DN */
+     log_log(LOG_ERR, "%s:%d: value %s not supported on platform",
+             filename, lnr, value);
++    free(value);
+     exit(EXIT_FAILURE);
+ #endif /* not HAVE_LDAP_DOMAIN2DN */
+   }
+@@ -693,6 +701,7 @@ static void handle_base(const char *filename, int lnr,
+   /* no free spot found */
+   log_log(LOG_ERR, "%s:%d: maximum number of base options per map (%d) exceeded",
+           filename, lnr, NSS_LDAP_CONFIG_MAX_BASES);
++  free(value);
+   exit(EXIT_FAILURE);
+ }
+ 
+@@ -941,6 +950,7 @@ static void handle_validnames(const char *filename, int lnr,
+   char *value;
+   int i, l;
+   int flags = REG_EXTENDED | REG_NOSUB;
++  char* errbuf = NULL;
+   /* the rest of the line should be a regular expression */
+   value = get_linedup(filename, lnr, keyword, &line);
+   if (cfg->validnames_str != NULL)
+@@ -954,6 +964,7 @@ static void handle_validnames(const char *filename, int lnr,
+   {
+     log_log(LOG_ERR, "%s:%d: regular expression incorrectly delimited",
+             filename, lnr);
++    free(value);
+     exit(EXIT_FAILURE);
+   }
+   l = strlen(value);
+@@ -967,6 +978,7 @@ static void handle_validnames(const char *filename, int lnr,
+   {
+     log_log(LOG_ERR, "%s:%d: regular expression incorrectly delimited",
+             filename, lnr);
++    free(value);
+     exit(EXIT_FAILURE);
+   }
+   value[l - 1] = '\0';
+@@ -975,15 +987,17 @@ static void handle_validnames(const char *filename, int lnr,
+   {
+     /* get the error message */
+     l = regerror(i, &cfg->validnames, NULL, 0);
+-    value = malloc(l);
+-    if (value == NULL)
+-      log_log(LOG_ERR, "%s:%d: invalid regular expression", filename, lnr);
++    errbuf = malloc(l);
++    if (errbuf == NULL)
++        log_log(LOG_ERR, "%s:%d: invalid regular expression", filename, lnr);
+     else
+     {
+-      regerror(i, &cfg->validnames, value, l);
+-      log_log(LOG_ERR, "%s:%d: invalid regular expression: %s",
+-              filename, lnr, value);
++        regerror(i, &cfg->validnames, errbuf, l);
++        log_log(LOG_ERR, "%s:%d: invalid regular expression: %s", filename, lnr,
++                errbuf);
++        free(errbuf);
+     }
++    free(value);
+     exit(EXIT_FAILURE);
+   }
+   free(value);
+@@ -1340,7 +1354,14 @@ static void cfg_read(const char *filename, struct ldap_config *cfg)
+         else if (strncasecmp(token, "dns:", 4) == 0)
+         {
+ #ifdef HAVE_LDAP_DOMAIN2HOSTLIST
+-          add_uris_from_dns(filename, lnr, cfg, strdup(token + 4));
++            char* domain = strdup(token + 4);
++            if (!domain)
++            {
++                log_log(LOG_ERR, "%s:%d: strdup() failed", filename, lnr);
++                exit(EXIT_FAILURE);
++            }
++            add_uris_from_dns(filename, lnr, cfg, domain);
++            free(domain);
+ #else /* not HAVE_LDAP_DOMAIN2HOSTLIST */
+           log_log(LOG_ERR, "%s:%d: value %s not supported on platform",
+                   filename, lnr, token);
+diff --git a/nslcd/daemonize.c b/nslcd/daemonize.c
+index d11d358..538def2 100644
+--- a/nslcd/daemonize.c
++++ b/nslcd/daemonize.c
+@@ -21,14 +21,15 @@
+ 
+ #include "config.h"
+ 
+-#include <unistd.h>
+-#include <sys/types.h>
+-#include <sys/stat.h>
+-#include <fcntl.h>
+-#include <string.h>
+ #include <errno.h>
++#include <fcntl.h>
++#include <limits.h>
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++#include <unistd.h>
+ #ifdef HAVE_PTHREAD_H
+ #include <pthread.h>
+ #endif /* HAVE_PTHREAD_H */
+@@ -69,24 +70,31 @@ void daemonize_redirect_stdio(void)
+ /* try to fill the buffer until EOF or error */
+ static int read_response(int fd, char *buffer, size_t bufsz)
+ {
+-  int rc;
+-  size_t r = 0;
+-  while (r < bufsz)
+-  {
+-    rc = read(fd, buffer + r, bufsz - r);
+-    if (rc == 0)
+-      break;
+-    else if (rc > 0)
+-      r += rc;
+-    else if ((errno == EINTR) || (errno == EAGAIN))
+-      continue; /* ignore these errors and try again */
+-    else
++    ssize_t rc;
++    size_t r = 0;
++    while (r < bufsz)
+     {
+-      log_log(LOG_ERR, "read_response(): read() failed: %s", strerror(errno));
+-      return -1;
++        /* coverity[overflow_sink : FALSE] */ /* Reason: bufsz -r never be a negative */
++        rc = read(fd, buffer + r, bufsz - r);
++        if (rc == 0)
++            break;
++        else if (rc > 0)
++            r += rc;
++        else if ((errno == EINTR) || (errno == EAGAIN))
++            continue; /* ignore these errors and try again */
++        else
++        {
++            log_log(LOG_ERR, "read_response(): read() failed: %s",
++                    strerror(errno));
++            return -1;
++        }
+     }
+-  }
+-  return r;
++    if (r > INT_MAX)
++    {
++        log_log(LOG_ERR, "read_response(): response too large");
++        return -1;
++    }
++    return (int)r;
+ }
+ 
+ /* The parent process calling daemonize_daemon() will end up here on success */
+@@ -203,7 +211,11 @@ int daemonize_daemon(void)
+   }
+   daemonizefd = pipefds[1];
+   /* close the file descriptor on exec (ignore errors) */
+-  fcntl(daemonizefd, F_SETFD, FD_CLOEXEC);
++  if (fcntl(daemonizefd, F_SETFD, FD_CLOEXEC) == -1)
++  {
++      log_log(LOG_DEBUG, "fcntl(F_SETFD, FD_CLOEXEC) failed: %s (ignored)",
++              strerror(errno));
++  }
+ #ifdef HAVE_PTHREAD_ATFORK
+   /* handle any other forks by closing daemonizefd first */
+   (void)pthread_atfork(NULL, NULL, closefd);
+diff --git a/nslcd/myldap.c b/nslcd/myldap.c
+index 6b98a21..aa5e062 100644
+--- a/nslcd/myldap.c
++++ b/nslcd/myldap.c
+@@ -1870,7 +1870,10 @@ static char **myldap_get_ranged_values(MYLDAP_ENTRY *entry, const char *attr)
+     attrs[1] = NULL;
+     /* close the previous search, if any */
+     if (search != NULL)
+-      myldap_search_close(search);
++    {
++        myldap_search_close(search);
++        search = NULL;
++    }
+     /* start the new search */
+     search = myldap_search(session, dn, LDAP_SCOPE_BASE, "(objectClass=*)", attrs, NULL);
+     if (search == NULL)
+@@ -1881,7 +1884,11 @@ static char **myldap_get_ranged_values(MYLDAP_ENTRY *entry, const char *attr)
+   }
+   /* close any started searches */
+   if (search != NULL)
+-    myldap_search_close(search);
++  {
++      /* coverity[double_free : FALSE] */ /* Reason: search is freed only if it is not null */
++      myldap_search_close(search);
++      search = NULL;
++  }
+   /* return the contents of the set as a list */
+   if (set == NULL)
+     return NULL;
+@@ -2216,24 +2223,24 @@ int myldap_has_objectclass(MYLDAP_ENTRY *entry, const char *objectclass)
+ const char ***myldap_get_deref_values(MYLDAP_ENTRY *entry,
+                 const char *derefattr, const char *getattr)
+ {
+-  LDAPControl **entryctrls;
+-  LDAPDerefRes *deref, *d;
+-  LDAPDerefVal *a;
+-  int i, pass;
+-  int rc;
+-  int found;
+-  int counts[2];
+-  size_t sizes[2], size;
+-  char *buffer = NULL;
+-  char ***results = NULL;
+-  rc = ldap_get_entry_controls(entry->search->session->ld, entry->search->msg,
+-                                &entryctrls);
+-  if (rc != LDAP_SUCCESS)
+-  {
+-    myldap_err(LOG_WARNING, entry->search->session->ld, rc,
+-               "ldap_get_entry_controls() failed");
+-    return NULL;
+-  }
++    LDAPControl** entryctrls = NULL;
++    LDAPDerefRes *deref, *d;
++    LDAPDerefVal* a;
++    int i, pass;
++    int rc;
++    int found;
++    int counts[2];
++    size_t sizes[2], size;
++    char* buffer = NULL;
++    char*** results = NULL;
++    rc = ldap_get_entry_controls(entry->search->session->ld, entry->search->msg,
++                                 &entryctrls);
++    if (rc != LDAP_SUCCESS)
++    {
++        myldap_err(LOG_WARNING, entry->search->session->ld, rc,
++                   "ldap_get_entry_controls() failed");
++        return NULL;
++    }
+   if (entryctrls == NULL)
+     return NULL;
+   /* see if we can find a deref control */
+diff --git a/nslcd/passwd.c b/nslcd/passwd.c
+index 016fb73..5ca05bd 100644
+--- a/nslcd/passwd.c
++++ b/nslcd/passwd.c
+@@ -325,7 +325,10 @@ char *dn2uid(MYLDAP_SESSION *session, const char *dn, char *buf, size_t buflen)
+   pthread_mutex_lock(&dn2uid_cache_mutex);
+   /* try to get the entry from the cache here again because it could have
+      changed in the meantime */
+-  cacheentry = dict_get(dn2uid_cache, dn);
++  if (dn2uid_cache != NULL)
++  {
++      cacheentry = dict_get(dn2uid_cache, dn);
++  }
+   if (cacheentry == NULL)
+   {
+     /* allocate a new entry in the cache */
+@@ -333,7 +336,19 @@ char *dn2uid(MYLDAP_SESSION *session, const char *dn, char *buf, size_t buflen)
+     if (cacheentry != NULL)
+     {
+       cacheentry->uid = NULL;
+-      dict_put(dn2uid_cache, dn, cacheentry);
++      if (dn2uid_cache != NULL)
++      {
++          if (dict_put(dn2uid_cache, dn, cacheentry) != 0)
++          {
++              free(cacheentry);
++              cacheentry = NULL;
++          }
++      }
++      else
++      {
++          free(cacheentry);
++          cacheentry = NULL;
++      }
+     }
+   }
+   /* update the cache entry */
+diff --git a/pam/pam.c b/pam/pam.c
+index a3a18f8..ee020f6 100644
+--- a/pam/pam.c
++++ b/pam/pam.c
+@@ -236,9 +236,27 @@ static int init(pam_handle_t *pamh, struct pld_cfg *cfg, struct pld_ctx **ctx,
+     return rc;
+   }
+   /* get more PAM information (ignore errors) */
+-  pam_get_item(pamh, PAM_RUSER, (PAM_ITEM_CONST void **)ruser);
+-  pam_get_item(pamh, PAM_RHOST, (PAM_ITEM_CONST void **)rhost);
+-  pam_get_item(pamh, PAM_TTY, (PAM_ITEM_CONST void **)tty);
++  rc = pam_get_item(pamh, PAM_RUSER, (PAM_ITEM_CONST void**)ruser);
++  if (rc != PAM_SUCCESS)
++  {
++      pam_syslog(pamh, LOG_ERR, "failed to get remote user: %s",
++                 pam_strerror(pamh, rc));
++      return rc;
++  }
++  rc = pam_get_item(pamh, PAM_RHOST, (PAM_ITEM_CONST void**)rhost);
++  if (rc != PAM_SUCCESS)
++  {
++      pam_syslog(pamh, LOG_ERR, "failed to get host: %s",
++                 pam_strerror(pamh, rc));
++      return rc;
++  }
++  rc = pam_get_item(pamh, PAM_TTY, (PAM_ITEM_CONST void**)tty);
++  if (rc != PAM_SUCCESS)
++  {
++      pam_syslog(pamh, LOG_ERR, "failed to get tty: %s",
++                 pam_strerror(pamh, rc));
++      return rc;
++  }
+   return PAM_SUCCESS;
+ }
+ 
+-- 
+2.43.0
+

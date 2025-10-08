@@ -1,9 +1,13 @@
 SUMMARY = "PEF and alert management application"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/platform-event-filter.git;protocol=https;branch=main"
-SRCREV = "5bbf8c908d3a9dc5c3250f1db54ab5adcc49013b"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/platform-event-filter.git;protocol=https;branch=main"
 
-SRC_URI += "file://pef-alert-manager.json"
+
+SRCREV = "31c69e162005ecedbe4c79c2d2d227f19c103a45"
+
+SRC_URI += "file://pef-alert-manager.json \
+            file://pef-lan-param-config.json \
+           "
 
 S = "${WORKDIR}/git"
 PV = "1.0+git${SRCPV}"
@@ -29,4 +33,5 @@ SYSTEMD_SERVICE:${PN} = "pef-configuration.service \
 do_install:append() {
     install -d ${D}/var/lib/pef-alert-manager
     install -m 0644 ${WORKDIR}/pef-alert-manager.json ${D}/var/lib/pef-alert-manager
+    install -m 0644 ${WORKDIR}/pef-lan-param-config.json ${D}/var/lib/pef-alert-manager
 }

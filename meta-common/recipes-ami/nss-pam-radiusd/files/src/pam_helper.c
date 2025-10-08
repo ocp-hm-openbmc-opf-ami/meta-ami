@@ -11,6 +11,21 @@
 
 typedef enum nss_status nss_status_t;
 
+unsigned int calculate_checksum(const pamusrpkt_t *pkt)
+{
+	unsigned int checksum = 0;
+	pamusrpkt_t temp_pkt = *pkt;
+	temp_pkt.checksum = 0;
+
+	const unsigned char *data = (const unsigned char *)&temp_pkt;
+	size_t len = sizeof(pamusrpkt_t) - sizeof(unsigned int);
+
+	for (size_t i = 0; i < len; ++i)
+	{
+		checksum = (checksum << 1) ^ data[i];
+	}
+	return checksum;
+}
 /*
  * @ fn         - _nss_radius_getpwent_r
  * @ brief      - get passwd file entry reentrantly
@@ -42,6 +57,7 @@ nss_status_t _nss_radius_getpwnam_r(char *name, struct passwd *pwd,
   pamusrpkt_t nss_req, nss_res;
   int radius_handle;
   char defshell[MAX_SHELL_NAME_LENGTH];
+  unsigned int calculated_checksum = 0;
 
   if (name == NULL || name[0] == '\0') {
     return NSS_STATUS_NOTFOUND;
@@ -69,6 +85,8 @@ nss_status_t _nss_radius_getpwnam_r(char *name, struct passwd *pwd,
     result = NSS_STATUS_UNAVAIL;
     return result;
   }
+  nss_req.checksum = 0;
+  nss_req.checksum = calculate_checksum(&nss_req);
   ret = post_pam_userinfo(&nss_req, PAM_HELPER_Q);
   if (ret < 0) {
     syslog(LOG_WARNING, "error openig queue %s \n", PAM_HELPER_Q);
@@ -76,7 +94,16 @@ nss_status_t _nss_radius_getpwnam_r(char *name, struct passwd *pwd,
     pipe_close(radius_handle);
     return result;
   }
+  nss_res.checksum = 0;
   ret = get_pam_userinfo(&nss_res, NSS_RADIUS_Q, radius_handle, WAIT_1000_MS);
+  calculated_checksum = calculate_checksum(&nss_res);
+  if (calculated_checksum != nss_res.checksum)
+  {
+	  fprintf(stderr, " ***failed in get_pam_userinfo . Checksum mismatch! Expected %d, got %d\n",calculated_checksum, nss_res.checksum);
+	  result = NSS_STATUS_UNAVAIL;
+	  pipe_close(radius_handle);
+	  return result;
+  }
   pipe_close(radius_handle);
   if (nss_res.action == PAM_RESPONSE) {
     if (nss_res.ret == PAM_USER_RETRIEVED_SUCCESSFULLY) {
@@ -262,7 +289,7 @@ int get_pam_userinfo(pamusrpkt_t *pu, char *queue, int handle,
 
   size = sizeof(pamusrpkt_t);
   PAMH_GET_FROM_Q(pu, size, handle, &err); // WAIT_INFINITE
-  if (err == -1) {
+  if ((err == -1) || (err != sizeof(pamusrpkt_t))){
     printf(" %s : Error in retrieving from queue %s : %s\n", __FILE__, queue,
            strerror(errno));
     ret = -1;

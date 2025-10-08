@@ -1,0 +1,307 @@
+From 94c59a1cc46139e9116fcd18aff55c87836c4a5d Mon Sep 17 00:00:00 2001
+From: Vijaysankar R <vijaysankarr@ami.com>
+Date: Wed, 10 Sep 2025 21:04:42 +0530
+Subject: [PATCH 7/7] Coverity-Fix
+
+---
+ lib/avpair.c     | 17 +++++++++++++--
+ lib/buildreq.c   |  1 +
+ lib/clientid.c   | 12 +++++-----
+ lib/config.c     | 10 ++++++++-
+ src/radexample.c | 42 ++++++++++++++++++++++++++++++-----
+ src/radlogin.c   | 57 ++++++++++++++++++++++++++++++++++++++++++------
+ 6 files changed, 117 insertions(+), 22 deletions(-)
+
+diff --git a/lib/avpair.c b/lib/avpair.c
+index 979c0d9..fe428b5 100644
+--- a/lib/avpair.c
++++ b/lib/avpair.c
+@@ -111,7 +111,13 @@ VALUE_PAIR *rc_avpair_new (rc_handle *rh, int attrid, void *pval, int len, int v
+ 	}
+ 	if ((vp = malloc (sizeof (VALUE_PAIR))) != NULL)
+ 	{
+-		strncpy (vp->name, pda->name, sizeof (vp->name));
++		int retVal = snprintf(vp->name, sizeof(vp->name), "%s", pda->name);
++		if (retVal < 0 || retVal >= sizeof(vp->name))
++		{
++			rc_log(LOG_WARNING, "rc_avpair_new: attribute name truncated or snprintf failed (retVal=%d)", retVal);
++			free(vp);
++			return NULL;
++		}
+ 		vp->attribute = attrid;
+ 		vp->next = NULL;
+ 		vp->type = pda->type;
+@@ -265,6 +271,7 @@ rc_avpair_gen(rc_handle *rh, VALUE_PAIR *pair, unsigned char *ptr,
+ 		pair->lvalue = attrlen;
+ 		break;
+ 
++	/*coverity[unterminated_case : FALSE]*/ /*Reason: Intentional fallthrough*/
+ 	case PW_TYPE_INTEGER:
+ 		if (attrlen != 4) {
+ 			rc_log(LOG_ERR, "rc_avpair_gen: received INT "
+@@ -367,6 +374,11 @@ void rc_avpair_insert (VALUE_PAIR **a, VALUE_PAIR *p, VALUE_PAIR *b)
+ 		}
+ 	}
+ 
++	if(this_node == NULL)
++	{
++		rc_log(LOG_CRIT, "rc_avpair_insert: target node not found in list");
++		abort();
++	}
+ 	b->next = this_node->next;
+ 	this_node->next = b;
+ 
+@@ -708,8 +720,9 @@ int rc_avpair_tostr (rc_handle *rh, VALUE_PAIR *pair, char *name, int ln, char *
+ 		break;
+ 
+ 	    case PW_TYPE_DATE:
++	        time_t time_val = (time_t)pair->lvalue;
+ 		strftime (buffer, sizeof (buffer), "%m/%d/%y %H:%M:%S",
+-			  gmtime ((time_t *) & pair->lvalue));
++			  gmtime (&time_val));
+ 		strncpy(value, buffer, lv-1);
+ 		break;
+ 
+diff --git a/lib/buildreq.c b/lib/buildreq.c
+index fd1deb7..8800e5a 100644
+--- a/lib/buildreq.c
++++ b/lib/buildreq.c
+@@ -289,6 +289,7 @@ int rc_eaptls_extract_data(eap_tls_state_t *state, VALUE_PAIR **received){
+ 		}
+ 
+ 		// Copy the data
++		/*coverity[overrun-buffer-arg : FALSE]*/ /*Reason: state->tls_buffer_len is validated against sizeof(state->tls_buffer)*/
+ 		memcpy(state->tls_buffer + state->tls_buffer_len, copy_start, copy_len);
+ 		state->tls_buffer_len += copy_len;
+ 
+diff --git a/lib/clientid.c b/lib/clientid.c
+index 03d39df..78e24f5 100644
+--- a/lib/clientid.c
++++ b/lib/clientid.c
+@@ -107,12 +107,12 @@ UINT4 rc_map2id(rc_handle *rh, char *name)
+ 	struct map2id_s *p;
+ 	char ttyname[PATH_MAX];
+ 
+-	*ttyname = '\0';
+-	if (*name != '/')
+-		strcpy(ttyname, "/dev/");
+-
+-	strncat(ttyname, name, sizeof(ttyname));
+-
++	int retVal = snprintf(ttyname, sizeof(ttyname), "%s%s",(*name != '/') ? "/dev/" : "", name);
++	if (retVal < 0 || retVal >= sizeof(ttyname))
++	{
++		rc_log(LOG_ERR, "rc_map2id: snprintf failed or truncated (retVal=%d)", retVal);
++		return 0;
++	}
+ 	for(p = rh->map2id_list; p; p = p->next)
+ 		if (!strcmp(ttyname, p->name)) return p->id;
+ 
+diff --git a/lib/config.c b/lib/config.c
+index 309be75..d42e9d0 100644
+--- a/lib/config.c
++++ b/lib/config.c
+@@ -165,6 +165,12 @@ static int set_option_auo(char *filename, int line, OPTION *option, char *p)
+ 
+ 	*iptr = 0;
+ 	p = strtok(p, ", \t");
++	if (p == NULL)
++	{
++		rc_log(LOG_ERR, "%s: auth_order: missing keyword", filename);
++		free(iptr);
++		return -1;
++	}
+ 
+ 	if (!strncmp(p, "local", 5))
+ 			*iptr = AUTH_LOCAL_FST;
+@@ -172,6 +178,7 @@ static int set_option_auo(char *filename, int line, OPTION *option, char *p)
+ 			*iptr = AUTH_RADIUS_FST;
+ 	else {
+ 		rc_log(LOG_ERR,"%s: auth_order: unknown keyword: %s", filename, p);
++		free(iptr);
+ 		return -1;
+ 	}
+ 
+@@ -184,6 +191,7 @@ static int set_option_auo(char *filename, int line, OPTION *option, char *p)
+ 			*iptr = (*iptr) | AUTH_RADIUS_SND;
+ 		else {
+ 			rc_log(LOG_ERR,"%s: auth_order: unknown or unexpected keyword: %s", filename, p);
++			free(iptr);
+ 			return -1;
+ 		}
+ 	}
+@@ -664,7 +672,7 @@ int rc_find_server (rc_handle *rh, char *server_name, UINT4 *ip_addr, char *secr
+ 	if (result == 0)
+ 	{
+ 		memset (buffer, '\0', sizeof (buffer));
+-		memset (secret, '\0', sizeof (secret));
++		memset (secret, '\0', MAX_SECRET_LENGTH + 1);
+ 		rc_log(LOG_ERR, "rc_find_server: couldn't find RADIUS server %s in %s",
+ 			 server_name, rc_conf_str(rh, "servers"));
+ 		return -1;
+diff --git a/src/radexample.c b/src/radexample.c
+index cfe3285..d314f6c 100644
+--- a/src/radexample.c
++++ b/src/radexample.c
+@@ -43,9 +43,30 @@ main (int argc, char **argv)
+ 		return ERROR_RC;
+ 
+ 	default_realm = rc_conf_str(rh, "default_realm");
+-
+-	strncpy(username, rc_getstr (rh, "login: ",1), sizeof(username));
+-	strncpy (passwd, rc_getstr(rh, "Password: ",0), sizeof (passwd));
++        const char *input = rc_getstr(rh, "login: ", 1);
++	if (!input)
++	{
++		rc_log(LOG_ERR, "Failed to read login input");
++		return ERROR_RC;
++	}
++	int retVal = snprintf(username, sizeof(username), "%s", input);
++	if (retVal < 0 || retVal >= sizeof(username))
++	{
++		rc_log(LOG_ERR, "Username truncated or snprintf failed");
++		return ERROR_RC;
++	}
++        const char *pass_input = rc_getstr(rh, "Password: ", 0);
++	if (!pass_input)
++	{
++		rc_log(LOG_ERR, "Failed to read password input ");
++		return ERROR_RC;
++	}
++	retVal = snprintf(passwd, sizeof(passwd), "%s", pass_input);
++	if (retVal < 0 || retVal >= sizeof(passwd))
++	{
++		rc_log(LOG_ERR, "Password input truncated or snprintf failed");
++		return ERROR_RC;
++	}
+ 
+ 	send = NULL;
+ 
+@@ -53,14 +74,23 @@ main (int argc, char **argv)
+ 	 * Fill in User-Name
+ 	 */
+ 
+-	strncpy(username_realm, username, sizeof(username_realm));
++	retVal = snprintf(username_realm, sizeof(username_realm), "%s", username);
++	if(retVal < 0 || retVal >= sizeof(username_realm))
++	{
++		rc_log(LOG_ERR, "Username realm copy failed");
++		return ERROR_RC;
++	}
+ 
+ 	/* Append default realm */
+ 	if ((strchr(username_realm, '@') == NULL) && default_realm &&
+ 	    (*default_realm != '\0'))
+ 	{
+-		strncat(username_realm, "@", sizeof(username_realm));
+-		strncat(username_realm, default_realm, sizeof(username_realm));
++		retVal = snprintf(username_realm, sizeof(username_realm), "%s@%s", username,default_realm);
++		if (retVal < 0 || retVal >= sizeof(username_realm))
++		{
++			rc_log(LOG_ERR, "Username with realm truncated");
++			return ERROR_RC;
++		}
+ 	}
+ 
+ 	if (rc_avpair_add(rh, &send, PW_USER_NAME, username_realm, -1, 0) == NULL)
+diff --git a/src/radlogin.c b/src/radlogin.c
+index 770cbdc..7196d88 100644
+--- a/src/radlogin.c
++++ b/src/radlogin.c
+@@ -196,6 +196,7 @@ main (int argc, char **argv)
+ 	int		maxtries = 0;
+ 	char		*ttyn  = NULL;
+ 	char            *path_radiusclient_conf = RC_CONFIG_FILE;
++	int 		retVal;
+ 
+         extern char *optarg;
+         extern int optind;
+@@ -245,9 +246,23 @@ main (int argc, char **argv)
+ 		client_port = rc_map2id(rh, ttyn);
+ 
+ 		if ((p = strrchr(ttyn, '/')) == NULL)
+-			strncpy(tty, ttyn, sizeof(tty));
++		{
++			retVal = snprintf(tty, sizeof(tty), "%s", ttyn);
++			if (retVal < 0 || retVal >= sizeof(tty))
++			{
++				rc_log(LOG_ERR, "TTY name truncated or snprintf failed");
++				return ERROR_RC;
++			}
++		}
+ 		else
+-			strncpy(tty, p+1, sizeof(tty));
++		{
++			retVal = snprintf(tty, sizeof(tty), "%s", p + 1);
++			if (retVal < 0 || retVal >= sizeof(tty))
++			{
++				rc_log(LOG_ERR, "TTY basename truncated or snprintf failed");
++				return ERROR_RC;
++			}
++		}
+ 	}
+ 	else
+ 	{
+@@ -255,9 +270,23 @@ main (int argc, char **argv)
+ 		if (ttyn)
+ 		{
+ 			if ((p = strrchr(ttyn, '/')) == NULL)
+-				strncpy(tty, ttyn, sizeof(tty));
++			{
++				retVal = snprintf(tty, sizeof(tty), "%s", ttyn);
++				if (retVal < 0 || retVal >= sizeof(tty))
++				{
++					rc_log(LOG_ERR, "TTY name truncated or snprintf failed");
++					return ERROR_RC;
++				}
++			}
+ 			else
+-				strncpy(tty, p+1, sizeof(tty));
++			{
++				retVal = snprintf(tty, sizeof(tty), "%s", p + 1);
++				if (retVal < 0 || retVal >= sizeof(tty))
++				{
++					rc_log(LOG_ERR, "TTY basename truncated or snprintf failed");
++					return ERROR_RC;
++				}
++			}
+ 
+ 			client_port = rc_map2id(rh, ttyn);
+ 		}
+@@ -276,7 +305,12 @@ main (int argc, char **argv)
+ 
+ 	if ((argc - optind) == 1)
+ 	{
+-		strncpy(username,argv[optind], sizeof(username));
++		retVal = snprintf(username, sizeof(username), "%s", argv[optind]);
++		if (retVal < 0 || retVal >= sizeof(username))
++		{
++			rc_log(LOG_ERR, "Username from argv truncated or snprintf failed");
++			return ERROR_RC;
++		}
+ 	}
+ 	else
+ 	{
+@@ -328,8 +362,17 @@ main (int argc, char **argv)
+ 
+ 	 while (!*username) {
+ 	 	p = rc_getstr (rh, SC_LOGIN, 1);
+-	 	if (p)
+-	 		strncpy(username, p, sizeof(username));
++		if (!p)
++		{
++			rc_log(LOG_ERR, "Failed to read login input");
++			exit(ERROR_RC);
++		}
++		retVal = snprintf(username, sizeof(username), "%s", p);
++		if (retVal < 0 || retVal >= sizeof(username))
++		{
++			rc_log(LOG_ERR, "Username input truncated or snprintf failed");
++			return ERROR_RC;
++		}
+ 	 	else
+ 	 		exit (ERROR_RC);
+ 	 }
+-- 
+2.34.1
+

@@ -1,0 +1,101 @@
+From 752411e3e0e0921575940a1cec1f79e53e1b8f1d Mon Sep 17 00:00:00 2001
+From: Vijaysankar R <vijaysankarr@ami.com>
+Date: Sat, 26 Apr 2025 09:42:24 +0530
+Subject: [PATCH 203/203] fixedInvalidPamreorder
+
+---
+ user_mgr.cpp | 28 ++++++++++++++++------------
+ 1 file changed, 16 insertions(+), 12 deletions(-)
+
+diff --git a/user_mgr.cpp b/user_mgr.cpp
+index a62c2ea..a6300aa 100644
+--- a/user_mgr.cpp
++++ b/user_mgr.cpp
+@@ -848,7 +848,10 @@ int UserMgr::setPamModuleConfValue(const std::string& confFile,
+         lg2::error("Failed to open pam configuration file {FILENAME}",
+                    "FILENAME", confFile);
+         // Delete the unused tmp file
+-        std::remove(tmpConfFile.c_str());
++        if (std::remove(tmpConfFile.c_str()) != 0)
++	{
++	  lg2::error("Failed to remove temporary file {TMPFILE}", "TMPFILE", tmpConfFile);
++	}
+         return failure;
+     }
+     std::string line;
+@@ -894,7 +897,10 @@ int UserMgr::setPamModuleConfValue(const std::string& confFile,
+         }
+     }
+     // No changes, so delete the unused tmp file
+-    std::remove(tmpConfFile.c_str());
++     if (std::remove(tmpConfFile.c_str()) != 0)
++     {
++       lg2::error("Failed to remove temporary file {TMPFILE}", "TMPFILE", tmpConfFile);
++     }
+     return failure;
+ }
+ 
+@@ -1424,13 +1430,11 @@ UserInfoMap UserMgr::getUserInfo(std::string userName)
+     {
+         auto primaryGid = getPrimaryGroup(userName);
+         int primaryPriv = (int)primaryGid;
+-        void* bnss_radius_handle = NULL;
+         bool radiusEnableStatus = false;
+-        bnss_radius_handle = dlopen("/usr/lib/libnss_radius.so", RTLD_LAZY);
++        std::unique_ptr<void, int(*)(void *)> bnss_radius_handle(dlopen("/usr/lib/libnss_radius.so", RTLD_LAZY), dlclose);
+         if (bnss_radius_handle)
+         {
+-            int (*getRadiusEnableDbusProperty)(bool*) = (int (*)(
+-                bool*))dlsym(bnss_radius_handle, "getRadiusEnableDbusProperty");
++            int (*getRadiusEnableDbusProperty)(bool*) = reinterpret_cast <int (*)(bool*)> (dlsym(bnss_radius_handle.get(), "getRadiusEnableDbusProperty"));
+             if (NULL != getRadiusEnableDbusProperty)
+             {
+                 retval = getRadiusEnableDbusProperty(&radiusEnableStatus);
+@@ -1691,22 +1695,22 @@ void UserMgr::initializeAccountPolicy()
+     }
+     else
+     {
+-        uint32_t value32 = 0;
++        uint16_t value16 = 0;
+         try
+         {
+             tmp = std::stoul(valueStr, nullptr);
+-            if (tmp > std::numeric_limits<decltype(value32)>::max())
++            if (tmp > std::numeric_limits<decltype(value16)>::max())
+             {
+                 throw std::out_of_range("Out of range");
+             }
+-            value32 = static_cast<decltype(value32)>(tmp);
++            value16 = static_cast<decltype(value16)>(tmp);
+         }
+         catch (const std::exception& e)
+         {
+             lg2::error("Exception for AccountUnlockTimeout: {ERR}", "ERR", e);
+             throw;
+         }
+-        AccountPolicyIface::accountUnlockTimeout(value32);
++        AccountPolicyIface::accountUnlockTimeout(static_cast<uint32_t>(value16));
+     }
+ }
+ 
+@@ -1727,7 +1731,7 @@ void UserMgr::initUserObjects(void)
+         // The other groups don't contain real BMC users.
+         for (const char* grp : predefinedGroups)
+         {
+-            if (grp == grpSsh)
++            if (std::strcmp(grp, grpSsh) == 0)
+             {
+                 groupLists.emplace(grp, sshGrpUsersList);
+             }
+@@ -1953,7 +1957,7 @@ bool updatePamOrder(const std::string confFile,
+                     {
+                         std::string pamOrderBuf = modifyPamOrderLineBuf(
+                             preDefinePamOrder[reqPamOrder[innerLoop] - 1],
+-                            maxPamReorderModule + 1 - innerLoop);
++                            maxPamReorderModule + 2 - innerLoop);
+                         outFile << pamOrderBuf << std::endl;
+                     }
+                     isModified = true;
+-- 
+2.34.1
+

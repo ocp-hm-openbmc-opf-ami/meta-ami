@@ -1,12 +1,16 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-host-ipmid.git;branch=master;protocol=https;name=override;"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/phosphor-host-ipmid;protocol=https;branch=master;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "185db5961e3a757de8b02144442c35327f44f1f2"
+SRCREV_override = "ff1cc2ad4af41fca2f59b5b58f76e4c9fc6f2200"
+
+RDEPENDS:${PN}:remove = "phosphor-time-manager"
 
 SRC_URI += " \
            file://phosphor-ipmi-host-ami.service \
            file://phosphor-ipmi-host-evb-ami.service \
+           file://0001-removing-sel-callbacks-update.patch \
+           file://0002-Add-remote-mac-address.patch \
            "
 
 SRC_URI_EGS:append = " \

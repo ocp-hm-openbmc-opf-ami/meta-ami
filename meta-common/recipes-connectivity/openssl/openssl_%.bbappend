@@ -7,9 +7,9 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 # FILES:${PN} =+ "${libdir}/ossl-modules/*"
 
-EXTRA_OECONF:append = "${@bb.utils.contains('OPENSSL_FIPS_SUPPORT', 'enabled', 'enable-fips enable-legacy','', d)}"
+EXTRA_OECONF:append = "${@bb.utils.contains('OPENSSL_FIPS_SUPPORT', 'enabled', ' enable-fips enable-legacy ','', d)}"
 
-PACKAGES =+ "${@bb.utils.contains('OPENSSL_FIPS_SUPPORT', 'enabled', 'enable-fips enable-legacy','', d)}"
+PACKAGES =+ "${@bb.utils.contains('OPENSSL_FIPS_SUPPORT', 'enabled', ' enable-fips enable-legacy ','', d)}"
 FILES:fips = "${@bb.utils.contains('OPENSSL_FIPS_SUPPORT', 'enabled', '${libdir}/ossl-modules/fips.so','', d)}"
 FILES:legacy = "${@bb.utils.contains('OPENSSL_FIPS_SUPPORT', 'enabled', '${libdir}/ossl-modules/legacy.so','', d)}"
 FILES:${PN} =+ "${@bb.utils.contains('OPENSSL_FIPS_SUPPORT', 'enabled', '${libdir}/ossl-modules/*','', d)}"

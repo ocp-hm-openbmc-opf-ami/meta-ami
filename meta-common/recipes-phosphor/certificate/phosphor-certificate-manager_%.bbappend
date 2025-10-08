@@ -14,4 +14,8 @@ SRC_URI += " \
 	    file://0006-Add-enhancement-for-certificate-errors.patch \
 	    file://0007-Removed-PrivateKey-Validation.patch \
             file://0009-Fix-For-rekey-rekey.patch \
+            file://0008-Added-feature-for-Certificate-replacement.patch \
+            file://0010-Add-new-certificate-data-fields-support.patch \
+	    file://0011-clang-format.patch \
+            file://0012-populate-properties-from-PEM-chain.patch \
            "

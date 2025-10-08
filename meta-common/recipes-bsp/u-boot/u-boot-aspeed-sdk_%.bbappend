@@ -6,6 +6,11 @@ SRC_URI:append = " \
     file://0005-Fix-NCSI-in-UBoot.patch \
     "
 
+SRC_URI += " \
+	file://CVE-2024-57256.patch \
+	file://CVE-2024-57258.patch \
+	"
+
 SRC_URI:append:evb-ast2600 = "file://0007-Save-env-variables-before-autoboot.patch "
 
 EVB_SRC_URI = " file://spl.cfg"
@@ -36,7 +41,7 @@ SRC_URI_NON_PFR:append:emmc-sw-ami = "file://0006-emmc-support-bootarg.patch"
 
 SRC_URI_NON_PFR_DUAL:append = " file://0002-adding-support-for-non-pfr-dual-image-feature.patch \
                                 "
-SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'dual-image', SRC_URI_NON_PFR_DUAL,'', d)}"
+SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-dual-image', SRC_URI_NON_PFR_DUAL,'', d)}"
 
 SRC_URI_NON_PFR_HW_FAILSAFE_BOOT:append = ""
 
@@ -46,8 +51,9 @@ SRC_URI_NON_PFR_HW_FAILSAFE_BOOT:append:intel-ast2600 = " file://0003-add-hw-fai
 SRC_URI_NON_PFR_HW_FAILSAFE_BOOT:append:evb-ast2600 = " file://0004-add-hw-failsafe-boot-support-for-evb.patch \
                                             "
 
-SRC_URI:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'hw-failsafe-boot', SRC_URI_NON_PFR_HW_FAILSAFE_BOOT,'', d)}"
+SRC_URI:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-hw-failsafe-boot', SRC_URI_NON_PFR_HW_FAILSAFE_BOOT,'', d)}"
 SRC_URI:append = " ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
 
 SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', ' file://flash-layout-update.cfg  ', d)}"
 
+SRC_URI:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'debug-tweaks', '', 'file://boot_delay.cfg', d)}"

@@ -1,0 +1,66 @@
+From 0ddb12cdf92e49d4405e6a93cc3785af399f9dde Mon Sep 17 00:00:00 2001
+From: abishek <abishekb@ami.com>
+Date: Fri, 14 Mar 2025 08:49:31 +0530
+Subject: [PATCH 199/199] Fix for coverity issue in obmc_console
+
+---
+ console-socket.c | 14 ++++++++++----
+ tty-handler.c    |  6 ++++--
+ 2 files changed, 14 insertions(+), 6 deletions(-)
+
+diff --git a/console-socket.c b/console-socket.c
+index 3873440..f1276ed 100644
+--- a/console-socket.c
++++ b/console-socket.c
+@@ -59,14 +59,20 @@ ssize_t console_socket_path_readable(const struct sockaddr_un *addr,
+ {
+ 	const char *src = (const char *)addr;
+ 	size_t len;
+-
++	ssize_t retval;
+ 	if (addrlen > SSIZE_MAX) {
+ 		return -EINVAL;
+ 	}
+ 
+ 	len = addrlen - sizeof(addr->sun_family) - 1;
+-	memcpy(path, src + sizeof(addr->sun_family) + 1, len);
+-	path[len] = '\0';
+-
++	if(len >= sizeof(socket_path_t)){
++	    	return -EINVAL;
++	}
++	retval = snprintf(path,len,"%s",src + sizeof(addr->sun_family) + 1);
++	if(retval < 0 || (retval >= (signed)sizeof(socket_path_t)))
++	{
++	    	return -EINVAL;
++	
++	}
+ 	return (ssize_t)len; /* strlen() style */
+ }
+diff --git a/tty-handler.c b/tty-handler.c
+index a722d24..88a2fcf 100644
+--- a/tty-handler.c
++++ b/tty-handler.c
+@@ -112,7 +112,8 @@ static int tty_drain_queue(struct tty_handler *th, size_t force_len)
+ 		if (force_len && force_len < total_len + len) {
+ 			len = force_len - total_len;
+ 		}
+-
++		/* Reason for False Positive - len is always greater than are equal to zero */
++		/* coverity[overflow_sink : FALSE] */
+ 		wlen = write(th->fd, buf, len);
+ 		if (wlen < 0) {
+ 			if (errno == EINTR) {
+@@ -261,7 +262,8 @@ static struct handler *tty_init(const struct handler_type *type
+ 
+ 	th = malloc(sizeof(*th));
+ 	if (!th) {
+-		return NULL;
++		free(tty_path);
++	    	return NULL;
+ 	}
+ 
+ 	th->fd = open(tty_path, O_RDWR | O_NONBLOCK);
+-- 
+2.34.1
+

@@ -7,7 +7,7 @@
 
 #if (BMCWEB_AMI_NVME_MACRO) || (BMCWEB_AMI_RAIDMSCC_MACRO) ||                  \
     (BMCWEB_AMI_RAIDBRCM_MACRO)
-#include "redfish-core/lib/ext/collection_ext.hpp"
+#include "ext/include/collection_ext.hpp"
 #endif
 
 namespace redfish::ext::core::resource
@@ -18,7 +18,6 @@ inline void handleSystemsStorageCollectionGet(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
     const std::string& systemName)
 {
-    BMCWEB_LOG_ERROR("Inside handleSystemsStorageCollectionGet");
     if (!redfish::setUpRedfishRoute(app, req, asyncResp))
     {
         return;
@@ -35,7 +34,8 @@ inline void handleSystemsStorageCollectionGet(
     asyncResp->res.jsonValue["@odata.id"] = std::format(
         "/redfish/v1/Systems/{}/Storage", BMCWEB_REDFISH_SYSTEM_URI_NAME);
     asyncResp->res.jsonValue["Name"] = "Storage Collection";
-    asyncResp->res.jsonValue["Description"] = "Collection of storage for this system";
+    asyncResp->res.jsonValue["Description"] =
+        "Collection of storage for this system";
 
     constexpr std::array<std::string_view, 1> interface{
         "xyz.openbmc_project.Inventory.Item.Storage"};
@@ -49,7 +49,6 @@ inline void handleSystemsStorageCollectionGet(
 
 inline void requestStorageCollectionRoutes(App& app)
 {
-    BMCWEB_LOG_ERROR("Inside requestStorageCollectionRoutes for RAID ---->>");
     BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/Storage/")
         .privileges(redfish::privileges::getStorageCollection)
         .methods(boost::beast::http::verb::get)(
@@ -61,7 +60,6 @@ inline void afterSystemsStorageGetSubtree(
     const std::string& storageId, const boost::system::error_code& ec,
     const dbus::utility::MapperGetSubTreeResponse& subtree)
 {
-    BMCWEB_LOG_ERROR("Inside afterSystemsStorageGetSubtree");
     if (ec)
     {
         BMCWEB_LOG_DEBUG("requestRoutesStorage DBUS response error");
@@ -73,9 +71,9 @@ inline void afterSystemsStorageGetSubtree(
         subtree,
         [&storageId](const std::pair<std::string,
                                      dbus::utility::MapperServiceMap>& object) {
-        return sdbusplus::message::object_path(object.first).filename() ==
-               storageId;
-    });
+            return sdbusplus::message::object_path(object.first).filename() ==
+                   storageId;
+        });
     if (storage == subtree.end())
     {
 #if BMCWEB_AMI_RAIDBRCM_MACRO
@@ -105,12 +103,9 @@ inline void afterSystemsStorageGetSubtree(
             }
         }
 #endif
-        // else
-        // {
         messages::resourceNotFound(asyncResp->res, "#Storage.v1_13_0.Storage",
                                    storageId);
         return;
-        //}
     }
     asyncResp->res.jsonValue["@odata.type"] = "#Storage.v1_13_0.Storage";
     asyncResp->res.jsonValue["@odata.id"] =
@@ -126,13 +121,12 @@ inline void afterSystemsStorageGetSubtree(
                             BMCWEB_REDFISH_SYSTEM_URI_NAME, storageId);
 }
 
-inline void
-    handleSystemsStorageGet(App& app, const crow::Request& req,
-                            const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-                            const std::string& systemName,
-                            const std::string& storageId)
+inline void handleSystemsStorageGet(
+    App& app, const crow::Request& req,
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+    const std::string& systemName, const std::string& storageId)
 {
-    BMCWEB_LOG_ERROR("Inside handleSystemsStorageGet");
+    asyncResp->res.clearHeader(boost::beast::http::field::allow);
     if (!redfish::setUpRedfishRoute(app, req, asyncResp))
     {
         return;
@@ -144,7 +138,11 @@ inline void
                                    systemName);
         return;
     }
-
+    if (!membersResponseGet(asyncResp, storageId, "StorageCollection"))
+    {
+        return;
+    }
+    asyncResp->res.addHeader("Allow", "GET");
     if (storageId == "1")
     {
         redfish::handleSystemsStorageGetSingleInstance(asyncResp);
@@ -166,7 +164,12 @@ inline void
         std::size_t mscc = storageId.find("mscc_");
         if ((mscc != std::string::npos))
         {
-            redfish::getMSCCStorageInstance(asyncResp, storageId);
+            constexpr std::array<std::string_view, 1> interfaces = {
+                "com.ami.storage.mscc.ctrl.Controller"};
+            dbus::utility::getSubTree(
+                "/com/ami/storage/mscc", 0, interfaces,
+                std::bind_front(redfish::getMSCCStorageInstance, asyncResp,
+                                storageId));
         }
     }
 #endif
@@ -174,7 +177,6 @@ inline void
     {
         if (storageId == "Nvme")
         {
-            BMCWEB_LOG_ERROR("Inside 1111handleSystemsStorageGet");
             redfish::getStorageNvmeInstance(asyncResp);
         }
     }
@@ -192,6 +194,24 @@ inline void requestRoutesStorage(App& app)
         .privileges(redfish::privileges::getStorage)
         .methods(boost::beast::http::verb::get)(
             std::bind_front(handleSystemsStorageGet, std::ref(app)));
+
+    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/Storage/<str>/")
+        .methods(boost::beast::http::verb::post,
+                 boost::beast::http::verb::patch, boost::beast::http::verb::put,
+                 boost::beast::http::verb::delete_)(
+            [&app](const crow::Request& /* req */,
+                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+                   const std::string& /* systemName */,
+                   const std::string& storageId) {
+                asyncResp->res.clearHeader(boost::beast::http::field::allow);       
+                if (!membersResponseGet(asyncResp, storageId,
+                                        "StorageCollection"))
+                {
+                    return;
+                }
+                asyncResp->res.addHeader("Allow", "GET");
+                messages::operationNotAllowed(asyncResp->res);
+            });
 }
 
 } // namespace redfish::ext::core::resource

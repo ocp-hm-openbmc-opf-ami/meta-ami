@@ -7,7 +7,8 @@ SRC_URI = "\
             file://CMakeLists.txt \
             file://include/ \
 	    file://src/ \
-	    file://nss-pam-radiusd.service \	
+	    file://nss-pam-radiusd.service \
+            file://0003-Added-Radius-In-Pamorder.patch \	
           "
 
 S = "${WORKDIR}"
@@ -21,7 +22,9 @@ INSANE_SKIP:${PN} += "dev-so"
 DEPENDS += " \
     sdbusplus \
     boost \
+    nlohmann-json \
     phosphor-logging \
+    openssl \
     "
 
 do_install() {

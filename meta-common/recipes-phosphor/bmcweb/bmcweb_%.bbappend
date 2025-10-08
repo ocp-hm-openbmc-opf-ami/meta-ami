@@ -8,13 +8,52 @@ EXTRA_OEMESON += "-Dredfish-dbus-log=enabled"
 # add "redfish-hostiface" group
 GROUPADD_PARAM:${PN}:append = ";redfish-hostiface"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/bmcweb;branch=master;protocol=https;name=override;"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/bmcweb;protocol=https;branch=master;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "be5c8e5fe09ece87750f0e4652548a95ee0e85b0"
+SRCREV_override = "8f00b4ffa7f0210c4933a18aafa57b3cbd17dc31"
 
+EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '-Dintel-pfr=enabled',' ', d)}"
+
+EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '-Dintel-pfr=enabled',' ', d)}"
 EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'meta-mgx','-Dredfish-intel-feature=enabled','', d)}"
 EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'mtmitchell-layer', '-Dredfish-intel-feature=enabled', '', d)}"
 
 DEPENDS += "phosphor-snmp"
 
+do_configure:append() {
+    bbplain "****************************** Features Enabled in This Firmware Image ***********************************************"
+    i=1
+    for feature in ${EXTRA_IMAGE_FEATURES}; do
+        i=$(expr "$i" + 1)
+    done
+
+    bbplain "Total Feature Count = $i "
+
+    bbplain "*****************************************************************************"
+
+    rm -f "${S}/config/amiconfig.h"
+    touch "${S}/config/amiconfig.h"
+
+    i=1
+    j=1
+    for feature in ${EXTRA_IMAGE_FEATURES}; do
+        ENV_VAR_NAME=$(echo "$feature" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
+	ENV_LINE="#define ${ENV_VAR_NAME} true"
+
+        if [ $i -eq 1 ]; then
+            echo "" >> ${S}/config/amiconfig.h
+        fi
+
+        if ! grep -q "^${ENV_LINE}$" ${S}/config/amiconfig.h; then
+            echo "${ENV_LINE}" >> ${S}/config/amiconfig.h
+	    j=$(expr "$j" + 1)
+        else
+            bbwarn "Skipped (Duplicate feature already exists): $i. ${ENV_LINE}"
+        fi
+        i=$(expr "$i" + 1)
+    done
+
+    bbwarn "Generated environment variables in amiconfig.h file with $j Features"
+
+}
 

@@ -1,0 +1,157 @@
+From 790f370103e2817331b64297d182582fe8985d50 Mon Sep 17 00:00:00 2001
+From: pavithra <pavithrat@ami.com>
+Date: Wed, 23 Apr 2025 19:14:13 +0530
+Subject: [PATCH 309/309] Cipher Suite Privilege Limit
+
+---
+ command/open_session.cpp | 24 ++++++++++++++++++--
+ command/open_session.hpp | 48 ++++++++++++++++++++++++++++++++++++++++
+ command/session_cmds.cpp | 14 ++++++++++++
+ 3 files changed, 84 insertions(+), 2 deletions(-)
+
+diff --git a/command/open_session.cpp b/command/open_session.cpp
+index 21e0f3f..a0db55c 100644
+--- a/command/open_session.cpp
++++ b/command/open_session.cpp
+@@ -47,6 +47,18 @@ std::vector<uint8_t>
+         return outPayload;
+     }
+ 
++    uint8_t cipherPrivLimit = 0;
++    uint8_t cipherId = 0;
++
++    uint8_t chNum = static_cast<uint8_t>(getInterfaceIndex());
++    cipherPrivLimit = static_cast<uint8_t>(getCipherPrivilegeLimit(chNum, cipherId));
++
++    if (cipherPrivLimit == 0)
++    {
++	response->status_code = static_cast<uint8_t>(RAKP_ReturnCode::INSUFFICIENT_RESOURCES_ROLE);
++	return outPayload;
++    }
++
+     session::Privilege priv;
+ 
+     // 0h in the requested maximum privilege role field indicates highest level
+@@ -56,11 +68,19 @@ std::vector<uint8_t>
+     // permitted privilege level.
+     if (!request->maxPrivLevel)
+     {
+-        priv = session::Privilege::ADMIN;
++        priv = static_cast<session::Privilege>(cipherPrivLimit);
+     }
+     else
+     {
+-        priv = static_cast<session::Privilege>(request->maxPrivLevel);
++	if (request->maxPrivLevel <= cipherPrivLimit)
++	{
++            priv = static_cast<session::Privilege>(request->maxPrivLevel);
++	}
++	else
++	{
++            response->status_code = static_cast<uint8_t>(RAKP_ReturnCode::UNAUTH_ROLE_PRIV);
++	    return outPayload;
++	}
+     }
+ 
+     // Check for valid Confidentiality Algorithms
+diff --git a/command/open_session.hpp b/command/open_session.hpp
+index 2e17bf3..3497e20 100644
+--- a/command/open_session.hpp
++++ b/command/open_session.hpp
+@@ -4,6 +4,10 @@
+ 
+ #include <vector>
+ 
++#include <user_channel/channel_mgmt.hpp>
++
++#include <fstream>
++
+ namespace command
+ {
+ 
+@@ -159,6 +163,50 @@ struct OpenSessionResponse
+     uint16_t reserved14;
+ } __attribute__((packed));
+ 
++/** @brief Get Cipher privilege from Json
++ *
++ *  @param[in] chNum - Channal Number
++ *
++ *  @param[in] cipherId - Cipher ID
++ *
++ *  @return Cipher privilege value
++ */
++inline uint8_t getCipherPrivilegeLimit(const uint8_t& chNum, const uint8_t cipherId)
++{
++    (void)cipherId;  
++    uint8_t cipherPrivLimit = 4;
++
++    std::string channelKey = "Channel" + std::to_string(chNum);
++    std::ifstream jsonFile("/var/lib/ipmi/cs_privilege_levels.json");
++
++    if (!jsonFile.is_open())
++    {
++       // return admin privilege since cipher privilege is not set
++       return cipherPrivLimit;
++    }
++    else
++    {
++       using json = nlohmann::json;
++       json jsonData;
++       try
++       {
++	  jsonFile >> jsonData;
++       }
++       catch (const json::parse_error& e)
++       {
++	  std::cerr << "JSON parsing error: " << e.what() << std::endl;
++       }
++
++       jsonFile.close();
++       std::string cipherPrivStr = jsonData[channelKey]["CipherID0"];
++
++       ipmi::ChannelConfig channelConfig;
++       cipherPrivLimit = static_cast<uint8_t>(channelConfig.convertToPrivLimitIndex(cipherPrivStr));
++
++       return cipherPrivLimit;
++    }
++}
++
+ /**
+  * @brief RMCP+ Open Session Request, RMCP+ Open Session Response
+  *
+diff --git a/command/session_cmds.cpp b/command/session_cmds.cpp
+index 1a7c266..0465507 100644
+--- a/command/session_cmds.cpp
++++ b/command/session_cmds.cpp
+@@ -11,6 +11,8 @@
+ 
+ #include <chrono>
+ 
++#include "open_session.hpp"
++
+ using namespace std::chrono_literals;
+ 
+ namespace command
+@@ -54,6 +56,18 @@ std::vector<uint8_t>
+         return outPayload;
+     }
+ 
++    uint8_t cipherId = 0;
++    uint8_t chNum = static_cast<uint8_t>(getInterfaceIndex());
++
++    uint8_t cipherPrivLimit = static_cast<uint8_t>(getCipherPrivilegeLimit(chNum, cipherId));
++
++    if (reqPrivilegeLevel > cipherPrivLimit)
++    {
++	// Requested level exceeds Cpher Privilege Limit
++	response->completionCode = IPMI_CC_EXCEEDS_USER_PRIV;
++	return outPayload;
++    }
++
+     if (reqPrivilegeLevel > (static_cast<uint8_t>(session->reqMaxPrivLevel) &
+                              session::reqMaxPrivMask))
+     {
+-- 
+2.34.1
+

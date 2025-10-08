@@ -1,0 +1,152 @@
+From fb81074a81431725ad3e01f263dbd2ee2833e8c5 Mon Sep 17 00:00:00 2001
+From: fredhsieh <fredhsieh@ami.com>
+Date: Fri, 12 Sep 2025 17:44:41 +0800
+Subject: [PATCH] Fix I2C Coverity for linux-onetree
+
+---
+ drivers/i2c/i2c-slave-mqueue.c | 57 +++++++++++++++++++++++++---------
+ 1 file changed, 43 insertions(+), 14 deletions(-)
+
+diff --git a/drivers/i2c/i2c-slave-mqueue.c b/drivers/i2c/i2c-slave-mqueue.c
+index a9f116ef9528..385f4cc854db 100644
+--- a/drivers/i2c/i2c-slave-mqueue.c
++++ b/drivers/i2c/i2c-slave-mqueue.c
+@@ -51,34 +51,49 @@ static int i2c_slave_mqueue_callback(struct i2c_client *client,
+ 				     enum i2c_slave_event event, u8 *val)
+ {
+ 	struct mq_queue *mq = i2c_get_clientdata(client);
+-	struct mq_msg *msg = mq->curr;
++	struct mq_msg *msg;
++	unsigned long flags;
+ 	int ret = 0;
+ 
+ 	switch (event) {
+ 	case I2C_SLAVE_WRITE_REQUESTED:
+ 	case I2C_SLAVE_GCALL_REQUESTED:
++		spin_lock_irqsave(&mq->lock, flags);
+ 		mq->truncated = 0;
++		msg = mq->curr;
+ 
+ 		msg->len = 1;
+ 		msg->buf[0] = event == I2C_SLAVE_GCALL_REQUESTED ?
+ 			      0 : client->addr << 1;
++		spin_unlock_irqrestore(&mq->lock, flags);
+ 		break;
+ 
+ 	case I2C_SLAVE_WRITE_RECEIVED:
++		spin_lock_irqsave(&mq->lock, flags);
++		msg = mq->curr;
++
+ 		if (msg->len < MQ_MSGBUF_SIZE) {
+-			msg->buf[msg->len++] = *val;
++			msg->buf[msg->len] = *val;
++			msg->len++;
+ 		} else {
+-			dev_err(&client->dev, "message is truncated!\n");
+ 			mq->truncated = 1;
+ 			ret = -EINVAL;
++			spin_unlock_irqrestore(&mq->lock, flags);
++			dev_err(&client->dev, "message is truncated!\n");
++			return ret;
+ 		}
++		spin_unlock_irqrestore(&mq->lock, flags);
+ 		break;
+ 
+ 	case I2C_SLAVE_STOP:
+-		if (unlikely(mq->truncated || msg->len < 2))
++		spin_lock_irqsave(&mq->lock, flags);
++		msg = mq->curr;
++
++		if (unlikely(mq->truncated || msg->len < 2)) {
++			spin_unlock_irqrestore(&mq->lock, flags);
+ 			break;
++		}
+ 
+-		spin_lock(&mq->lock);
+ 		mq->in = MQ_QUEUE_NEXT(mq->in);
+ 		mq->curr = &mq->queue[mq->in];
+ 		mq->curr->len = 0;
+@@ -86,7 +101,7 @@ static int i2c_slave_mqueue_callback(struct i2c_client *client,
+ 		/* Flush the oldest message */
+ 		if (mq->out == mq->in)
+ 			mq->out = MQ_QUEUE_NEXT(mq->out);
+-		spin_unlock(&mq->lock);
++		spin_unlock_irqrestore(&mq->lock, flags);
+ 
+ 		kernfs_notify(mq->kn);
+ 		break;
+@@ -150,16 +165,18 @@ static int i2c_slave_mqueue_probe(struct i2c_client *client)
+ 	BUILD_BUG_ON(!is_power_of_2(MQ_QUEUE_SIZE));
+ 
+ 	mq->client = client;
+-
+-	buf = devm_kmalloc_array(dev, MQ_QUEUE_SIZE, MQ_MSGBUF_SIZE,
+-				 GFP_KERNEL);
++	
++	buf = kzalloc(MQ_QUEUE_SIZE * MQ_MSGBUF_SIZE, GFP_KERNEL);
++	
+ 	if (!buf)
+ 		return -ENOMEM;
+ 
+-	mq->queue = devm_kzalloc(dev, sizeof(*mq->queue) * MQ_QUEUE_SIZE,
+-				 GFP_KERNEL);
+-	if (!buf)
++	mq->queue = kzalloc(sizeof(*mq->queue) * MQ_QUEUE_SIZE, GFP_KERNEL);
++
++	if (!mq->queue) {
++		kfree(buf);
+ 		return -ENOMEM;
++	}
+ 
+ 	for (i = 0; i < MQ_QUEUE_SIZE; i++)
+ 		mq->queue[i].buf = buf + i * MQ_MSGBUF_SIZE;
+@@ -176,12 +193,17 @@ static int i2c_slave_mqueue_probe(struct i2c_client *client)
+ 	mq->bin.size = MQ_MSGBUF_SIZE * MQ_QUEUE_SIZE;
+ 
+ 	ret = sysfs_create_bin_file(&dev->kobj, &mq->bin);
+-	if (ret)
++	if (ret) {
++		kfree(mq->queue);
++		kfree(buf);
+ 		return ret;
++	}
+ 
+ 	mq->kn = kernfs_find_and_get(dev->kobj.sd, mq->bin.attr.name);
+ 	if (!mq->kn) {
+ 		sysfs_remove_bin_file(&dev->kobj, &mq->bin);
++		kfree(mq->queue);
++		kfree(buf);
+ 		return -EFAULT;
+ 	}
+ 
+@@ -189,6 +211,8 @@ static int i2c_slave_mqueue_probe(struct i2c_client *client)
+ 	if (ret) {
+ 		kernfs_put(mq->kn);
+ 		sysfs_remove_bin_file(&dev->kobj, &mq->bin);
++		kfree(mq->queue);
++		kfree(buf);
+ 		return ret;
+ 	}
+ 
+@@ -198,12 +222,17 @@ static int i2c_slave_mqueue_probe(struct i2c_client *client)
+ static void i2c_slave_mqueue_remove(struct i2c_client *client)
+ {
+ 	struct mq_queue *mq = i2c_get_clientdata(client);
+-
++	
+ 	i2c_slave_unregister(client);
+ 
+ 	kernfs_put(mq->kn);
+ 	sysfs_remove_bin_file(&client->dev.kobj, &mq->bin);
+ 
++	if (mq->queue) {
++		kfree(mq->queue[0].buf);  /* Free the original buf */
++		kfree(mq->queue);         /* Free the queue array */
++	}
++
+ }
+ 
+ static const struct i2c_device_id i2c_slave_mqueue_id[] = {
+-- 
+2.34.1
+

@@ -1,8 +1,9 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/dbus-sensors.git;branch=master;protocol=https;name=override;"
+
+SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/dbus-sensors;protocol=https;branch=master;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "8514ed10b2d6998e3f3db75bdcbf09605208da4f"
+SRCREV_override = "b49ff121c8fd880de57ac90e7a6d8bb2800b1dfd"
 
 SRC_URI_ast2600:append =  " \
             file://0001-ADCSensor-Fix-for-P3V3-sensor.patch \
@@ -28,6 +29,7 @@ PACKAGECONFIG[acpidevicestatus] = "-Dacpidevice=enabled, -Dacpidevice=disabled"
 PACKAGECONFIG[digital] = "-Ddigital=enabled, -Ddigital=disabled"
 PACKAGECONFIG[bmcfirmwarehealth] = "-Dbmc-firmware-health=enabled, -Dbmc-firmware-health=disabled"
 PACKAGECONFIG[damagedsensor] = "-Ddamaged-sensor=enabled, -Ddamaged-sensor=disabled"
+PACKAGECONFIG[logstatus] = "-Dlogstatus=enabled, -Dlogstatus=disabled"
 
 PACKAGECONFIG:append = " processorstatus \
             systemsensor \
@@ -40,6 +42,7 @@ PACKAGECONFIG:append = " processorstatus \
             digital \
             bmcfirmwarehealth \
             damagedsensor \
+            logstatus \
 "
 
 SYSTEMD_SERVICE:${PN}:append = " ${@bb.utils.contains('PACKAGECONFIG', 'processorstatus', \
@@ -85,4 +88,6 @@ SYSTEMD_SERVICE:${PN} += "${@bb.utils.contains('PACKAGECONFIG', 'bmcfirmwareheal
 SYSTEMD_SERVICE:${PN} += "${@bb.utils.contains('PACKAGECONFIG', 'damagedsensor', \
                                                'xyz.openbmc_project.damagedsensor.service', \
                                                '', d)}"
-
+SYSTEMD_SERVICE:${PN}:append = " ${@bb.utils.contains('PACKAGECONFIG', 'digital', \
+                                               'xyz.openbmc_project.logstatus.service', \
+                                               '', d)}"

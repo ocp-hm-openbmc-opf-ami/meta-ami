@@ -1,0 +1,585 @@
+From 02f05ccc3756d76d6d03841ba6aa6563378b56ea Mon Sep 17 00:00:00 2001
+From: SonaN <sonan@ami.com>
+Date: Thu, 14 Aug 2025 00:06:55 +0530
+Subject: [PATCH] Added the Condition to handle the journal log
+
+Signed-off-by: SonaN <sonan@ami.com>
+---
+ dbus/dbusconfiguration.cpp | 67 ++++++++++++++++++++++------------
+ main.cpp                   | 18 ++++++++++
+ pid/builder.cpp            | 55 ++++++++++++++++++++--------
+ pid/buildjson.cpp          | 23 ++++++++----
+ pid/fancontroller.cpp      | 16 ++++++---
+ pid/zone.cpp               | 74 ++++++++++++++++++++++++++++----------
+ sensors/builder.cpp        | 28 ++++++++++-----
+ 7 files changed, 206 insertions(+), 75 deletions(-)
+
+diff --git a/dbus/dbusconfiguration.cpp b/dbus/dbusconfiguration.cpp
+index 0fc9fa6..4aecc0d 100644
+--- a/dbus/dbusconfiguration.cpp
++++ b/dbus/dbusconfiguration.cpp
+@@ -289,14 +289,21 @@ inline void getCycleTimeSetting(
+         }
+         else
+         {
+-            std::cerr << "Zone " << zoneIndex << ": " << attributeName
+-                      << " is invalid. Use default " << value << " ms\n";
++            if constexpr (pid_control::conf::DEBUG)
++            {
++                std::cerr << "Zone " << zoneIndex << ": " << attributeName
++                          << " is invalid. Use default " << value << " ms\n";
++            }
+         }
+     }
+     else
+     {
+-        std::cerr << "Zone " << zoneIndex << ": " << attributeName
+-                  << " cannot find setting. Use default " << value << " ms\n";
++        if constexpr (pid_control::conf::DEBUG)
++        {
++            std::cerr << "Zone " << zoneIndex << ": " << attributeName
++                      << " cannot find setting. Use default " << value
++                      << " ms\n";
++        }
+     }
+ }
+ 
+@@ -623,8 +630,11 @@ bool init(sdbusplus::bus_t& bus, boost::asio::steady_timer& timer,
+ 
+             auto desiredIndex = static_cast<int64_t>(*ptrZoneIndex);
+             auto grantedIndex = setZoneIndex(name, foundZones, desiredIndex);
+-            std::cout << "Zone " << name << " is at ZoneIndex " << grantedIndex
+-                      << "\n";
++            if constexpr (pid_control::conf::DEBUG)
++            {
++                std::cout << "Zone " << name << " is at ZoneIndex "
++                          << grantedIndex << "\n";
++            }
+         }
+     }
+ 
+@@ -673,8 +683,8 @@ bool init(sdbusplus::bus_t& bus, boost::asio::steady_timer& timer,
+                 auto maxPwmFind = cfg.find("MaxPwm");
+                 if (maxPwmFind != cfg.end())
+                 {
+-                    details.oemconfig.maxPwm = std::visit(VariantToIntVisitor(),
+-                                                          maxPwmFind->second);
++                    details.oemconfig.maxPwm =
++                        std::visit(VariantToIntVisitor(), maxPwmFind->second);
+                 }
+                 auto minNumberFansFind = cfg.find("MinnumberFailedFans");
+                 if (minNumberFansFind != cfg.end())
+@@ -886,25 +896,35 @@ bool init(sdbusplus::bus_t& bus, boost::asio::steady_timer& timer,
+                          * * Log error and continue, this allows the fan control
+                          * to work with other good fan pid class
+                          */
+-                        std::cerr
+-                            << "fan PID has invalid number of Outputs: input size "
+-                            << inputSensorInterfaces.size() << " output size "
+-                            << outputSensorInterfaces.size() << "\n";
++                        if constexpr (pid_control::conf::DEBUG)
++                        {
++                            std::cerr
++                                << "fan PID has invalid number of Outputs: input size "
++                                << inputSensorInterfaces.size()
++                                << " output size "
++                                << outputSensorInterfaces.size() << "\n";
++                        }
+                         for (const SensorInterfaceType& inputSensorInterface :
+                              inputSensorInterfaces)
+                         {
+-                            std::cerr
+-                                << "fan PID has invalid number of Outputs: input "
+-                                << inputSensorInterface.first << " : "
+-                                << inputSensorInterface.second << "\n";
++                            if constexpr (pid_control::conf::DEBUG)
++                            {
++                                std::cerr
++                                    << "fan PID has invalid number of Outputs: input "
++                                    << inputSensorInterface.first << " : "
++                                    << inputSensorInterface.second << "\n";
++                            }
+                         }
+                         for (const SensorInterfaceType& outputSensorInterface :
+                              outputSensorInterfaces)
+                         {
+-                            std::cerr
+-                                << "fan PID has invalid number of Outputs: output "
+-                                << outputSensorInterface.first << " : "
+-                                << outputSensorInterface.second << "\n";
++                            if constexpr (pid_control::conf::DEBUG)
++                            {
++                                std::cerr
++                                    << "fan PID has invalid number of Outputs: output "
++                                    << outputSensorInterface.first << " : "
++                                    << outputSensorInterface.second << "\n";
++                            }
+                         }
+                         continue;
+                     }
+@@ -1184,8 +1204,11 @@ bool init(sdbusplus::bus_t& bus, boost::asio::steady_timer& timer,
+     }
+     if (zoneConfig.empty() || zoneDetailsConfig.empty())
+     {
+-        std::cerr
+-            << "No fan zones, application pausing until new configuration\n";
++        if constexpr (pid_control::conf::DEBUG)
++        {
++            std::cerr
++                << "No fan zones, application pausing until new configuration\n";
++        }
+         return false;
+     }
+     return true;
+diff --git a/main.cpp b/main.cpp
+index 71de40a..22b026e 100644
+--- a/main.cpp
++++ b/main.cpp
+@@ -119,7 +119,10 @@ void stopControlLoops()
+ 
+     if (state::zones.size() > 0 && state::zones.begin()->second.use_count() > 1)
+     {
++	if constexpr (pid_control::conf::DEBUG)
++	{
+         throw std::runtime_error("wait for count back to 1");
++	}
+     }
+ 
+     state::zones.clear();
+@@ -148,7 +151,10 @@ void restartControlLoops()
+         }
+         catch (const std::exception& e)
+         {
++	    if constexpr (pid_control::conf::DEBUG)
++	    {
+             std::cerr << "Failed during building: " << e.what() << "\n";
++	    }
+             exit(EXIT_FAILURE); /* fatal error. */
+         }
+     }
+@@ -168,7 +174,10 @@ void restartControlLoops()
+ 
+     if (0 == state::zones.size())
+     {
++	if constexpr (pid_control::conf::DEBUG)
++	{
+         std::cerr << "No zones defined, exiting.\n";
++	}
+         std::exit(EXIT_FAILURE);
+     }
+ 
+@@ -177,7 +186,10 @@ void restartControlLoops()
+         std::shared_ptr<boost::asio::steady_timer> timer =
+             state::timers.emplace_back(
+                 std::make_shared<boost::asio::steady_timer>(io));
++	if constexpr (pid_control::conf::DEBUG)
++	{
+         std::cerr << "pushing zone " << i.first << "\n";
++	}
+         pidControlLoop(i.second, timer, &state::isCanceling);
+     }
+ }
+@@ -200,8 +212,11 @@ void tryRestartControlLoops(bool first)
+         }
+         catch (const std::exception& e)
+         {
++	    if constexpr (pid_control::conf::DEBUG)
++	    {
+             std::cerr << "Failed during restartControlLoops, try again: "
+                       << e.what() << "\n";
++	    }
+             tryRestartControlLoops(false);
+         }
+     };
+@@ -243,8 +258,11 @@ void tryTerminateControlLoops(bool first)
+         }
+         catch (const std::exception& e)
+         {
++	   if constexpr (pid_control::conf::DEBUG)
++	   {
+             std::cerr << "Failed during stopControlLoops, try again: "
+                       << e.what() << "\n";
++	   }
+             tryTerminateControlLoops(false);
+             return;
+         }
+diff --git a/pid/builder.cpp b/pid/builder.cpp
+index 3f8bf1c..570d138 100644
+--- a/pid/builder.cpp
++++ b/pid/builder.cpp
+@@ -50,10 +50,10 @@ static std::string getPidControlPath(int64_t zone, std::string pidname)
+     return std::string(objectPath) + std::to_string(zone) + "/" + pidname;
+ }
+ 
+-std::unordered_map<int64_t, std::shared_ptr<ZoneInterface>>
+-    buildZones(const std::map<int64_t, conf::PIDConf>& zonePids,
+-               std::map<int64_t, conf::ZoneConfig>& zoneConfigs,
+-               SensorManager& mgr, sdbusplus::bus_t& modeControlBus)
++std::unordered_map<int64_t, std::shared_ptr<ZoneInterface>> buildZones(
++    const std::map<int64_t, conf::PIDConf>& zonePids,
++    std::map<int64_t, conf::ZoneConfig>& zoneConfigs, SensorManager& mgr,
++    sdbusplus::bus_t& modeControlBus)
+ {
+     std::unordered_map<int64_t, std::shared_ptr<ZoneInterface>> zones;
+ 
+@@ -69,7 +69,10 @@ std::unordered_map<int64_t, std::shared_ptr<ZoneInterface>>
+             /* The Zone doesn't have a configuration, bail. */
+             static constexpr auto err =
+                 "Bailing during load, missing Zone Configuration";
+-            std::cerr << err << std::endl;
++            if constexpr (pid_control::conf::DEBUG)
++            {
++                std::cerr << err << std::endl;
++            }
+             throw std::runtime_error(err);
+         }
+ 
+@@ -78,14 +81,19 @@ std::unordered_map<int64_t, std::shared_ptr<ZoneInterface>>
+             zoneConf->second.failsafePercent, zoneConf->second.cycleTime, mgr,
+             modeControlBus, getControlPath(zoneId).c_str(), deferSignals,
+             zoneConf->second.oemconfig, zoneConf->second.accumulateSetPoint);
+-
+-        std::cerr << "Zone Id: " << zone->getZoneID() << "\n";
++        if constexpr (pid_control::conf::DEBUG)
++        {
++            std::cerr << "Zone Id: " << zone->getZoneID() << "\n";
++        }
+ 
+         // For each PID create a Controller and a Sensor.
+         for (const auto& [name, info] : pidConfig)
+         {
+             std::vector<pid_control::conf::SensorInput> inputs;
+-            std::cerr << "PID name: " << name << "\n";
++            if constexpr (pid_control::conf::DEBUG)
++            {
++                std::cerr << "PID name: " << name << "\n";
++            }
+ 
+             /*
+              * TODO(venture): Need to check if input is known to the
+@@ -137,22 +145,39 @@ std::unordered_map<int64_t, std::shared_ptr<ZoneInterface>>
+                     getPidControlPath(zoneId, name), deferSignals);
+                 zone->addPidFailSafePercent(name, info.failSafePercent);
+             }
+-
+-            std::cerr << "inputs: ";
++            if constexpr (pid_control::conf::DEBUG)
++            {
++                std::cerr << "inputs: ";
++            }
+             for (const auto& i : inputs)
+             {
+-                std::cerr << i.name;
++                if constexpr (pid_control::conf::DEBUG)
++                {
++                    std::cerr << i.name;
++                }
+                 if (i.convertTempToMargin)
+                 {
+-                    std::cerr << "[" << i.convertMarginZero << "]";
++                    if constexpr (pid_control::conf::DEBUG)
++                    {
++                        std::cerr << "[" << i.convertMarginZero << "]";
++                    }
+                 }
+                 if (i.missingIsAcceptable)
+                 {
+-                    std::cerr << "?";
++                    if constexpr (pid_control::conf::DEBUG)
++                    {
++                        std::cerr << "?";
++                    }
+                 }
+-                std::cerr << ", ";
++                if constexpr (pid_control::conf::DEBUG)
++                {
++                    std::cerr << ", ";
++                }
++            }
++            if constexpr (pid_control::conf::DEBUG)
++            {
++                std::cerr << "\n";
+             }
+-            std::cerr << "\n";
+         }
+ 
+         zone->emit_object_added();
+diff --git a/pid/buildjson.cpp b/pid/buildjson.cpp
+index feb3bb8..f8b1339 100644
+--- a/pid/buildjson.cpp
++++ b/pid/buildjson.cpp
+@@ -183,14 +183,21 @@ inline void getCycleTimeSetting(const auto& zone, const int id,
+         }
+         else
+         {
+-            std::cerr << "Zone " << id << ": " << attributeName
+-                      << " is invalid. Use default " << value << " ms\n";
++            if constexpr (pid_control::conf::DEBUG)
++            {
++                std::cerr << "Zone " << id << ": " << attributeName
++                          << " is invalid. Use default " << value << " ms\n";
++            }
+         }
+     }
+     else
+     {
+-        std::cerr << "Zone " << id << ": " << attributeName
+-                  << " cannot find setting. Use default " << value << " ms\n";
++        if constexpr (pid_control::conf::DEBUG)
++        {
++            std::cerr << "Zone " << id << ": " << attributeName
++                      << " cannot find setting. Use default " << value
++                      << " ms\n";
++        }
+     }
+ }
+ 
+@@ -236,8 +243,12 @@ std::pair<std::map<int64_t, conf::PIDConf>, std::map<int64_t, conf::ZoneConfig>>
+ 
+             if (thisZone.find(name) != thisZone.end())
+             {
+-                std::cerr << "Warning: zone " << id
+-                          << " have the same pid name " << name << std::endl;
++                if constexpr (pid_control::conf::DEBUG)
++                {
++                    std::cerr
++                        << "Warning: zone " << id << " have the same pid name "
++                        << name << std::endl;
++                }
+             }
+ 
+             thisZone[name] = item;
+diff --git a/pid/fancontroller.cpp b/pid/fancontroller.cpp
+index 378ef9b..bfc15bc 100644
+--- a/pid/fancontroller.cpp
++++ b/pid/fancontroller.cpp
+@@ -79,7 +79,10 @@ double FanController::inputProc(void)
+     }
+     catch (const std::exception& e)
+     {
+-        std::cerr << "exception on inputProc.\n";
++        if constexpr (pid_control::conf::DEBUG)
++        {
++            std::cerr << "exception on inputProc.\n";
++        }
+         throw;
+     }
+ 
+@@ -172,10 +175,13 @@ void FanController::outputProc(double value)
+             if (failsafeTransition)
+             {
+                 failsafeTransition = false;
+-                std::cerr << "Zone " << _owner->getZoneID() << " fans, "
+-                          << (failsafeCurrState ? "entering failsafe"
+-                                                : "returning to normal")
+-                          << " mode, output pwm: " << percent << "\n";
++                if constexpr (pid_control::conf::DEBUG)
++                {
++                    std::cerr << "Zone " << _owner->getZoneID() << " fans, "
++                              << (failsafeCurrState ? "entering failsafe"
++                                                    : "returning to normal")
++                              << " mode, output pwm: " << percent << "\n";
++                }
+             }
+         }
+     }
+diff --git a/pid/zone.cpp b/pid/zone.cpp
+index f055a29..1d36654 100644
+--- a/pid/zone.cpp
++++ b/pid/zone.cpp
+@@ -92,7 +92,7 @@ void DbusPidZone::setManualMode(bool mode)
+ 
+ bool DbusPidZone::getFailSafeMode(void) const
+ {
+-	if (true == _forceFailSafeMode)
++    if (true == _forceFailSafeMode)
+     {
+         return true;
+     }
+@@ -364,14 +364,20 @@ void DbusPidZone::determineMaxSetPointRequest(void)
+     }
+     else if (_maximumSetPointName.compare(_maximumSetPointNamePrev))
+     {
+-        std::cerr << "PID Zone " << _zoneId << " max SetPoint "
+-                  << _maximumSetPoint << " requested by "
+-                  << _maximumSetPointName;
++        if constexpr (pid_control::conf::DEBUG)
++        {
++            std::cerr << "PID Zone " << _zoneId << " max SetPoint "
++                      << _maximumSetPoint << " requested by "
++                      << _maximumSetPointName;
++        }
+         for (const auto& sensor : _failSafeSensors)
+         {
+             if (sensor.find("Fan") == std::string::npos)
+             {
+-                std::cerr << " " << sensor;
++                if constexpr (pid_control::conf::DEBUG)
++                {
++                    std::cerr << " " << sensor;
++                }
+             }
+         }
+         std::cerr << "\n";
+@@ -391,6 +397,12 @@ void DbusPidZone::determineMaxSetPointRequest(void)
+         // Allow per-zone setpoint files to override overall setpoint file
+         std::ostringstream zoneSuffix;
+         zoneSuffix << ".zone" << _zoneId;
++        if constexpr (pid_control::conf::DEBUG)
++        {
++            std::cout << "Debug: zoneSuffix = " << zoneSuffix.str()
++                      << std::endl;
++        }
++
+         std::string zoneSetpointPath = setpointpath + zoneSuffix.str();
+ 
+         fileParseRpm(zoneSetpointPath, _maximumSetPoint);
+@@ -502,18 +514,29 @@ void DbusPidZone::initializeCache(void)
+ 
+ void DbusPidZone::dumpCache(void)
+ {
+-    std::cerr << "Cache values now: \n";
++    if constexpr (pid_control::conf::DEBUG)
++    {
++        std::cerr << "Cache values now: \n";
++    }
+     for (const auto& [name, value] : _cachedValuesByName)
+     {
+-        std::cerr << name << ": " << value.scaled << " " << value.unscaled
+-                  << "\n";
++        if constexpr (pid_control::conf::DEBUG)
++        {
++            std::cerr << name << ": " << value.scaled << " " << value.unscaled
++                      << "\n";
++        }
++    }
++    if constexpr (pid_control::conf::DEBUG)
++    {
++        std::cerr << "Fan outputs now: \n";
+     }
+-
+-    std::cerr << "Fan outputs now: \n";
+     for (const auto& [name, value] : _cachedFanOutputs)
+     {
+-        std::cerr << name << ": " << value.scaled << " " << value.unscaled
+-                  << "\n";
++        if constexpr (pid_control::conf::DEBUG)
++        {
++            std::cerr << name << ": " << value.scaled << " " << value.unscaled
++                      << "\n";
++        }
+     }
+ }
+ 
+@@ -563,9 +586,12 @@ bool DbusPidZone::failSafe() const
+ 
+ bool DbusPidZone::forceFailSafe(bool modeStatus)
+ {
+-    std::cerr << "force fail-safe: " << modeStatus << std::endl;
++    if constexpr (pid_control::conf::DEBUG)
++    {
++        std::cerr << "force fail-safe: " << modeStatus << std::endl;
++    }
+     _forceFailSafeMode = modeStatus;
+-    //return ModeObject::forceFailSafe(modeStatus);
++    // return ModeObject::forceFailSafe(modeStatus);
+     return true;
+ }
+ 
+@@ -610,13 +636,20 @@ void DbusPidZone::initPidFailSafePercent(void)
+     // controller, and assign it to zone failsafe percent.
+ 
+     _failSafePercent = _zoneFailSafePercent;
+-    std::cerr << "zone: Zone" << _zoneId
+-              << " zoneFailSafePercent: " << _zoneFailSafePercent << "\n";
++    if constexpr (pid_control::conf::DEBUG)
++    {
++        std::cerr << "zone: Zone" << _zoneId
++                  << " zoneFailSafePercent: " << _zoneFailSafePercent << "\n";
++    }
+ 
+     for (const auto& [name, value] : _pidsFailSafePercent)
+     {
+         _failSafePercent = std::max(_failSafePercent, value);
+-        std::cerr << "pid: " << name << " failSafePercent: " << value << "\n";
++        if constexpr (pid_control::conf::DEBUG)
++        {
++            std::cerr << "pid: " << name << " failSafePercent: " << value
++                      << "\n";
++        }
+     }
+ 
+     // when the final failsafe percent is zero , it indicate no failsafe
+@@ -625,8 +658,11 @@ void DbusPidZone::initPidFailSafePercent(void)
+     {
+         _failSafePercent = 100;
+     }
+-    std::cerr << "Final zone" << _zoneId
+-              << " failSafePercent: " << _failSafePercent << "\n";
++    if constexpr (pid_control::conf::DEBUG)
++    {
++        std::cerr << "Final zone" << _zoneId
++                  << " failSafePercent: " << _failSafePercent << "\n";
++    }
+ }
+ 
+ void DbusPidZone::addPidFailSafePercent(std::string name, double percent)
+diff --git a/sensors/builder.cpp b/sensors/builder.cpp
+index 45be00b..c3926bf 100644
+--- a/sensors/builder.cpp
++++ b/sensors/builder.cpp
+@@ -57,9 +57,14 @@ SensorManager buildSensors(std::map<std::string, conf::SensorConfig>& config,
+ 
+         std::string name = current->first;
+         const conf::SensorConfig* info = &current->second;
+-
+-        std::cerr << "Sensor: " << name << " " << info->type << " ";
+-        std::cerr << info->readPath << " " << info->writePath << "\n";
++        if constexpr (pid_control::conf::DEBUG)
++        {
++            std::cerr << "Sensor: " << name << " " << info->type << " ";
++        }
++        if constexpr (pid_control::conf::DEBUG)
++        {
++            std::cerr << info->readPath << " " << info->writePath << "\n";
++        }
+ 
+         IOInterfaceType rtype = getReadInterfaceType(info->readPath);
+         IOInterfaceType wtype = getWriteInterfaceType(info->writePath);
+@@ -100,8 +105,8 @@ SensorManager buildSensors(std::map<std::string, conf::SensorConfig>& config,
+                         << " Failed to create dbus passive sensor :" << name
+                         << " of type: " << info->type << "\n";
+                     config.erase(current);
+-                    auto sensor = std::make_unique<FailedSensor>(name,
+-                                                                 info->timeout);
++                    auto sensor =
++                        std::make_unique<FailedSensor>(name, info->timeout);
+                     mgmr.addSensor(info->type, name, std::move(sensor));
+                     continue;
+                 }
+@@ -177,12 +182,19 @@ SensorManager buildSensors(std::map<std::string, conf::SensorConfig>& config,
+         {
+             // These sensors are read-only, but only for this application
+             // which only writes to fan sensors.
+-            std::cerr << info->type << " readPath: " << info->readPath << "\n";
++            if constexpr (pid_control::conf::DEBUG)
++            {
++                std::cerr << info->type << " readPath: " << info->readPath
++                          << "\n";
++            }
+ 
+             if (IOInterfaceType::EXTERNAL == rtype)
+             {
+-                std::cerr << "Creating HostSensor: " << name
+-                          << " path: " << info->readPath << "\n";
++                if constexpr (pid_control::conf::DEBUG)
++                {
++                    std::cerr << "Creating HostSensor: " << name
++                              << " path: " << info->readPath << "\n";
++                }
+ 
+                 /*
+                  * The reason we handle this as a HostSensor is because it's
+-- 
+2.43.0
+
