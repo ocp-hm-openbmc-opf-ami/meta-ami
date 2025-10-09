@@ -634,7 +634,7 @@ SUPPORTED_VENDOR:${PN}-network-bonding-support = "ALL"
 
 SUMMARY:${PN}-network-openssl-support = "AMI Core Features: Openssl FIPS Support"
 DESCRIPTION:${PN}-network-openssl-support = "OpenSSL FIPS (Federal Information Processing Standard) is a mode of OpenSSL that ensures cryptographic operations meet FIPS 140-2 security standards, providing a validated and secure environment for encryption and cryptographic modules used in sensitive applications."
-RDEPENDS:${PN}-network-openssl-support = " openssl-manager "
+RDEPENDS:${PN}-network-openssl-support = " openssl-manager openssl-ossl-module-legacy openssl-ossl-module-fips "
 SUPPORTED_VENDOR:${PN}-network-openssl-support = "ALL"
 #-----------------------------------#
 
