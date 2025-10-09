@@ -11,7 +11,6 @@ RPROVIDES:${PN} = "${PACKAGES}"
 
 PACKAGES = " \
     ${PN}-apps \
-    ${PN}-ssp \
     ${PN}-crypto \
     ${PN}-ssif \
     ${PN}-mtdtest \
@@ -24,14 +23,6 @@ RDEPENDS:${PN}-apps = " \
     aspeed-app \
     "
 
-SUMMARY:${PN}-ssp = "AspeedTech Secondary Service Processor"
-RDEPENDS:${PN}-ssp = " \
-    ssp \
-    "
-RRECOMMENDS:${PN}-ssp= " \
-    kernel-module-aspeed-ssp \
-    "
-
 SUMMARY:${PN}-crypto = "AspeedTech Crypto"
 RDEPENDS:${PN}-crypto = " \
     libcrypto \
@@ -40,6 +31,7 @@ RDEPENDS:${PN}-crypto = " \
     openssl-bin \
     openssl-conf \
     openssl-engines \
+    ast-crypto-engine \
     "
 
 SUMMARY:${PN}-ssif = "IPMI SMBus System Interface"

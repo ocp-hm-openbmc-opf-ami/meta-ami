@@ -65,6 +65,7 @@ static void print_usage(const char *name)
 }
 
 static bool cal_pec;
+static bool has_write_req;
 
 uint8_t crc8(uint8_t crc, const uint8_t *data, uint8_t len)
 {
@@ -333,6 +334,7 @@ int main(int argc, char *argv[])
 				ret = EXIT_FAILURE;
 				goto err_free;
 			}
+			has_write_req = true;
 			nxfers++;
 			break;
 		default:
@@ -350,7 +352,8 @@ int main(int argc, char *argv[])
 			print_rx_data(&xfers[i]);
 	}
 	ret = EXIT_SUCCESS;
-	pthread_join(thread_mctp, NULL);
+	if (has_write_req)
+		pthread_join(thread_mctp, NULL);
 err_free:
 	for (i = 0; i < nxfers; i++)
 		free((void *)(uintptr_t)xfers[i].data);

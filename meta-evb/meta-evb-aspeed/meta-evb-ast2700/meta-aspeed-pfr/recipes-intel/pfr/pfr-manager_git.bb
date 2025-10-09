@@ -3,15 +3,16 @@ DESCRIPTION = "Daemon to handle all PFR functionalities"
 
 LICENSE = "Apache-2.0"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=7becf906c8f8d03c237bad13bc3dac53"
-inherit cmake systemd
+inherit cmake systemd pkgconfig
 
-SRC_URI = " \
-	git://github.com/openbmc/pfr-manager;protocol=https;branch=master \
-	file://0001-Porting-for-ast2600-pfr-evaluation-board.patch \
-	"
+SRC_URI = "git://github.com/openbmc/pfr-manager;branch=master;protocol=https \
+           file://0001-fix-pfr-manager-crash.patch \
+           file://0002-fix-no-postcodeIface.patch \
+           file://0003-fix-no-update-UfmProvisioned-property.patch \
+           "
 
 PV = "0.1+git"
-SRCREV = "bcc7ce1f418c1a16a7868fee62499fa677242254"
+SRCREV = "1695ee330bc54df35f537b4026bf1e2426ce9d28"
 
 S = "${WORKDIR}/git"
 

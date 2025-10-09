@@ -6,6 +6,7 @@ LIC_FILES_CHKSUM = "file://${WORKDIR}/LICENSE-2.0.txt;md5=3b83ef96387f14655fc854
 
 SRC_URI = "file://gen_emmc_boot_image.py \
            file://gen_uart_booting_image.py \
+           file://recovery_spl_extraction.py \
            file://LICENSE-2.0.txt \
           "
 
@@ -19,6 +20,7 @@ do_install() {
     install -d ${D}/${bindir}
     install -m 0755 ${WORKDIR}/gen_emmc_boot_image.py ${D}/${bindir}
     install -m 0755 ${WORKDIR}/gen_uart_booting_image.py ${D}/${bindir}
+    install -m 0755 ${WORKDIR}/recovery_spl_extraction.py ${D}/${bindir}
 }
 
 FILES:${PN} += "${bindir}"

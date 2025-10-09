@@ -1,7 +1,7 @@
 require optee-os-helper.inc
 
-do_install:append() {
+do_deploy:append() {
     # install core in firmware
-    install -m 644 ${B}/core/tee.dmp ${D}${nonarch_base_libdir}/firmware/
-    install -m 644 ${B}/core/tee.map ${D}${nonarch_base_libdir}/firmware/
+    install -m 644 ${B}/core/tee.dmp ${DEPLOYDIR}/${MLPREFIX}optee
+    install -m 644 ${B}/core/tee.map ${DEPLOYDIR}/${MLPREFIX}optee
 }

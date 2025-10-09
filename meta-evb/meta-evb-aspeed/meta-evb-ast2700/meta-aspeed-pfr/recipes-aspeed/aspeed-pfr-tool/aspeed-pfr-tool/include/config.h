@@ -6,5 +6,5 @@
 
 #pragma once
 
-#define ASPEED_PFR_TOOL_VERSION "1.0.3"
+#define ASPEED_PFR_TOOL_VERSION "2.0.0"
 

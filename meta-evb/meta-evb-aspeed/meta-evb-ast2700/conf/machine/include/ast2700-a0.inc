@@ -1,0 +1,2 @@
+MACHINE_FEATURES:append = " ast2700-a0"
+MACHINEOVERRIDES .= ":ast2700-a0"

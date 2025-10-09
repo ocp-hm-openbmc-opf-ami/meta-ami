@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${@'${THISDIR}/${PN}:' if '${MULTI_SOL_ENABLED}' == 
 RDEPENDS:${PN} += "bash"
 
 # Declare port specific config files
-OBMC_CONSOLE_TTYS = "${@bb.utils.contains('MULTI_SOL_ENABLED', '1', "ttyS0 ttyS1 ttyS2 ttyS3", OBMC_CONSOLE_HOST_TTY ,  d)}"
+OBMC_CONSOLE_TTYS = "${@bb.utils.contains('MULTI_SOL_ENABLED', '1', "ttyS0 ttyS1 ttyS2 ttyS8", OBMC_CONSOLE_HOST_TTY ,  d)}"
 CONSOLE_CLIENT = "2200 2201 2202 2203"
 
 CONSOLE_SERVER_CONF_FMT = "file://server.{0}.conf"
@@ -12,6 +12,8 @@ CONSOLE_CLIENT_SERVICE_FMT = "obmc-console-ssh@{0}.service"
 MULTI_SOL_SRC_URI = " \
 		${@compose_list(d, 'CONSOLE_SERVER_CONF_FMT', 'OBMC_CONSOLE_TTYS')} \
     		${@compose_list(d, 'CONSOLE_CLIENT_CONF_FMT', 'CONSOLE_CLIENT')} \
+                file://override-ttyS2.conf \
+                file://override-ttyS7.conf \
 	"
 
 SOL_SYSTEMD_SERVICE = " \
@@ -50,6 +52,14 @@ if [ "${MULTI_SOL_ENABLED}" = "1" ]; then
     
     #Install the console client configurations
     install -m 0644 ${WORKDIR}/client.*.conf ${D}${sysconfdir}/${BPN}/
+    # Add obmc-console service override to customize service behavior for each tty.
+    for tty in ${OBMC_CONSOLE_TTYS}; do
+        if [ -f ${WORKDIR}/override-${tty}.conf ]; then
+            install -d ${D}${systemd_unitdir}/system/obmc-console@${tty}.service.d
+            install -m 0644 ${WORKDIR}/override-${tty}.conf \
+              ${D}${systemd_unitdir}/system/obmc-console@${tty}.service.d/override.conf
+        fi
+    done
 #else
     # Remove OpenBMC obmc-console default rules
     #rm -rf ${D}${nonarch_base_libdir}/udev/rules.d/80-obmc-console-uart.rules

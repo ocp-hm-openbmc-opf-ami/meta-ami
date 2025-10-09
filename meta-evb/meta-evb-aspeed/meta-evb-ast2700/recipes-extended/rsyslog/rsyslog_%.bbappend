@@ -19,5 +19,7 @@ do_install:append() {
         install -d ${D}${bindir}
         install -m 0755 ${WORKDIR}/rotate-event-logs.sh ${D}/${bindir}/rotate-event-logs.sh
 }
+
 #rm ${D}${sysconfdir}/rsyslog.d/imjournal.conf
+
 SYSTEMD_SERVICE:${PN} += " rotate-event-logs.service"

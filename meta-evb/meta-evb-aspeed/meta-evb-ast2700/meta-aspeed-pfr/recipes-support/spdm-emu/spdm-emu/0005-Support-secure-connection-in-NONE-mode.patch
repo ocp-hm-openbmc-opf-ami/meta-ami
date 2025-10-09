@@ -1,0 +1,1163 @@
+From be20025f93f8da5b96aa2fc947bdb49b8d8a404e Mon Sep 17 00:00:00 2001
+From: Kane-Chen-AS <kane_chen@aspeedtech.com>
+Date: Mon, 7 Oct 2024 11:15:03 +0800
+Subject: [PATCH] spdm-emu: Support secure connection in NONE mode
+
+In the original code, the NONE mode doesn't support the
+secure connection. It causes a problem to test session
+feature with MCTP socket environment. To adjust the code
+for supporting the secure communication in NONE mode.
+
+Signed-off-by: Kane-Chen-AS <kane_chen@aspeedtech.com>
+---
+ CMakeLists.txt                                |  15 +-
+ library/spdm_transport_none_lib/common.c      | 213 ++++++++++++++++--
+ library/spdm_transport_none_lib/none.c        |   3 +-
+ spdm_emu/spdm_emu_common/command.c            |  55 +++--
+ spdm_emu/spdm_emu_common/key.c                |   3 +
+ spdm_emu/spdm_emu_common/spdm_emu.c           |  27 +++
+ spdm_emu/spdm_emu_common/spdm_emu.h           |   7 +
+ .../spdm_requester_emu/spdm_requester_emu.c   | 201 +++++++++++++++--
+ .../spdm_requester_session.c                  |   9 +
+ .../spdm_requester_emu/spdm_requester_spdm.c  |  66 +++++-
+ .../spdm_responder_emu/spdm_responder_emu.c   |  49 +++-
+ .../spdm_responder_emu/spdm_responder_spdm.c  |   5 +
+ 12 files changed, 589 insertions(+), 64 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 2e670b0..f8aca8c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -176,7 +176,20 @@ if(CMAKE_SYSTEM_NAME MATCHES "Linux")
+         SET(CMOCKA_FLAGS -std=gnu99 -Wpedantic -Wall -Wshadow -Wmissing-prototypes -Wcast-align -Werror=address -Wstrict-prototypes -Werror=strict-prototypes -Wwrite-strings -Werror=write-strings -Werror-implicit-function-declaration -Wpointer-arith -Werror=pointer-arith -Wdeclaration-after-statement -Werror=declaration-after-statement -Wreturn-type -Werror=return-type -Wuninitialized -Werror=uninitialized -Werror=strict-overflow -Wstrict-overflow=2 -Wno-format-zero-length -Wmissing-field-initializers -Wformat-security -Werror=format-security -fno-common -Wformat -fno-common -fstack-protector-strong)
+         SET(CMAKE_EXE_LINKER_FLAGS "-flto -Wno-error -no-pie" )
+         SET(CMAKE_C_LINK_EXECUTABLE   "<CMAKE_C_COMPILER> <FLAGS> <CMAKE_C_LINK_FLAGS> <LINK_FLAGS> <OBJECTS> -o <TARGET> -static -Wl,--start-group <LINK_LIBRARIES> -Wl,--end-group")
+-
++        install(DIRECTORY  libspdm/include/ DESTINATION include/ )
++        install(DIRECTORY  include/ DESTINATION include/ )
++        file(GLOB headers "${CMAKE_SOURCE_DIR}/spdm_emu/spdm_emu_common/*.h")
++        SET(INSTALL_HEADERS
++            ${CMAKE_SOURCE_DIR}/spdm_emu/spdm_emu_common/command.h
++            ${CMAKE_SOURCE_DIR}/spdm_emu/spdm_emu_common/nv_storage.h
++            ${CMAKE_SOURCE_DIR}/spdm_emu/spdm_emu_common/os_include.h
++            ${CMAKE_SOURCE_DIR}/spdm_emu/spdm_emu_common/spdm_emu.h
++            ${CMAKE_SOURCE_DIR}/spdm_emu/spdm_emu_common/working_queue.h
++            ${CMAKE_SOURCE_DIR}/libspdm/include/hal/arm/processor_bind.h
++            ${CMAKE_SOURCE_DIR}/libspdm/os_stub/spdm_device_secret_lib_sample/spdm_device_secret_lib_internal.h
++        )
++        install(FILES ${INSTALL_HEADERS} DESTINATION include/
++            PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ)
+     elseif(TOOLCHAIN STREQUAL "ARM_GCC")
+         SET(CMAKE_C_COMPILER arm-linux-gnueabi-gcc)
+         ADD_COMPILE_OPTIONS(-g -fshort-wchar -fno-strict-aliasing -Wall -Werror -Wno-array-bounds -ffunction-sections -fdata-sections -fno-common -Wno-address -fpie -fno-asynchronous-unwind-tables -flto -DUSING_LTO  -Wno-maybe-uninitialized -Wno-uninitialized  -Wno-builtin-declaration-mismatch -Wno-nonnull-compare)
+diff --git a/library/spdm_transport_none_lib/common.c b/library/spdm_transport_none_lib/common.c
+index db61bb3..3673f04 100644
+--- a/library/spdm_transport_none_lib/common.c
++++ b/library/spdm_transport_none_lib/common.c
+@@ -3,10 +3,24 @@
+  *  Copyright 2021-2022 DMTF. All rights reserved.
+  *  License: BSD 3-Clause License. For full text see link: https://github.com/DMTF/libspdm/blob/main/LICENSE.md
+  **/
+-
++#include <stdio.h>
++#include <stdlib.h>
+ #include "library/spdm_transport_none_lib.h"
+ #include "library/spdm_secured_message_lib.h"
+ #include "hal/library/debuglib.h"
++#include "library/spdm_transport_mctp_lib.h"
++#include "industry_standard/mctp.h"
++
++libspdm_return_t libspdm_mctp_encode_message(const uint32_t *session_id, size_t message_size,
++                                             void *message,
++                                             size_t *transport_message_size,
++                                             void **transport_message);
++libspdm_return_t libspdm_mctp_decode_message(uint32_t **session_id,
++                                             size_t transport_message_size,
++                                             void *transport_message,
++                                             size_t *message_size,
++                                             void **message);
++extern bool isSessionCreated;
+ 
+ /**
+  * Encode a normal message or secured message to a transport message.
+@@ -51,6 +65,20 @@ libspdm_return_t none_decode_message(uint32_t **session_id,
+                                   const void *transport_message,
+                                   size_t *message_size,
+                                   void **message);
++/**
++ * when data is received from a MCTP socket, the MCTP type (ex. 5 for spdm)
++ * has been removed. To add the MCTP type back for fitting code process.
++ */
++void insert_mctp_type(uint8_t mctp_type, void *transport_message, size_t transport_message_size)
++{
++    int i;
++    uint8_t *ptr = (uint8_t *)transport_message;
++
++    for (i = transport_message_size; i > 0 ;i--) {
++        ptr[i] = ptr[i - 1];
++    }
++    ptr[0] = mctp_type;
++}
+ 
+ /**
+  * Encode an SPDM from a transport layer message.
+@@ -81,18 +109,71 @@ libspdm_return_t spdm_transport_none_encode_message(
+     size_t *transport_message_size, void **transport_message)
+ {
+     libspdm_return_t status;
++    libspdm_secured_message_callbacks_t spdm_secured_message_callbacks;
++    void *secured_message_context;
++    void *app_message;
++    size_t app_message_size;
++    uint8_t *secured_message;
++    size_t secured_message_size;
++    size_t transport_header_size;
+ 
+     if (is_app_message && (session_id == NULL)) {
+         return LIBSPDM_STATUS_UNSUPPORTED_CAP;
+     }
+-    /* normal message */
+-    status = none_encode_message(NULL, message_size, message,
+-                                transport_message_size,
+-                                transport_message);
+-    if (LIBSPDM_STATUS_IS_ERROR(status)) {
+-        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR, "transport_encode_message - %p\n",
+-                        status));
+-        return status;
++
++    if (session_id != NULL) {
++        spdm_secured_message_callbacks.version = SPDM_SECURED_MESSAGE_CALLBACKS_VERSION;
++        spdm_secured_message_callbacks.get_sequence_number = libspdm_mctp_get_sequence_number;
++        spdm_secured_message_callbacks.get_max_random_number_count = libspdm_mctp_get_max_random_number_count;
++
++        secured_message_context =
++            libspdm_get_secured_message_context_via_session_id(spdm_context, *session_id);
++        if (secured_message_context == NULL) {
++            return LIBSPDM_STATUS_UNSUPPORTED_CAP;
++        }
++        if (!is_app_message) {
++            /* SPDM message to APP message*/
++            status = libspdm_mctp_encode_message(NULL, message_size, message, &app_message_size, &app_message);
++            if (LIBSPDM_STATUS_IS_ERROR(status)) {
++                LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR, "transport_encode_message - %p\n", status));
++                return status;
++            }
++        } else {
++            app_message = (void *)message;
++            app_message_size = message_size;
++        }
++
++        /* APP message to secured message*/
++        transport_header_size = libspdm_transport_mctp_get_header_size(spdm_context);
++        secured_message = (uint8_t *)*transport_message + transport_header_size;
++        secured_message_size = *transport_message_size - transport_header_size;
++        status = libspdm_encode_secured_message(
++                    secured_message_context, *session_id, is_requester,
++                    app_message_size, app_message, &secured_message_size,
++                    secured_message, &spdm_secured_message_callbacks);
++        if (LIBSPDM_STATUS_IS_ERROR(status)) {
++            LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR, "libspdm_encode_secured_message - %p\n", status));
++            return status;
++        }
++        /* secured message to secured MCTP message*/
++        status = libspdm_mctp_encode_message(
++            session_id, secured_message_size, secured_message,
++            transport_message_size, transport_message);
++        if (LIBSPDM_STATUS_IS_ERROR(status)) {
++            LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR, "transport_encode_message - %p\n", status));
++            return status;
++        }
++    }
++    else {
++        /* normal message */
++        status = none_encode_message(NULL, message_size, message,
++                                    transport_message_size,
++                                    transport_message);
++        if (LIBSPDM_STATUS_IS_ERROR(status)) {
++            LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR, "transport_encode_message - %p\n",
++                            status));
++            return status;
++        }
+     }
+ 
+     return LIBSPDM_STATUS_SUCCESS;
+@@ -129,24 +210,114 @@ libspdm_return_t spdm_transport_none_decode_message(
+ {
+     
+     libspdm_return_t status;
++    uint32_t *secured_message_session_id;
++    uint8_t *secured_message;
++    size_t secured_message_size;
++    uint8_t *app_message;
++    size_t app_message_size;
++    libspdm_secured_message_callbacks_t spdm_secured_message_callbacks;
++    void *secured_message_context;
++    libspdm_error_struct_t spdm_error;
++    bool isSecure;
+ 
+     if ((session_id == NULL) || (is_app_message == NULL)) {
+         return LIBSPDM_STATUS_UNSUPPORTED_CAP;
+     }
+-    
+-    /* get non-secured message*/
+-    status = none_decode_message(NULL,
+-                                transport_message_size,
+-                                transport_message,
+-                                message_size, message);
+-    if (LIBSPDM_STATUS_IS_ERROR(status)) {
+-        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR, "transport_decode_message - %p\n",
+-                        status));
+-        return status;
++
++    if (transport_message_size >= LIBSPDM_SENDER_RECEIVE_BUFFER_SIZE) {
++        printf("buffer is not enough\n");
++        return LIBSPDM_STATUS_BUFFER_TOO_SMALL;
++    }
++
++    secured_message_session_id = NULL;
++    if (isSessionCreated) {
++        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR, "rcv secure message\n"));
++        insert_mctp_type(MCTP_MESSAGE_TYPE_SECURED_MCTP, transport_message, transport_message_size);
++        transport_message_size++;
++
++        /* Detect received message*/
++        status = libspdm_mctp_decode_message(
++                        &secured_message_session_id, transport_message_size,
++                        transport_message, &secured_message_size, (void **)&secured_message);
++        if (LIBSPDM_STATUS_IS_ERROR(status)) {
++            LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR, "transport_decode_message - %p\n", status));
++            return status;
++        }
++    }
++
++    if (secured_message_session_id != NULL) {
++        *session_id = secured_message_session_id;
++        spdm_error.error_code = 0;
++        spdm_error.session_id = 0;
++        libspdm_set_last_spdm_error_struct(spdm_context, &spdm_error);
++
++        spdm_secured_message_callbacks.version = SPDM_SECURED_MESSAGE_CALLBACKS_VERSION;
++        spdm_secured_message_callbacks.get_sequence_number = libspdm_mctp_get_sequence_number;
++        spdm_secured_message_callbacks.get_max_random_number_count = libspdm_mctp_get_max_random_number_count;
++
++        secured_message_context =
++                libspdm_get_secured_message_context_via_session_id(spdm_context, *secured_message_session_id);
++        if (secured_message_context == NULL) {
++            spdm_error.error_code = SPDM_ERROR_CODE_INVALID_SESSION;
++            spdm_error.session_id = *secured_message_session_id;
++            libspdm_set_last_spdm_error_struct(spdm_context, &spdm_error);
++            return LIBSPDM_STATUS_UNSUPPORTED_CAP;
++        }
++
++        /* Secured message to APP message*/
++        app_message = *message;
++        app_message_size = *message_size;
++        status = libspdm_decode_secured_message(
++                secured_message_context, *secured_message_session_id,
++                is_requester, secured_message_size, secured_message,
++                &app_message_size, (void **)&app_message,
++                &spdm_secured_message_callbacks);
++        if (LIBSPDM_STATUS_IS_ERROR(status)) {
++            LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR, "libspdm_decode_secured_message - %p\n", status));
++            libspdm_secured_message_get_last_spdm_error_struct(secured_message_context, &spdm_error);
++            libspdm_set_last_spdm_error_struct(spdm_context, &spdm_error);
++            return status;
++        }
++
++        /* APP message to SPDM message.*/
++        status = libspdm_mctp_decode_message(&secured_message_session_id,
++                                            app_message_size, app_message,
++                                            message_size, message);
++        if (LIBSPDM_STATUS_IS_ERROR(status)) {
++            *is_app_message = true;
++            /* just return APP message.*/
++            *message = app_message;
++            *message_size = app_message_size;
++            return LIBSPDM_STATUS_SUCCESS;
++        } else {
++            *is_app_message = false;
++            if (secured_message_session_id == NULL) {
++                return LIBSPDM_STATUS_SUCCESS;
++            } else {
++                /* get encapsulated secured message - cannot handle it.*/
++                LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR,
++                                "transport_decode_message - expect encapsulated normal but got session (%08x)\n",
++                                *secured_message_session_id));
++                return LIBSPDM_STATUS_UNSUPPORTED_CAP;
++            }
++        }
++
+     }
++    else {
++        /* get non-secured message*/
++        status = none_decode_message(NULL,
++                                    transport_message_size,
++                                    transport_message,
++                                    message_size, message);
++        if (LIBSPDM_STATUS_IS_ERROR(status)) {
++            LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR, "transport_decode_message - %p\n",
++                            status));
++            return status;
++        }
+ 
+-    *session_id = NULL;
+-    *is_app_message = false;
++        *session_id = NULL;
++        *is_app_message = false;
++    }
+     return LIBSPDM_STATUS_SUCCESS;
+ }
+ 
+diff --git a/library/spdm_transport_none_lib/none.c b/library/spdm_transport_none_lib/none.c
+index 841ce8f..4beffa8 100644
+--- a/library/spdm_transport_none_lib/none.c
++++ b/library/spdm_transport_none_lib/none.c
+@@ -105,5 +105,6 @@ libspdm_return_t none_decode_message(uint32_t **session_id,
+ uint32_t spdm_transport_none_get_header_size(
+     void *spdm_context)
+ {
+-    return sizeof(spdm_secured_message_cipher_header_t);
++    /* In order to support secure connection in NONE mode, to increase one data byte for MCTP type */
++    return sizeof(spdm_secured_message_cipher_header_t) + 1;
+ }
+diff --git a/spdm_emu/spdm_emu_common/command.c b/spdm_emu/spdm_emu_common/command.c
+index 7c85de8..7f92fd0 100644
+--- a/spdm_emu/spdm_emu_common/command.c
++++ b/spdm_emu/spdm_emu_common/command.c
+@@ -23,6 +23,8 @@ size_t m_send_receive_buffer_size;
+  * This function will return if enough data is read, or socket error.
+  **/
+ struct sockaddr_mctp my_address;
++struct sockaddr_mctp my_address_secure;
++int m_mctp_secure = -1;
+ 
+ bool libmctp_read_bytes(const SOCKET socket, uint8_t *buffer,
+                 uint32_t number_of_bytes)
+@@ -57,15 +59,23 @@ bool read_bytes(const SOCKET socket, uint8_t *buffer,
+ {
+     int32_t result;
+     socklen_t addrlen;
++    struct sockaddr_mctp *pMCTP;
+ 
+     if (m_use_transport_layer == SOCKET_TRANSPORT_TYPE_MCTP)
+         return libmctp_read_bytes(socket, buffer, number_of_bytes);
+     addrlen = sizeof(my_address);
++
++    /* for different MCTP message types */
++    if (socket == m_mctp_secure)
++        pMCTP = &my_address_secure;
++    else
++        pMCTP = &my_address;
++
+     result = recvfrom(socket, (char *)(buffer),
+             number_of_bytes, MSG_TRUNC,
+-            &my_address, &addrlen);
++            (struct sockaddr *)pMCTP, &addrlen);
+     *recv_bytes = result;
+-    printf("message (%zd bytes) from remote EID 0x%02x\n", result, my_address.smctp_addr);
++    //printf("message (%zd bytes) from remote EID 0x%02x\n", result, pMCTP->smctp_addr.s_addr);
+     if (result == -1) {
+         printf("Receive error - 0x%x\n",
+ #ifdef _MSC_VER
+@@ -128,9 +138,9 @@ bool libmctp_read_multiple_bytes(const SOCKET socket, uint8_t *buffer,
+     if (!result) {
+         return result;
+     }
+-    printf("Platform port Receive buffer:\n    ");
+-    dump_data(buffer, length);
+-    printf("\n");
++    //printf("Platform port Receive buffer:\n    ");
++    //dump_data(buffer, length);
++    //printf("\n");
+ 
+     return true;
+ }
+@@ -162,14 +172,14 @@ bool read_multiple_bytes(const SOCKET socket, uint8_t *buffer,
+     if (length == 0) {
+         return true;
+     }
+-    result = read_bytes(socket, buffer, 256, &length);
++    result = read_bytes(socket, buffer, max_buffer_length, &length);
+     *bytes_received = length;
+     if (!result) {
+         return result;
+     }
+-    printf("Platform port Receive buffer:\n    ");
+-    dump_data(buffer, length);
+-    printf("\n");
++//    printf("Platform port Receive buffer:\n    ");
++//    dump_data(buffer, length);
++//    printf("\n");
+ 
+     return true;
+ }
+@@ -333,18 +343,29 @@ bool write_bytes(const SOCKET socket, const uint8_t *buffer,
+ {
+     int32_t result;
+     uint32_t number_sent;
++    struct sockaddr_mctp *pMCTP;
+ 
+     if (m_use_transport_layer == SOCKET_TRANSPORT_TYPE_MCTP)
+         return libmctp_write_bytes(socket, buffer, number_of_bytes);
+ 
+-    printf("write_bytes: ");
++//    printf("write_bytes: ");
++    if (socket == m_mctp_secure)
++        pMCTP = &my_address_secure;
++    else
++        pMCTP = &my_address;
+ 
+     number_sent = 0;
+-    my_address.smctp_tag &= ~MCTP_TAG_OWNER;
+-    dump_data(buffer, number_of_bytes);
+-    printf("\n");
++    if (spdm_mode == SPDM_RESPOND_MODE)
++        pMCTP->smctp_tag &= ~MCTP_TAG_OWNER;
++    else if (spdm_mode == SPDM_REQUESTER_MODE)
++        pMCTP->smctp_tag |= MCTP_TAG_OWNER;
++    else {
++        printf("unknown spdm mode\n");
++        return false;
++    }
++
+     result = sendto(socket, (buffer),
+-            number_of_bytes, 0, (struct sockaddr *)&my_address, sizeof(my_address));
++            number_of_bytes, 0, (struct sockaddr *)pMCTP, sizeof(my_address));
+     if (result == -1) {
+ #ifdef _MSC_VER
+         if (WSAGetLastError() == 0x2745) {
+@@ -417,9 +438,9 @@ bool write_multiple_bytes(const SOCKET socket, const uint8_t *buffer,
+     if (!result) {
+         return result;
+     }
+-    printf("Platform port Transmit buffer:\n    ");
+-    dump_data(buffer, bytes_to_send);
+-    printf("\n");
++//    printf("Platform port Transmit buffer: %d\n    ", bytes_to_send);
++//    dump_data(buffer, bytes_to_send);
++//    printf("\n");
+     return true;
+ }
+ 
+diff --git a/spdm_emu/spdm_emu_common/key.c b/spdm_emu/spdm_emu_common/key.c
+index abee42b..e389cbd 100644
+--- a/spdm_emu/spdm_emu_common/key.c
++++ b/spdm_emu/spdm_emu_common/key.c
+@@ -187,6 +187,9 @@ uint8_t m_mctp_medium = 0; /* 0: SMBus, 1: I3C */
+ uint8_t m_mctp_bus = 4;
+ uint8_t m_mctp_sa = 0x10;
+ uint8_t m_mctp_eid = 0x0a;
++uint8_t m_mctp_deid = 0x0b;
+ uint8_t m_mctp_rot_sa = 0x38;
+ uint8_t m_failure_case = 0x00;
++uint8_t spdm_mode = 0;
++uint8_t m_mctp_network = 0;
+ 
+diff --git a/spdm_emu/spdm_emu_common/spdm_emu.c b/spdm_emu/spdm_emu_common/spdm_emu.c
+index 9ddaf4d..8db512d 100644
+--- a/spdm_emu/spdm_emu_common/spdm_emu.c
++++ b/spdm_emu/spdm_emu_common/spdm_emu.c
+@@ -22,6 +22,7 @@ uint32_t m_exe_session =
+      /* EXE_SESSION_NO_END |*/
+      EXE_SESSION_KEY_UPDATE | EXE_SESSION_HEARTBEAT | EXE_SESSION_MEAS |
+      EXE_SESSION_SET_CERT | EXE_SESSION_GET_CSR| 0);
++bool isSessionCreated = false;
+ 
+ void print_usage(const char *name)
+ {
+@@ -31,6 +32,7 @@ void print_usage(const char *name)
+     printf("   [--mctp_medium 0|1]\n");
+     printf("   [--mctp_bus 4]\n");
+     printf("   [--mctp_sa 0x10]\n");
++    printf("   [--mctp_deid 0x0b]\n");
+     printf("   [--mctp_rot_sa 0x38]\n");
+     printf("   [--mctp_eid 0x0a]\n");
+     printf(
+@@ -71,7 +73,9 @@ void print_usage(const char *name)
+     printf("   [--mctp_medium] is the mctp medium. 0 is SMBus and 1 is I3C\n");
+     printf("   [--mctp_bus] is the smbus channel. By default, set to /dev/i2c-4\n");
+     printf("   [--mctp_sa] is the slave address of smbus channel. By default, set to 0x10 (7-bit address)\n");
++    printf("   [--mctp_deid] is the mctp destination endpoint id. By default, set to 0x0b\n");
+     printf("   [--mctp_eid] is the endpoint id of mctp. By default, set to 0x0a.\n");
++    printf("   [--mctp_network] is the mctp network index. By default, set to 0x0.\n");
+     printf(
+         "   [--cap] is capability flags. Multiple flags can be set together. Please use ',' for them.\n");
+     printf(
+@@ -515,6 +519,7 @@ void process_args(char *program_name, int argc, char *argv[])
+             m_mctp_bus = data32 & 0xff;
+             argc -= 2;
+             argv += 2;
++            printf("mctp_bus - 0x%02x\n", m_mctp_bus);
+             continue;
+         }
+ 
+@@ -523,6 +528,7 @@ void process_args(char *program_name, int argc, char *argv[])
+             m_mctp_medium = data32 & 0xff;
+             argc -= 2;
+             argv += 2;
++            printf("mctp_medium - %d\n", m_mctp_medium);
+             continue;
+         }
+ 
+@@ -550,6 +556,22 @@ void process_args(char *program_name, int argc, char *argv[])
+             continue;
+         }
+ 
++        if (strcmp(argv[0], "--mctp_deid") == 0) {
++            data32 = strtol(argv[1], NULL, 0);
++            m_mctp_deid = data32 & 0xff;
++            argc -= 2;
++            argv += 2;
++            continue;
++        }
++
++        if (strcmp(argv[0], "--mctp_network") == 0) {
++            data32 = strtol(argv[1], NULL, 0);
++            m_mctp_network = data32;
++            argc -= 2;
++            argv += 2;
++            continue;
++        }
++
+         if (strcmp(argv[0], "--cap") == 0) {
+             if (argc >= 2) {
+                 value_string_entry_t *CapabilitiesStringTable;
+@@ -1115,6 +1137,11 @@ void process_args(char *program_name, int argc, char *argv[])
+         print_usage(program_name);
+         exit(0);
+     }
++	if (strcmp(program_name, "spdm_requester_emu") == 0)
++		spdm_mode = SPDM_REQUESTER_MODE; // requester mode
++	else if (strcmp(program_name, "spdm_responder_emu") == 0)
++		spdm_mode = SPDM_RESPOND_MODE; // responder mode
++	printf("spdm mode = %d\n", spdm_mode);
+ 
+ 
+     /* Open PCAP file as last option, after the user indicates transport type.*/
+diff --git a/spdm_emu/spdm_emu_common/spdm_emu.h b/spdm_emu/spdm_emu_common/spdm_emu.h
+index 51492b2..486c581 100644
+--- a/spdm_emu/spdm_emu_common/spdm_emu.h
++++ b/spdm_emu/spdm_emu_common/spdm_emu.h
+@@ -61,7 +61,14 @@ extern uint8_t m_mctp_medium;
+ extern uint8_t m_mctp_bus;
+ extern uint8_t m_mctp_sa;
+ extern uint8_t m_mctp_eid;
++extern uint8_t m_mctp_deid;
+ extern uint8_t m_mctp_rot_sa;
++extern bool isSessionCreated;
++extern uint8_t m_mctp_network;
++
++#define SPDM_REQUESTER_MODE 1
++#define SPDM_RESPOND_MODE 2
++extern uint8_t spdm_mode;
+ 
+ extern char *m_load_state_file_name;
+ extern char *m_save_state_file_name;
+diff --git a/spdm_emu/spdm_requester_emu/spdm_requester_emu.c b/spdm_emu/spdm_requester_emu/spdm_requester_emu.c
+index 2f6ef4e..6c999af 100644
+--- a/spdm_emu/spdm_requester_emu/spdm_requester_emu.c
++++ b/spdm_emu/spdm_requester_emu/spdm_requester_emu.c
+@@ -9,10 +9,12 @@
+ #include <fcntl.h>
+ #include <poll.h>
+ #include <pthread.h>
++#include <linux/mctp.h>
+ 
+ #include <libmctp.h>
+ #include <libmctp-log.h>
+ #include <libmctp-smbus.h>
++#include <libmctp-asti3c.h>
+ #include <libmctp-cmds.h>
+ #include <libmctp-msgtypes.h>
+ 
+@@ -22,6 +24,7 @@
+ #define MCTP_RX "/sys/bus/i2c/devices/%d-%04x/slave-mqueue"
+ #define MCTP_TX "/dev/i2c-%d"
+ 
++#define MCTP_I3C_RXTX "/dev/i3c-mctp-target"
+ #define MCTP_BUS 4
+ #define MCTP_RX_SA 0x10
+ #define MCTP_SRC_EID 0x0a
+@@ -41,9 +44,12 @@ struct in_addr m_ip_address = { 0x0100007F };
+ uint8_t m_receive_buffer[LIBSPDM_MAX_MESSAGE_BUFFER_SIZE];
+ 
+ extern SOCKET m_socket;
++extern SOCKET m_socket_org;
++extern SOCKET m_mctp_secure;
+ 
+ extern void *m_spdm_context;
+ extern void *m_scratch_buffer;
++bool mctp_socket_mode = false;
+ 
+ void *spdm_client_init(void);
+ 
+@@ -67,15 +73,87 @@ libspdm_return_t do_session_via_spdm(bool use_psk);
+ libspdm_return_t do_certificate_provising_via_spdm(uint32_t* session_id);
+ bool init_mctp_server();
+ 
++extern struct sockaddr_mctp my_address;
++extern struct sockaddr_mctp my_address_secure;
++bool create_socket(uint16_t port_number, SOCKET *listen_socket)
++{
++    int32_t res;
++
++    /* Initialize Winsock*/
++#ifdef _MSC_VER
++    WSADATA ws;
++    res = WSAStartup(MAKEWORD(2, 2), &ws);
++    if (res != 0) {
++        printf("WSAStartup failed with error: %d\n", res);
++        return false;
++    }
++#endif
++
++    *listen_socket = socket(AF_MCTP, SOCK_DGRAM, 0);
++    if (INVALID_SOCKET == *listen_socket) {
++        printf("Cannot create server listen socket.  Error is 0x%x\n",
++#ifdef _MSC_VER
++               WSAGetLastError()
++#else
++               errno
++#endif
++               );
++        return false;
++    }
++
++    libspdm_zero_mem(&my_address, sizeof(my_address));
++    my_address.smctp_family = AF_MCTP;
++    my_address.smctp_addr.s_addr = m_mctp_deid;
++    my_address.smctp_type = MCTP_MESSAGE_TYPE_SPDM;
++
++    res = bind(*listen_socket, (struct sockaddr *)&my_address,
++               sizeof(my_address));
++    if (res == SOCKET_ERROR) {
++        printf("Bind error.  Error is 0x%x\n",
++#ifdef _MSC_VER
++               WSAGetLastError()
++#else
++               errno
++#endif
++               );
++        closesocket(*listen_socket);
++        return false;
++    }
++
++    /* create socket for secure connection */
++    m_mctp_secure = socket(AF_MCTP, SOCK_DGRAM, 0);
++    if (m_mctp_secure == -1) {
++        printf("can't create secure socket\n");
++        return false;
++    }
++
++    libspdm_zero_mem(&my_address_secure, sizeof(struct sockaddr_mctp));
++    my_address_secure.smctp_family = AF_MCTP;
++    my_address_secure.smctp_addr.s_addr = m_mctp_deid;
++    my_address_secure.smctp_type = MCTP_MESSAGE_TYPE_SECURED_MCTP | 0x80;
++
++    if (bind(m_mctp_secure, (struct sockaddr *)&my_address_secure, sizeof(struct sockaddr_mctp)) < 0) {
++        printf("Bind secure socket error. error - %s\n", strerror(errno));
++        close(m_mctp_secure);
++        return false;
++    }
++
++    return true;
++}
++
+ bool init_client(SOCKET *sock, uint16_t port)
+ {
+     SOCKET client_socket;
+     struct sockaddr_in server_addr;
+     int32_t ret_val;
+ 
+-    if (m_use_transport_layer != SOCKET_TRANSPORT_TYPE_MCTP)
+-        return init_mctp_server();
++    if (m_use_transport_layer == SOCKET_TRANSPORT_TYPE_MCTP) {
++        init_mctp_server();
++    } else {
++        return create_socket(DEFAULT_SPDM_PLATFORM_PORT, sock);
++    }
+ 
++#if 0
+     client_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+     if (client_socket == INVALID_SOCKET) {
+         printf("Create socket Failed - %x\n",
+@@ -109,7 +187,7 @@ bool init_client(SOCKET *sock, uint16_t port)
+     }
+ 
+     printf("connect success!\n");
+-
++#endif
+     *sock = client_socket;
+     return true;
+ }
+@@ -135,6 +213,7 @@ bool platform_client_routine(uint16_t port_number)
+     }
+ 
+     m_socket = platform_socket;
++    m_socket_org = platform_socket;
+ 
+     if (m_use_transport_layer != SOCKET_TRANSPORT_TYPE_NONE) {
+         response_size = sizeof(m_receive_buffer);
+@@ -181,9 +260,10 @@ bool platform_client_routine(uint16_t port_number)
+         }
+     }
+ #endif /*LIBSPDM_ENABLE_CAPABILITY_MEAS_CAP*/
++#if 0
+     /* when use --trans NONE, skip secure session  */
+     if (m_use_transport_layer == SOCKET_TRANSPORT_TYPE_NONE) {
+-        if (m_use_version >= SPDM_MESSAGE_VERSION_12) {      
++        if (m_use_version >= SPDM_MESSAGE_VERSION_12) {
+             status = do_certificate_provising_via_spdm(NULL);
+             if (LIBSPDM_STATUS_IS_ERROR(status)) {
+                     printf("do_certificate_provising_via_spdm - %x\n",
+@@ -193,6 +273,7 @@ bool platform_client_routine(uint16_t port_number)
+         }
+     }
+     else
++#endif
+     {
+ #if (LIBSPDM_ENABLE_CAPABILITY_KEY_EX_CAP || LIBSPDM_ENABLE_CAPABILITY_PSK_EX_CAP)
+         if (m_use_version >= SPDM_MESSAGE_VERSION_11) {
+@@ -256,9 +337,9 @@ void rx_request_handler(mctp_eid_t src, void *data, void *msg, size_t len,
+     uint8_t mctp_type;
+ 
+     if (len > 0) {
+-        mctp_type = req[0];
++        mctp_type = req[0] & 0x7f;
+ 
+-        if (mctp_type == 0x05) {
++        if (mctp_type == 0x05 || mctp_type == 0x06) {
+             /* PIPE Data to LibSPDM Reciever */
+             wq_enqueue(comm_queue, req, len, src, tag);
+             /* Getting Response data from LibSPDM */
+@@ -278,13 +359,21 @@ void *platform_mctp_server(void *ctx)
+ {
+     struct spdm_mctp_ctx *mctp_ctx = ctx;
+     struct mctp_binding_smbus *smbus = (struct mctp_binding_smbus *)mctp_ctx->prot;
++    struct mctp_binding_asti3c *i3c = (struct mctp_binding_smbus *)mctp_ctx->prot;
++    struct mctp_asti3c_pkt_private *i3c_private = mctp_ctx->priv_binding;
+     struct mctp *mctp = mctp_ctx->mctp;
+     struct pollfd pfd = { 0 };
+     int count = 0;
+     int r;
+ 
+-    pfd.fd = smbus->in_fd;
+-    pfd.events = POLLPRI;
++    if (m_mctp_medium == 0) {
++        pfd.events = POLLPRI;
++        pfd.fd = smbus->in_fd;
++    }
++    else if (m_mctp_medium == 1) {
++        pfd.fd = m_server_socket;
++        pfd.events = POLLIN | POLLOUT | POLLERR | POLLPRI;
++    }
+ 
+     mctp_set_rx_all(mctp, rx_request_handler, mctp_ctx);
+     mctp_set_rx_ctrl(mctp, rx_request_control_handler, mctp_ctx);
+@@ -295,14 +384,24 @@ void *platform_mctp_server(void *ctx)
+             printf("Poll returned error status (errno=%d)\n", errno);
+             break;
+         }
+-        if (r == 0 || !(pfd.revents & POLLPRI))
+-            continue;
+-        if (mctp_smbus_read(smbus) < 0) {
+-            printf("%s: MCTP RX error\n", __func__);
+-            break;
+-        } /*else {
+-            printf("%s: SMBUS READ Done\n", __func__);
+-        }*/
++		if (m_mctp_medium == 0) {
++			if (r == 0 || !(pfd.revents & POLLPRI)) {
++				printf("Poll timeout\n");
++				continue;
++			}
++			if (mctp_smbus_read(smbus) < 0) {
++				printf("%s: MCTP RX error\n", __func__);
++				break;
++			}
++		} else if (m_mctp_medium == 1) {
++			if (r > 0 && pfd.revents & (POLLIN | POLLERR | POLLPRI)) {
++				lseek(m_server_socket, 0, SEEK_SET);
++				mctp_asti3c_rx(i3c, m_server_socket);
++			}
++			continue;
++		} else {
++			printf("unknown medium type = %x\n", m_mctp_medium);
++		}
+         if (mctp_ctx->len > 0) {
+             count++;
+             mctp_ctx->len = 0;
+@@ -315,6 +414,54 @@ void *platform_mctp_server(void *ctx)
+ 
+ bool init_mctp_server()
+ {
++#if 1
++    char binding[128];
++    struct mctp *mctp = mctp_init();
++    struct spdm_mctp_ctx *mctp_ctx = (struct spdm_mctp_ctx *)malloc(sizeof(struct spdm_mctp_ctx));
++
++    if (mctp == NULL) {
++    printf("Fail to init mctp structure\n");
++    return false;
++    }
++
++    comm_queue = wq_create();
++
++    mctp_set_log_stdio(MCTP_LOG_ERR);
++    mctp_set_tracing_enabled(true);
++
++    if (m_mctp_medium == 1) {
++        struct mctp_binding_asti3c  *i3c = mctp_asti3c_init();
++        if (i3c == NULL) {
++                printf("Failed to alloc i3c structure\n");
++            return false;
++        }
++        snprintf(binding, sizeof(binding), "%s-%d", MCTP_I3C_RXTX, m_mctp_bus);
++
++        m_mctp_tx = open(binding, O_RDWR | O_NONBLOCK);
++        m_server_socket = m_mctp_tx;
++
++        struct mctp_asti3c_pkt_private *i3c_private =
++            (struct mctp_asti3c_pkt_private *)malloc(sizeof(struct mctp_asti3c_pkt_private));
++        i3c_private->fd = m_mctp_tx;
++        i3c_private->append_pec = true;
++        i3c_private->is_target = true;
++        mctp_ctx->prot = (void *)i3c;
++        mctp_ctx->priv_binding = i3c_private;
++        mctp_asti3c_set_def_data(i3c_private);
++
++        mctp_register_bus(mctp, &i3c->binding, m_mctp_eid);
++        mctp_binding_set_tx_enabled(&i3c->binding, true);
++    }
++
++    mctp_ctx->len = 0;
++    mctp_ctx->mctp = mctp;
++    m_mctp_context = mctp_ctx;
++
++    pthread_t mctp_server;
++    pthread_create(&mctp_server, NULL, platform_mctp_server, mctp_ctx);
++
++    return true;
++#else
+     char binding[128];
+     int fd;
+     struct mctp *mctp;
+@@ -378,8 +525,27 @@ bool init_mctp_server()
+ 
+     pthread_t mctp_server;
+     pthread_create(&mctp_server, NULL, platform_mctp_server, mctp_ctx);
+-    
++
+     return true;
++#endif
++}
++
++void setup_i3c_env()
++{
++	int ret;
++
++	if (m_mctp_medium == 1) {
++		if (m_use_transport_layer == SOCKET_TRANSPORT_TYPE_MCTP) {
++			ret = access("/dev/i3c-mctp-target-0", F_OK);
++			if (ret < 0) {
++				mctp_socket_mode = true;
++				m_use_transport_layer = SOCKET_TRANSPORT_TYPE_NONE;
++				/* if mctp_network is not configured, to use default setting */
++				if (m_mctp_network == 0)
++					m_mctp_network = 4;
++			}
++		}
++	}
+ }
+ 
+ int main(int argc, char *argv[])
+@@ -388,6 +554,7 @@ int main(int argc, char *argv[])
+     srand((unsigned int)time(NULL));
+ 
+     process_args("spdm_requester_emu", argc, argv);
++    setup_i3c_env();
+ 
+     platform_client_routine(DEFAULT_SPDM_PLATFORM_PORT);
+     printf("Client stopped\n");
+diff --git a/spdm_emu/spdm_requester_emu/spdm_requester_session.c b/spdm_emu/spdm_requester_emu/spdm_requester_session.c
+index 35a50a5..0cb1c9e 100644
+--- a/spdm_emu/spdm_requester_emu/spdm_requester_session.c
++++ b/spdm_emu/spdm_requester_emu/spdm_requester_session.c
+@@ -9,6 +9,8 @@
+ #if (LIBSPDM_ENABLE_CAPABILITY_KEY_EX_CAP || LIBSPDM_ENABLE_CAPABILITY_PSK_EX_CAP)
+ 
+ extern SOCKET m_socket;
++extern SOCKET m_socket_org;
++extern SOCKET m_mctp_secure;
+ 
+ extern void *m_spdm_context;
+ 
+@@ -25,6 +27,7 @@ libspdm_return_t do_measurement_via_spdm(const uint32_t *session_id);
+ libspdm_return_t pci_doe_process_session_message(void *spdm_context, uint32_t session_id);
+ libspdm_return_t mctp_process_session_message(void *spdm_context, uint32_t session_id);
+ libspdm_return_t do_certificate_provising_via_spdm(uint32_t* session_id);
++extern bool isSessionCreated;
+ 
+ libspdm_return_t do_app_session_via_spdm(uint32_t session_id)
+ {
+@@ -97,11 +100,17 @@ libspdm_return_t do_session_via_spdm(bool use_psk)
+         return status;
+     }
+ 
++    isSessionCreated = true;
++    m_socket_org = m_socket;
++    m_socket = m_mctp_secure;
++    /* To disable unsupport operation */
++#if 0
+     status = do_app_session_via_spdm(session_id);
+     if (LIBSPDM_STATUS_IS_ERROR(status)) {
+         printf("do_app_session_via_spdm - %x\n", (uint32_t)status);
+         return status;
+     }
++#endif
+ 
+     if ((m_exe_session & EXE_SESSION_HEARTBEAT) != 0) {
+         status = libspdm_heartbeat(spdm_context, session_id);
+diff --git a/spdm_emu/spdm_requester_emu/spdm_requester_spdm.c b/spdm_emu/spdm_requester_emu/spdm_requester_spdm.c
+index 40f31d9..684ee29 100644
+--- a/spdm_emu/spdm_requester_emu/spdm_requester_spdm.c
++++ b/spdm_emu/spdm_requester_emu/spdm_requester_spdm.c
+@@ -14,12 +14,14 @@
+ 
+ extern void *m_mctp_context;
+ extern struct wq_t *comm_queue;
++extern int m_mctp_secure;
+ 
+ uint8_t spdm_src_eid = 0x0b, spdm_tag;
+ 
+ void *m_spdm_context;
+ void *m_scratch_buffer;
+ SOCKET m_socket;
++SOCKET m_socket_org;
+ 
+ bool communicate_platform_data(SOCKET socket, uint32_t command,
+                                const uint8_t *send_buffer, size_t bytes_to_send,
+@@ -67,7 +69,7 @@ libspdm_return_t spdm_device_libmctp_send_message(void *spdm_context,
+ {
+     struct spdm_mctp_ctx *mctp_ctx = m_mctp_context;
+ 
+-    printf("Sending with MSG_TAG=%02x DST_EID=%02x\n", spdm_tag, spdm_src_eid);
++//    printf("Sending with MSG_TAG=%02x DST_EID=%02x\n", spdm_tag, spdm_src_eid);
+ 
+     mctp_message_tx(mctp_ctx->mctp,
+             spdm_src_eid,
+@@ -131,6 +133,62 @@ libspdm_return_t spdm_device_receive_message(void *spdm_context,
+     return LIBSPDM_STATUS_SUCCESS;
+ }
+ 
++libspdm_return_t spdm_device_none_send_message(void *spdm_context,
++                                       size_t request_size, const void *request,
++                                       uint64_t timeout)
++{
++    bool result;
++    uint8_t *pData = (uint8_t *)request;
++
++    /**
++     * When data is sent via a MCTP socket, the MCTP type will be added automatically.
++     * In current code process, secure type will be added after session is created.
++     * To skip first byte to avoid duplicate MCTP type
++     */
++    if (isSessionCreated) {
++        pData += 1;
++        request_size--;
++    }
++
++    result = send_platform_data(m_socket, SOCKET_SPDM_COMMAND_NORMAL, pData, (uint32_t)request_size);
++
++    if (!result) {
++        fprintf(stderr, "send_platform_data Error - %x\n",
++#ifdef _MSC_VER
++               WSAGetLastError()
++#else
++               errno
++#endif
++               );
++        return LIBSPDM_STATUS_SEND_FAIL;
++    }
++    return LIBSPDM_STATUS_SUCCESS;
++}
++
++libspdm_return_t spdm_device_none_receive_message(void *spdm_context,
++                                          size_t *response_size,
++                                          void **response,
++                                          uint64_t timeout)
++{
++    bool result;
++    uint32_t command;
++
++    LIBSPDM_DEBUG((LIBSPDM_DEBUG_INFO, "spdm_device_none_receive_message - m_socket - %d\n", m_socket));
++    result = receive_platform_data(m_socket, &command, *response,
++                                   response_size);
++    if (!result) {
++        printf("receive_platform_data Error - %x\n",
++#ifdef _MSC_VER
++               WSAGetLastError()
++#else
++               errno
++#endif
++               );
++        return LIBSPDM_STATUS_RECEIVE_FAIL;
++    }
++    return LIBSPDM_STATUS_SUCCESS;
++}
++
+ /**
+  * Send and receive an DOE message
+  *
+@@ -185,7 +243,7 @@ void *spdm_client_init(void)
+     spdm_version_number_t spdm_version;
+     size_t scratch_buffer_size;
+ 
+-    printf("context_size - 0x%x\n", (uint32_t)libspdm_get_context_size());
++//    printf("context_size - 0x%x\n", (uint32_t)libspdm_get_context_size());
+ 
+     m_spdm_context = (void *)malloc(libspdm_get_context_size());
+     if (m_spdm_context == NULL) {
+@@ -216,8 +274,8 @@ void *spdm_client_init(void)
+             libspdm_transport_pci_doe_decode_message,
+             libspdm_transport_pci_doe_get_header_size);
+     } else if (m_use_transport_layer == SOCKET_TRANSPORT_TYPE_NONE) {
+-        libspdm_register_device_io_func(spdm_context, spdm_device_send_message,
+-                                        spdm_device_receive_message);
++        libspdm_register_device_io_func(spdm_context, spdm_device_none_send_message,
++                                        spdm_device_none_receive_message);
+         libspdm_register_transport_layer_func(
+             spdm_context, spdm_transport_none_encode_message,
+             spdm_transport_none_decode_message,
+diff --git a/spdm_emu/spdm_responder_emu/spdm_responder_emu.c b/spdm_emu/spdm_responder_emu/spdm_responder_emu.c
+index 9dd9a65..5fc19c0 100644
+--- a/spdm_emu/spdm_responder_emu/spdm_responder_emu.c
++++ b/spdm_emu/spdm_responder_emu/spdm_responder_emu.c
+@@ -30,12 +30,15 @@ uint32_t m_command;
+ 
+ SOCKET m_server_socket;
+ SOCKET m_mctp_tx;
++SOCKET m_socket_org;
+ 
+ extern void *m_spdm_context;
+ extern void *m_scratch_buffer;
+ extern void *m_pci_doe_context;
+ extern void *m_mctp_context;
+ extern struct wq_t *comm_queue;
++extern int m_mctp_secure;
++extern bool mctp_socket_mode;
+ 
+ struct mctp_ctrl_resp {
+ 	struct mctp_ctrl_msg_hdr hdr;
+@@ -64,9 +67,9 @@ void rx_request_handler(mctp_eid_t src, void *data, void *msg, size_t len,
+ 
+     printf("%s\n", __func__);
+     if (len > 0) {
+-        mctp_type = req[0];
++        mctp_type = req[0] & 0x7f;
+ 
+-        if (mctp_type == 0x05) {
++        if (mctp_type == 0x05 || mctp_type == 0x6) {
+             /* PIPE Data to LibSPDM Reciever */
+             wq_enqueue(comm_queue, req, len, src, tag);
+             /* Getting Response data from LibSPDM */
+@@ -194,6 +197,7 @@ void *spdm_server_init(void);
+ libspdm_return_t pci_doe_init_responder ();
+ 
+ extern struct sockaddr_mctp my_address;
++extern struct sockaddr_mctp my_address_secure;
+ bool create_socket(uint16_t port_number, SOCKET *listen_socket)
+ {
+     int32_t res;
+@@ -231,6 +235,7 @@ bool create_socket(uint16_t port_number, SOCKET *listen_socket)
+     my_address.smctp_family = AF_MCTP;
+     my_address.smctp_addr.s_addr = MCTP_ADDR_ANY;
+     my_address.smctp_type = 5;
++    my_address.smctp_network = m_mctp_network;
+ 
+     res = bind(*listen_socket, (struct sockaddr *)&my_address,
+                sizeof(my_address));
+@@ -246,6 +251,25 @@ bool create_socket(uint16_t port_number, SOCKET *listen_socket)
+         return false;
+     }
+ 
++    /* create socket for secure connection */
++    m_mctp_secure = socket(AF_MCTP, SOCK_DGRAM, 0);
++    if (m_mctp_secure == -1) {
++        printf("can't create secure socket\n");
++        return false;
++    }
++
++    libspdm_zero_mem(&my_address_secure, sizeof(struct sockaddr_mctp));
++    my_address_secure.smctp_family = AF_MCTP;
++    my_address_secure.smctp_addr.s_addr = MCTP_ADDR_ANY;
++    my_address_secure.smctp_type = MCTP_MESSAGE_TYPE_SECURED_MCTP | 0x80;
++    my_address_secure.smctp_network = m_mctp_network;
++
++    if (bind(m_mctp_secure, (struct sockaddr *)&my_address_secure, sizeof(struct sockaddr_mctp)) < 0) {
++        printf("Bind secure socket error. error - %s\n", strerror(errno));
++        close(m_mctp_secure);
++        return false;
++    }
++
+     return true;
+ }
+ 
+@@ -314,7 +338,7 @@ bool init_mctp_server()
+             printf("Failed to alloc i3c structure\n");
+         return false;
+     }
+-    snprintf(binding, sizeof(binding), MCTP_I3C_RXTX, m_mctp_bus);
++    snprintf(binding, sizeof(binding), MCTP_I3C_RXTX);
+ 
+     m_mctp_tx = open(binding, O_RDWR | O_NONBLOCK);
+     m_server_socket = m_mctp_tx;
+@@ -547,6 +571,24 @@ bool platform_server_routine(uint16_t port_number)
+     return true;
+ }
+ 
++void setup_i3c_env()
++{
++	int ret;
++
++	if (m_mctp_medium == 1) {
++		if (m_use_transport_layer == SOCKET_TRANSPORT_TYPE_MCTP) {
++			ret = access("/dev/i3c-mctp-target-0", F_OK);
++			if (ret < 0) {
++				mctp_socket_mode = true;
++				m_use_transport_layer = SOCKET_TRANSPORT_TYPE_NONE;
++				/* if mctp_network is not configured, to use default setting */
++				if (m_mctp_network == 0)
++					m_mctp_network = 4;
++			}
++		}
++	}
++}
++
+ int main(int argc, char *argv[])
+ {
+     libspdm_return_t status;
+@@ -555,6 +597,7 @@ int main(int argc, char *argv[])
+     srand((unsigned int)time(NULL));
+ 
+     process_args("spdm_responder_emu", argc, argv);
++    setup_i3c_env();
+ 
+     m_spdm_context = spdm_server_init();
+     if (m_spdm_context == NULL) {
+diff --git a/spdm_emu/spdm_responder_emu/spdm_responder_spdm.c b/spdm_emu/spdm_responder_emu/spdm_responder_spdm.c
+index 48e5062..7ce95dc 100644
+--- a/spdm_emu/spdm_responder_emu/spdm_responder_spdm.c
++++ b/spdm_emu/spdm_responder_emu/spdm_responder_spdm.c
+@@ -52,6 +52,11 @@ libspdm_return_t spdm_device_send_message(void *spdm_context,
+ {
+     bool result;
+ 
++    if (isSessionCreated) {
++        request += 1;
++        request_size--;
++    }
++
+     result = send_platform_data(m_server_socket, SOCKET_SPDM_COMMAND_NORMAL,
+                                 request, (uint32_t)request_size);
+     if (!result) {

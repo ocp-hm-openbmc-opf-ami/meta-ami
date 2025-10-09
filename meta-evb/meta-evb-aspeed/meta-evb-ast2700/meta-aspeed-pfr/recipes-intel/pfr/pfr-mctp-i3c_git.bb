@@ -8,6 +8,7 @@ inherit pkgconfig meson
 SRC_URI = " file://main.c;subdir=${S} \
             file://meson.build;subdir=${S} \
             file://pfr-mctp-i3c.service;subdir=${S} \
+            file://mctp-i3c-starter.sh;subdir=${S} \
           "
 
 inherit obmc-phosphor-systemd

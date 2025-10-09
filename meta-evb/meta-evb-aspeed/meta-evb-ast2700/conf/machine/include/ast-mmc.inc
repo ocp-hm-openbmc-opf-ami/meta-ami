@@ -15,3 +15,6 @@ IMAGE_OVERHEAD_FACTOR = "1.0"
 # about 60K, so add extra rootfs space 4MB
 # Defines additional free disk space created in the image in Kbytes
 IMAGE_ROOTFS_EXTRA_SPACE = "4096"
+
+# OpenBMC uses wic.xz by default. Add support for wic.gz to flash EMMC image at U-Boot.
+IMAGE_FSTYPES += " wic.gz mmc-ext4-tar"

@@ -1,0 +1,282 @@
+From e61479b2a67f26f640249d219d4c010abd0be83c Mon Sep 17 00:00:00 2001
+From: Kane-Chen-AS <kane_chen@aspeedtech.com>
+Date: Thu, 19 Sep 2024 11:41:07 +0800
+Subject: [PATCH] libspdm: Support secure connection in NONE mode
+
+In the original code, the NONE mode doesn't support the
+secure connection. It causes a problem to test session
+feature with MCTP socket environment. To adjust the code
+for supporting the secure communication in NONE mode.
+
+Signed-off-by: Kane-Chen-AS <kane_chen@aspeedtech.com>
+---
+ include/hal/library/debuglib.h                |  1 +
+ include/library/spdm_responder_lib.h          |  3 +-
+ include/library/spdm_secured_message_lib.h    |  2 ++
+ .../spdm_common_lib/libspdm_com_opaque_data.c |  4 ++-
+ .../libspdm_rsp_communication.c               | 23 ++++++++++++-
+ .../libspdm_rsp_receive_send.c                |  4 ++-
+ .../libspdm_secmes_encode_decode.c            | 33 +++++++++++++++++++
+ .../libspdm_mctp_mctp.c                       |  3 +-
+ os_stub/debuglib/debuglib.c                   | 11 +++++--
+ 9 files changed, 77 insertions(+), 7 deletions(-)
+
+diff --git a/include/hal/library/debuglib.h b/include/hal/library/debuglib.h
+index 218cc4cc..591d8059 100644
+--- a/include/hal/library/debuglib.h
++++ b/include/hal/library/debuglib.h
+@@ -25,6 +25,7 @@
+ /* Detailed debug messages that may significantly impact boot performance*/
+ #define LIBSPDM_DEBUG_VERBOSE 0x00400000
+ #define LIBSPDM_DEBUG_ERROR 0x80000000 /* Error*/
++#define LIBSPDM_DEBUG_FILE 0x08000000 /* use debug file */
+ 
+ /**
+  * Prints a debug message to the debug output device if the specified error level is enabled.
+diff --git a/include/library/spdm_responder_lib.h b/include/library/spdm_responder_lib.h
+index fcbc10a2..47f61d05 100644
+--- a/include/library/spdm_responder_lib.h
++++ b/include/library/spdm_responder_lib.h
+@@ -95,7 +95,8 @@ libspdm_return_t libspdm_process_request(void *spdm_context,
+ libspdm_return_t libspdm_build_response(void *spdm_context, const uint32_t *session_id,
+                                         bool is_app_message,
+                                         size_t *response_size,
+-                                        void **response);
++                                        void **response,
++                                        uint8_t *response_code);
+ 
+ /**
+  * This is the main dispatch function in SPDM responder.
+diff --git a/include/library/spdm_secured_message_lib.h b/include/library/spdm_secured_message_lib.h
+index 07cc1e89..ef1b0333 100644
+--- a/include/library/spdm_secured_message_lib.h
++++ b/include/library/spdm_secured_message_lib.h
+@@ -12,6 +12,8 @@
+ #include "industry_standard/spdm_secured_message.h"
+ #include "library/spdm_return_status.h"
+ 
++#define MAX_REKEY_COUNT 10000
++
+ typedef enum {
+     LIBSPDM_SESSION_TYPE_NONE,
+     LIBSPDM_SESSION_TYPE_MAC_ONLY,
+diff --git a/library/spdm_common_lib/libspdm_com_opaque_data.c b/library/spdm_common_lib/libspdm_com_opaque_data.c
+index 3d53a526..11a297ba 100644
+--- a/library/spdm_common_lib/libspdm_com_opaque_data.c
++++ b/library/spdm_common_lib/libspdm_com_opaque_data.c
+@@ -325,10 +325,12 @@ bool libspdm_get_element_from_opaque_data(libspdm_context_t *spdm_context,
+                 (const uint8_t *)opaque_element_table_header + current_element_len);
+     }
+ 
+-    /*ensure data size is right*/
++    // total_element_len includes panding data, it may not equal to the data_element_size
++#if 0
+     if (data_element_size != total_element_len) {
+         return false;
+     }
++#endif
+ 
+     return result;
+ }
+diff --git a/library/spdm_responder_lib/libspdm_rsp_communication.c b/library/spdm_responder_lib/libspdm_rsp_communication.c
+index 6ef71ec9..763ac49a 100644
+--- a/library/spdm_responder_lib/libspdm_rsp_communication.c
++++ b/library/spdm_responder_lib/libspdm_rsp_communication.c
+@@ -6,6 +6,7 @@
+ 
+ #include "internal/libspdm_responder_lib.h"
+ 
++bool mctp_socket_mode = false;
+ /**
+  * This is the main dispatch function in SPDM responder.
+  *
+@@ -33,6 +34,7 @@ libspdm_return_t libspdm_responder_dispatch_message(void *context)
+     bool is_app_message;
+     void *message;
+     size_t message_size;
++    uint8_t response_code = 0;
+ 
+     spdm_context = context;
+ 
+@@ -76,7 +78,7 @@ libspdm_return_t libspdm_responder_dispatch_message(void *context)
+     libspdm_zero_mem(response, response_size);
+ 
+     status = libspdm_build_response(spdm_context, session_id_ptr, is_app_message,
+-                                    &response_size, (void **)&response);
++                                    &response_size, (void **)&response, &response_code);
+     if (LIBSPDM_STATUS_IS_ERROR(status)) {
+         libspdm_release_sender_buffer (spdm_context);
+         return status;
+@@ -87,5 +89,24 @@ libspdm_return_t libspdm_responder_dispatch_message(void *context)
+ 
+     libspdm_release_sender_buffer (spdm_context);
+ 
++	extern int m_server_socket;
++	extern int m_mctp_secure;
++	extern int m_socket_org;
++	extern bool isSessionCreated;
++	extern uint8_t m_mctp_medium;
++
++	if (mctp_socket_mode) {
++		if (response_code == SPDM_FINISH_RSP ||
++			response_code == SPDM_PSK_FINISH_RSP) {
++			printf("to replace the socket to secure sockect\n");
++			m_socket_org = m_server_socket;
++			m_server_socket = m_mctp_secure;
++			isSessionCreated = true;
++		} else if (response_code == SPDM_END_SESSION_ACK) {
++			printf("to restore the socket to non-secure sockect\n");
++			m_server_socket = m_socket_org;
++			isSessionCreated = false;
++		}
++	}
+     return status;
+ }
+diff --git a/library/spdm_responder_lib/libspdm_rsp_receive_send.c b/library/spdm_responder_lib/libspdm_rsp_receive_send.c
+index 1cede9c0..062e8997 100644
+--- a/library/spdm_responder_lib/libspdm_rsp_receive_send.c
++++ b/library/spdm_responder_lib/libspdm_rsp_receive_send.c
+@@ -327,7 +327,8 @@ void libspdm_set_connection_state(libspdm_context_t *spdm_context,
+ libspdm_return_t libspdm_build_response(void *context, const uint32_t *session_id,
+                                         bool is_app_message,
+                                         size_t *response_size,
+-                                        void **response)
++                                        void **response,
++                                        uint8_t *response_code)
+ {
+     libspdm_context_t *spdm_context;
+     uint8_t *my_response;
+@@ -614,6 +615,7 @@ libspdm_return_t libspdm_build_response(void *context, const uint32_t *session_i
+     }
+ 
+     spdm_response = (void *)my_response;
++    *response_code = spdm_response->request_response_code;
+     if (session_id != NULL) {
+         switch (spdm_response->request_response_code) {
+         case SPDM_FINISH_RSP:
+diff --git a/library/spdm_secured_message_lib/libspdm_secmes_encode_decode.c b/library/spdm_secured_message_lib/libspdm_secmes_encode_decode.c
+index 75f2a21c..d0500e94 100644
+--- a/library/spdm_secured_message_lib/libspdm_secmes_encode_decode.c
++++ b/library/spdm_secured_message_lib/libspdm_secmes_encode_decode.c
+@@ -58,6 +58,7 @@ libspdm_return_t libspdm_encode_secured_message(
+     uint32_t rand_count;
+     uint32_t max_rand_count;
+     libspdm_session_state_t session_state;
++    uint8_t rekey = false;
+ 
+     secured_message_context = spdm_secured_message_context;
+ 
+@@ -166,6 +167,8 @@ libspdm_return_t libspdm_encode_secured_message(
+             .response_data_sequence_number =
+                 sequence_number;
+         }
++        if (sequence_number >= MAX_REKEY_COUNT)
++            rekey = true;
+     }
+ 
+     record_header_size = sizeof(spdm_secured_message_a_data_header1_t) +
+@@ -289,6 +292,20 @@ libspdm_return_t libspdm_encode_secured_message(
+     if (!result) {
+         return LIBSPDM_STATUS_CRYPTO_ERROR;
+     }
++
++    if (rekey) {
++        LIBSPDM_DEBUG((LIBSPDM_DEBUG_INFO, "rekey\n"));
++        if (is_requester) {
++            libspdm_create_update_session_data_key(secured_message_context, LIBSPDM_KEY_UPDATE_ACTION_REQUESTER);
++            secured_message_context->application_secret
++            .request_data_sequence_number = 0;
++        } else {
++            libspdm_create_update_session_data_key(secured_message_context, LIBSPDM_KEY_UPDATE_ACTION_RESPONDER);
++            secured_message_context->application_secret
++            .response_data_sequence_number = 0;
++        }
++    }
++
+     return LIBSPDM_STATUS_SUCCESS;
+ }
+ 
+@@ -343,6 +360,7 @@ libspdm_return_t libspdm_decode_secured_message(
+     libspdm_session_state_t session_state;
+     libspdm_error_struct_t spdm_error;
+     libspdm_return_t status;
++    uint8_t rekey = false;
+ 
+     spdm_error.error_code = 0;
+     spdm_error.session_id = 0;
+@@ -460,6 +478,8 @@ libspdm_return_t libspdm_decode_secured_message(
+             .response_data_sequence_number =
+                 sequence_number;
+         }
++        if (sequence_number >= MAX_REKEY_COUNT)
++            rekey = true;
+     }
+ 
+     record_header_size = sizeof(spdm_secured_message_a_data_header1_t) +
+@@ -667,5 +687,18 @@ libspdm_return_t libspdm_decode_secured_message(
+         return LIBSPDM_STATUS_UNSUPPORTED_CAP;
+     }
+ 
++    if (rekey) {
++        LIBSPDM_DEBUG((LIBSPDM_DEBUG_INFO, "rekey\n"));
++        if (is_requester) {
++            libspdm_create_update_session_data_key(secured_message_context, LIBSPDM_KEY_UPDATE_ACTION_REQUESTER);
++            secured_message_context->application_secret
++                .request_data_sequence_number = 0;
++        } else {
++            libspdm_create_update_session_data_key(secured_message_context, LIBSPDM_KEY_UPDATE_ACTION_RESPONDER);
++            secured_message_context->application_secret
++                .response_data_sequence_number = 0;
++        }
++    }
++
+     return LIBSPDM_STATUS_SUCCESS;
+ }
+diff --git a/library/spdm_transport_mctp_lib/libspdm_mctp_mctp.c b/library/spdm_transport_mctp_lib/libspdm_mctp_mctp.c
+index 21c6691c..3927d630 100644
+--- a/library/spdm_transport_mctp_lib/libspdm_mctp_mctp.c
++++ b/library/spdm_transport_mctp_lib/libspdm_mctp_mctp.c
+@@ -124,7 +124,8 @@ libspdm_return_t libspdm_mctp_decode_message(uint32_t **session_id,
+ 
+     mctp_message_header = transport_message;
+ 
+-    switch (mctp_message_header->message_type) {
++    /* ignore integrity_check bit */
++    switch (mctp_message_header->message_type & 0x7f) {
+     case MCTP_MESSAGE_TYPE_SECURED_MCTP:
+         LIBSPDM_ASSERT(session_id != NULL);
+         if (session_id == NULL) {
+diff --git a/os_stub/debuglib/debuglib.c b/os_stub/debuglib/debuglib.c
+index f4109ffd..11c66b8c 100644
+--- a/os_stub/debuglib/debuglib.c
++++ b/os_stub/debuglib/debuglib.c
+@@ -30,6 +30,7 @@
+ #ifndef LIBSPDM_DEBUG_LEVEL_CONFIG
+ #define LIBSPDM_DEBUG_LEVEL_CONFIG (LIBSPDM_DEBUG_INFO | LIBSPDM_DEBUG_INFO)
+ #endif
++uint32_t debug_level = LIBSPDM_DEBUG_INFO | LIBSPDM_DEBUG_VERBOSE | LIBSPDM_DEBUG_ERROR;
+ 
+ void libspdm_debug_assert(const char *file_name, size_t line_number,
+                           const char *description)
+@@ -60,7 +61,7 @@ void libspdm_debug_print(size_t error_level, const char *format, ...)
+     char buffer[LIBSPDM_MAX_DEBUG_MESSAGE_LENGTH];
+     va_list marker;
+ 
+-    if ((error_level & LIBSPDM_DEBUG_LEVEL_CONFIG) == 0) {
++    if ((error_level & debug_level) == 0) {
+         return;
+     }
+ 
+@@ -70,5 +71,11 @@ void libspdm_debug_print(size_t error_level, const char *format, ...)
+ 
+     va_end(marker);
+ 
+-    printf("%s", buffer);
++    if (debug_level & LIBSPDM_DEBUG_FILE) {
++        FILE *fp = fopen("/tmp/spdm_dbg.log", "a+");
++        fprintf(fp, "%s", buffer);
++        fclose(fp);
++    }
++    else
++        printf("%s", buffer);
+ }

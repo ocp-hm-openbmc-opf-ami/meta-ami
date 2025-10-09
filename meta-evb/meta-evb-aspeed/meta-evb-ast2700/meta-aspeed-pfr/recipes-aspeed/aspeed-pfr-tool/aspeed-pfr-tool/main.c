@@ -15,13 +15,14 @@
 #include "provision.h"
 #include "checkpoint.h"
 #include "i2c_utils.h"
+#include "utils.h"
 #include "arguments.h"
 #include "config.h"
 #include "status.h"
 #include "info.h"
 #include "spdm.h"
 
-static const char short_options[] = "hvb:a:c:p:uk:w:r:dsiS:l:";
+static const char short_options[] = "hvb:a:c:p:uk:w:r:dsiS:l:ED:t:n:";
 static const struct option
 	long_options[] = {
 	{ "help", no_argument, NULL, 'h' },
@@ -39,8 +40,18 @@ static const struct option
 	{ "info", no_argument, NULL, 'i' },
 	{ "spdm", required_argument, NULL, 'S' },
 	{ "lms", required_argument, NULL, 'l' },
+	{ "secure", no_argument, NULL, 'E' },
+	{ "dest_id", required_argument, NULL, 'D' },
+	{ "test_case", required_argument, NULL, 't' },
+	{ "mctp_network", required_argument, NULL, 'n' },
 	{ 0, 0, 0, 0 }
 };
+
+#ifdef SUPPORT_SECURE_CONNECTION
+	char secure_connect_status[32] = "this is supported";
+#else
+	char secure_connect_status[32] = "this is not supported";
+#endif
 
 static void usage(FILE *fp, int argc, char **argv)
 {
@@ -63,6 +74,10 @@ static void usage(FILE *fp, int argc, char **argv)
 		" -i | --info           show bmc/pch version info\n"
 		" -S | --spdm           enable or disable SPDM attestation\n"
 		" -l | --lms            use LMS sign scheme\n"
+		" -E | --secure         use secure connection (%s)\n"
+		" -D | --dest_id        MCTP destination endpoint id [default : 0x%x]\n"
+		" -t | --test_case      specify test case for secure connection\n"
+		" -n | --mctp_network   specify MCTP network index\n"
 		"example:\n"
 		"--provision /usr/share/pfrconfig/rk_pub.pem\n"
 		"--provision show\n"
@@ -82,7 +97,7 @@ static void usage(FILE *fp, int argc, char **argv)
 		"--lms 256\n"
 		"--lms 384\n"
 		"",
-		argv[0]);
+		argv[0], secure_connect_status, DEFAULT_MCTP_DST_SKT);
 }
 
 void printVersion(void)
@@ -100,6 +115,7 @@ void printArguments(ARGUMENTS args)
 	printf("PCH_ACTIVE_PFM_OFFSET = 0x%08x\n", args.pch_active_pfm_offset);
 	printf("PCH_STAGING_OFFSET = 0x%08x\n", args.pch_staging_offset);
 	printf("PCH_RECOVERY_OFFSET = 0x%08x\n", args.pch_recovery_offset);
+	printf("AFM_STAGING_OFFSET = 0x%08x\n", args.afm_staging_offset);
 	printf("Tx Msg\n");
 	printRawData(args.tx_msg, args.tx_msg_len);
 }
@@ -134,6 +150,9 @@ void parseConfigElements(ARGUMENTS *args)
 			args->pch_staging_offset = strtoul(&line[strlen("PCH_STAGING_OFFSET") + 1], 0, 0);
 		else if (strncmp(line, "PCH_RECOVERY_OFFSET", strlen("PCH_RECOVERY_OFFSET")) == 0)
 			args->pch_recovery_offset = strtoul(&line[strlen("PCH_RECOVERY_OFFSET") + 1], 0, 0);
+		else if (strncmp(line, "AFM_STAGING_OFFSET", strlen("AFM_STAGING_OFFSET")) == 0)
+			args->afm_staging_offset = strtoul(&line[strlen("AFM_STAGING_OFFSET") + 1], 0, 0);
+
 	}
 }
 
@@ -156,6 +175,7 @@ int main(int argc, char *argv[])
 	uint8_t bus;
 	int i;
 	int j;
+	uint8_t test_case_flag = 0;
 
 	args.pfr_tool_conf = "/usr/share/pfrconfig/aspeed-pfr-tool.conf";
 	args.debug_flag = 0;
@@ -217,11 +237,10 @@ int main(int argc, char *argv[])
 			info_flag = 1;
 			break;
 		case 'S':
-			if (strcmp(optarg, "enable") == 0) {
+			if (strcmp(optarg, "enable") == 0)
 				spdm_flag = 1;
-			} else if (strcmp(optarg, "disable") == 0) {
+			else if (strcmp(optarg, "disable") == 0)
 				spdm_flag = 0;
-			}
 			break;
 		case 'l':
 			args.lms_mode = strtoul(optarg, 0, 10);
@@ -229,6 +248,18 @@ int main(int argc, char *argv[])
 				usage(stdout, argc, argv);
 				exit(EXIT_FAILURE);
 			}
+			break;
+		case 'E':
+			args.secure_mode = 1;
+			break;
+		case 'D':
+			args.mctp_dst = strtoul(optarg, 0, 0);
+			break;
+		case 't':
+			test_case_flag = strtoul(optarg, 0, 0);
+			break;
+		case 'n':
+			args.mctp_network = strtoul(optarg, 0, 0);
 			break;
 		default:
 			usage(stdout, argc, argv);
@@ -254,19 +285,73 @@ int main(int argc, char *argv[])
 	if (args.debug_flag)
 		printArguments(args);
 
-	args.i2c_fd = i2cOpenDev(args.i2c_bus, args.rot_addr);
+#ifdef SUPPORT_SECURE_CONNECTION
+	if (args.secure_mode) {
+		int ret = access("/dev/i3c-mctp-target-0", F_OK);
+
+		if (ret == 0) {
+			fprintf(stderr, "Secure connection isn't supported in this mode\n");
+			args.i2c_fd = i2cOpenDev(args.i2c_bus, args.rot_addr);
+			args.secure_mode = 0;
+		} else {
+			if (args.mctp_dst == 0)
+				args.mctp_dst = DEFAULT_MCTP_DST_SKT;
+
+			if (args.mctp_network == 0)
+				args.mctp_network = DEFAULT_MCTP_NETWORK;
+
+			if (setupSecureConnect(&args)) {
+				fprintf(stderr, "Failed to setup secure connection\n");
+				// If secure connection can't be used, use SMBus instead
+				args.i2c_fd = i2cOpenDev(args.i2c_bus, args.rot_addr);
+				args.secure_mode = 0;
+			}
+		}
+	} else {
+		args.i2c_fd = i2cOpenDev(args.i2c_bus, args.rot_addr);
+	}
+#else
+	if (args.secure_mode) {
+		fprintf(stderr, "Secure connection feature is not enabled\n");
+		args.i2c_fd = i2cOpenDev(args.i2c_bus, args.rot_addr);
+		args.secure_mode = 0;
+	} else {
+		args.i2c_fd = i2cOpenDev(args.i2c_bus, args.rot_addr);
+	}
+#endif
+
+#ifdef SECURE_TEST_CASE
+	if (test_case_flag) {
+		if (!args.secure_mode) {
+			printf("Test case should be executed in secure mode (-E)\n");
+			return -1;
+		}
+		if (test_case_flag == 0xff) {
+			/* to run all test cases */
+			for (i = 0; i < test_case_flag; i++)
+				test_case_handler(&args, i, (i == test_case_flag - 1)?true:false);
+		} else
+			test_case_handler(&args, test_case_flag, true);
+		return 0;
+	}
+#else
+	if (test_case_flag)
+		printf("Secure test case is not enabled\n");
+#endif
+
 	if (read_reg_flag) {
 		if (args.tx_msg_len > 2)
-			printf("invalid read register command\n");
+			printf("Invalid read register command\n");
 		else {
 			if (args.tx_msg_len == 1) {
-				read_reg_value = i2cReadByteData(args, args.tx_msg[0]);
+				read_reg_value = ReadByteData(args, args.tx_msg[0]);
 				printf("%02x\n", read_reg_value);
 			} else {
 				if (args.tx_msg[1] < 1) {
-					printf("invalid length %02x\n", args.tx_msg[1]);
+					printf("Invalid length %02x\n", args.tx_msg[1]);
 				} else {
-					args.rx_msg_len = i2cReadBlockData(args, args.tx_msg[0], args.tx_msg[1], args.rx_msg);
+					args.rx_msg_len = ReadBlockData(args, args.tx_msg[0],
+								args.tx_msg[1], args.rx_msg);
 					if (args.rx_msg_len > 0)
 						printRawData(args.rx_msg, args.rx_msg_len);
 				}
@@ -276,12 +361,13 @@ int main(int argc, char *argv[])
 
 	if (write_reg_flag) {
 		if (args.tx_msg_len < 2)
-			printf("invalid write register command\n");
+			printf("Invalid write register command\n");
 		else
 			if (args.tx_msg_len > 2)
-				i2cWriteBlockData(args, args.tx_msg[0], args.tx_msg_len - 1, &args.tx_msg[1]);
+				WriteBlockData(args, args.tx_msg[0], args.tx_msg_len - 1,
+						&args.tx_msg[1]);
 			else
-				i2cWriteByteData(args, args.tx_msg[0], args.tx_msg[1]);
+				WriteByteData(args, args.tx_msg[0], args.tx_msg[1]);
 	}
 
 	if (provision_flag)
@@ -301,6 +387,9 @@ int main(int argc, char *argv[])
 
 	if (spdm_flag != -1)
 		setSPDMFunction(args, spdm_flag);
+
+	if (args.secure_mode)
+		close_secure_session(&args);
 
 	if (args.i2c_fd >= 0)
 		close(args.i2c_fd);

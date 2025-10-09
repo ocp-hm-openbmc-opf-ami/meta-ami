@@ -1,3 +1,11 @@
+# According to the design of AST2600, it is required to add the image length at
+# offset 0x28 in the header of boot image to support boot from eMMC and the size
+# of boot image should align block size. (512bytes)
+# Users do not need to add image length in the header of boot image and the size
+# of boot image does not need to align block size, either. (512 bytes) for AST2700.
+# This recipe is only used for AST2600. Users should not bitbake this recipe if
+# BMC SOC is not AST2600.
+
 DESCRIPTION = "Generate image boot from eMMC for ASPEED BMC SoCs"
 LICENSE = "Apache-2.0"
 LIC_FILES_CHKSUM = "file://${ASPEEDSDKBASE}/LICENSE;md5=a3740bd0a194cd6dcafdc482a200a56f"
@@ -17,21 +25,13 @@ inherit deploy
 # Image composition
 UBOOT_SUFFIX ?= "bin"
 
-ASPEED_IMAGE_BOOTMCU_FW_IMAGE ?= "${BOOTMCU_FW_BINARY}"
 ASPEED_IMAGE_UBOOT_SPL_IMAGE ?= "u-boot-spl"
 ASPEED_IMAGE_UBOOT_IMAGE ?= "u-boot"
 ASPEED_EMMC_IMAGE_UBOOT_SPL_IMAGE ?= "emmc_${ASPEED_IMAGE_UBOOT_SPL_IMAGE}"
-
 ASPEED_EMMC_IMAGE_MERGE_BOOT_IMAGE ?= "emmc_image-u-boot"
-ASPEED_EMMC_IMAGE_BOOTMCU_FW_OFFSET_KB ?= "0"
-ASPEED_EMMC_IMAGE_BOOTMCU_FW_SIZE_KB ?= "768"
-ASPEED_EMMC_IMAGE_UBOOT_OFFSET_KB?= "768"
-ASPEED_EMMC_IMAGE_MERGE_BOOT_SIZE_KB ?= "2048"
 
-ASPEED_EMMC_IMAGE_UBOOT_SPL_OFFSET_KB:aspeed-g6 ?= "0"
+# machine configs did not have the SPL size
 ASPEED_EMMC_IMAGE_UBOOT_SPL_SIZE_KB:aspeed-g6 ?= "64"
-ASPEED_EMMC_IMAGE_UBOOT_OFFSET_KB:aspeed-g6 ?= "64"
-ASPEED_EMMC_IMAGE_MERGE_BOOT_SIZE_KB:aspeed-g6 ?= "1280"
 
 ASPEED_SECURE_BOOT ?= "${@bb.utils.contains('MACHINE_FEATURES', 'ast-secure', 'yes', 'no', d)}"
 ASPEED_BOOT_EMMC ?= "${@bb.utils.contains('MACHINE_FEATURES', 'ast-mmc', 'yes', 'no', d)}"
@@ -46,7 +46,7 @@ do_mk_empty_image() {
     install -d ${OUTPUT_IMAGE_DIR}
 
     # Assemble the flash image
-    dd if=/dev/zero bs=1k count=${ASPEED_EMMC_IMAGE_MERGE_BOOT_SIZE_KB} | \
+    dd if=/dev/zero bs=1k count=${MMC_UBOOT_SIZE} | \
         tr '\000' '\377' > ${OUTPUT_IMAGE_DIR}/${ASPEED_EMMC_IMAGE_MERGE_BOOT_IMAGE}
 }
 
@@ -83,14 +83,15 @@ python do_deploy() {
     if d.getVar('ASPEED_BOOT_EMMC', True) != "yes":
         bb.fatal("Only support Boot from EMMC mode run this task")
 
-    bmcu_fw_binary = d.getVar('BOOTMCU_FW_BINARY', True)
+    bootmcu_fw_binary = d.getVar('BOOTMCU_FW_BINARY', True)
     spl_binary = d.getVar('SPL_BINARY', True)
     soc_family = d.getVar('SOC_FAMILY', True)
 
+    if bootmcu_fw_binary and spl_binary:
+        bb.fatal('SPL_BINARY and BOOTMCU_FW_BINARY should not be set at the same time')
+
     if soc_family == "aspeed-g7":
-        if not bmcu_fw_binary:
-            bb.fatal("Boot from EMMC only support BootMCU SPL")
-        bb.build.exec_func("do_mk_emmc_boot_image_g7", d)
+        bb.fatal("AST2700 Boot from EMMC mode should not run this task")
     elif soc_family == "aspeed-g6":
         if not spl_binary:
             bb.fatal("Boot from EMMC only support SPL")
@@ -117,33 +118,35 @@ python do_deploy() {
                               'of=%s' % emmc_boot_image])
 
 
+    uboot_offset = 0
+
     # bootmcu
-    if bmcu_fw_binary:
-        bootmcu_fw_finish_kb = (int(d.getVar('ASPEED_EMMC_IMAGE_BOOTMCU_FW_OFFSET_KB', True)) +
-                                int(d.getVar('ASPEED_EMMC_IMAGE_BOOTMCU_FW_SIZE_KB', True)))
+    if bootmcu_fw_binary:
+        bootmcu_fw_finish_kb = int(d.getVar('FLASH_BMCU_SIZE', True))
         _append_image(os.path.join(d.getVar('DEPLOY_DIR_IMAGE', True),
-                                   '%s' % (d.getVar('ASPEED_IMAGE_BOOTMCU_FW_IMAGE', True))),
-                      int(d.getVar('ASPEED_EMMC_IMAGE_BOOTMCU_FW_OFFSET_KB', True)),
+                                   '%s' % (d.getVar('BOOTMCU_FW_BINARY', True))),
+                      0,
                       bootmcu_fw_finish_kb)
+        uboot_offset += bootmcu_fw_finish_kb
 
     # spl
     if spl_binary:
-        spl_finish_kb = (int(d.getVar('ASPEED_EMMC_IMAGE_UBOOT_SPL_OFFSET_KB', True)) +
-                         int(d.getVar('ASPEED_EMMC_IMAGE_UBOOT_SPL_SIZE_KB', True)))
+        spl_finish_kb = int(d.getVar('ASPEED_EMMC_IMAGE_UBOOT_SPL_SIZE_KB', True))
         _append_image(os.path.join(d.getVar('SOURCE_IMAGE_DIR', True),
                                 '%s.%s' % (
                                 d.getVar('ASPEED_EMMC_IMAGE_UBOOT_SPL_IMAGE', True),
                                 d.getVar('UBOOT_SUFFIX', True))),
-                      int(d.getVar('ASPEED_EMMC_IMAGE_UBOOT_SPL_OFFSET_KB', True)),
+                      0,
                       spl_finish_kb)
+        uboot_offset += spl_finish_kb
 
     # uboot
     _append_image(os.path.join(d.getVar('DEPLOY_DIR_IMAGE', True),
                   '%s.%s' % (
                   d.getVar('ASPEED_IMAGE_UBOOT_IMAGE', True),
                   d.getVar('UBOOT_SUFFIX', True))),
-                  int(d.getVar('ASPEED_EMMC_IMAGE_UBOOT_OFFSET_KB', True)),
-                  int(d.getVar('ASPEED_EMMC_IMAGE_MERGE_BOOT_SIZE_KB', True)))
+                  uboot_offset,
+                  int(d.getVar('MMC_UBOOT_SIZE', True)))
 
     bb.build.exec_func("do_deploy_emmc_image", d)
 }
@@ -151,7 +154,6 @@ python do_deploy() {
 do_deploy[depends] += " \
     virtual/kernel:do_deploy \
     virtual/bootloader:do_deploy \
-    ${@bb.utils.contains('MACHINE_FEATURES', 'ast-bootmcu', 'bootmcu-fw:do_deploy', '', d)} \
     "
 
 addtask deploy before do_build after do_compile

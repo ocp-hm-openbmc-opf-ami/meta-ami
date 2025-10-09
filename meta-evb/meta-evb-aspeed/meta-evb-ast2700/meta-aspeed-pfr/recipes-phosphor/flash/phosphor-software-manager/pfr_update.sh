@@ -86,21 +86,21 @@ case ${EXTENDED_VERSION} in
 	"bios")
 		IMAGE=bios_signed_cap.bin
 		MTD_NAME=img-stg
-		CMD="aspeed-pfr-tool -w 0x13 0x01"
+		CMD="aspeed-pfr-tool -E -w 0x13 0x01"
 		pfr_update "$EXTENDED_VERSION" "$IMAGE" "$MTD_NAME" "$CMD"
 		;;
 
 	"pfrbmc")
 		IMAGE=bmc_signed_cap.bin
 		MTD_NAME=img-stg
-		CMD="aspeed-pfr-tool -w 0x13 0x08"
+		CMD="aspeed-pfr-tool -E -w 0x13 0x08"
 		pfr_update "$EXTENDED_VERSION" "$IMAGE" "$MTD_NAME" "$CMD"
 		;;
 
 	"pfr")
 		IMAGE=zephyr_signed.bin
 		MTD_NAME=pfr-stg
-		CMD="aspeed-pfr-tool -w 0x13 0x04"
+		CMD="aspeed-pfr-tool -E -w 0x13 0x04"
 		pfr_update "$EXTENDED_VERSION" "$IMAGE" "$MTD_NAME" "$CMD"
 		;;
 
