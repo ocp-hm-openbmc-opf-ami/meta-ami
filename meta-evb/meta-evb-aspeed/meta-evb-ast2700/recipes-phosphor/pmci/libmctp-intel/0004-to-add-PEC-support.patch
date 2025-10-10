@@ -1,0 +1,155 @@
+From 3b46d8bfd4e7b8c23b64cf7ffce94fade3072aa9 Mon Sep 17 00:00:00 2001
+From: Kane-Chen-AS <kane_chen@aspeedtech.com>
+Date: Mon, 2 Sep 2024 15:40:01 +0800
+Subject: [PATCH] to add PEC support
+
+Some hardware or driver doesn't support the PEC validation so
+we need to handle the PEC in application level.
+
+Signed-off-by: Kane-Chen-AS <kane_chen@aspeedtech.com>
+---
+ asti3c.c         | 61 ++++++++++++++++++++++++++++++++++++++++++------
+ libmctp-asti3c.h |  3 +++
+ 2 files changed, 57 insertions(+), 7 deletions(-)
+
+diff --git a/asti3c.c b/asti3c.c
+index c23d2d2..5c44a6b 100644
+--- a/asti3c.c
++++ b/asti3c.c
+@@ -11,6 +11,8 @@
+ #define pr_fmt(x) "asti3c: " x
+ #define BMC_I3C_SLAVE_ADDR       0x08
+ 
++struct mctp_asti3c_pkt_private *def_priv_data = NULL;
++
+ static uint8_t crc8 (uint8_t crc, const uint8_t *data, uint8_t len)
+ {
+         int i, j;
+@@ -51,10 +53,14 @@ static int mctp_asti3c_tx(struct mctp_binding *binding, struct mctp_pktbuf *pkt)
+ 	mctp_prdebug("Transmitting packet, len: %zu", len);
+ 	mctp_trace_tx(pkt->data, len);
+ 
+-        if (pkt_prv->append_pec) {
++	if (pkt_prv->append_pec) {
+ 		uint8_t i3c_addr = (BMC_I3C_SLAVE_ADDR << 1) | 0x01;
+ 		uint8_t pec;
+ 		uint8_t *buffer = malloc(len + 1);
++		if (pkt_prv->is_target == false) {
++			i3c_addr = BMC_I3C_SLAVE_ADDR << 1;
++		}
++
+ 		pec = crc8(0, &i3c_addr, 1);
+ 		pec = crc8(pec, (uint8_t *)pkt->data, len);
+ 
+@@ -64,7 +70,7 @@ static int mctp_asti3c_tx(struct mctp_binding *binding, struct mctp_pktbuf *pkt)
+ 		write_len = write(pkt_prv->fd, buffer, len);
+ 		mctp_trace_tx(buffer, len);
+ 		free(buffer);
+-        } else {
++	} else {
+ 		write_len = write(pkt_prv->fd, pkt->data, len);
+ 	}
+ 
+@@ -122,6 +128,16 @@ int mctp_asti3c_poll(int fd, int timeout)
+ 	return 0;
+ }
+ 
++void mctp_asti3c_set_def_data(struct mctp_asti3c_pkt_private *def)
++{
++	def_priv_data = def;
++}
++
++struct mctp_asti3c_pkt_private *mctp_asti3c_get_def_data(void)
++{
++	return def_priv_data;
++}
++
+ int mctp_asti3c_rx(struct mctp_binding_asti3c *asti3c, int fd)
+ {
+ 	uint8_t data[MCTP_I3C_BUFFER_SIZE];
+@@ -129,6 +145,7 @@ int mctp_asti3c_rx(struct mctp_binding_asti3c *asti3c, int fd)
+ 	struct mctp_pktbuf *pkt;
+ 	ssize_t read_len;
+ 	int rc;
++	struct mctp_asti3c_pkt_private *def;
+ 
+ 	if (fd < 0) {
+ 		mctp_prerr("Invalid file descriptor");
+@@ -142,14 +159,24 @@ int mctp_asti3c_rx(struct mctp_binding_asti3c *asti3c, int fd)
+ 	}
+ 
+ 	mctp_trace_rx(&data, read_len);
++	def = mctp_asti3c_get_def_data();
++	if (def)
++		memcpy(&pkt_prv, def, sizeof(struct mctp_asti3c_pkt_private));
+ 
+ 	/* PEC is verified at hardware level and does not
+ 	propogate to userspace, thus do not deal with PEC byte */
+-
+-	if ((read_len > (MCTP_BTU + MCTP_HEADER_SIZE)) ||
+-	    (read_len < (MCTP_HEADER_SIZE))) {
+-		mctp_prerr("Incorrect packet size: %zd", read_len);
+-		return -1;
++	if (pkt_prv.append_pec) {
++		if ((read_len > (MCTP_BTU + MCTP_HEADER_SIZE + 1)) ||
++			(read_len < (MCTP_HEADER_SIZE))) {
++			mctp_prerr("Incorrect packet size: %zd", read_len);
++			return -1;
++		}
++	} else {
++		if ((read_len > (MCTP_BTU + MCTP_HEADER_SIZE)) ||
++			(read_len < (MCTP_HEADER_SIZE))) {
++			mctp_prerr("Incorrect packet size: %zd", read_len);
++			return -1;
++		}
+ 	}
+ 
+ 	pkt_prv.fd = fd;
+@@ -160,6 +187,26 @@ int mctp_asti3c_rx(struct mctp_binding_asti3c *asti3c, int fd)
+ 		return -1;
+ 	}
+ 
++	// if hardware doesn't handle the PEC, to check PEC here
++	if (pkt_prv.append_pec) {
++		uint8_t i3c_addr;
++		uint8_t pec;
++
++		if (pkt_prv.is_target == true)
++			i3c_addr = BMC_I3C_SLAVE_ADDR << 1;
++		else
++			i3c_addr = (BMC_I3C_SLAVE_ADDR << 1) | 0x1;
++
++		pec = crc8(0, &i3c_addr, 1);
++		pec = crc8(pec, data, read_len - 1);
++		if (pec != data[read_len - 1]) {
++			mctp_prerr("pec is incorrect, expected pec = %x, rcv pec = %x\n", pec, data[read_len - 1]);
++			mctp_pktbuf_free(pkt);
++			return -1;
++		}
++		// to remove pec
++		read_len--;
++	}
+ 	rc = mctp_pktbuf_push(pkt, data, read_len);
+ 
+ 	if (rc) {
+diff --git a/libmctp-asti3c.h b/libmctp-asti3c.h
+index 03599cb..7306abb 100644
+--- a/libmctp-asti3c.h
++++ b/libmctp-asti3c.h
+@@ -34,6 +34,7 @@ struct mctp_asti3c_pkt_private {
+ 	/* Accept the fd into the binding to carry out I/O operations */
+ 	int fd;
+         bool append_pec;
++	bool is_target;
+ } __attribute__((__packed__));
+ 
+ struct mctp_binding_asti3c *mctp_asti3c_init(void);
+@@ -41,6 +42,8 @@ struct mctp_binding_asti3c *mctp_asti3c_init(void);
+ void mctp_asti3c_free(struct mctp_binding_asti3c *asti3c);
+ int mctp_asti3c_poll(int fd, int timeout);
+ int mctp_asti3c_rx(struct mctp_binding_asti3c *asti3c, int fd);
++void mctp_asti3c_set_def_data(struct mctp_asti3c_pkt_private *def);
++struct mctp_asti3c_pkt_private *mctp_asti3c_get_def_data(void);
+ 
+ #ifdef __cplusplus
+ }

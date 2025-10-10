@@ -20,10 +20,15 @@ SRC_URI += " \
              file://0018-add-snmp-media-group.patch \
              file://0022-Fix-to-add-support-to-include-dot-.-in-username.patch \
              file://0022-Added-chaanges-for-Pam-Reorder.patch \
+             file://0025-OT-14429-Updated-username-validation-check.patch \
              file://0199-RadiusUserAccountService.patch \
              file://0023-KerberosRelatedUserManagerChanges.patch \
              file://0024-Kerberos-Config-User-Manager.patch \
              file://0202-IPV6-Feature-enable-related-changes.patch \
+             file://0203-fixedInvalidPamreorder.patch \
+             file://0204-Added-Radius-In-Pamorder.patch \
+             file://0205-Removed-ipmi-Group-Check-Internal-Users.patch \
+             file://0206-Rename-Sync-Snmp-User.patch \
            "
 #OEM Privilege
 SRC_URI_OEM_PRIV:append = "file://upgrade_media_group.sh \

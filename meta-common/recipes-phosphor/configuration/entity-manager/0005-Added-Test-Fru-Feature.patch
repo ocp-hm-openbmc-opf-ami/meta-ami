@@ -1,0 +1,157 @@
+From d918814984113b83f7a9ee6ca0ea2dfd944ef71c Mon Sep 17 00:00:00 2001
+From: saravananm <saravananm@ami.com>
+Date: Fri, 23 May 2025 02:26:35 +0530
+Subject: [PATCH] Added Test-Fru Feature
+
+Support for Test FRU (TestFru dbus object)
+
+Async systemd watchdog notify (120s)
+
+Support for TMP432, TMP461, MAX16550, TMP1075 drivers
+
+EEPROM detection method modified to avoid FPGA crash.
+
+Tested. working as expected.
+
+Signed-off-by: saravananm <saravananm@ami.com>
+---
+ meson_options.txt  |  3 +++
+ src/devices.hpp    | 17 +++++++++++++++++
+ src/fru_device.cpp | 39 ++++++++++++++++++++++++++++++++++-----
+ src/meson.build    |  3 +++
+ 4 files changed, 57 insertions(+), 5 deletions(-)
+
+diff --git a/meson_options.txt b/meson_options.txt
+index ad9f7ed..617ec70 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -10,3 +10,6 @@ option(
+ option(
+     'validate-json', type: 'boolean', value: true, description: 'Run JSON schema validation during the build.',
+ )
++option(
++    'test-fru', value : false, type: 'boolean', description: 'On target Mock FRU device for test',
++)
+diff --git a/src/devices.hpp b/src/devices.hpp
+index 28028bb..a635e8b 100644
+--- a/src/devices.hpp
++++ b/src/devices.hpp
+@@ -199,6 +199,23 @@ const boost::container::flat_map<const char*, ExportTemplate, CmpStr>
+           ExportTemplate("raa229621 $Address", "/sys/bus/i2c/devices/i2c-$Bus",
+                          "new_device", "delete_device",
+                          createsHWMon::hasHWMonDir)},
++	 {"TMP432",
++
++          ExportTemplate("tmp432 $Address", "/sys/bus/i2c/devices/i2c-$Bus",
++                         "new_device", "delete_device",
++                         createsHWMon::hasHWMonDir)},
++         {"TMP461",
++          ExportTemplate("tmp461 $Address", "/sys/bus/i2c/devices/i2c-$Bus",
++			 "new_device", "delete_device",
++                         createsHWMon::hasHWMonDir)},
++         {"TMP1075",
++          ExportTemplate("tmp1075 $Address", "/sys/bus/i2c/devices/i2c-$Bus",
++                         "new_device", "delete_device",
++                         createsHWMon::hasHWMonDir)},
++         {"MAX16550",
++          ExportTemplate("max16550 $Address", "/sys/bus/i2c/devices/i2c-$Bus",
++                          "new_device", "delete_device",
++                          createsHWMon::hasHWMonDir)}, 
+          {"PIC32",
+           ExportTemplate("pic32 $Address", "/sys/bus/i2c/devices/i2c-$Bus",
+                          "new_device", "delete_device",
+diff --git a/src/fru_device.cpp b/src/fru_device.cpp
+index 90e167c..037c5ea 100644
+--- a/src/fru_device.cpp
++++ b/src/fru_device.cpp
+@@ -238,7 +238,6 @@ static bool isFruConfigured(uint8_t bus, uint8_t adress)
+     return false;
+ }
+ 
+-
+ static std::optional<bool> isDevice16Bit(int file)
+ {
+     // Set the higher data word address bits to 0. It's safe on 8-bit addressing
+@@ -287,8 +286,7 @@ static int i2cSmbusWriteThenRead(
+ 
+     constexpr size_t smbusWriteThenReadMsgCount = 2;
+     std::array<struct i2c_msg, smbusWriteThenReadMsgCount> msgs{};
+-    struct i2c_rdwr_ioctl_data rdwr
+-    {};
++    struct i2c_rdwr_ioctl_data rdwr{};
+ 
+     msgs[0].addr = address;
+     msgs[0].flags = 0;
+@@ -452,6 +450,30 @@ int getBusFRUs(int file, int first, int last, int bus,
+ 
+         // Scan for i2c eeproms loaded on this bus.
+         std::set<size_t> skipList = findI2CEeproms(bus, devices);
++        if (!skipList.empty())
++        {
++            // NOTE:
++            // In this function there are two ways to find the EEPROM.
++            // and record the information in the devices data structure.
++            // Method 1. In findI2CEeproms function,
++            //    it search "/sys/bus/i2c/devices/" and find the EEPROM device.
++            // Method 2. Find out the slave address of all devices
++            //    on the specified I2C bus, and test whether device
++            //    is 8 or 16 bits EEPROM by sending data 0 to each device.
++            //    Unfortunately,
++            //    FPGA Soc will crash when it receives 0 data,
++            //    and it will not return to normal until the power cycle.
++            // According to the experimental results,
++            // the Method 1 can find out all the EEPROMs on the system
++            // on a specific I2C bus and record the information,
++            // in this case,
++            // There is no need to proceed with Method 2.
++
++            // Find the EEPROM on the specified I2C bus,
++            // and record the information in the devices data structure
++            return 1;
++        }
++
+         std::set<size_t>& failedItems = failedAddresses[bus];
+         std::set<size_t>& foundItems = fruAddresses[bus];
+         foundItems.clear();
+@@ -1334,8 +1356,7 @@ bool updateFRUProperty(
+         return false;
+     }
+ 
+-    struct FruArea fruAreaParams
+-    {};
++    struct FruArea fruAreaParams{};
+ 
+     if (!findFruAreaLocationAndField(fruData, propertyName, fruAreaParams))
+     {
+@@ -1538,6 +1559,14 @@ int main()
+     */
+     iface->initialize();
+ 
++#ifdef ENABLE_TEST_FRU
++    std::shared_ptr<sdbusplus::asio::dbus_interface> testIface =
++        objServer.add_interface("/xyz/openbmc_project/FruDevice/TestFru",
++                                "xyz.openbmc_project.FruDevice");
++    testIface->register_property("BOARD_PRODUCT_NAME", 0);
++    testIface->initialize();
++#endif // ENABLE_TEST_FRU
++
+     std::function<void(sdbusplus::message_t & message)> eventHandler =
+         [&](sdbusplus::message_t& message) {
+             std::string objectName;
+diff --git a/src/meson.build b/src/meson.build
+index 248404c..982d111 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -27,6 +27,9 @@ if get_option('fru-device')
+     if get_option('fru-device-resizefru')
+         cpp_args_fd = cpp_args_fd + ['-DENABLE_FRU_AREA_RESIZE']
+     endif
++    if get_option('test-fru')
++        cpp_args_fd = cpp_args_fd + ['-DENABLE_TEST_FRU']
++    endif
+     executable(
+         'fru-device',
+         'expression.cpp',
+-- 
+2.34.1
+

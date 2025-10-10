@@ -1,0 +1,95 @@
+From 5e004ae4bb2983918d214926c95d8d2fd2d798c0 Mon Sep 17 00:00:00 2001
+From: santhoshs <santhoshs@ami.com>
+Date: Thu, 17 Apr 2025 04:07:08 +0000
+Subject: [PATCH] read-mac-and-chksum-from-eeprom-wo-dts.patch
+
+Signed-off-by: santhoshs <santhoshs@ami.com>
+---
+ drivers/net/designware.c | 57 ++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 57 insertions(+)
+
+diff --git a/drivers/net/designware.c b/drivers/net/designware.c
+index 877becd3df..812730aa57 100644
+--- a/drivers/net/designware.c
++++ b/drivers/net/designware.c
+@@ -31,6 +31,7 @@
+ #include <asm/io.h>
+ #include <power/regulator.h>
+ #include "designware.h"
++#include <env_internal.h>
+ 
+ #ifdef CONFIG_ARCH_NPCM8XX
+ #include <asm/io.h>
+@@ -904,6 +905,61 @@ static int designware_eth_remove(struct udevice *dev)
+ #endif
+ }
+ 
++static int designware_eth_read_hwaddr(struct udevice *dev) {
++#include <i2c_eeprom.h>
++#define CONFIG_SYS_I2C_MAC_OFFSET 0x1800
++#define CONFIG_MAC_CHKSUM_SIZE 1
++#define CONFIG_MAC_ADDR_WITH_CHKSUM_SIZE (ARP_HLEN+CONFIG_MAC_CHKSUM_SIZE)
++
++	struct eth_pdata *pdata = dev_get_plat(dev);
++	struct dw_eth_dev *priv = dev_get_priv(dev);
++	struct eth_mac_regs *mac_p = priv->mac_regs_p;
++	unsigned char env_enetaddr[CONFIG_MAC_ADDR_WITH_CHKSUM_SIZE] = {0};
++	struct udevice *i2c_eeprom_dev = NULL;
++	int ret = 0;
++	int sum = 0, i =0;
++	char *common_bootargs;
++	char new_bootargs[256];
++	char buf[ARP_HLEN_ASCII + 1];
++	//u32 macid_lo, macid_hi;
++
++	ret = uclass_first_device_err(UCLASS_I2C_EEPROM, &i2c_eeprom_dev);
++	if ( ret < 0 ) {
++		printf("Failed to get UCLASS_I2C_EEPROM, ret = %d\n", ret);
++		goto err;
++	}
++	ret = i2c_eeprom_read(i2c_eeprom_dev, CONFIG_SYS_I2C_MAC_OFFSET, env_enetaddr, CONFIG_MAC_ADDR_WITH_CHKSUM_SIZE);
++	if ( ret < 0 ) {
++		printf("\n Failed to read eeprom, ret = %d\n", ret);
++		goto err;
++	}
++	/* Calculate and validate 2’s complement checksum for the MAC Address */
++	for (i = 0; i < CONFIG_MAC_ADDR_WITH_CHKSUM_SIZE; i++) {
++		sum = (sum + env_enetaddr[i]) & 0xff;
++	}
++	if (sum == 0) {
++		memcpy(pdata->enetaddr, env_enetaddr, ARP_HLEN);
++		sprintf(buf, "%pM", pdata->enetaddr);
++		printf("\n%s MAC Address read from EEPROM %pM\n", dev->name, env_enetaddr);
++		env_set("ethaddr", buf);
++		return 0;
++	}
++	printf("MAC 2's complement checksum is incorrect. Sum = 0x%02X.\n", sum);
++
++err:
++	/* Write environment variable to UBOOT for SEL */
++	common_bootargs = env_get("common_bootargs");
++	if (common_bootargs == NULL) {
++		printf("common_bootargs is not set.\n");
++		strncpy(new_bootargs, "mac_invalid", sizeof(new_bootargs) - 1);
++		new_bootargs[sizeof(new_bootargs) - 1] = '\0';
++		env_set("common_bootargs", new_bootargs);
++	} else {
++		snprintf(new_bootargs, sizeof(new_bootargs), "%s mac_invalid", common_bootargs);
++		env_set("common_bootargs", new_bootargs);
++	}
++}
++
+ const struct eth_ops designware_eth_ops = {
+ 	.start			= designware_eth_start,
+ 	.send			= designware_eth_send,
+@@ -911,6 +967,7 @@ const struct eth_ops designware_eth_ops = {
+ 	.free_pkt		= designware_eth_free_pkt,
+ 	.stop			= designware_eth_stop,
+ 	.write_hwaddr		= designware_eth_write_hwaddr,
++	.read_rom_hwaddr = designware_eth_read_hwaddr,
+ };
+ 
+ int designware_eth_of_to_plat(struct udevice *dev)
+-- 
+2.34.1
+

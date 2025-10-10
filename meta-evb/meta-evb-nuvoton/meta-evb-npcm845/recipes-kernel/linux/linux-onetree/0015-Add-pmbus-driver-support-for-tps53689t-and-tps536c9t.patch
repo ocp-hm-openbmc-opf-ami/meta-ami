@@ -1,0 +1,199 @@
+From 05e8c0346aa46a7af16133c19779abcfb621e0ca Mon Sep 17 00:00:00 2001
+From: saikumaru <saikumaru@ami.com>
+Date: Tue, 9 Sep 2025 12:54:25 +0530
+Subject: [PATCH] Add pmbus driver support for tps53689t and tps536c9t
+
+Add pmbus VR driver support for tps53689t and tps536c9t
+
+Signed-off-by: saikumaru <saikumaru@ami.com>
+---
+ drivers/hwmon/pmbus/Kconfig     |   9 ++
+ drivers/hwmon/pmbus/Makefile    |   1 +
+ drivers/hwmon/pmbus/tps53689t.c | 143 ++++++++++++++++++++++++++++++++
+ 3 files changed, 153 insertions(+)
+ create mode 100644 drivers/hwmon/pmbus/tps53689t.c
+
+diff --git a/drivers/hwmon/pmbus/Kconfig b/drivers/hwmon/pmbus/Kconfig
+index bd85d71e4fbe..c244294cb90d 100644
+--- a/drivers/hwmon/pmbus/Kconfig
++++ b/drivers/hwmon/pmbus/Kconfig
+@@ -518,6 +518,15 @@ config SENSORS_TPS53679
+ 	  This driver can also be built as a module. If so, the module will
+ 	  be called tps53679.
+ 
++config SENSORS_TPS53689T
++	tristate "TI TPS53689t, TPS536c9t"
++	help
++	  If you say yes here you get hardware monitoring support for TI
++	  TPS53689T, TPS536C9T.
++
++	  This driver can also be built as a module. If so, the module will
++	  be called tps53679.
++
+ config SENSORS_TPS546D24
+ 	tristate "TPS546D24"
+ 	help
+diff --git a/drivers/hwmon/pmbus/Makefile b/drivers/hwmon/pmbus/Makefile
+index 84def7502d6e..0aebfc02243e 100644
+--- a/drivers/hwmon/pmbus/Makefile
++++ b/drivers/hwmon/pmbus/Makefile
+@@ -50,6 +50,7 @@ obj-$(CONFIG_SENSORS_TDA38640)	+= tda38640.o
+ obj-$(CONFIG_SENSORS_TPS25990)	+= tps25990.o
+ obj-$(CONFIG_SENSORS_TPS40422)	+= tps40422.o
+ obj-$(CONFIG_SENSORS_TPS53679)	+= tps53679.o
++obj-$(CONFIG_SENSORS_TPS53689T)	+= tps53689t.o
+ obj-$(CONFIG_SENSORS_TPS546D24)	+= tps546d24.o
+ obj-$(CONFIG_SENSORS_UCD9000)	+= ucd9000.o
+ obj-$(CONFIG_SENSORS_UCD9200)	+= ucd9200.o
+diff --git a/drivers/hwmon/pmbus/tps53689t.c b/drivers/hwmon/pmbus/tps53689t.c
+new file mode 100644
+index 000000000000..1678f7376890
+--- /dev/null
++++ b/drivers/hwmon/pmbus/tps53689t.c
+@@ -0,0 +1,143 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ *Driver for the TI TPS53689t and TPS536c9t
++*/
++
++
++#include <linux/bits.h>
++#include <linux/err.h>
++#include <linux/i2c.h>
++#include <linux/init.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/of_device.h>
++#include "pmbus.h"
++
++enum chips {
++	tps536c9t, tps53689t
++};
++
++#define TPS53689t_Vout_mode_16h		0x16 /* VR13.0 mode, Vout mode 16h */
++#define TPS536c9t_PAGE_NUM		1
++#define TPS53689t_PAGE_NUM		2
++
++static const struct i2c_device_id tps53689t_id[];
++
++static int tps53689t_identify_mode(struct i2c_client *client,
++				  struct pmbus_driver_info *info)
++{
++	u8 vout_params;
++	int i, ret;
++
++	for (i = 0; i < info->pages; i++) {
++		/* Read the register with VOUT scaling value.*/
++		ret = pmbus_read_byte_data(client, i, PMBUS_VOUT_MODE);
++		if (ret < 0)
++			return ret;
++
++		vout_params = ret & GENMASK(4, 0);
++
++		switch (vout_params) {
++		case TPS53689t_Vout_mode_16h:
++			info->vrm_version[i] = vr13;
++			break;
++		default:
++			return -EINVAL;
++		}
++	}
++
++	return 0;
++}
++
++static int tps53689t_identify(struct i2c_client *client,
++			     struct pmbus_driver_info *info)
++{
++	return tps53689t_identify_mode(client, info);
++}
++
++static struct pmbus_driver_info tps53689t_info = {
++	.format[PSC_VOLTAGE_IN] = linear,
++	.format[PSC_VOLTAGE_OUT] = linear,
++	.format[PSC_TEMPERATURE] = linear,
++	.format[PSC_CURRENT_OUT] = linear,
++	.format[PSC_POWER] = linear,
++	.func[0] = PMBUS_HAVE_VIN | PMBUS_HAVE_IIN | PMBUS_HAVE_PIN |
++		PMBUS_HAVE_STATUS_INPUT |
++		PMBUS_HAVE_VOUT | PMBUS_HAVE_STATUS_VOUT |
++		PMBUS_HAVE_IOUT | PMBUS_HAVE_STATUS_IOUT |
++		PMBUS_HAVE_TEMP | PMBUS_HAVE_STATUS_TEMP |
++		PMBUS_HAVE_POUT,
++	.func[1] = PMBUS_HAVE_VOUT | PMBUS_HAVE_STATUS_VOUT |
++		PMBUS_HAVE_IOUT | PMBUS_HAVE_STATUS_IOUT |
++		PMBUS_HAVE_TEMP | PMBUS_HAVE_STATUS_TEMP |
++		PMBUS_HAVE_POUT,
++	.pfunc[0] = PMBUS_HAVE_IOUT,
++	.pfunc[1] = PMBUS_HAVE_IOUT,
++	.pfunc[2] = PMBUS_HAVE_IOUT,
++	.pfunc[3] = PMBUS_HAVE_IOUT,
++	.pfunc[4] = PMBUS_HAVE_IOUT,
++	.pfunc[5] = PMBUS_HAVE_IOUT,
++	.pfunc[6] = PMBUS_HAVE_IOUT,
++};
++
++static int tps53689t_probe(struct i2c_client *client)
++{
++	struct device *dev = &client->dev;
++	struct pmbus_driver_info *info;
++	enum chips chip_id;
++
++	if (dev->of_node)
++		chip_id = (enum chips)of_device_get_match_data(dev);
++	else
++		chip_id = i2c_match_id(tps53689t_id, client)->driver_data;
++
++	info = devm_kmemdup(dev, &tps53689t_info, sizeof(*info), GFP_KERNEL);
++	if (!info)
++		return -ENOMEM;
++
++	switch (chip_id) {
++	case tps536c9t:
++		info->pages = TPS536c9t_PAGE_NUM;
++		info->identify = tps53689t_identify;
++		break;
++	case tps53689t:
++		info->pages = TPS53689t_PAGE_NUM;
++		info->identify = tps53689t_identify;
++		break;
++	default:
++		return -ENODEV;
++	}
++
++	return pmbus_do_probe(client, info);
++}
++
++static const struct i2c_device_id tps53689t_id[] = {
++	{"tps536c9t", tps536c9t},
++	{"tps53689t", tps53689t},
++	{}
++};
++
++MODULE_DEVICE_TABLE(i2c, tps53689t_id);
++
++static const struct of_device_id __maybe_unused tps53689t_of_match[] = {
++	{.compatible = "ti,tps536c9t", .data = (void *)tps536c9t},
++	{.compatible = "ti,tps53689t", .data = (void *)tps53689t},
++	{}
++};
++MODULE_DEVICE_TABLE(of, tps53689t_of_match);
++
++static struct i2c_driver tps53689t_driver = {
++	.driver = {
++		.name = "tps53689t",
++		.of_match_table = of_match_ptr(tps53689t_of_match),
++	},
++	.probe = tps53689t_probe,
++	.id_table = tps53689t_id,
++};
++
++module_i2c_driver(tps53689t_driver);
++
++MODULE_AUTHOR("Neil Liu <neil_hh_liu@wiwynn.com>");
++MODULE_DESCRIPTION("TI TPS53689t and TPS536c9t VR driver");
++MODULE_LICENSE("GPL");
++MODULE_IMPORT_NS(PMBUS);
+-- 
+2.47.1
+

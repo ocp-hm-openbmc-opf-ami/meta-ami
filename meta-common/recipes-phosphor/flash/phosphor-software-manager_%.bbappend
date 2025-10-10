@@ -11,17 +11,22 @@ SRC_URI_NON_PFR:append = "file://0001-Add-Purpose-for-other-components-and-add-i
 		   file://0008-Clear-tmp-and-firmware-inventory-while-cancel-task.patch \
 		   file://0009-fixed-Firmware-update-security-issue-Unsafe-Unpackin.patch \
          file://0010-add-condition-to-skip-the-removal-of-BMC-obj-path-du.patch \
+		   file://0010-update-whitelist-file-based-on-user-selection-and-tr.patch \
+         file://0011-Add-supoort-for-image-runtime-signing-for-intel-plat.patch \
+         file://0011-Add-HttpPushUriTarget-and-busy-property-under-softwa.patch \
+         file://0012-after-update-whitelist-Clear-files-if-user-not-selec.patch \
 		"
 
+EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', bb.utils.contains('BBFILE_COLLECTIONS', 'intel-features', ' -Dfwupd-intel-features=enabled','', d), d)}"
 SRC_URI:append = " ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
 
-PACKAGECONFIG:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'bios-update', ' flash_bios ','', d)}"
-PACKAGECONFIG:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'image-sign', ' verify_signature ','', d)}"
-PACKAGECONFIG:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'dual-image', ' static-dual-image ','', d)}"
-PACKAGECONFIG:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'sync-conf', ' sync_bmc_files ','', d)}"
+PACKAGECONFIG:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-bios-update', ' flash_bios ','', d)}"
+PACKAGECONFIG:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-image-sign', ' verify_signature ','', d)}"
+PACKAGECONFIG:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-dual-image', ' static-dual-image ','', d)}"
+PACKAGECONFIG:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-sync-conf', ' sync_bmc_files ','', d)}"
 
 EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '','-Dfwupd-script=enabled', d)}"
-EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '','-Doptional-images=image-bios,image-cpld,image-pldm', d)}"
+EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '','-Doptional-images=image-bios,image-cpld,image-pldm,image-raid', d)}"
 EXTRA_OEMESON += "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image','-Dactive-bmc-max-allowed=3', '-Dactive-bmc-max-allowed=2', d)}"
 EXTRA_OEMESON:append:intel-ast2600= "${@bb.utils.contains('PACKAGECONFIG', 'sync_bmc_files',' -Dalt-rwfs-dir="/run/media/rwfs-alt/.overlay"', '', d)}"
 
@@ -32,9 +37,14 @@ SRC_URI_NON_PFR_DUAL:append = "file://intel-flash-bmc \
                                 file://ami-flash-bmc \
                                 file://detect-slot-aspeed \
                                 file://reset-cs0-aspeed  \
+                                file://synclist \
                                 "                          
 SRC_URI_NON_PFR_DUAL:append:intel-ast2600 = " file://sync-once.sh \
-                                             file://synclist "
+                                             "
+
+SRC_URI_NON_PFR_DUAL:append = " file://obmc-flash-bmc-prepare-for-sync.service.in \
+                                          file://xyz.openbmc_project.Software.Sync.service.in \
+                                              "
 
 SRC_URI:append = " ${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', SRC_URI_NON_PFR_DUAL , '', d)}"
 FILES:${PN}-updater:append:intel-ast2600 = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/intel-flash-bmc ', '', d)}" 
@@ -49,6 +59,9 @@ do_install:append () {
          install -m 0644 ${WORKDIR}/fwupdinband@.service ${D}${systemd_unitdir}/system/fwupd@.service
          if ${@bb.utils.contains('PACKAGECONFIG','static-dual-image','true','false',d)}; then
             install -m 0755 ${WORKDIR}/detect-slot-aspeed ${D}${bindir}/detect-slot-aspeed
+            install -m 0755 ${WORKDIR}/synclist ${D}/etc/synclist
+	    install -m 0644 ${WORKDIR}/obmc-flash-bmc-prepare-for-sync.service.in  ${D}${systemd_unitdir}/system/obmc-flash-bmc-prepare-for-sync.service
+            install -m 0644 ${WORKDIR}/xyz.openbmc_project.Software.Sync.service.in  ${D}${systemd_unitdir}/system/xyz.openbmc_project.Software.Sync.service	
          fi  
       fi
 }
@@ -58,7 +71,6 @@ do_install:append:intel-ast2600 () {
         install -m 0644 ${WORKDIR}/intel-flash-bmc-static-mount-alt.service.in  ${D}${systemd_unitdir}/system/obmc-flash-bmc-static-mount-alt.service
         install -m 0755 ${WORKDIR}/intel-flash-bmc ${D}${bindir}/intel-flash-bmc
         install -m 0755 ${WORKDIR}/sync-once.sh ${D}${bindir}/sync-once.sh
-        install -m 0755 ${WORKDIR}/synclist ${D}/etc/synclist
    fi
 }
 

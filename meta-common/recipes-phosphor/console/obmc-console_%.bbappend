@@ -10,9 +10,11 @@ Single_SOL_SRC_URI = "file://single_sol_conf.ttyS2.conf \
 
 Single_SOL_SRC_URI:append:ast2700-default = "file://ast2700-sol-configure.sh "
 Single_SOL_SRC_URI:append:ast2700-dcscm = " file://ast2700-sol-configure.sh "
+Single_SOL_SRC_URI:append:ast2700-a0-dcscm = " file://ast2700-sol-configure.sh "
 
 Single_SOL_SRC_URI:append:evb-ast2600 = "file://ast2600-sol-configure.sh "
 Single_SOL_SRC_URI:append:intel-ast2600 = " file://ast2600-sol-configure.sh "
+
 
 Multi_SOL_SRC_URI = " \
 		file://multi_sol-configure.sh \
@@ -22,10 +24,11 @@ SRC_URI += "${@bb.utils.contains('MULTI_SOL_ENABLED', '1', '${Multi_SOL_SRC_URI}
 SRC_URI += " file://0001-fix-for-solssh-issue.patch \
              file://0002-Fix-for-lauching-sol-session-with-SOL-loop-test.patch \
              file://0003-Added-support-to-enable-disable-obmc-console-log.patch \
+	         file://0004-Fix-for-coverity-issue-in-obmc_console.patch \
+             file://0005-Added-changes-to-save-baudrate-in-config-file.patch \
            "
 
 PACKAGECONFIG[obmc-console-log] = "-Dobmc-console-log=true,-Dobmc-console-log=false"
-PACKAGECONFIG:append = "${@bb.utils.contains('IMAGE_INSTALL', ' phosphor-hostlogger', '', ' obmc-console-log' , d)}"
 
 do_install:append() {
     install -d ${D}${bindir}
@@ -35,7 +38,7 @@ else
 
     if [ "${MACHINE}" = "evb-ast2600" ] || [ "${MACHINE}" = "intel-ast2600" ]; then
 	install -m 0755 ${WORKDIR}/ast2600-sol-configure.sh ${D}${bindir}/sol-configure.sh
-    elif [ "${MACHINE}" = "ast2700-default" ] || [ "${MACHINE}" = "ast2700-dcscm" ]; then
+    elif [ "${MACHINE}" = "ast2700-default" ] || [ "${MACHINE}" = "ast2700-dcscm" ] || [ "${MACHINE}" = "ast2700-a0-dcscm" ]; then
 	install -m 0755 ${WORKDIR}/ast2700-sol-configure.sh ${D}${bindir}/sol-configure.sh
     fi
 

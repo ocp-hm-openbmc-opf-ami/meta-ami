@@ -6,6 +6,7 @@ LIC_FILES_CHKSUM = "file://${COREBASE}/meta/files/common-licenses/Apache-2.0;md5
 # 1 = SHA256
 # 2 = SHA384
 PFR_SHA ?= "1"
+PFR_MANIFEST ?= "pfr_manifest_ast2600_dcscm.json"
 
 SRC_URI = " \
            file://pfr_image.py \

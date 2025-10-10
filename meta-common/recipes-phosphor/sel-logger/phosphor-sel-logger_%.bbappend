@@ -13,6 +13,10 @@ SRC_URI += " \
            file://0004-Add-D-Bus-SEL-Logging-and-SEL-Policy-support.patch \
            file://0005-Add-Systemd-Unit-crash-logging-support.patch \
            file://0006-Add-Logging-event-basaed-on-severity.patch \
+           file://0008-Fix-for-OT-12242-lnr-unr-events-not-logging.patch \
+           file://0009-Fix-sel-logger-crash-and-add-discrete-event-severity.patch \
+           file://0010-coverity-fix.patch \
+           file://0011-crashErrorEventMonitor-coredump-fixed.patch \
            "
 
 

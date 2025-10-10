@@ -1,0 +1,225 @@
+From b47dbdee5285a9a6f8e89d134ec6bbfbbcad0dd5 Mon Sep 17 00:00:00 2001
+From: shamim ali <ashamim@ami.com>
+Date: Thu, 27 Mar 2025 10:07:02 -0400
+Subject: [PATCH] Add log file rotatecount and filesize in logrotate
+
+Signed-off-by: shamim ali <ashamim@ami.com>
+---
+ phosphor-rsyslog-config/server-conf.cpp | 138 ++++++++++++++++++++++++
+ phosphor-rsyslog-config/server-conf.hpp |  24 +++++
+ 2 files changed, 162 insertions(+)
+
+diff --git a/phosphor-rsyslog-config/server-conf.cpp b/phosphor-rsyslog-config/server-conf.cpp
+index f2a7aa8..12ef616 100644
+--- a/phosphor-rsyslog-config/server-conf.cpp
++++ b/phosphor-rsyslog-config/server-conf.cpp
+@@ -16,6 +16,7 @@
+
+ #include <optional>
+ #include <string>
++#include <regex>
+
+ namespace phosphor
+ {
+
+diff --git a/phosphor-rsyslog-config/server-conf.cpp b/phosphor-rsyslog-config/server-conf.cpp
+index f2a7aa8..f362397 100644
+--- a/phosphor-rsyslog-config/server-conf.cpp
++++ b/phosphor-rsyslog-config/server-conf.cpp
+@@ -286,6 +286,144 @@ void Server::restore(const char* filePath)
+     }
+ }
+ 
++void Server::updateSizeValue(uint16_t newSize, const char* filePath) {
++    std::ifstream inputFile(filePath);
++    if (!inputFile) {
++        log<level::ERR>("Error opening file: " );
++        return;
++    }
++
++    std::string content;
++    std::string line;
++    bool inTargetBlock = false;
++
++    std::regex sizeRegex(R"(\s*size\s*\d+[kK]?)");
++
++    while (std::getline(inputFile, line)) {
++        if (line.find("/var/log/*.log") != std::string::npos) {
++            inTargetBlock = true;
++        }
++        if (inTargetBlock && line.find("}") != std::string::npos) {
++            inTargetBlock = false;
++        }
++        if (inTargetBlock && std::regex_search(line, sizeRegex)) {
++            // Preserve leading spaces and update size format
++            std::smatch match;
++            if (std::regex_search(line, match, std::regex(R"(^\s*)"))) {
++                std::string leadingSpaces = match.str(0);
++                line = leadingSpaces + "size " + std::to_string(newSize);
++            }
++        }
++        content += line + "\n";
++    }
++    inputFile.close();
++
++    // Writing back to file
++    std::ofstream outputFile(filePath, std::ios::trunc);
++    if (!outputFile) {
++        log<level::ERR>("Error writing to file: ");
++        return;
++    }
++
++    outputFile << content;
++    outputFile.close();
++    restart();
++}
++
++
++void Server::updateRotateValue(bool rotateValue, const char* filePath) {
++    std::ifstream inputFile(filePath);
++    if (!inputFile) {
++         log<level::ERR>("Error opening file: ");
++        return;
++    }
++
++    std::string content;
++    std::string line;
++    bool inTargetBlock = false;
++    while (std::getline(inputFile, line)) {
++        if (line.find("/var/log/*.log") != std::string::npos) {
++            inTargetBlock = true;
++        }
++        if (inTargetBlock && std::regex_search(line, std::regex(R"(})"))) {
++            inTargetBlock = false;
++        }
++        if (inTargetBlock && std::regex_search(line, std::regex(R"(rotate\s+\d+)"))) {
++            line = "        rotate " + std::string(rotateValue ? "1" : "0");
++        }
++        content += line + "\n";
++    }
++    inputFile.close();
++
++    std::ofstream outputFile(filePath, std::ios::trunc);
++    if (!outputFile) {
++        log<level::ERR>("Error writing to file: ");
++        return;
++    }
++
++    outputFile << content;
++    outputFile.close();
++    restart();
++}
++
++bool Server::rotateCount(bool rotateValue)
++{
++
++    uint16_t updatedValue{};
++
++    try
++    {
++        auto currentValue = rotateCount();
++        if (currentValue == rotateValue)
++        {
++            return currentValue;
++        }
++
++        updateRotateValue(rotateValue);
++        updatedValue = NetworkClient::rotateCount(rotateValue);
++    }
++    catch (const InternalFailure& e)
++    {
++        throw;
++    }
++    catch (const std::exception& e)
++    {
++        log<level::ERR>(e.what());
++        elog<InternalFailure>();
++    }
++
++    return updatedValue;
++
++}
++
++uint16_t Server::fileSize(uint16_t newSize)
++{
++    uint16_t updatedSize{};
++    constexpr uint16_t maxFileSize = 65535;
++    try
++    {
++        auto currentSize = fileSize();
++        if(currentSize == newSize || newSize > maxFileSize)
++        {
++          return currentSize;
++        }
++
++        updateSizeValue(newSize);
++        updatedSize = NetworkClient::fileSize(newSize);
++    }
++    catch (const InternalFailure& e)
++    {
++        throw;
++    }
++    catch (const std::exception& e)
++    {
++        log<level::ERR>(e.what());
++        elog<InternalFailure>();
++    }
++
++    return updatedSize;
++}
++
+ void Server::restart()
+ {
+     utils::restart();
+diff --git a/phosphor-rsyslog-config/server-conf.hpp b/phosphor-rsyslog-config/server-conf.hpp
+index 33e92aa..cb8e41b 100644
+--- a/phosphor-rsyslog-config/server-conf.hpp
++++ b/phosphor-rsyslog-config/server-conf.hpp
+@@ -65,6 +65,8 @@ class Server : public Iface
+     using NetworkClient::address;
+     using NetworkClient::port;
+     using NetworkClient::transportProtocol;
++    using NetworkClient::rotateCount;
++    using NetworkClient::fileSize;
+ 
+     /** @brief Override that updates rsyslog config file as well
+      *  @param[in] value - remote server address
+@@ -89,6 +91,16 @@ class Server : public Iface
+     virtual TransportProtocol
+         transportProtocol(TransportProtocol protocol) override;
+ 
++    /** @brief - Set value of FileSize
++      *  @param[in] value - size of log file
++      * */
++    virtual uint16_t fileSize(uint16_t value) override;
++
++    /** @brief Set value of RotateCount
++     *  @param[in] value - rotate value 0 0r 1
++     * */
++    virtual bool rotateCount(bool value) override;
++
+   private:
+     /** @brief Update remote server address and port in
+      *         rsyslog config file.
+@@ -121,6 +133,18 @@ class Server : public Iface
+         restart();
+     }
+ 
++    /* @brief Update the Rotatecount Value
++     * @param[in] roteate - file rotate value 0 or 1
++     * @param[in] filePath - rsyslog logrotate config file path
++     */
++    void updateRotateValue(bool rotate, const char* filePath = "/etc/logrotate.d/logrotate.rsyslog");
++
++     /* @brief Update the Rotatecount Value
++     * @param[in] size - size of log file
++     * @param[in] filePath - rsyslog logrotate config file path
++     */
++    void updateSizeValue(uint16_t size, const char* filePath = "/etc/logrotate.d/logrotate.rsyslog");
++
+     sdbusplus::bus::match_t hostnameChange;
+ };
+ 
+-- 
+2.34.1
+

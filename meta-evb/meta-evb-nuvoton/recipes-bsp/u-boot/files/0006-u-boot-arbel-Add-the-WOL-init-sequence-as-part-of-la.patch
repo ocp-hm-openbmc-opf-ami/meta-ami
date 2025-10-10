@@ -1,0 +1,228 @@
+From bbc8f7e6a1f4287c4432a076cef47bf9b925452b Mon Sep 17 00:00:00 2001
+From: santhoshs <santhoshs@ami.com>
+Date: Mon, 28 Apr 2025 10:01:02 +0000
+Subject: [PATCH] u-boot-arbel-Add-the-WOL-init-sequence-as-part-of-la
+
+Signed-off-by: santhoshs <santhoshs@ami.com>
+---
+ board/nuvoton/arbel_evb/arbel_evb.c | 191 ++++++++++++++++++++++++++++
+ 1 file changed, 191 insertions(+)
+
+diff --git a/board/nuvoton/arbel_evb/arbel_evb.c b/board/nuvoton/arbel_evb/arbel_evb.c
+index cd37462ddd..a91a5e65df 100644
+--- a/board/nuvoton/arbel_evb/arbel_evb.c
++++ b/board/nuvoton/arbel_evb/arbel_evb.c
+@@ -7,6 +7,9 @@
+ #include <dm.h>
+ #include <asm/io.h>
+ #include <linux/bitfield.h>
++#include <i2c_eeprom.h>
++#include <net.h>
++#include <miiphy.h>
+ #include <asm/arch/gcr.h>
+ #include "../common/common.h"
+  
+@@ -30,6 +33,191 @@
+ 
+ DECLARE_GLOBAL_DATA_PTR;
+ 
++// EEPROM I2C address and offset for MAC address
++#define CONFIG_SYS_I2C_MAC_OFFSET 0x1800
++#define CONFIG_MAC_CHKSUM_SIZE 1
++#define CONFIG_MAC_ADDR_WITH_CHKSUM_SIZE (ARP_HLEN+CONFIG_MAC_CHKSUM_SIZE)
++
++// -- WOL related definitions --
++// RTL8211F PHY registers
++#define RTL8211F_DEVNAME 			"eth@f0802000"
++#define RTL8211F_PHY_INDEX 			0x00
++#define RTL8211F_PHY_INER 			0xa42
++#define RTL8211F_PHY_PHYCR 			0xa43
++#define RTL8211F_PHY_FRM_MSK0_REG 	0xd80
++#define RTL8211F_PHY_FRM_CRC_REG	0xd88
++#define RTL8211F_PHY_PULSE_LOW_REG 	0xd8a
++#define RTL8211F_PHY_ADDR_REG 		0xd8c
++
++// RTL8211F Pages in the PHY registers
++#define RTL8211F_PAGE_SELECT		0x1f
++#define RTL8211F_REG_10				0x10
++#define RTL8211F_REG_11				0x11
++#define RTL8211F_REG_12				0x12
++#define RTL8211F_REG_13				0x13
++#define RTL8211F_REG_14				0x14
++#define RTL8211F_REG_15				0x15
++#define RTL8211F_REG_16				0x16
++#define RTL8211F_REG_17				0x17
++#define RTL8211F_INSR				0x1d
++
++// RTL8211F PHY registers values
++#define RTL8211F_PHY_FRM_MSK_NULL	0x0000
++#define RTL8211F_PHY_RESET_VAL 		0x0000
++#define RTL8211F_PME_INTR_EN 		0x0080
++#define RTL8211F_PME_INTR_STS_MSK 	0x0080
++#define RTL8211F_PAD_ISOLATION_EN 	0x1fff
++#define RTL8211F_WOL_EN				0x8000
++#define RTL8211F_WOL_MAX_PKT_LEN	0x1fff
++#define RTL8211F_WOL_MGCPKT_EN		0x1000
++#define RTL8211F_WOL_WKUP_FRM0_EN	0x0001
++#define RTL8211F_WOL_PULSE_INTR		0x0003
++
++// RTL8211F WOL frame mask and CRC values
++// constant mask values for WOL and CRC
++#define RTL8211F_WKUP_FRM_MSK_0		0xf000
++#define RTL8211F_WKUP_FRM_MSK_1		0x0010
++#define RTL8211F_WKUP_FRM_MSK_2		0x00c0
++#define RTL8211F_WKUP_FRM_CRC		0x438f
++// Disable PME interrupt
++static void arbel_wol_disable_pme_intr(char* devname)
++{
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_PAGE_SELECT, RTL8211F_PHY_INER);
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_REG_12, RTL8211F_PHY_RESET_VAL);
++}
++
++// Set MAC address for WOL feature by reading the MAC address from EEPROM
++// Return 0: success, -1: failed to get UCLASS_I2C_EEPROM, -2: checksum error
++static int arbel_wol_set_mac_addr(char* devname)
++{
++	unsigned char env_enetaddr[CONFIG_MAC_ADDR_WITH_CHKSUM_SIZE] = {0};
++	struct udevice *i2c_eeprom_dev = NULL;
++	int ret = 0;
++	int sum = 0, i = 0;
++
++	ret = uclass_first_device_err(UCLASS_I2C_EEPROM, &i2c_eeprom_dev);
++	if ( ret < 0 ) {
++		printf("Failed to get UCLASS_I2C_EEPROM, ret = %d\n", ret);
++		return -1;
++	}
++	ret = i2c_eeprom_read(i2c_eeprom_dev, CONFIG_SYS_I2C_MAC_OFFSET, env_enetaddr, CONFIG_MAC_ADDR_WITH_CHKSUM_SIZE);
++	if ( ret < 0 ) {
++		printf("\n Failed to read eeprom, ret = %d\n", ret);
++		return -1;
++	}
++	/* Calculate and validate 2’s complement checksum for the MAC Address */
++	for (i = 0; i < CONFIG_MAC_ADDR_WITH_CHKSUM_SIZE; i++) {
++		sum = (sum + env_enetaddr[i]) & 0xff;
++	}
++	if (sum == 0) {
++		/* use current device */
++		devname = miiphy_get_current_dev();
++
++		miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_PAGE_SELECT, RTL8211F_PHY_ADDR_REG);
++		miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_REG_10, (u16)env_enetaddr[1] << 8 | env_enetaddr[0]);
++		miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_REG_11, (u16)env_enetaddr[3] << 8 | env_enetaddr[2]);
++		miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_REG_12, (u16)env_enetaddr[5] << 8 | env_enetaddr[4]);
++	
++		return 0;
++	}
++
++	return -2;
++}
++
++// Set frame mask and CRC for WOL
++static void arbel_wol_set_frame_mask_crc(char* devname)
++{
++	// Set frame mask for WOL
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_PAGE_SELECT, RTL8211F_PHY_FRM_MSK0_REG);
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_REG_10, RTL8211F_WKUP_FRM_MSK_0);
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_REG_11, RTL8211F_WKUP_FRM_MSK_1);
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_REG_12, RTL8211F_WKUP_FRM_MSK_2);
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_REG_13, RTL8211F_PHY_FRM_MSK_NULL);
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_REG_14, RTL8211F_PHY_FRM_MSK_NULL);
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_REG_15, RTL8211F_PHY_FRM_MSK_NULL);
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_REG_16, RTL8211F_PHY_FRM_MSK_NULL);
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_REG_17, RTL8211F_PHY_FRM_MSK_NULL);
++
++	// Set CRC for WOL frame mask
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_PAGE_SELECT, RTL8211F_PHY_FRM_CRC_REG);
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_REG_10, RTL8211F_WKUP_FRM_CRC);
++}
++
++// Enable PME interrupt
++static void arbel_wol_enable_pme_intr(char* devname)
++{
++	// Enable PME interrupt for WOL
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_PAGE_SELECT, RTL8211F_PHY_INER);
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_REG_12, RTL8211F_PME_INTR_EN);
++}
++
++// Reset and re-enable WOL feature
++static void arbel_wol_reset_reenable_wol(char* devname)
++{
++	// Switch to register 0xd8a to reset WOL
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_PAGE_SELECT, RTL8211F_PHY_PULSE_LOW_REG);
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_REG_10, RTL8211F_PHY_RESET_VAL);
++
++	// Set to max packet length for WOL which automatically disables WOL (bit 15)
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_REG_11, RTL8211F_WOL_MAX_PKT_LEN);
++
++	// Set WOL pulse interrupt and enable WOL
++	// Also set the WOL maximum packet length
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_REG_13, RTL8211F_WOL_PULSE_INTR);
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_REG_11, (RTL8211F_WOL_EN | RTL8211F_WOL_MAX_PKT_LEN));
++
++	// Enable WOL magic packet and wake-up frame 0 as last step
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_REG_10, RTL8211F_WOL_MGCPKT_EN);
++}
++
++// Read WOL interrupt status
++static u16 arbel_wol_read_intr_status(char* devname)
++{
++	u16 tmp = 0;
++
++	// Read WOL interrupt status to clear any pending interrupt
++	miiphy_write(devname, RTL8211F_PHY_INDEX, RTL8211F_PAGE_SELECT, RTL8211F_PHY_PHYCR);
++	miiphy_read(devname, RTL8211F_PHY_INDEX, RTL8211F_INSR, &tmp);
++
++	return tmp;
++}
++
++// Initialize WOL feature
++static void arbel_init_wol(void)
++{
++	const char* devname;
++	
++	// Set current device for WOL as eth@f0802000
++	miiphy_set_current_dev(RTL8211F_DEVNAME);
++	
++	// Get current device for WOL and print it for telemetry
++	devname = miiphy_get_current_dev();
++	printf ("Current device for WOL is: %s\n", devname);
++
++	// Disable PME interrupt and set MAC address for WOL
++	arbel_wol_disable_pme_intr(devname);
++	if (arbel_wol_set_mac_addr(devname) < 0) {
++		printf("Failed to set MAC address for WOL\n");
++		goto err;
++	}
++
++	// Set frame mask and CRC for WOL, enable PME interrupt,
++	// then reset and re-enable WOL
++	arbel_wol_set_frame_mask_crc(devname);
++	arbel_wol_enable_pme_intr(devname);
++	arbel_wol_reset_reenable_wol(devname);
++
++	// Check PME WOL Interrupt bit, if set, clear it via R2C
++	// then reset and re-enable WOL
++	if (arbel_wol_read_intr_status(devname) & RTL8211F_PME_INTR_STS_MSK) {
++		printf("PME WOL Interrupt bit is set\n. Clearing it via R2C\n");
++		arbel_wol_reset_reenable_wol(devname);
++	}
++
++err:
++	return;
++}
++
+ int board_init(void)
+ {
+ 	u32 val;
+@@ -111,5 +299,8 @@ int last_stage_init(void)
+ {
+ 	board_set_console();
+ 
++	/* Initialize WOL on RTL8211F */
++	arbel_init_wol();
++
+ 	return 0;
+ }
+-- 
+2.34.1
+

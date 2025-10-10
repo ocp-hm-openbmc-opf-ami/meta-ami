@@ -1,0 +1,262 @@
+From bc5639dc96a908cabf36f84a4b13a297f8bf292f Mon Sep 17 00:00:00 2001
+From: krishna <krishnar@ami.com>
+Date: Tue, 5 Aug 2025 19:36:13 +0530
+Subject: [PATCH 10/10] Add condition for journal error and info handling
+
+---
+ src/entity_manager.cpp |  4 ++++
+ src/fru_device.cpp     | 11 ++++++++++-
+ src/fru_utils.cpp      | 34 ++++++++++++++++++++++++++++++++--
+ src/overlay.cpp        |  9 +++++++++
+ src/perform_scan.cpp   |  6 ++++++
+ 5 files changed, 61 insertions(+), 3 deletions(-)
+
+diff --git a/src/entity_manager.cpp b/src/entity_manager.cpp
+index eea7915..896867b 100644
+--- a/src/entity_manager.cpp
++++ b/src/entity_manager.cpp
+@@ -60,6 +60,7 @@ static std::map<std::string, foundProbeData> mapFoundData;
+ 
+ constexpr const char* fruConn = "xyz.openbmc_project.FruDevice";
+ constexpr const char* fruIntf = "xyz.openbmc_project.FruDevice";
++constexpr const bool debug = false;
+ 
+ const boost::container::flat_map<const char*, probe_type_codes, CmpStr>
+     probeTypes{{{"FALSE", probe_type_codes::FALSE_T},
+@@ -1225,7 +1226,10 @@ static std::set<std::string> getProbeInterfaces()
+         auto findProbe = it->find("Probe");
+         if (findProbe == it->end())
+         {
++	    if constexpr (debug)
++	    {
+             std::cerr << "configuration file missing probe:\n " << *it << "\n";
++	    }
+             it++;
+             continue;
+         }
+diff --git a/src/fru_device.cpp b/src/fru_device.cpp
+index ea20b4c..f95f45a 100644
+--- a/src/fru_device.cpp
++++ b/src/fru_device.cpp
+@@ -584,8 +584,11 @@ int getBusFRUs(int file, int first, int last, int bus,
+             // Set target address
+             if (ioctl(file, I2C_SLAVE, ii) < 0)
+             {
++		if (debug)
++		{
+                 std::cerr << "device at bus " << bus << " address " << ii
+                           << " busy\n";
++		}
+                 continue;
+             }
+             // probe
+@@ -619,9 +622,12 @@ int getBusFRUs(int file, int first, int last, int bus,
+             /* Check for Device type if it is 8 bit or 16 bit */
+             std::optional<bool> is16Bit = isDevice16Bit(file);
+             if (!is16Bit.has_value())
+-            {
++            { 
++		if (debug)
++		{
+                 std::cerr << "failed to read bus " << bus << " address " << ii
+                           << "\n";
++		}
+                 if (powerIsOn)
+                 {
+                     failedItems.insert(ii);
+@@ -884,7 +890,10 @@ void addFruObjectToDbus(
+         device, formattedFRU, bus, address, unknownBusObjectCount);
+     if (!optionalProductName)
+     {
++	if (debug)
++	{
+         std::cerr << "getProductName failed. product name is empty.\n";
++	}
+         productName += "Unknown";
+     }
+     else
+diff --git a/src/fru_utils.cpp b/src/fru_utils.cpp
+index 15d4234..3ff350c 100644
+--- a/src/fru_utils.cpp
++++ b/src/fru_utils.cpp
+@@ -231,21 +231,30 @@ bool verifyOffset(const std::vector<uint8_t>& fruBytes, fruAreas currentArea,
+     // check if Fru data has at least 8 byte header
+     if (fruBytesSize <= fruBlockSize)
+     {
++	if (debug)
++	{
+         std::cerr << "Error: trying to parse empty FRU\n";
++	}
+         return false;
+     }
+ 
+     // Check range of passed currentArea value
+     if (currentArea > fruAreas::fruAreaMultirecord)
+-    {
++    {  
++	if (debug)
++	{
+         std::cerr << "Error: Fru area is out of range\n";
++	}
+         return false;
+     }
+ 
+     unsigned int currentAreaIndex = getHeaderAreaFieldOffset(currentArea);
+     if (currentAreaIndex > fruBytesSize)
+     {
++	if (debug)
++	{
+         std::cerr << "Error: Fru area index is out of range\n";
++	}
+         return false;
+     }
+ 
+@@ -374,8 +383,11 @@ resCodes
+ {
+     resCodes ret = resCodes::resOK;
+     if (fruBytes.size() <= fruBlockSize)
+-    {
++    { 
++	if(debug)
++	{
+         std::cerr << "Error: trying to parse empty FRU \n";
++	}
+         return resCodes::resErr;
+     }
+     result["Common_Format_Version"] =
+@@ -708,8 +720,11 @@ bool findFRUHeader(FRUReader& reader, const std::string& errorHelp,
+ {
+     if (reader.read(baseOffset, 0x8, blockData.data()) < 0)
+     {
++	if (debug)
++	{
+         std::cerr << "failed to read " << errorHelp << " base offset "
+                   << baseOffset << "\n";
++	}
+         return false;
+     }
+ 
+@@ -798,8 +813,11 @@ std::pair<std::vector<uint8_t>, bool>
+ 
+         if (reader.read(baseOffset + areaOffset, 0x2, blockData.data()) < 0)
+         {
++	   if (debug)
++	   {
+             std::cerr << "failed to read " << errorHelp << " base offset "
+                       << baseOffset << "\n";
++	   }
+             return {{}, true};
+         }
+ 
+@@ -828,8 +846,11 @@ std::pair<std::vector<uint8_t>, bool>
+             // record has 3 bytes of the header we care about.
+             if (reader.read(baseOffset + areaOffset, 0x3, blockData.data()) < 0)
+             {
++		if (debug)
++		{
+                 std::cerr << "failed to read " << errorHelp << " base offset "
+                           << baseOffset << "\n";
++		}
+                 return {{}, true};
+             }
+ 
+@@ -860,8 +881,11 @@ std::pair<std::vector<uint8_t>, bool>
+         if (reader.read(baseOffset + readOffset, requestLength,
+                         blockData.data()) < 0)
+         {
++	   if (debug)
++	   {
+             std::cerr << "failed to read " << errorHelp << " base offset "
+                       << baseOffset << "\n";
++	   }
+             return {{}, true};
+         }
+ 
+@@ -1112,14 +1136,20 @@ std::optional<std::string> getProductName(
+     resCodes res = formatIPMIFRU(device, formattedFRU);
+     if (res == resCodes::resErr)
+     {
++	if (debug)
++	{
+         std::cerr << "failed to parse FRU for device at bus " << bus
+                   << " address " << address << "\n";
++	}
+         return std::nullopt;
+     }
+     if (res == resCodes::resWarn)
+     {
++	if (debug)
++	{
+         std::cerr << "Warnings while parsing FRU for device at bus " << bus
+                   << " address " << address << "\n";
++	}
+     }
+ 
+     auto productNameFind = formattedFRU.find("BOARD_PRODUCT_NAME");
+diff --git a/src/overlay.cpp b/src/overlay.cpp
+index f6d2476..4b63fc7 100644
+--- a/src/overlay.cpp
++++ b/src/overlay.cpp
+@@ -96,8 +96,11 @@ void linkMux(const std::string& muxName, uint64_t busIndex, uint64_t address,
+             devDir / ("channel-" + std::to_string(channelIndex));
+         if (!is_symlink(channelPath))
+         {
++	    if constexpr (debug)
++	    {
+             std::cerr << channelPath << " for mux channel " << channelName
+                       << " doesn't exist!\n";
++	    }
+             continue;
+         }
+         std::filesystem::path bus = std::filesystem::read_symlink(channelPath);
+@@ -122,7 +125,10 @@ static int deleteDevice(const std::string& busPath, uint64_t address,
+     std::ofstream deviceFile(deviceDestructor);
+     if (!deviceFile.good())
+     {
++	 if constexpr (debug)
++	 {
+         std::cerr << "Error writing " << deviceDestructor << "\n";
++	 }
+         return -1;
+     }
+     deviceFile << std::to_string(address);
+@@ -139,7 +145,10 @@ static int createDevice(const std::string& busPath,
+     std::ofstream deviceFile(deviceConstructor);
+     if (!deviceFile.good())
+     {
++	     if constexpr (debug)
++	     {
+         std::cerr << "Error writing " << deviceConstructor << "\n";
++	     }
+         return -1;
+     }
+     deviceFile << parameters;
+diff --git a/src/perform_scan.cpp b/src/perform_scan.cpp
+index e807a0f..cb21c70 100644
+--- a/src/perform_scan.cpp
++++ b/src/perform_scan.cpp
+@@ -592,7 +592,10 @@ void PerformScan::run()
+         auto findProbe = it->find("Probe");
+         if (findProbe == it->end())
+         {
++	    if constexpr (debug)
++	    {
+             std::cerr << "configuration file missing probe:\n " << *it << "\n";
++	    }
+             it = _configurations.erase(it);
+             continue;
+         }
+@@ -600,7 +603,10 @@ void PerformScan::run()
+         auto findName = it->find("Name");
+         if (findName == it->end())
+         {
++	    if constexpr (debug)
++	    {
+             std::cerr << "configuration file missing name:\n " << *it << "\n";
++	    }
+             it = _configurations.erase(it);
+             continue;
+         }
+-- 
+2.34.1
+

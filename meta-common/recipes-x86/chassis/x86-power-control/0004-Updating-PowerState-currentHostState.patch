@@ -1,0 +1,65 @@
+From 86397f812a7910ea7b597ce7bd7a0f1c62ea856e Mon Sep 17 00:00:00 2001
+From: nikhilad <nikhilad@ami.com>
+Date: Sun, 29 Jun 2025 02:13:40 +0530
+Subject: [PATCH] Updating PowerState currentHostState
+
+If the power operation is failed
+this patch will update the
+PowerState enum to "PowerState::on"
+and CurrentHostState dbus property to
+"xyz.openbmc_project.State.Host.HostState.Running"
+
+Signed-off-by: nikhilad <nikhilad@ami.com>
+---
+ src/power_control.cpp | 14 +++++++++++++-
+ 1 file changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/src/power_control.cpp b/src/power_control.cpp
+index 02ed48a..a4ba9bd 100644
+--- a/src/power_control.cpp
++++ b/src/power_control.cpp
+@@ -190,6 +190,8 @@ static bool sioEnabled = true;
+ // Timers
+ // Time holding GPIOs asserted
+ static boost::asio::steady_timer gpioAssertTimer(io);
++// Time holding to 70 sec for powering off
++static boost::asio::steady_timer waitTimer(io);
+ // Time between off and on during a power cycle
+ static boost::asio::steady_timer powerCycleTimer(io);
+ // Time OS gracefully powering off
+@@ -1458,7 +1460,8 @@ static void forcePowerOff()
+     }
+ 
+     // If the force off timer expires, then the power-button override failed
+-    gpioAssertTimer.async_wait([](const boost::system::error_code ec) {
++    waitTimer.expires_after(std::chrono::seconds(70));
++    waitTimer.async_wait([](const boost::system::error_code ec) {
+         if (ec)
+         {
+             // operation_aborted is expected if timer is canceled before
+@@ -1472,6 +1475,14 @@ static void forcePowerOff()
+         }
+ 
+         lg2::error("Power-button override failed. Not sure what to do now.");
++
++        if((powerState == PowerState::transitionToOff) || (powerState == PowerState::transitionToCycleOff))
++        {
++            powerState = PowerState::on;
++            hostIface->set_property(
++            "CurrentHostState",
++            std::string("xyz.openbmc_project.State.Host.HostState.Running"));
++        }
+     });
+ }
+ 
+@@ -1830,6 +1841,7 @@ static void powerStateWaitForPSPowerOK(const Event event)
+         {
+             // Cancel any GPIO assertions held during the transition
+             gpioAssertTimer.cancel();
++            waitTimer.cancel();
+             psPowerOKWatchdogTimer.cancel();
+             if (sioEnabled == true)
+             {
+-- 
+2.25.1
+

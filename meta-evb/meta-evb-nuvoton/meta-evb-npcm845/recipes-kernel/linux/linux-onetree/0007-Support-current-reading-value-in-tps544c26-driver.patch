@@ -1,0 +1,363 @@
+From 5d867dce004e4057c75556d44701c8bf90077b39 Mon Sep 17 00:00:00 2001
+From: saikumaru <saikumaru@ami.com>
+Date: Tue, 9 Sep 2025 11:18:41 +0530
+Subject: [PATCH] Support current reading value in tps544c26 driver
+
+This driver implements support for TPS544C26 chip.
+
+Signed-off-by: saikumaru <saikumaru@ami.com>
+---
+ drivers/hwmon/Kconfig     |  11 ++
+ drivers/hwmon/Makefile    |   1 +
+ drivers/hwmon/tps544c26.c | 305 ++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 317 insertions(+)
+ create mode 100644 drivers/hwmon/tps544c26.c
+
+diff --git a/drivers/hwmon/Kconfig b/drivers/hwmon/Kconfig
+index 78cfab266a6f..b66d9a9743d8 100644
+--- a/drivers/hwmon/Kconfig
++++ b/drivers/hwmon/Kconfig
+@@ -2212,6 +2212,17 @@ config SENSORS_TMP513
+ 	  This driver can also be built as a module. If so, the module
+ 	  will be called tmp513.
+ 
++config SENSORS_TPS544C26
++	tristate "Texas Instruments TPS544C26 and compatibles"
++	depends on I2C
++	help
++	  If you say yes here you get support for Texas Instruments TPS544C26
++	  sensor chips.
++
++	  This driver can also be built as a module. If so, the module
++	  will be called tps544c26.
++
++
+ config SENSORS_VEXPRESS
+ 	tristate "Versatile Express"
+ 	depends on VEXPRESS_CONFIG
+diff --git a/drivers/hwmon/Makefile b/drivers/hwmon/Makefile
+index 3e901476ccff..9f3312822524 100644
+--- a/drivers/hwmon/Makefile
++++ b/drivers/hwmon/Makefile
+@@ -215,6 +215,7 @@ obj-$(CONFIG_SENSORS_TMP401)	+= tmp401.o
+ obj-$(CONFIG_SENSORS_TMP421)	+= tmp421.o
+ obj-$(CONFIG_SENSORS_TMP464)	+= tmp464.o
+ obj-$(CONFIG_SENSORS_TMP513)	+= tmp513.o
++obj-$(CONFIG_SENSORS_TPS544C26)	+= tps544c26.o
+ obj-$(CONFIG_SENSORS_VEXPRESS)	+= vexpress-hwmon.o
+ obj-$(CONFIG_SENSORS_VIA_CPUTEMP)+= via-cputemp.o
+ obj-$(CONFIG_SENSORS_VIA686A)	+= via686a.o
+diff --git a/drivers/hwmon/tps544c26.c b/drivers/hwmon/tps544c26.c
+new file mode 100644
+index 000000000000..6a8b82feafce
+--- /dev/null
++++ b/drivers/hwmon/tps544c26.c
+@@ -0,0 +1,305 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * Driver for the Renesas TPS544C26
++ */
++
++#include <linux/hwmon.h>
++#include <linux/i2c.h>
++#include <linux/module.h>
++
++#define tps544c26_PRODUCT_ID 0xc8
++#define tps544c26_READ_VOUT 0x8b
++#define tps544c26_READ_VIN 0x88
++#define tps544c26_READ_TEMP 0x8d
++#define tps544c26_READ_IOUT 0x8c
++#define tps544c26_READ_IIN 0x89
++#define tps544c26_PIN_SENSE_RES 0xb3
++#define tps544c26_IIN_MASK (BIT(0) | BIT(1) | BIT(2))
++#define tps544c26_ICC_MASK (BIT(0) | BIT(1) | BIT(2))
++#define tps544c26_ICC_MAX 0xc0
++#define tps544c26_PROTOCOL_ID_SVID 0xc2
++#define tps544c26_PROTOCOL_ID_mask(x) ((x & 0xc0)>>6)
++
++
++
++static const int ICC_MAX_table[] = {
++	6, 10, 15, 20, 25, 30, 35, 40
++};
++
++static const int IIN_MAX_table[] = {
++	16,	213, 16, 40, 32, 40, 32, 64
++};
++
++struct tps544c26_data {
++	struct i2c_client *client;
++	struct mutex update_lock;
++};
++
++static const char * const voltage_label[] = {
++	"vin",
++	"vout1",
++};
++
++static const char * const current_label[] = {
++	"iin1",
++	"iout1",
++};
++
++static int tps544c26_read_string(struct device *dev, enum hwmon_sensor_types type,
++			     u32 attr, int channel, const char **str)
++{
++	switch (type) {
++	case hwmon_in:
++	switch (attr) {
++	case hwmon_in_label:
++		*str = voltage_label[channel];
++		return 0;
++	default:
++		break;
++	}
++	break;
++	case hwmon_curr:
++	switch (attr) {
++	case hwmon_curr_label:
++		*str = current_label[channel];
++		return 0;
++	default:
++		break;
++	}
++	default:
++		break;
++	}
++
++	return -EOPNOTSUPP;
++}
++
++static umode_t tps544c26_hwmon_visible(const void *data,
++				   enum hwmon_sensor_types type,
++				   u32 attr, int channel)
++{
++	switch (type) {
++	case hwmon_in:
++		return 0444;
++	case hwmon_temp:
++		return 0444;
++	case hwmon_curr:
++		return 0444;
++	default:
++		return 0;
++	}
++}
++
++static int tps544c26_read_values(struct tps544c26_data *data, u8 command, long *val)
++{
++	int ret;
++	struct i2c_client *client = data->client;
++
++	mutex_lock(&data->update_lock);
++	ret = i2c_smbus_read_byte_data(client, command);
++	if (ret < 0) {
++		dev_err(&client->dev, "Failed to read register\n");
++		goto err_unlock;
++	}
++	*val = ret;
++	ret = 0;
++
++err_unlock:
++	mutex_unlock(&data->update_lock);
++	return ret;
++}
++
++static int tps544c26_voltage_read(struct tps544c26_data *data, int channel, long *val)
++{
++	int ret;
++	u8 protocol_id;
++
++	switch (channel) {
++	case 0:
++		ret = tps544c26_read_values(data, tps544c26_READ_VIN, val);
++		if (ret < 0)
++			return ret;
++		*val = DIV_ROUND_CLOSEST(*val * 1000, 32) + 8000;
++		break;
++	case 1:
++		ret = tps544c26_read_values(data, tps544c26_PROTOCOL_ID_SVID, val);
++		if (ret < 0)
++			return ret;
++		protocol_id = tps544c26_PROTOCOL_ID_mask(*val);
++
++		ret = tps544c26_read_values(data, tps544c26_READ_VOUT, val);
++		if (ret < 0)
++			return ret;
++
++		if (protocol_id == 0x00) { //VR13,10mv
++			*val = DIV_ROUND_CLOSEST(*val * 125, 10) + 250;
++		} else if (protocol_id == 0x01) { //VR13,5mv
++			*val = DIV_ROUND_CLOSEST(*val * 625, 100) + 125;
++		} else {
++			return -EOPNOTSUPP;
++		}
++		break;
++	default:
++		return -EOPNOTSUPP;
++	}
++	return 0;
++
++}
++
++
++static int tps544c26_temp_read(struct tps544c26_data *data, int channel, long *val)
++{
++	int ret;
++
++	ret = tps544c26_read_values(data, tps544c26_READ_TEMP, val);
++	if (ret < 0)
++		return ret;
++	*val = (*val - 40) * 1000;
++	return 0;
++}
++
++static int tps544c26_current_read(struct tps544c26_data *data, int channel, long *val,
++			    struct device *dev)
++{
++	int ret;
++	int max;
++	long max_value;
++
++	switch (channel) {
++	case 0:
++		ret = tps544c26_read_values(data, tps544c26_PIN_SENSE_RES, &max_value);
++		if (ret < 0)
++			return ret;
++		max_value = max_value & tps544c26_IIN_MASK;
++		max = IIN_MAX_table[max_value];
++		ret = tps544c26_read_values(data, tps544c26_READ_IIN, val);
++		if (ret < 0)
++			return ret;
++
++		/* When PIN_SENSE_RES = 1b, IIN_MAX = 21.3 A,
++		 * but floating point cannot be used in kernel driver,
++		 * so divide by 10 here.
++		 */
++		if (max_value == 1)
++			*val = DIV_ROUND_CLOSEST(*val * max * 100, 256);
++		else
++			*val = DIV_ROUND_CLOSEST(*val * max * 1000, 256);
++		break;
++	case 1:
++		ret = tps544c26_read_values(data, tps544c26_ICC_MAX, &max_value);
++		if (ret < 0)
++			return ret;
++		max_value = max_value & tps544c26_ICC_MASK;
++		max = ICC_MAX_table[max_value];
++		ret = tps544c26_read_values(data, tps544c26_READ_IOUT, val);
++		if (ret < 0)
++			return ret;
++		*val = DIV_ROUND_CLOSEST(*val * max * 1000, 256);
++		break;
++	default:
++		return -EOPNOTSUPP;
++	}
++	return 0;
++}
++
++static int tps544c26_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
++			    u32 attr, int channel, long *val)
++{
++	struct tps544c26_data *data = dev_get_drvdata(dev);
++	struct i2c_client *client = data->client;
++	int ret;
++
++	switch (type) {
++	case hwmon_in:
++		return tps544c26_voltage_read(data, channel, val);
++	case hwmon_temp:
++		return tps544c26_temp_read(data, channel, val);
++	case hwmon_curr:
++		return tps544c26_current_read(data, channel, val, dev);
++	default:
++		return -EOPNOTSUPP;
++	}
++}
++
++static const struct hwmon_channel_info *tps544c26_info[] = {
++	HWMON_CHANNEL_INFO(in, HWMON_I_INPUT | HWMON_I_LABEL,
++						   HWMON_I_INPUT | HWMON_I_LABEL),
++	HWMON_CHANNEL_INFO(temp, HWMON_T_INPUT),
++	HWMON_CHANNEL_INFO(curr, HWMON_C_INPUT | HWMON_C_LABEL,
++						     HWMON_C_INPUT | HWMON_C_LABEL),
++	NULL,
++};
++
++static const struct hwmon_ops tps544c26_hwmon_ops = {
++	.is_visible = tps544c26_hwmon_visible,
++	.read = tps544c26_hwmon_read,
++	.read_string = tps544c26_read_string,
++};
++
++static const struct hwmon_chip_info tps544c26_chip_info = {
++	.ops = &tps544c26_hwmon_ops,
++	.info = tps544c26_info,
++};
++
++static int tps544c26_probe(struct i2c_client *client)
++{
++	struct device *device = &client->dev;
++	struct device *hwmon_dev;
++	struct tps544c26_data *data;
++	int ret;
++
++	ret = i2c_smbus_read_byte_data(client, tps544c26_PRODUCT_ID);
++	if (ret < 0) {
++		dev_err(&client->dev, "Failed to read product id\n");
++		return ret;
++	} else if (ret == 0x13) {
++		dev_info(&client->dev, "Found %s chip\n", client->name);
++	} else {
++		dev_err(&client->dev, "%s probe failed\n", client->name);
++		return -ENODEV;
++	}
++
++
++	data = devm_kzalloc(device, sizeof(*data), GFP_KERNEL);
++	if (!data)
++		return -ENOMEM;
++
++	data->client = client;
++	mutex_init(&data->update_lock);
++
++	hwmon_dev = devm_hwmon_device_register_with_info(device,
++							 client->name,
++							 data,
++							 &tps544c26_chip_info,
++							 NULL);
++
++	if (IS_ERR(hwmon_dev))
++		return PTR_ERR(hwmon_dev);
++	return 0;
++}
++
++static const struct i2c_device_id tps544c26_id[] = {
++	{ "tps544c26", 0 },
++	{ },
++};
++MODULE_DEVICE_TABLE(i2c, tps544c26_id);
++
++static const struct of_device_id tps544c26_of_match[] = {
++	{ .compatible = "ti,tps544c26" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, tps544c26_of_match);
++
++static struct i2c_driver tps544c26_driver = {
++	.driver = {
++		.name = "tps544c26",
++		.of_match_table = tps544c26_of_match,
++	},
++	.probe	= tps544c26_probe,
++	.id_table	= tps544c26_id,
++};
++
++module_i2c_driver(tps544c26_driver);
++
++MODULE_AUTHOR("Evan SC Lin <evan_sc_lin@wiwynn.com>");
++MODULE_DESCRIPTION("Ti tps544c26 vr driver");
++MODULE_LICENSE("GPL");
+-- 
+2.47.1
+

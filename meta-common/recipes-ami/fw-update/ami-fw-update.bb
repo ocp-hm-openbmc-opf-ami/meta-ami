@@ -3,7 +3,7 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 PROJECT_SRC_DIR := "${THISDIR}/files"
 LICENSE = "Proprietary"
-LIC_FILES_CHKSUM = "file://${AMIBASE}/COPYING.AMI;md5=33abf79b43490ccebfe76ef9882fd8de"
+LIC_FILES_CHKSUM = "file://${AMIBASE}/COPYING.AMI;md5=65a69a674f34a9f30737c9f0abd4fc5c"
 SRC_URI += "file://fwupd-restricted.sh"
 SRC_URI += "file://apply-onreset.service"
 SRC_URI += "file://applyonreset.sh"

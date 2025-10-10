@@ -1,12 +1,14 @@
 SUMMARY = "AMI service license validation implementation"
 DESCRIPTION = "AMI service license validation implementing ..."
-LICENSE = "CLOSED"
+LICENSE = "Proprietary"
+LIC_FILES_CHKSUM = "file://${AMIBASE}/COPYING.AMI;md5=65a69a674f34a9f30737c9f0abd4fc5c"
+
 # Modify these as desired
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/license-control.git;protocol=https;branch=main"
-SRCREV = "27beaa1ba31cd4a892dd4f639f1f8a100e2d98af"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/license-control.git;protocol=https;branch=main"
+SRCREV = "336afbcf9de351757e04d3f817c2683710721bec"
 
 S = "${WORKDIR}/git"
 PV = "1.0+git${SRCPV}"

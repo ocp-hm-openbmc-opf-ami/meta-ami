@@ -1,8 +1,8 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
-SRC_URI:append = " file://pfr_manifest_ast2700_dcscm.json"
+SRC_URI:append = " file://${PFR_MANIFEST}"
 
-do_install:append() {
+do_install:append:class-native() {
     install -d ${D}/${datadir}/pfrconfig
-    install -m 400 ${WORKDIR}/pfr_manifest_ast2700_dcscm.json ${D}/${datadir}/pfrconfig
+    install -m 400 ${WORKDIR}/${PFR_MANIFEST} ${D}/${datadir}/pfrconfig
 }

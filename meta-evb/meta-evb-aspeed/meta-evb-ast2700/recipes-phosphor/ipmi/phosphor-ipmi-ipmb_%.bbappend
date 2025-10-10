@@ -5,5 +5,5 @@ do_install:append() {
                     ${D}${datadir}/ipmbbridge
 }
 
-# Enable ipmbbridged service by default
+# Disable ipmbbridged service by default
 SYSTEMD_AUTO_ENABLE ?= "enable"

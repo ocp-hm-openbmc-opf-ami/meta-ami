@@ -209,6 +209,10 @@ then
 	cat /proc/cmdline $optbase > $optfile
 	get_fw_env_var openbmcinit >> $optfile
 	get_fw_env_var openbmconce >> $optfile
+else
+        get_fw_env_var openbmcinit >> $optfile
+        get_fw_env_var openbmconce >> $optfile
+	
 fi
 
 echo rofs = $rofs $rofst   rwfs = $rwfs $rwfst
@@ -297,7 +301,7 @@ if grep -w factory-reset $optfile
 then
 	echo "Factory reset requested."
 	touch $trigger
-	do_save=--no-save-files
+	do_save=--save-files
 else
 	do_save=--save-files
 fi
@@ -407,7 +411,14 @@ fi
 if test "$rwfst" = none
 then
 	echo "Running with read-write overlay in RAM for this boot."
-	echo "No state will be preserved unless flash update performed."
+    tmprwdir="/run/initramfs/tmprw"
+    mkdir -p "$tmprwdir"
+
+    mount -t "$(probe_fs_type "$rwdev")" -o "$rwopts" "$rwdev" "$tmprwdir"
+    cp -rp "$tmprwdir/"* "$rwdir" 2>/dev/null
+
+    umount "$tmprwdir"
+    rm -rf "$tmprwdir"
 elif ! mount $rwdev $rwdir -t $rwfst -o $rwopts
 then
 	msg="$(cat)" << HERE

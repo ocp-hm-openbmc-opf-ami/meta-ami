@@ -1,0 +1,76 @@
+From f68063485d8f9946a740089ddf1129baac9f99c5 Mon Sep 17 00:00:00 2001
+From: rashidmp <rashidmp@ami.com>
+Date: Thu, 14 Aug 2025 14:33:45 +0530
+Subject: [PATCH] Fix Wrong Operation State on NCSI
+
+Signed-off-by: rashidmp <rashidmp@ami.com>
+---
+ net/core/net-sysfs.c   | 23 ++++++++++++++++-------
+ net/ncsi/ncsi-manage.c |  8 ++++++++
+ 2 files changed, 24 insertions(+), 7 deletions(-)
+
+diff --git a/net/core/net-sysfs.c b/net/core/net-sysfs.c
+index f7404bc67974..009f7fa0b534 100644
+--- a/net/core/net-sysfs.c
++++ b/net/core/net-sysfs.c
+@@ -27,6 +27,8 @@
+ 
+ #include "dev.h"
+ #include "net-sysfs.h"
++#include <net/ncsi.h>
++#include "../ncsi/internal.h"
+ 
+ #ifdef CONFIG_SYSFS
+ static const char fmt_hex[] = "%#x\n";
+@@ -304,15 +306,22 @@ static const char *const operstates[] = {
+ static ssize_t operstate_show(struct device *dev,
+ 			      struct device_attribute *attr, char *buf)
+ {
+-	const struct net_device *netdev = to_net_dev(dev);
+-	unsigned char operstate;
++        struct net_device *netdev = to_net_dev(dev);
++        unsigned char operstate;
++       struct ncsi_dev *nd;
++       nd = ncsi_find_dev(netdev);
++       if (nd && !nd->link_up) {
+ 
+-	operstate = READ_ONCE(netdev->operstate);
+-	if (!netif_running(netdev))
+ 		operstate = IF_OPER_DOWN;
+-
+-	if (operstate >= ARRAY_SIZE(operstates))
+-		return -EINVAL; /* should not happen */
++       }
++       else {
++               operstate = READ_ONCE(netdev->operstate);
++               if (!netif_running(netdev))
++                       operstate = IF_OPER_DOWN;
++
++               if (operstate >= ARRAY_SIZE(operstates))
++                       return -EINVAL; /* should not happen */
++       }
+ 
+ 	return sysfs_emit(buf, "%s\n", operstates[operstate]);
+ }
+diff --git a/net/ncsi/ncsi-manage.c b/net/ncsi/ncsi-manage.c
+index 14d99b108908..e3be58639464 100644
+--- a/net/ncsi/ncsi-manage.c
++++ b/net/ncsi/ncsi-manage.c
+@@ -83,6 +83,14 @@ void ncsi_report_link(struct ncsi_dev_priv *ndp, bool force_down)
+ 	}
+ 
+ report:
++        if (nd->link_up) {
++               nd->dev->operstate = IF_OPER_UP;
++               netif_carrier_on(nd->dev);
++        }
++        else {
++               netif_carrier_off(nd->dev);
++        }
++
+ 	if(rtnl_trylock()){
+ 		call_netdevice_notifiers(NETDEV_CHANGE,nd->dev);
+ 		rtnl_unlock();
+-- 
+2.34.1
+

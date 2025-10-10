@@ -1,0 +1,252 @@
+From c5ee21717ec36956324fa0bf4ee364a182a77b96 Mon Sep 17 00:00:00 2001
+From: Vijaysankar R <vijaysankarr@ami.com>
+Date: Wed, 7 May 2025 00:06:27 +0530
+Subject: [PATCH 204/204] Added-Radius-In-Pamorder
+
+---
+ user_mgr.cpp | 141 +++++++++++++++++++++++++++++++++++----------------
+ user_mgr.hpp |   2 +-
+ 2 files changed, 99 insertions(+), 44 deletions(-)
+
+diff --git a/user_mgr.cpp b/user_mgr.cpp
+index a6300aa..0d7f3c2 100644
+--- a/user_mgr.cpp
++++ b/user_mgr.cpp
+@@ -30,6 +30,7 @@
+ #include <sys/wait.h>
+ #include <time.h>
+ #include <unistd.h>
++#include <nss.h>
+ 
+ #include <boost/algorithm/string/split.hpp>
+ #include <boost/filesystem.hpp>
+@@ -52,6 +53,7 @@
+ #include <string_view>
+ #include <unordered_set>
+ #include <vector>
++#define MAX_USER_NAME_LEN 255
+ 
+ namespace phosphor
+ {
+@@ -89,6 +91,13 @@ typedef struct
+     std::string pamModuleName;
+ } pamReorder;
+ 
++typedef enum nss_status (*getRadiusUserInfoType)(
++    char *name,
++    struct passwd *pwd,
++    char *buffer,
++    size_t buflen,
++    int *errnop
++);
+ struct privilageStruct
+ {
+     int privNum;
+@@ -96,7 +105,7 @@ struct privilageStruct
+ };
+ 
+ const pamReorder pamReorderStruct[maxPamReorderModule] = {
+-    {1, "pam_unix.so"}, {2, "pam_ldap.so"}};
++    {1, "pam_unix.so"}, {2, "pam_ldap.so"}, {3, "pam_radius.so"}};
+ 
+ enum privMgrLevel
+ {
+@@ -1412,10 +1421,18 @@ UserInfoMap UserMgr::getUserInfo(std::string userName)
+     struct privilageStruct privBuf[3] = {
+         {1, "priv-admin"}, {2, "priv-operator"}, {3, "priv-user"}};
+     UserInfoMap userInfo;
+-    int userID = 0, retval = 0;
+-    // Check whether the given user is local user or not.
+-    if (isUserExist(userName))
++    int userID = 0, retval = 0, userType = 1;
++    std::vector<uint8_t> currentPamOrder;
++    currentPamOrder = getPamOrder();
++    for (uint8_t value : currentPamOrder){
++    if(value == 1){
++    struct group *grp = getgrnam("ipmi");
++    if (isUserExist(userName)){
++    for (char** member = grp->gr_mem; *member != nullptr; member++)
++    {
++    if (strcmp(*member, userName.c_str()) == 0)
+     {
++	userType = 0;
+         const auto& user = usersList[userName];
+         userInfo.emplace("UserPrivilege", user.get()->userPrivilege());
+         userInfo.emplace("UserGroups", user.get()->userGroups());
+@@ -1425,45 +1442,18 @@ UserInfoMap UserMgr::getUserInfo(std::string userName)
+         userInfo.emplace("UserPasswordExpired",
+                          user.get()->userPasswordExpired());
+         userInfo.emplace("RemoteUser", false);
++	return userInfo;
+     }
+-    else
++    }
++    }
++    if(userType)
++    continue;
++    }
++    if(value == 2)
+     {
+         auto primaryGid = getPrimaryGroup(userName);
+-        int primaryPriv = (int)primaryGid;
+-        bool radiusEnableStatus = false;
+-        std::unique_ptr<void, int(*)(void *)> bnss_radius_handle(dlopen("/usr/lib/libnss_radius.so", RTLD_LAZY), dlclose);
+-        if (bnss_radius_handle)
+-        {
+-            int (*getRadiusEnableDbusProperty)(bool*) = reinterpret_cast <int (*)(bool*)> (dlsym(bnss_radius_handle.get(), "getRadiusEnableDbusProperty"));
+-            if (NULL != getRadiusEnableDbusProperty)
+-            {
+-                retval = getRadiusEnableDbusProperty(&radiusEnableStatus);
+-                if (!((retval < 0) || (radiusEnableStatus == false)))
+-                {
+-                    getRadiusUserID(userName, &userID);
+-                    if (userID >= 9000)
+-                    {
+-                        int iter = 0;
+-                        userInfo.emplace("RemoteUser", true);
+-                        for (iter = 0;
+-                             iter <
+-                             ((signed)(sizeof(privBuf) / sizeof(privBuf[0])));
+-                             iter++)
+-                        {
+-                            if (primaryPriv == privBuf[iter].privNum)
+-                            {
+-                                userInfo.emplace("UserPrivilege",
+-                                                 privBuf[iter].privStr);
+-                                userInfo.emplace("RemoteUser", true);
+-                                return userInfo;
+-                            }
+-                        }
+-                    }
+-                }
+-            }
+-        }
+-
+-        DbusUserObj objects = getPrivilegeMapperObject();
++	int Gid = int(primaryGid);
++	DbusUserObj objects = getPrivilegeMapperObject();
+         std::string ldapConfigPath;
+         std::string userPrivilege;
+ 
+@@ -1485,7 +1475,7 @@ UserInfoMap UserMgr::getUserInfo(std::string userName)
+             }
+             if (ldapConfigPath.empty())
+             {
+-                return userInfo;
++                continue;
+             }
+ 
+             for (const auto& [path, interfaces] : objects)
+@@ -1530,12 +1520,20 @@ UserInfoMap UserMgr::getUserInfo(std::string userName)
+             if (!userPrivilege.empty())
+             {
+                 userInfo.emplace("UserPrivilege", userPrivilege);
++		userInfo.emplace("RemoteUser", true);
++		break;
+             }
+             else
+             {
++	        if(Gid > 100)
++		{
+                 lg2::warning("LDAP group privilege mapping does not exist, "
+                              "default \"priv-user\" is used");
+                 userInfo.emplace("UserPrivilege", "priv-user");
++		userInfo.emplace("RemoteUser", true);
++		}
++		else
++		continue;
+             }
+         }
+         catch (const std::bad_variant_access& e)
+@@ -1543,8 +1541,65 @@ UserInfoMap UserMgr::getUserInfo(std::string userName)
+             lg2::error("Error while accessing variant: {ERR}", "ERR", e);
+             elog<InternalFailure>();
+         }
+-        userInfo.emplace("RemoteUser", true);
+     }
++    if(value == 3)
++    {
++        auto primaryGid = getPrimaryGroup(userName);
++        int primaryPriv = (int)primaryGid;
++        bool radiusEnableStatus = false;
++        std::unique_ptr<void, int(*)(void *)> bnss_radius_handle(dlopen("/usr/lib/libnss_radius.so", RTLD_LAZY), dlclose);
++        if (bnss_radius_handle)
++        {
++            int (*getRadiusEnableDbusProperty)(bool*) = reinterpret_cast <int (*)(bool*)> (dlsym(bnss_radius_handle.get(), "getRadiusEnableDbusProperty"));
++            if (NULL != getRadiusEnableDbusProperty)
++            {
++                retval = getRadiusEnableDbusProperty(&radiusEnableStatus);
++                if (!((retval < 0) || (radiusEnableStatus == false)))
++                {
++	            getRadiusUserInfoType getRadiusUserInfo = reinterpret_cast <getRadiusUserInfoType> (dlsym(bnss_radius_handle.get(), "_nss_radius_getpwnam_r"));
++		    if (getRadiusUserInfo) {
++                      struct passwd pwd;
++                      char nameBuf[MAX_USER_NAME_LEN]={0};
++                      pwd.pw_name = nameBuf;
++                      char buf[MAX_USER_NAME_LEN];
++                      int err = 0;
++                      getRadiusUserInfo(const_cast<char *>(userName.c_str()), &pwd, buf, sizeof(buf), &err);
++                      userID = pwd.pw_uid;
++                      primaryPriv = pwd.pw_gid;
++                    if (userID >= 9000)
++                    {
++                        int iter = 0;
++                        userInfo.emplace("RemoteUser", true);
++                        for (iter = 0;
++                             iter <
++                             ((signed)(sizeof(privBuf) / sizeof(privBuf[0])));
++                             iter++)
++                        {
++                            if (primaryPriv == privBuf[iter].privNum)
++                            {
++                                userInfo.emplace("UserPrivilege",
++                                                 privBuf[iter].privStr);
++                                userInfo.emplace("RemoteUser", true);
++                                return userInfo;
++                            }
++			    else
++		            continue;
++                        }
++                    }
++		    else
++	            	continue;
++		    }
++            }
++	    else
++	    continue;
++        }
++	  else
++	  continue;
++    }
++      	else
++	continue;
++  }
++  }
+     return userInfo;
+ }
+ 
+@@ -1957,7 +2012,7 @@ bool updatePamOrder(const std::string confFile,
+                     {
+                         std::string pamOrderBuf = modifyPamOrderLineBuf(
+                             preDefinePamOrder[reqPamOrder[innerLoop] - 1],
+-                            maxPamReorderModule + 2 - innerLoop);
++                            maxPamReorderModule + 1 - innerLoop);
+                         outFile << pamOrderBuf << std::endl;
+                     }
+                     isModified = true;
+diff --git a/user_mgr.hpp b/user_mgr.hpp
+index 0e44ea5..eab8fdc 100644
+--- a/user_mgr.hpp
++++ b/user_mgr.hpp
+@@ -43,7 +43,7 @@ inline constexpr size_t maxSystemUsers = 30;
+ inline constexpr uint8_t minPasswdLength = 8;
+ inline constexpr size_t maxSystemGroupNameLength = 32;
+ inline constexpr size_t maxSystemGroupCount = 64;
+-inline constexpr uint8_t maxPamReorderModule = 2;
++inline constexpr uint8_t maxPamReorderModule = 3;
+ 
+ using UserMgrIface = sdbusplus::xyz::openbmc_project::User::server::Manager;
+ using UserSSHLists =
+-- 
+2.43.0
+

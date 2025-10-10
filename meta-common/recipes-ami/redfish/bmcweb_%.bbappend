@@ -3,18 +3,17 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 # The list of source files — local or remote
 SRC_URI_EXT:append= " \
-	file://collection_ext.hpp;subdir=git/redfish-core/lib/ext \
-	file://storage_ext.hpp;subdir=git/redfish-core/lib/ext \
+	file://collection_ext.hpp;subdir=git/ext/include \
+	file://storage_ext.hpp;subdir=git/ext/include \
+        file://log_services_ext.hpp;subdir=git/ext/include \
 "
-SRC_URI:append = "${@bb.utils.contains_any('IMAGE_INSTALL', 'raid-mscc nvme-mgmt nvmebasic-mgmt raid-mgmt', SRC_URI_EXT, '', d)}"
+SRC_URI:append = "${@bb.utils.contains_any('IMAGE_FEATURES', 'onetree-msccraid onetree-nvme onetree-nvmebasic onetree-brcmraid', SRC_URI_EXT, '', d)}"
 
-EXTRA_OEMESON += "${@bb.utils.contains_any('IMAGE_INSTALL', 'nvme-mgmt nvmebasic-mgmt', ' -Dami-nvme=enabled','', d)}"
-EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'raid-mscc', ' -Dami-raidmscc=enabled','', d)}"
-EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'raid-mgmt', ' -Dami-raidbrcm=enabled','', d)}"
-EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'nic-mgmt', ' -Dami-nic=enabled','', d)}"
-EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'redfish-core', ' -Dami-rep=enabled','', d)}"
 EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'pciesw-service', ' -Dami-pciesw=enabled','', d)}"
 EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb-ast2600', ' -Dast2600-evb=enabled','', d)}"
 EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb-nuvoton-npcm845', ' -Darbel-nuvoton=enabled','', d)}"
-EXTRA_OEMESON += "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'nm-features', ' -Dami-nm=enabled', '', d)}"
-EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'google-authenticator-libpam', ' -Dami-2fa=enabled','', d)}"
+EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-intelsipack', ' -Dami-nm=enabled', '', d)}"
+EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-2fa', ' -Dami-2fa=enabled','', d)}"
+EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'egs', ' -Dami-egs=enabled','', d)}"
+EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'bhs', ' -Dami-bhs=enabled','', d)}"
+EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'aspeed-sdk-layer', ' -Dast2700-evb=enabled','', d)}"

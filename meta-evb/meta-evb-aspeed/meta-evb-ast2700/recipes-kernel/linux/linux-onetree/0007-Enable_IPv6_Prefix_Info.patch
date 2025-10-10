@@ -1,0 +1,330 @@
+From 79f4a4f5dbe8cc81565ff44a997c32ce2ed71980 Mon Sep 17 00:00:00 2001
+From: Ethan Wei <ethanwei@ami.com>
+Date: Mon, 3 Mar 2025 12:00:37 +0800
+Subject: [PATCH] Enable IPv6 Prefix Info
+
+---
+ drivers/net/bonding/bond_main.c          |   3 +
+ drivers/net/ethernet/faraday/ftgmac100.c |  22 ++-
+ include/net/ndisc.h                      |  16 +++
+ net/ipv6/ndisc.c                         |  13 ++
+ net/ipv6/route.c                         | 174 +++++++++++++++++++++++
+ 5 files changed, 227 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/bonding/bond_main.c b/drivers/net/bonding/bond_main.c
+index b094c48bebc3..0cdc360e5c35 100644
+--- a/drivers/net/bonding/bond_main.c
++++ b/drivers/net/bonding/bond_main.c
+@@ -5958,6 +5958,9 @@ static void bond_uninit(struct net_device *bond_dev)
+ 
+ 	list_del(&bond->bond_list);
+ 
++	//clear all route prefix entry from proc /proc/net/ipv6_route_prefix_info
++	clear_route_prefix_entry();
++
+ 	bond_debug_unregister(bond);
+ }
+ 
+diff --git a/drivers/net/ethernet/faraday/ftgmac100.c b/drivers/net/ethernet/faraday/ftgmac100.c
+index b5ab59e54317..5a9de97fd959 100644
+--- a/drivers/net/ethernet/faraday/ftgmac100.c
++++ b/drivers/net/ethernet/faraday/ftgmac100.c
+@@ -1173,10 +1173,30 @@ static int ftgmac100_set_pauseparam(struct net_device *netdev,
+ 	return 0;
+ }
+ 
++int ftgmac100_ethtool_get_link_ksettings(struct net_device *netdev,
++                                        struct ethtool_link_ksettings *cmd)
++{
++       struct phy_device *phydev = netdev->phydev;
++       struct ftgmac100 *priv = netdev_priv(netdev);
++       int retval = 0;
++
++       if (phydev) {
++               phy_ethtool_ksettings_get(phydev, cmd);
++       } else if (priv->use_ncsi) {
++               cmd->base.speed = priv->cur_speed;
++               cmd->base.duplex = priv->cur_duplex;
++               cmd->base.autoneg = 0;
++       } else {
++               retval = -ENODEV;
++       }
++
++       return retval;
++}
++
+ static const struct ethtool_ops ftgmac100_ethtool_ops = {
+ 	.get_drvinfo		= ftgmac100_get_drvinfo,
+ 	.get_link		= ethtool_op_get_link,
+-	.get_link_ksettings	= phy_ethtool_get_link_ksettings,
++	.get_link_ksettings	= ftgmac100_ethtool_get_link_ksettings,
+ 	.set_link_ksettings	= phy_ethtool_set_link_ksettings,
+ 	.nway_reset		= phy_ethtool_nway_reset,
+ 	.get_ringparam		= ftgmac100_get_ringparam,
+diff --git a/include/net/ndisc.h b/include/net/ndisc.h
+index 9bbdf6eaa942..1bae9c7c8bc6 100644
+--- a/include/net/ndisc.h
++++ b/include/net/ndisc.h
+@@ -223,6 +223,22 @@ struct ndisc_ops {
+ 				       bool dev_addr_generated);
+ };
+ 
++struct route_prefix_info
++{
++       struct in6_addr gwaddr;
++       struct in6_addr prefix;
++       u8 prefix_len;
++       u8 addr[ETH_ALEN];
++       u8 ifname[IFNAMSIZ];
++       struct list_head list;
++};
++
++void add_route_prefix_entry(struct net_device *dev, u8 *opt, int len, struct in6_addr *gwaddr, u8 *addr);
++
++void del_route_prefix_entry(struct in6_addr *gwaddr);
++
++void clear_route_prefix_entry(void);
++
+ #if IS_ENABLED(CONFIG_IPV6)
+ static inline int ndisc_ops_is_useropt(const struct net_device *dev,
+ 				       u8 nd_opt_type)
+diff --git a/net/ipv6/ndisc.c b/net/ipv6/ndisc.c
+index 68debc78189c..f81c555f41b0 100644
+--- a/net/ipv6/ndisc.c
++++ b/net/ipv6/ndisc.c
+@@ -1465,6 +1465,8 @@ static enum skb_drop_reason ndisc_router_discovery(struct sk_buff *skb)
+ 	 *	Process options.
+ 	 */
+ 
++	u8 *llAddr = NULL;
++
+ 	if (!neigh)
+ 		neigh = __neigh_lookup(&nd_tbl, &ipv6_hdr(skb)->saddr,
+ 				       skb->dev, 1);
+@@ -1486,6 +1488,17 @@ static enum skb_drop_reason ndisc_router_discovery(struct sk_buff *skb)
+ 			     NEIGH_UPDATE_F_ISROUTER,
+ 			     NDISC_ROUTER_ADVERTISEMENT, &ndopts);
+ 		reason = SKB_CONSUMED;
++		llAddr=lladdr;
++	}
++
++	if (in6_dev->cnf.accept_ra_pinfo && ndopts.nd_opts_pi) {
++			struct nd_opt_hdr *p;
++			for (p = ndopts.nd_opts_pi;
++					p;
++					p = ndisc_next_option(p, ndopts.nd_opts_pi_end)) {
++					add_route_prefix_entry( skb->dev,(u8 *)p, (p->nd_opt_len) << 3, &ipv6_hdr(skb)->saddr, llAddr);
++			}
++			llAddr=NULL;
+ 	}
+ 
+ 	if (!ipv6_accept_ra(in6_dev)) {
+diff --git a/net/ipv6/route.c b/net/ipv6/route.c
+index 236a45557ba1..3ea9f426905f 100644
+--- a/net/ipv6/route.c
++++ b/net/ipv6/route.c
+@@ -3866,6 +3866,10 @@ static int __ip6_del_rt(struct fib6_info *rt, struct nl_info *info)
+ 	err = fib6_del(rt, info);
+ 	spin_unlock_bh(&table->tb6_lock);
+ 
++	if(!err){
++		del_route_prefix_entry(&rt->fib6_nh->fib_nh_gw6);
++	}
++
+ out:
+ 	fib6_info_release(rt);
+ 	return err;
+@@ -6553,6 +6557,170 @@ static void __net_exit ip6_route_net_exit(struct net *net)
+ 	dst_entries_destroy(&net->ipv6.ip6_dst_ops);
+ }
+ 
++static LIST_HEAD(prefix_list);
++
++void clear_route_prefix_entry(void)
++{
++	struct list_head *pos, *next;
++	struct route_prefix_info *entry;
++
++	list_for_each_safe(pos, next, &prefix_list) {
++		entry = list_entry(pos, struct route_prefix_info, list);
++		list_del(pos);
++		kfree(entry);
++	}
++}
++
++EXPORT_SYMBOL_GPL(clear_route_prefix_entry);
++
++void del_route_prefix_entry(struct in6_addr *gwaddr)
++{
++		struct route_prefix_info *entry;
++		struct list_head *pos,*next;
++
++		if(gwaddr == NULL){
++			return;
++		}
++
++		list_for_each_safe(pos, next, &prefix_list) {
++
++			entry = list_entry(pos, struct route_prefix_info, list);
++
++			if(memcmp(&entry->gwaddr.s6_addr,&gwaddr->s6_addr,sizeof(struct in6_addr)) == 0) {
++				list_del(pos);
++				kfree(entry);
++				break;
++			}
++		}
++}
++
++void add_route_prefix_entry(struct net_device *dev, u8 *opt, int len, struct in6_addr *gwaddr, u8 *addr) {
++		struct route_prefix_info *entry;
++		struct route_prefix_info *curr_entry;
++		struct list_head *pos;
++		struct prefix_info *pinfo;
++		__u32 valid_lft;
++		__u32 prefered_lft;
++		int addr_type;
++		struct inet6_dev *in6_dev;
++
++		pinfo = (struct prefix_info *) opt;
++
++		if(pinfo == NULL){
++			return;
++		}
++
++		if (len < sizeof(struct prefix_info)) {
++			netdev_dbg(dev, "addrconf: prefix option too short\n");
++			return;
++		}
++
++		/*
++		 *      Validation checks ([ADDRCONF], page 19)
++		 */
++
++		addr_type = ipv6_addr_type(&pinfo->prefix);
++
++		if (addr_type & (IPV6_ADDR_MULTICAST|IPV6_ADDR_LINKLOCAL))
++			return;
++
++		valid_lft = ntohl(pinfo->valid);
++		prefered_lft = ntohl(pinfo->prefered);
++
++		if (prefered_lft > valid_lft) {
++			net_warn_ratelimited("addrconf: prefix option has invalid lifetime\n");
++			return;
++		}
++
++		in6_dev = in6_dev_get(dev);
++
++		if (!in6_dev) {
++			net_dbg_ratelimited("addrconf: device %s not configured\n", dev->name);
++			return;
++		}
++
++		if (valid_lft != 0 && valid_lft < in6_dev->cnf.accept_ra_min_lft){
++			goto put;
++		}
++
++		entry = kmalloc(sizeof(*entry), GFP_KERNEL);
++		if (!entry){
++			goto put;
++		}
++
++		if(gwaddr != NULL){
++			memcpy(entry->gwaddr.s6_addr , gwaddr->s6_addr, sizeof(struct in6_addr));
++		}
++		if(addr != NULL){
++			memcpy(entry->addr, addr, ETH_ALEN);
++		}
++		memcpy(entry->prefix.s6_addr , &pinfo->prefix, sizeof(struct in6_addr));
++		entry->prefix_len = pinfo->prefix_len;
++		memcpy(entry->ifname, dev->name , IFNAMSIZ);
++
++
++		list_for_each(pos, &prefix_list) {
++
++			curr_entry = list_entry(pos, struct route_prefix_info, list);
++
++			if((memcmp(&curr_entry->gwaddr.s6_addr,&entry->gwaddr.s6_addr,sizeof(struct in6_addr)) == 0) &&
++			   (memcmp(&curr_entry->addr,&entry->addr,ETH_ALEN) == 0) &&
++			   (memcmp(&curr_entry->prefix.s6_addr,&entry->prefix.s6_addr,sizeof(struct in6_addr)) == 0) &&
++			   (memcmp(&curr_entry->ifname,&entry->ifname,IFNAMSIZ) == 0) &&
++			   (curr_entry->prefix_len == entry->prefix_len)){
++				goto put;
++			}
++		}
++
++		list_add(&entry->list, &prefix_list);
++
++put:
++	in6_dev_put(in6_dev);
++}
++
++static void *route_prefix_info_seq_start(struct seq_file *seq, loff_t *pos)
++{
++	struct list_head *p;
++	loff_t n = 0;
++
++	list_for_each(p, &prefix_list) {
++		if (n++ == *pos)
++			return list_entry(p, struct route_prefix_info, list);
++	}
++
++	return NULL;
++}
++
++static void *route_prefix_info_seq_next(struct seq_file *seq, void *v, loff_t *pos)
++{
++	struct route_prefix_info *entry = v;
++	(*pos)++;
++	if (entry->list.next == &prefix_list)
++		return NULL;
++	return list_entry(entry->list.next, struct route_prefix_info, list);
++}
++
++static void route_prefix_info_seq_stop(struct seq_file *seq, void *v)
++{
++		/*do nothing here*/
++}
++
++static int route_prefix_info_seq_show(struct seq_file *seq, void *v)
++{
++	struct route_prefix_info *entry = v;
++
++	seq_printf(seq, "%pI6 %pI6 %u %pM %s\n", entry->gwaddr.s6_addr ,entry->prefix.s6_addr , entry->prefix_len,entry->addr,entry->ifname);
++
++	return 0;
++}
++
++const struct seq_operations route_prefix_info_seq_ops = {
++	.start = route_prefix_info_seq_start,
++	.next = route_prefix_info_seq_next,
++	.stop = route_prefix_info_seq_stop,
++	.show = route_prefix_info_seq_show
++};
++
+ static int __net_init ip6_route_net_init_late(struct net *net)
+ {
+ #ifdef CONFIG_PROC_FS
+@@ -6566,6 +6734,11 @@ static int __net_init ip6_route_net_init_late(struct net *net)
+ 		remove_proc_entry("ipv6_route", net->proc_net);
+ 		return -ENOMEM;
+ 	}
++
++	if (!proc_create_net("ipv6_route_prefix_info", 0, net->proc_net,
++								&route_prefix_info_seq_ops,sizeof(struct seq_net_private))){
++			return -ENOMEM;
++	}
+ #endif
+ 	return 0;
+ }
+@@ -6575,6 +6748,7 @@ static void __net_exit ip6_route_net_exit_late(struct net *net)
+ #ifdef CONFIG_PROC_FS
+ 	remove_proc_entry("ipv6_route", net->proc_net);
+ 	remove_proc_entry("rt6_stats", net->proc_net);
++	remove_proc_entry("ipv6_route_prefix_info", net->proc_net);
+ #endif
+ }
+ 
+-- 
+2.34.1
+

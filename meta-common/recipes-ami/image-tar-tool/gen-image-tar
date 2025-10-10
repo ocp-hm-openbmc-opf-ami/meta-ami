@@ -115,15 +115,7 @@ if [ ! -f "${file}" ]; then
   exit 1
 fi
 
-if [[ -z $version ]]; then
-  echo "Please provide version of image with -v option"
-  exit 1
-fi
 
-if [[ -z $component ]]; then
-  echo "Please provide component of image with -c option"
-  exit 1
-fi
 
 if [[ -z $outfile ]]; then
   outfile=$(pwd)/obmc-image.tar.gz
@@ -157,6 +149,42 @@ if [[ "${do_sign}" == true ]]; then
   public_key_file=publickey
   public_key_path=${scratch_dir}/$public_key_file
   openssl pkey -in "${private_key_path}" -pubout -out "${public_key_path}"
+fi
+
+# Check if tar file is provided
+if [[ "${file}" == *.tar* ]]; then
+  echo "Tar file detected, extracting files... $scratch_dir"
+  tar -xvf "$file" -C "$scratch_dir"
+  for file in "${scratch_dir}"/*; do
+    filename=$(basename "$file")
+    if [[ "$filename" != "OpenBMC.priv" ]]; then
+        files_to_sign+=" $filename"
+    fi
+  done
+  cd "$scratch_dir"
+  private_key_name=$(basename "${private_key_path}")
+  key_type="${private_key_name%.*}"
+  for file in $files_to_sign; do
+  openssl dgst -sha256 -sign "${private_key_name}" -out "${file}.sig" "$file"
+  done
+  additional_files="*.sig"
+  sort_signature_files="image-kernel.sig image-runtime.sig image-rofs.sig image-rwfs.sig image-u-boot.sig MANIFEST.sig publickey.sig"
+  cat $sort_signature_files >image-full
+      openssl dgst -sha256 -sign ${private_key_name} -out image-full.sig image-full
+      additional_files="${additional_files} image-full.sig"
+  tar -czvf $outfile $files_to_sign $additional_files
+  echo "image tarball is at $outfile"
+  exit 0  
+fi
+
+if [[ -z $version ]]; then
+  echo "Please provide version of image with -v option"
+  exit 1
+fi
+
+if [[ -z $component ]]; then
+  echo "Please provide component of image with -c option"
+  exit 1
 fi
 
 manifest_location="MANIFEST"

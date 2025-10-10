@@ -63,7 +63,7 @@ mkdir -p "$OVERLAY_MNT"
 
 mtd_by_name() {
     local name="$1"
-    echo "/dev/$(grep "$name" /proc/mtd | cut -d : -f 1)"
+    echo "/dev/$(grep "$name" /proc/mtd | head -n 1 | cut -d : -f 1)"
 }
 
 mtdnum_by_name() {
@@ -161,6 +161,52 @@ full_clean() {
     sync
 }
 
+partial_restore_to_default() {
+
+    restore_whitelist=${RWFS_MNT}/.restore_whitelist
+    BMC_PRESERVE_DIR=${RWFS_MNT}/bmc_preserve_dir
+
+    # backup user selected files and folders
+    while read -r f
+    do
+        # Entries shall start with /, no trailing /.. or embedded /../
+        if test "/${f#/}" != "$f" -o "${f%/..}" != "${f#*/../}"
+        then
+            echo 1>&2 "WARNING: Skipping bad whitelist entry $f."
+            continue
+        fi
+        if ! test -e "$OVERLAY_SYNC/$f"
+        then
+            continue
+        fi
+        d="$BMC_PRESERVE_DIR/$f"
+        while test "${d%/}" != "${d%/.}"
+        do
+            d="${d%/.}"
+            d="${d%/}"
+        done
+        mkdir -p "${d%/*}"
+        cp -rp "$OVERLAY_SYNC/$f" "${d%/*}/"
+    done < $restore_whitelist
+
+    rm -rf "$OVERLAY_SYNC"
+    mkdir -p "$OVERLAY_SYNC"
+
+    # copy required configs from backup dir to overlaydir
+    cp -rp "$BMC_PRESERVE_DIR/"* "$OVERLAY_SYNC"
+    rm -rf "$BMC_PRESERVE_DIR"
+
+    RESTORE_UB_ENV=$RWFS_MNT/uboot_env_data.bin
+    log "Check u-boot env to restore-defaults"
+    if [ -f "$RESTORE_UB_ENV" ]; then
+        rm -rf "$RESTORE_UB_ENV"
+    else
+        clear_ubenv
+    fi
+
+    sync
+}
+
 jffs2_mount() {
     mtd_name=$1
     mnt=$2
@@ -229,6 +275,14 @@ if [ -f "$RESTORE_FLAG" ]; then
         targeted_clean_reserve_user_lan
     fi
     rm -f $RESTORE_FLAG
+    mount -o remount,ro "$RWFS_MNT"
+fi
+
+RESTORE_PARTIAL_FLAG=$RWFS_MNT/.restore_whitelist
+if [ -f "$RESTORE_PARTIAL_FLAG" ]; then
+    mount -o remount,rw "$RWFS_MNT"
+    partial_restore_to_default
+    rm -f $RESTORE_PARTIAL_FLAG
     mount -o remount,ro "$RWFS_MNT"
 fi
 

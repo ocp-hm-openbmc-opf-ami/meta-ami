@@ -1,5 +1,5 @@
 project('aspeed-pfr-tool', 'c', 'cpp',
-        version : '1.0',
+        version : '2.1',
         meson_version: '>=0.57.0',
         default_options: [
             'werror=true',
@@ -18,8 +18,9 @@ incdir = include_directories(
 # Get the options and enable the respective features
 ## create a MAP of  "options : feature_flag"
 feature_map = {
-    'mctp' : '-DENABLE_PFR_MCTP',
     'attestation' : '-DENABLE_PFR_SPDM_ATTESTATION',
+    'secure_connection' : '-DSUPPORT_SECURE_CONNECTION',
+    'secure_test_case' : '-DSECURE_TEST_CASE',
 }
 
 # Get the options status and build a project summary to show which flags are
@@ -31,6 +32,11 @@ foreach option_key, option_value : feature_map
     endif
 endforeach
 
+if (get_option('secure_connection').enabled())
+    spdm = meson.get_compiler('c').find_library('spdm')
+    aspeed_pfr_tool_dependencies += [spdm]
+endif
+
 # Generate the aspeed-pfr-tool executable
 executable(
     'aspeed-pfr-tool',
@@ -41,6 +47,7 @@ executable(
       'status.c',
       'info.c',
       'spdm.c',
+      'utils.c',
       'main.c'
     ],
     include_directories : incdir,
@@ -59,6 +66,7 @@ conf_data.set('BMC_RECOVERY_OFFSET', get_option('bmc_recovery_offset'))
 conf_data.set('PCH_ACTIVE_PFM_OFFSET', get_option('pch_active_pfm_offset'))
 conf_data.set('PCH_STAGING_OFFSET', get_option('pch_staging_offset'))
 conf_data.set('PCH_RECOVERY_OFFSET', get_option('pch_recovery_offset'))
+conf_data.set('AFM_STAGING_OFFSET', get_option('afm_staging_offset'))
 
 summary('I2C_BUS',get_option('i2c_bus'), section : 'PFR Info')
 summary('ROT_ADDRESS',get_option('rot_address'), section : 'PFR Info')
@@ -68,6 +76,7 @@ summary('BMC_RECOVERY_OFFSET',get_option('bmc_recovery_offset'), section : 'PFR 
 summary('PCH_ACTIVE_PFM_OFFSET',get_option('pch_active_pfm_offset'), section : 'PFR Info')
 summary('PCH_STAGING_OFFSET',get_option('pch_staging_offset'), section : 'PFR Info')
 summary('PCH_RECOVERY_OFFSET',get_option('pch_recovery_offset'), section : 'PFR Info')
+summary('AFM_STAGING_OFFSET',get_option('afm_staging_offset'), section : 'PFR Info')
 
 # Copy aspeed-pfr-tool.conf to /usr/share/pfrconfig
 configure_file(input : 'aspeed-pfr-tool.conf.in',

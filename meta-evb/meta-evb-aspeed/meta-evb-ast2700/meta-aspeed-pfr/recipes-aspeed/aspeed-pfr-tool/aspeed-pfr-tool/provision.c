@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include "provision.h"
 #include "i2c_utils.h"
+#include "utils.h"
 #include "mailbox_enums.h"
 #include "arguments.h"
 
@@ -184,7 +185,7 @@ int waitUntilUfmCmdTriggerExec(ARGUMENTS args)
 	int i = 0;
 
 	while (i < 100) {
-		read_reg_value = i2cReadByteData(args, MB_UFM_CMD_TRIGGER);
+		read_reg_value = ReadByteData(args, MB_UFM_CMD_TRIGGER);
 		if (read_reg_value & mask) {
 			if (args.debug_flag)
 				printf("UFM Command Trigger: Not execute, wait 20ms %d time\n", i);
@@ -204,7 +205,7 @@ int waitUntilUfmProvStatusCmdDone(ARGUMENTS args)
 	int i = 0;
 
 	while (i < 100) {
-		read_reg_value = i2cReadByteData(args, MB_PROVISION_STATUS);
+		read_reg_value = ReadByteData(args, MB_PROVISION_STATUS);
 		if (read_reg_value & MB_UFM_PROV_CMD_BUSY_MASK) {
 			if (args.debug_flag)
 				printf("UFM Provisioning Status: Command busy..., wait 20ms %d time\n", i);
@@ -231,17 +232,17 @@ int writeUfmProvFifoCmd(ARGUMENTS args, MB_UFM_PROV_CMD_ENUM cmd, uint8_t *buf, 
 	int i;
 
 	// Flush Write FIFO
-	i2cWriteByteData(args, MB_UFM_CMD_TRIGGER, MB_UFM_CMD_FLUSH_WR_FIFO_MASK);
+	WriteByteData(args, MB_UFM_CMD_TRIGGER, MB_UFM_CMD_FLUSH_WR_FIFO_MASK);
 	if (waitUntilUfmCmdTriggerExec(args) || waitUntilUfmProvStatusCmdDone(args))
 		return 1;
 
 	// Write FIFO
 	for (i = 0; i < len; i++)
-		i2cWriteByteData(args, MB_UFM_WRITE_FIFO, buf[i]);
+		WriteByteData(args, MB_UFM_WRITE_FIFO, buf[i]);
 
 	// Trigger command
-	i2cWriteByteData(args, MB_PROVISION_CMD, cmd);
-	i2cWriteByteData(args, MB_UFM_CMD_TRIGGER, MB_UFM_CMD_EXECUTE_MASK);
+	WriteByteData(args, MB_PROVISION_CMD, cmd);
+	WriteByteData(args, MB_UFM_CMD_TRIGGER, MB_UFM_CMD_EXECUTE_MASK);
 	if (waitUntilUfmCmdTriggerExec(args) || waitUntilUfmProvStatusCmdDone(args))
 		return 1;
 
@@ -253,27 +254,30 @@ int readUfmProvFifoCmd(ARGUMENTS args, MB_UFM_PROV_CMD_ENUM cmd, uint8_t *buf, i
 	int i;
 
 	// Flush Read FIFO
-	i2cWriteByteData(args, MB_UFM_CMD_TRIGGER, MB_UFM_CMD_FLUSH_RD_FIFO_MASK);
+	WriteByteData(args, MB_UFM_CMD_TRIGGER, MB_UFM_CMD_FLUSH_RD_FIFO_MASK);
 	if (waitUntilUfmCmdTriggerExec(args) || waitUntilUfmProvStatusCmdDone(args))
 		return 1;
 
 	// Trigger command
-	i2cWriteByteData(args, MB_PROVISION_CMD, cmd);
-	i2cWriteByteData(args, MB_UFM_CMD_TRIGGER, MB_UFM_CMD_EXECUTE_MASK);
+	WriteByteData(args, MB_PROVISION_CMD, cmd);
+	WriteByteData(args, MB_UFM_CMD_TRIGGER, MB_UFM_CMD_EXECUTE_MASK);
 	if (waitUntilUfmCmdTriggerExec(args) || waitUntilUfmProvStatusCmdDone(args))
 		return 1;
 
 	// Read FIFO
 	for (i = 0; i < len; i++)
-		buf[i] = i2cReadByteData(args, MB_UFM_READ_FIFO);
+		buf[i] = ReadByteData(args, MB_UFM_READ_FIFO);
 
 	return 0;
 }
 
-int writeUfmProvBmcPchRegionOffset(ARGUMENTS args)
+int writeUfmProvRegionOffset(ARGUMENTS args)
 {
 	uint8_t bmc_offset[12];
 	uint8_t pch_offset[12];
+#ifdef ENABLE_PFR_SPDM_ATTESTATION
+	uint8_t afm_offset[4];
+#endif
 
 	memcpy(bmc_offset, &args.bmc_active_pfm_offset, 4);
 	memcpy(bmc_offset + 4, &args.bmc_recovery_offset, 4);
@@ -281,12 +285,19 @@ int writeUfmProvBmcPchRegionOffset(ARGUMENTS args)
 	memcpy(pch_offset, &args.pch_active_pfm_offset, 4);
 	memcpy(pch_offset + 4, &args.pch_recovery_offset, 4);
 	memcpy(pch_offset + 8, &args.pch_staging_offset, 4);
+#ifdef ENABLE_PFR_SPDM_ATTESTATION
+	memcpy(afm_offset, &args.afm_staging_offset, 4);
+#endif
 
 	if (args.debug_flag) {
 		printf("BMC Offset\n");
 		printRawData(bmc_offset, sizeof(bmc_offset));
 		printf("PCH Offset\n");
 		printRawData(pch_offset, sizeof(pch_offset));
+#ifdef ENABLE_PFR_SPDM_ATTESTATION
+		printf("AFM Offset\n");
+		printRawData(afm_offset, sizeof(afm_offset));
+#endif
 	}
 
 	// Write BMC offset
@@ -301,13 +312,21 @@ int writeUfmProvBmcPchRegionOffset(ARGUMENTS args)
 		return 1;
 	}
 
+#ifdef ENABLE_PFR_SPDM_ATTESTATION
+	// Write AFM offset
+	if (writeUfmProvFifoCmd(args, MB_UFM_PROV_AFM_OFFSET, afm_offset, sizeof(afm_offset))) {
+		printf("Write UFM AFM offset failed\n");
+		return 1;
+	}
+#endif
+
 	return 0;
 }
 
 int provisionLock(ARGUMENTS args)
 {
-	i2cWriteByteData(args, MB_PROVISION_CMD, MB_UFM_PROV_END);
-	i2cWriteByteData(args, MB_UFM_CMD_TRIGGER, MB_UFM_CMD_EXECUTE_MASK);
+	WriteByteData(args, MB_PROVISION_CMD, MB_UFM_PROV_END);
+	WriteByteData(args, MB_UFM_CMD_TRIGGER, MB_UFM_CMD_EXECUTE_MASK);
 	if (waitUntilUfmCmdTriggerExec(args) || waitUntilUfmProvStatusCmdDone(args)) {
 		printf("%s failed\n", __func__);
 		return 1;
@@ -338,6 +357,15 @@ int provisionShow(ARGUMENTS args)
 	printf("PCH Active PFM Offset : 0x%08x\n", *(uint32_t *)&read_buf[0]);
 	printf("PCH Recovery Region Offset : 0x%08x\n", *(uint32_t *)&read_buf[4]);
 	printf("PCH Staging Region Offset : 0x%08x\n", *(uint32_t *)&read_buf[8]);
+
+#ifdef ENABLE_PFR_SPDM_ATTESTATION
+	// Read AFM Offset
+	if (readUfmProvFifoCmd(args, MB_UFM_PROV_RD_AFM_OFFSET, read_buf, 4)) {
+		printf("Read UFM AFM offset failed\n");
+		return 1;
+	}
+	printf("AFM Staging Region Offset : 0x%08x\n", *(uint32_t *)&read_buf);
+#endif
 
 	// Read Root Key hash
 	if (readUfmProvFifoCmd(args, MB_UFM_PROV_RD_ROOT_KEY, read_buf, SHA384_LENGTH)) {
@@ -375,8 +403,8 @@ int doProvision(ARGUMENTS args)
 		printRawData(write_buffer, hashLen);
 	}
 
-	// Write BMC, PCH region offset
-	if (writeUfmProvBmcPchRegionOffset(args)) {
+	// Write BMC, PCH, AFM region offset
+	if (writeUfmProvRegionOffset(args)) {
 		printf("Write UFM BMC/PCH offset failed\n");
 		return 1;
 	}
@@ -416,8 +444,8 @@ int provision(ARGUMENTS args)
 
 int unprovision(ARGUMENTS args)
 {
-	i2cWriteByteData(args, MB_PROVISION_CMD, MB_UFM_PROV_ERASE);
-	i2cWriteByteData(args, MB_UFM_CMD_TRIGGER, MB_UFM_CMD_EXECUTE_MASK);
+	WriteByteData(args, MB_PROVISION_CMD, MB_UFM_PROV_ERASE);
+	WriteByteData(args, MB_UFM_CMD_TRIGGER, MB_UFM_CMD_EXECUTE_MASK);
 	if (waitUntilUfmCmdTriggerExec(args) || waitUntilUfmProvStatusCmdDone(args)) {
 		printf("%s failed\n", __func__);
 		return 1;

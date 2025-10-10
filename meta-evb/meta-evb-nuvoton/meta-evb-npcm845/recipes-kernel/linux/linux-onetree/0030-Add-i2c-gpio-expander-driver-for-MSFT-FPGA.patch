@@ -1,0 +1,590 @@
+From c86c3781d4b52d1a43e0bf9ba1dc869333a1f356 Mon Sep 17 00:00:00 2001
+From: saikumaru <saikumaru@ami.com>
+Date: Fri, 19 Sep 2025 10:22:22 +0530
+Subject: [PATCH] Add i2c gpio expander driver for MSFT FPGA
+
+Support N-bit i2c register mapping to gpiochip
+
+Signed-off-by: saikumaru <saikumaru@ami.com>
+---
+ drivers/gpio/Kconfig          |   7 +
+ drivers/gpio/Makefile         |   1 +
+ drivers/gpio/gpio-msft-fpga.c | 536 ++++++++++++++++++++++++++++++++++
+ 3 files changed, 544 insertions(+)
+ create mode 100644 drivers/gpio/gpio-msft-fpga.c
+
+diff --git a/drivers/gpio/Kconfig b/drivers/gpio/Kconfig
+index bd21ecfadb64..de4e4abe2306 100644
+--- a/drivers/gpio/Kconfig
++++ b/drivers/gpio/Kconfig
+@@ -1178,6 +1178,13 @@ config GPIO_TS4900
+ 	  Say yes here to enabled the GPIO driver for Technologic's FPGA core.
+ 	  Series supported include TS-4100, TS-4900, TS-7970 and TS-7990.
+ 
++config GPIO_MSFT_FPGA
++	tristate "MFST FPGA I2C GPIO"
++	select GPIOLIB_IRQCHIP
++	select IRQ_DOMAIN
++	help
++	 This enables the GPIO IOX for MSFT FPGA IO expander
++
+ endmenu
+ 
+ menu "MFD GPIO expanders"
+diff --git a/drivers/gpio/Makefile b/drivers/gpio/Makefile
+index b613d9a94131..d29277c45705 100644
+--- a/drivers/gpio/Makefile
++++ b/drivers/gpio/Makefile
+@@ -113,6 +113,7 @@ obj-$(CONFIG_GPIO_MOXTET)		+= gpio-moxtet.o
+ obj-$(CONFIG_GPIO_MPC5200)		+= gpio-mpc5200.o
+ obj-$(CONFIG_GPIO_MPC8XXX)		+= gpio-mpc8xxx.o
+ obj-$(CONFIG_GPIO_MSC313)		+= gpio-msc313.o
++obj-$(CONFIG_GPIO_MSFT_FPGA)	+= gpio-msft-fpga.o
+ obj-$(CONFIG_GPIO_MT7621)		+= gpio-mt7621.o
+ obj-$(CONFIG_GPIO_MVEBU)		+= gpio-mvebu.o
+ obj-$(CONFIG_GPIO_MXC)			+= gpio-mxc.o
+diff --git a/drivers/gpio/gpio-msft-fpga.c b/drivers/gpio/gpio-msft-fpga.c
+new file mode 100644
+index 000000000000..b44015f5841a
+--- /dev/null
++++ b/drivers/gpio/gpio-msft-fpga.c
+@@ -0,0 +1,536 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Copyright (C) 2021-2022 Quanta Computer
++ */
++
++#include <linux/gpio/driver.h>
++#include <linux/i2c.h>
++#include <linux/module.h>
++#include <linux/seq_file.h>
++#include <linux/slab.h>
++#include <linux/interrupt.h>
++#include <linux/regmap.h>
++
++#define MAX_BANK 32
++#define BANK_SZ 8
++#define MAX_LINE	(MAX_BANK * BANK_SZ)
++#define NBANK(chip) DIV_ROUND_UP(chip->gpio.ngpio, BANK_SZ)
++
++struct fpga_iox {
++	struct i2c_client *client;
++	struct gpio_chip gpio;
++	struct mutex i2c_lock;
++	unsigned int reg_shift;
++	const char *const *names;
++	DECLARE_BITMAP(direction, MAX_LINE);
++
++	struct mutex irq_lock;
++	DECLARE_BITMAP(last_stat, MAX_LINE);
++	DECLARE_BITMAP(irq_mask, MAX_LINE);
++	DECLARE_BITMAP(irq_trig_raise, MAX_LINE);
++	DECLARE_BITMAP(irq_trig_fall, MAX_LINE);
++	struct irq_chip irq_chip;
++	atomic_t wakeup_path;
++};
++
++static int fpga_iox_read(struct fpga_iox *chip, unsigned offset, uint8_t *value)
++{
++	int ret;
++
++	ret = i2c_smbus_read_byte_data(chip->client, offset);
++	if (ret < 0) {
++		dev_err(chip->gpio.parent, "i2c_smbus_read_byte_data failed: %d\n",
++			ret);
++		return ret;
++	}
++
++	*value = ret & 0xff;
++	return 0;
++}
++
++static int fpga_iox_write(struct fpga_iox *chip, unsigned offset, uint8_t value)
++{
++	int ret;
++
++	ret = i2c_smbus_write_byte_data(chip->client, offset, value);
++	if (ret < 0) {
++		dev_err(chip->gpio.parent, "i2c_smbus_write_byte_data failed: %d\n",
++			ret);
++		return ret;
++	}
++
++	return 0;
++}
++
++static int fpga_iox_gpio_get(struct gpio_chip *gc, unsigned offset)
++{
++	struct fpga_iox *chip = gpiochip_get_data(gc);
++	u8 reg = offset >> chip->reg_shift;
++	u8 bit = BIT(offset % BANK_SZ);
++	u8 reg_val;
++	int ret;
++
++	reg_val = bitmap_get_value8(chip->irq_mask, reg * BANK_SZ);
++	if (reg_val & bit) {
++		reg_val = bitmap_get_value8(chip->last_stat, reg * BANK_SZ);
++	} else {
++		mutex_lock(&chip->i2c_lock);
++		ret = fpga_iox_read(chip, reg, &reg_val);
++		mutex_unlock(&chip->i2c_lock);
++		if (ret < 0)
++			return ret;
++	}
++
++	return !!(reg_val & bit);
++}
++
++static void fpga_iox_gpio_set(struct gpio_chip *gc, unsigned offset, int value)
++{
++	struct fpga_iox *chip = gpiochip_get_data(gc);
++	unsigned int reg = offset >> chip->reg_shift;
++	unsigned int pos = offset & 7;
++	int err;
++	u8 val;
++
++	mutex_lock(&chip->i2c_lock);
++	err = fpga_iox_read(chip, reg, &val);
++	if (err < 0)
++		goto unlock;
++
++	if (value)
++		val |= BIT(pos);
++	else
++		val &= ~BIT(pos);
++
++	fpga_iox_write(chip, reg, val);
++
++unlock:
++	mutex_unlock(&chip->i2c_lock);
++}
++
++static void fpga_iox_gpio_dbg_show(struct seq_file *s, struct gpio_chip *gc)
++{
++	struct fpga_iox *chip = gpiochip_get_data(gc);
++	unsigned int max_reg_addr = NBANK(chip);
++	int i, j;
++	int err;
++	const char *label;
++
++	for (i = 0; i < max_reg_addr; i++) {
++		u8 reg_val;
++
++		mutex_lock(&chip->i2c_lock);
++
++		err = fpga_iox_read(chip, i, &reg_val);
++
++		if (err < 0)
++			goto unlock;
++
++		mutex_unlock(&chip->i2c_lock);
++
++		for (j = 0; j < 8; j++) {
++			unsigned int bit = (i << chip->reg_shift) + j;
++			const char *level = "low ";
++
++			if (reg_val & BIT(j))
++				level = "high";
++
++			label = gpiochip_is_requested(gc, bit);
++			seq_printf(s, "%2u: {%s} %s\n", bit, label, level);
++		}
++	}
++
++	return;
++
++unlock:
++	mutex_unlock(&chip->i2c_lock);
++}
++
++static int fpga_iox_read_regs(struct fpga_iox *chip, unsigned long *val)
++{
++	struct i2c_client *client = chip->client;
++	int i, ret;
++	u8 cmd[1];
++	u8 values[MAX_BANK];
++	struct i2c_msg msg[2] = {
++		{
++			.addr = client->addr,
++			.flags = 0,
++			.len = sizeof(cmd),
++			.buf = cmd,
++		},
++		{
++			.addr = client->addr,
++			.flags = I2C_M_RD,
++			.len = sizeof(values),
++			.buf = values,
++		},
++	};
++	cmd[0] = 0x0;
++
++	ret = i2c_transfer(client->adapter, msg, ARRAY_SIZE(msg));
++	if (ret < 0)
++		return ret;
++
++	for (i = 0; i < MAX_BANK; i++)
++		bitmap_set_value8(val, values[i], i * BANK_SZ);
++
++	return 0;
++}
++
++static int fpga_iox_gpio_direction_input(struct gpio_chip *gc, unsigned offset)
++{
++	struct fpga_iox *chip = gpiochip_get_data(gc);
++	u8 reg = offset >> chip->reg_shift;
++	u8 bit = BIT(offset % BANK_SZ);
++	u8 val;
++
++	val = bitmap_get_value8(chip->direction, reg * BANK_SZ);
++	val |= bit;
++	bitmap_set_value8(chip->direction, val, reg * BANK_SZ);
++	return 0;
++}
++
++static int fpga_iox_gpio_direction_output(struct gpio_chip *gc,
++		unsigned offset, int val)
++{
++	struct fpga_iox *chip = gpiochip_get_data(gc);
++	u8 reg = offset >> chip->reg_shift;
++	u8 bit = BIT(offset % BANK_SZ);
++
++	/* set output level */
++	fpga_iox_gpio_set(gc, offset, val);
++
++	val = bitmap_get_value8(chip->direction, reg * BANK_SZ);
++	val &= ~bit;
++	bitmap_set_value8(chip->direction, val, reg * BANK_SZ);
++
++	return 0;
++}
++
++static int fpga_iox_gpio_get_direction(struct gpio_chip *gc, unsigned offset)
++{
++	struct fpga_iox *chip = gpiochip_get_data(gc);
++	u8 bank = offset >> chip->reg_shift;
++	u8 bit = BIT(offset % BANK_SZ);
++	u8 value;
++
++	value = bitmap_get_value8(chip->direction, bank * BANK_SZ);
++
++	if (value & bit)
++		return GPIO_LINE_DIRECTION_IN;
++
++	return GPIO_LINE_DIRECTION_OUT;
++}
++
++
++static int fpga_iox_gpio_setup(struct fpga_iox *chip, unsigned int num_gpios)
++{
++	struct gpio_chip *gc = &chip->gpio;
++
++	chip->reg_shift = 3;
++	gc->get = fpga_iox_gpio_get;
++	gc->set = fpga_iox_gpio_set;
++	gc->direction_input  = fpga_iox_gpio_direction_input;
++	gc->direction_output = fpga_iox_gpio_direction_output;
++	gc->get_direction = fpga_iox_gpio_get_direction;
++	gc->can_sleep = true;
++
++	if (IS_ENABLED(CONFIG_DEBUG_FS))
++		gc->dbg_show = fpga_iox_gpio_dbg_show;
++
++	gc->base = -1;
++	gc->ngpio = num_gpios;
++	gc->label = chip->client->name;
++	gc->parent = &chip->client->dev;
++	gc->fwnode = gc->parent->fwnode;
++	gc->owner = THIS_MODULE;
++
++	bitmap_fill(chip->direction, MAX_LINE);
++	return 0;
++}
++
++static void fpga_iox_irq_mask(struct irq_data *d)
++{
++	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
++	struct fpga_iox *chip = gpiochip_get_data(gc);
++	irq_hw_number_t hwirq = irqd_to_hwirq(d);
++
++	clear_bit(hwirq, chip->irq_mask);
++}
++
++static void fpga_iox_irq_unmask(struct irq_data *d)
++{
++	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
++	struct fpga_iox *chip = gpiochip_get_data(gc);
++	irq_hw_number_t hwirq = irqd_to_hwirq(d);
++
++	set_bit(hwirq, chip->irq_mask);
++}
++
++static int fpga_iox_irq_set_wake(struct irq_data *d, unsigned int on)
++{
++	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
++	struct fpga_iox *chip = gpiochip_get_data(gc);
++
++	if (on)
++		atomic_inc(&chip->wakeup_path);
++	else
++		atomic_dec(&chip->wakeup_path);
++
++	return irq_set_irq_wake(chip->client->irq, on);
++}
++
++static void fpga_iox_irq_bus_lock(struct irq_data *d)
++{
++	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
++	struct fpga_iox *chip = gpiochip_get_data(gc);
++
++	mutex_lock(&chip->irq_lock);
++}
++
++static void fpga_iox_irq_bus_sync_unlock(struct irq_data *d)
++{
++	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
++	struct fpga_iox *chip = gpiochip_get_data(gc);
++	DECLARE_BITMAP(irq_mask, MAX_LINE);
++	DECLARE_BITMAP(reg_direction, MAX_LINE);
++	int level;
++
++	/* Switch direction to input if needed */
++
++	bitmap_or(irq_mask, chip->irq_trig_fall, chip->irq_trig_raise, gc->ngpio);
++	bitmap_complement(reg_direction, chip->direction, gc->ngpio);
++	bitmap_and(irq_mask, irq_mask, reg_direction, gc->ngpio);
++
++	/* Look for any newly setup interrupt */
++	for_each_set_bit(level, irq_mask, gc->ngpio)
++		fpga_iox_gpio_direction_input(&chip->gpio, level);
++
++	mutex_unlock(&chip->irq_lock);
++}
++
++static int fpga_iox_irq_set_type(struct irq_data *d, unsigned int type)
++{
++	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
++	struct fpga_iox *chip = gpiochip_get_data(gc);
++	irq_hw_number_t hwirq = irqd_to_hwirq(d);
++
++	if (!(type & IRQ_TYPE_EDGE_BOTH)) {
++		dev_err(&chip->client->dev, "irq %d: unsupported type %d\n",
++			d->irq, type);
++		return -EINVAL;
++	}
++
++	assign_bit(hwirq, chip->irq_trig_fall, type & IRQ_TYPE_EDGE_FALLING);
++	assign_bit(hwirq, chip->irq_trig_raise, type & IRQ_TYPE_EDGE_RISING);
++
++	return 0;
++}
++
++static void fpga_iox_irq_shutdown(struct irq_data *d)
++{
++	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
++	struct fpga_iox *chip = gpiochip_get_data(gc);
++	irq_hw_number_t hwirq = irqd_to_hwirq(d);
++
++	clear_bit(hwirq, chip->irq_trig_raise);
++	clear_bit(hwirq, chip->irq_trig_fall);
++}
++
++static bool fpga_iox_irq_pending(struct fpga_iox *chip, unsigned long *pending)
++{
++	struct gpio_chip *gc = &chip->gpio;
++	DECLARE_BITMAP(old_stat, MAX_LINE);
++	DECLARE_BITMAP(cur_stat, MAX_LINE);
++	DECLARE_BITMAP(new_stat, MAX_LINE);
++	DECLARE_BITMAP(trigger, MAX_LINE);
++	int ret;
++
++	mutex_lock(&chip->i2c_lock);
++	ret = fpga_iox_read_regs(chip, cur_stat);
++	mutex_unlock(&chip->i2c_lock);
++	if (ret)
++		return false;
++
++	/* Remove output pins from the equation */
++	bitmap_copy(old_stat, chip->last_stat, gc->ngpio);
++
++	bitmap_and(new_stat, cur_stat, chip->direction, gc->ngpio);
++	bitmap_xor(cur_stat, new_stat, old_stat, gc->ngpio);
++	bitmap_and(trigger, cur_stat, chip->irq_mask, gc->ngpio);
++
++	if (bitmap_empty(trigger, gc->ngpio))
++		return false;
++
++	bitmap_copy(chip->last_stat, new_stat, gc->ngpio);
++
++	bitmap_and(cur_stat, chip->irq_trig_fall, old_stat, gc->ngpio);
++	bitmap_and(old_stat, chip->irq_trig_raise, new_stat, gc->ngpio);
++	bitmap_or(new_stat, old_stat, cur_stat, gc->ngpio);
++	bitmap_and(pending, new_stat, trigger, gc->ngpio);
++
++	return !bitmap_empty(pending, gc->ngpio);
++}
++
++static irqreturn_t fpga_iox_irq_handler(int irq, void *devid)
++{
++	struct fpga_iox *chip = devid;
++	struct gpio_chip *gc = &chip->gpio;
++	DECLARE_BITMAP(pending, MAX_LINE);
++	int level;
++	bool ret;
++
++	bitmap_zero(pending, MAX_LINE);
++
++	ret = fpga_iox_irq_pending(chip, pending);
++	if (ret) {
++		ret = 0;
++
++		for_each_set_bit(level, pending, gc->ngpio) {
++			int nested_irq = irq_find_mapping(gc->irq.domain, level);
++
++			if (unlikely(nested_irq <= 0)) {
++				dev_warn_ratelimited(gc->parent, "unmapped interrupt %d\n", level);
++				continue;
++			}
++
++			handle_nested_irq(nested_irq);
++			ret = 1;
++		}
++	}
++
++	return IRQ_RETVAL(ret);
++}
++
++static int fpga_iox_irq_setup(struct fpga_iox *chip, int irq_base)
++{
++	struct i2c_client *client = chip->client;
++	struct irq_chip *irq_chip = &chip->irq_chip;
++	DECLARE_BITMAP(raw_stat, MAX_LINE);
++	struct gpio_irq_chip *girq;
++	int ret;
++
++	if (!client->irq)
++		return 0;
++
++	if (irq_base == -1)
++		return 0;
++
++	ret = fpga_iox_read_regs(chip, raw_stat);
++	if (ret)
++		return ret;
++
++	/*
++	 * There is no way to know which GPIO line generated the
++	 * interrupt.  We have to rely on the previous read for
++	 * this purpose.
++	 */
++	bitmap_and(chip->last_stat, raw_stat, chip->direction, chip->gpio.ngpio);
++	mutex_init(&chip->irq_lock);
++
++	irq_chip->name = dev_name(&client->dev);
++	irq_chip->irq_mask = fpga_iox_irq_mask;
++	irq_chip->irq_unmask = fpga_iox_irq_unmask;
++	irq_chip->irq_set_wake = fpga_iox_irq_set_wake;
++	irq_chip->irq_bus_lock = fpga_iox_irq_bus_lock;
++	irq_chip->irq_bus_sync_unlock = fpga_iox_irq_bus_sync_unlock;
++	irq_chip->irq_set_type = fpga_iox_irq_set_type;
++	irq_chip->irq_shutdown = fpga_iox_irq_shutdown;
++
++	girq = &chip->gpio.irq;
++	girq->chip = irq_chip;
++	/* This will let us handle the parent IRQ in the driver */
++	girq->parent_handler = NULL;
++	girq->num_parents = 0;
++	girq->parents = NULL;
++	girq->default_type = IRQ_TYPE_NONE;
++	girq->handler = handle_simple_irq;
++	girq->threaded = true;
++	girq->first = irq_base; /* FIXME: get rid of this */
++
++	ret = devm_request_threaded_irq(&client->dev, client->irq,
++					NULL, fpga_iox_irq_handler,
++					IRQF_ONESHOT | IRQF_SHARED,
++					dev_name(&client->dev), chip);
++	if (ret) {
++		dev_err(&client->dev, "failed to request irq %d\n",
++			client->irq);
++		return ret;
++	}
++
++	return 0;
++}
++
++static int fpga_iox_i2c_probe(struct i2c_client *client
++				    )
++{
++	struct device_node *np = client->dev.of_node;
++	struct fpga_iox *chip;
++	int irq_base = 0;
++	u32 num_gpios;
++	int err;
++
++	err = of_property_read_u32(np, "nr-gpios", &num_gpios);
++	if (err < 0)
++		return err;
++
++	if (num_gpios == 0) {
++		dev_err(&client->dev, "IO expander must have at least 1 gpio.\n");
++		return -EINVAL;
++	}
++
++	chip = devm_kzalloc(&client->dev, sizeof(*chip), GFP_KERNEL);
++	if (!chip)
++		return -ENOMEM;
++
++	mutex_init(&chip->i2c_lock);
++	chip->client = client;
++
++	//Setup All direction as Output
++	bitmap_zero(chip->direction, MAX_LINE);
++
++	err = fpga_iox_gpio_setup(chip, num_gpios);
++	if (err)
++		return err;
++
++	i2c_set_clientdata(client, chip);
++
++	if (of_property_read_bool(np, "interrupts")) {
++		err = fpga_iox_irq_setup(chip, irq_base);
++		if (err)
++			return err;
++	}
++
++	err = devm_gpiochip_add_data(&client->dev, &chip->gpio, chip);
++	if (err)
++		dev_err(&client->dev, "devm_gpiochip_add_data failed, %d\n", err);
++
++	return 0;
++}
++
++static const struct i2c_device_id fpga_iox_i2c_id[] = {
++	{ "gpio-msft-fpga" },
++	{ },
++};
++MODULE_DEVICE_TABLE(i2c, fpga_iox_i2c_id);
++
++static const struct of_device_id fpga_iox_of_match[] = {
++	{ .compatible = "microsoft,gpio-expander-fpga", },
++	{ },
++};
++MODULE_DEVICE_TABLE(of, fpga_iox_of_match);
++
++static struct i2c_driver fpga_iox_i2c_driver = {
++	.driver = {
++		.name = "gpio-msft-fpga",
++		.of_match_table = fpga_iox_of_match,
++	},
++	.probe = fpga_iox_i2c_probe,
++	.id_table = fpga_iox_i2c_id,
++};
++module_i2c_driver(fpga_iox_i2c_driver);
++
++MODULE_DESCRIPTION("MSFT FPGA N-bit GPIO expander");
++MODULE_AUTHOR("Bob Chen <bob.chen@quantatw.com>");
++MODULE_LICENSE("GPL");
+-- 
+2.47.1
+

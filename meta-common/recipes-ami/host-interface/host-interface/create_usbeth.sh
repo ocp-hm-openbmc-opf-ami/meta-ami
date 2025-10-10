@@ -1,20 +1,41 @@
-#! /bin/sh
+#! /bin/bash
 
-set -x # Debug mode
+#set -x # Debug mode
 
 eth_conf_directory="/sys/kernel/config/usb_gadget/eth"
-dev_name=""
+prefix=""
+port_count=""
+port_start=""
 
 detect_platform() {
     # AST2600
     if [ -e "/sys/bus/platform/devices/1e6a0000.usb-vhub" ]; then
-        dev_name="1e6a0000.usb-vhub"
+        prefix="1e6a0000.usb-vhub:p"
+        port_count=7
+        port_start=1
     fi
 
     # AST27xx
-    #Todo: To support dual node, the detection case for 2700/2750 needs to be refined.
-    if [ -e "/sys/bus/platform/devices/12011000.usb-vhub" ]; then
-        dev_name="12011000.usb-vhub"
+    #TODO: To support dual node, the detection case for 2700/2750 needs to be refined.
+    if [ -e "/sys/bus/platform/devices/12011000.usb-vhub" ] || [ -e "/sys/bus/platform/devices/12060000.usb-vhub" ]; then
+
+        if [ -e "/sys/bus/platform/devices/12011000.usb-vhub" ]; then
+            prefix="12011000.usb-vhub:p"  # For AST2700 A0 (USB over PCIE)
+        fi
+
+        if [ -e "/sys/bus/platform/devices/12060000.usb-vhub" ]; then
+            prefix="12060000.usb-vhub:p"  # For AST2700 A1 (Physical-USB)
+        fi
+
+        port_count=7
+        port_start=1
+    fi
+
+    # NPCM845
+    if [ -e "/sys/bus/platform/devices/ci_hdrc.0" ]; then
+        prefix="ci_hdrc."
+        port_count=9
+        port_start=0
     fi
 }
 
@@ -92,8 +113,8 @@ create_eth() {
 
     # Create interface for ECM and configure it.
     mkdir functions/ecm.usb0
-    echo $dev_mac > functions/ecm.usb0/dev_addr
-    echo $host_mac > functions/ecm.usb0/host_addr
+    echo "$dev_mac" > functions/ecm.usb0/dev_addr
+    echo "$host_mac" > functions/ecm.usb0/host_addr
     mkdir configs/c.2
     echo 0 > configs/c.2/MaxPower
     echo 0xC0 > configs/c.2/bmAttributes
@@ -104,8 +125,8 @@ create_eth() {
 
     # Create configuration for rndis
     mkdir functions/rndis.usb0
-    echo $dev_mac > functions/rndis.usb0/dev_addr
-    echo $host_mac > functions/rndis.usb0/host_addr
+    echo "$dev_mac" > functions/rndis.usb0/dev_addr
+    echo "$host_mac" > functions/rndis.usb0/host_addr
     echo RNDIS > functions/rndis.usb0/os_desc/interface.rndis/compatible_id
     echo 5162001 > functions/rndis.usb0/os_desc/interface.rndis/sub_compatible_id
     mkdir configs/c.1
@@ -120,21 +141,31 @@ create_eth() {
 }
 
 connect_eth() {
-    if ! grep -q "${dev_name}:p" UDC; then
-        i=0
-        num_ports=5
-        base_usb_dir="/sys/bus/platform/devices/${dev_name}/${dev_name}:p"
-        while [ "${i}" -lt "${num_ports}" ]; do
-            port=$(("${i}" + 1))
-            i="${port}"
-            if [ ! -e "${base_usb_dir}${port}/gadget/suspended" ]; then
-                break
+    local port_index="$port_start"
+
+    while (( port_index < port_start + port_count )); do
+        local device="/sys/class/udc/${prefix}${port_index}/device"
+        local gadget
+        
+        gadget=$(echo "$device"/gadget* 2>/dev/null | awk -F'/' '{print $NF}' || true)
+        if [[ -n "$gadget" ]]; then
+            local suspended_file="$device/$gadget/suspended"
+            
+            if [[ ! -e "$suspended_file" && -f UDC && -z "$(cat UDC)" ]]; then
+                echo "${prefix}${port_index}" > UDC
+                return 0
             fi
-        done
-        echo "${dev_name}:p${port}" > UDC
-    fi
+        fi
+        
+        port_index=$((port_index + 1))
+    done
 }
 
+disconnect_eth() {
+    if [[ -f UDC && -n "$(cat UDC)" ]]; then
+        echo "" > UDC
+    fi
+}
 
 if [ ! -e "${eth_conf_directory}" ]; then
     create_eth
@@ -145,10 +176,9 @@ fi
 if [ "$1" = "connect" ]; then
     detect_platform
     connect_eth
-    ifconfig hostusb0 169.254.0.17 netmask 255.255.0.0
-    ifconfig hostusb0 up
-
+elif [ "$1" = "disconnect" ]; then
+    disconnect_eth
 else
-    echo >&2 "Invalid option: $1. Use 'connect'."
+    echo >&2 "Invalid option: $1. Use 'connect' or 'disconnect'."
     exit 1
 fi

@@ -1,0 +1,94 @@
+From 6130d9e84e21beccf63b1ef6191719cf32e1ab1f Mon Sep 17 00:00:00 2001
+From: johannwang <johannwang@ami.com>
+Date: Mon, 26 May 2025 10:42:53 +0800
+Subject: [PATCH] 0062-Fix-Multi-NCSI-NoDHCPIP-Issue
+
+---
+ net/ncsi/ncsi-manage.c | 46 ++++++++++++++++++++++++------------------
+ 1 file changed, 26 insertions(+), 20 deletions(-)
+
+diff --git a/net/ncsi/ncsi-manage.c b/net/ncsi/ncsi-manage.c
+index 2d798e234fd8..b033135b8fb6 100644
+--- a/net/ncsi/ncsi-manage.c
++++ b/net/ncsi/ncsi-manage.c
+@@ -1356,6 +1356,7 @@ static void ncsi_probe_channel(struct ncsi_dev_priv *ndp)
+ {
+ 	struct ncsi_dev *nd = &ndp->ndev;
+ 	struct ncsi_package *np;
++	struct ncsi_channel *nc;
+ 	struct ncsi_cmd_arg nca;
+ 	unsigned char index;
+ 	int ret;
+@@ -1446,16 +1447,30 @@ static void ncsi_probe_channel(struct ncsi_dev_priv *ndp)
+ 		nd->state = ncsi_dev_state_probe_gvi;
+ 		break;
+ 	case ncsi_dev_state_probe_cis:
++		ndp->pending_req_num = NCSI_MAX_CHANNEL;
++
++		/* Clear initial state */
++		nca.type = NCSI_PKT_CMD_CIS;
++		nca.package = ndp->active_package->id;
++		for (index = 0; index < NCSI_MAX_CHANNEL; index++) {
++			nca.channel = index;
++			ret = ncsi_xmit_cmd(&nca);
++			if (ret)
++				goto error;
++		}
++
++		if (IS_ENABLED(CONFIG_NCSI_OEM_CMD_KEEP_PHY) && ndp->channel_probe_id == 0)
++				nd->state = ncsi_dev_state_probe_keep_phy;
++		nd->state = ncsi_dev_state_probe_gvi;	
++		break;
+ 	case ncsi_dev_state_probe_gvi:
+ 	case ncsi_dev_state_probe_gc:
+ 	case ncsi_dev_state_probe_gls:
+ 		np = ndp->active_package;
+-		ndp->pending_req_num = 1;
++		ndp->pending_req_num = np->channel_num;
+ 
+ 		/* Clear initial state Retrieve version, capability or link status */
+-		if (nd->state == ncsi_dev_state_probe_cis)
+-			nca.type = NCSI_PKT_CMD_CIS;
+-		else if (nd->state == ncsi_dev_state_probe_gvi)
++		if (nd->state == ncsi_dev_state_probe_gvi)
+ 			nca.type = NCSI_PKT_CMD_GVI;
+ 		else if (nd->state == ncsi_dev_state_probe_gc)
+ 			nca.type = NCSI_PKT_CMD_GC;
+@@ -1463,27 +1478,18 @@ static void ncsi_probe_channel(struct ncsi_dev_priv *ndp)
+ 			nca.type = NCSI_PKT_CMD_GLS;
+ 
+ 		nca.package = np->id;
+-		nca.channel = ndp->channel_probe_id;
+-
+-		ret = ncsi_xmit_cmd(&nca);
+-		if (ret)
+-			goto error;
++		NCSI_FOR_EACH_CHANNEL(np, nc) {
++			nca.channel = nc->id;
++			ret = ncsi_xmit_cmd(&nca);
++			if (ret)
++				goto error;
++		}
+ 
+-		if (nd->state == ncsi_dev_state_probe_cis) {
+-			nd->state = ncsi_dev_state_probe_gvi;
+-			if (IS_ENABLED(CONFIG_NCSI_OEM_CMD_KEEP_PHY) && ndp->channel_probe_id == 0)
+-				nd->state = ncsi_dev_state_probe_keep_phy;
+-		} else if (nd->state == ncsi_dev_state_probe_gvi) {
++		if (nd->state == ncsi_dev_state_probe_gvi) {
+ 			nd->state = ncsi_dev_state_probe_gc;
+ 		} else if (nd->state == ncsi_dev_state_probe_gc) {
+ 			nd->state = ncsi_dev_state_probe_gls;
+ 		} else {
+-			nd->state = ncsi_dev_state_probe_cis;
+-			ndp->channel_probe_id++;
+-		}
+-
+-		if (ndp->channel_probe_id == ndp->channel_count) {
+-			ndp->channel_probe_id = 0;
+ 			nd->state = ncsi_dev_state_probe_dp;
+ 		}
+ 		break;
+-- 
+2.25.1
+

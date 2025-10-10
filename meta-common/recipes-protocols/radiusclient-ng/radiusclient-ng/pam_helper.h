@@ -106,10 +106,27 @@ typedef struct {
   char srcq[QUEUE_NAME];
   int ret;
   pamusr_t usr;
+  unsigned int checksum;
 } __attribute__((packed)) pamusrpkt_t;
 
 extern int post_pam_userinfo(pamusrpkt_t *pu, char *queue);
 extern int get_pam_userinfo(pamusrpkt_t *pu, char *queue, int handle,
                             unsigned int num_ms);
 extern void remove_pam_user(char *uname, int table);
+unsigned int calculate_checksum(const pamusrpkt_t *pkt)
+{
+	unsigned int checksum = 0;
+	pamusrpkt_t temp_pkt = *pkt;
+	temp_pkt.checksum = 0;
+
+	const unsigned char *data = (const unsigned char *)&temp_pkt;
+	size_t len = sizeof(pamusrpkt_t) - sizeof(unsigned int);
+
+	for (size_t i = 0; i < len; ++i)
+	{
+		checksum = (checksum << 1) ^ data[i];
+	}
+	return checksum;
+}
+
 #endif /* LIBPAM_HELPER_ */

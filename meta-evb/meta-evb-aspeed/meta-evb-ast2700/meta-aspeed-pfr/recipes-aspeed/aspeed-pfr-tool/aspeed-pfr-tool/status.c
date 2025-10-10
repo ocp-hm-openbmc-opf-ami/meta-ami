@@ -11,7 +11,7 @@
 #include <unistd.h>
 #include "mailbox_enums.h"
 #include "arguments.h"
-#include "i2c_utils.h"
+#include "utils.h"
 #include "provision.h"
 
 static const char *g_plat_state[256] = {
@@ -344,62 +344,62 @@ static const char *g_pfr_activity_unknown = "Unkown";
 
 static uint8_t get_cpld_id(ARGUMENTS args)
 {
-	return i2cReadByteData(args, MB_CPLD_STATIC_ID);
+	return ReadByteData(args, MB_CPLD_STATIC_ID);
 }
 
 static uint8_t get_cpld_ver(ARGUMENTS args)
 {
-	return i2cReadByteData(args, MB_CPLD_RELEASE_VERSION);
+	return ReadByteData(args, MB_CPLD_RELEASE_VERSION);
 }
 
 static uint8_t get_cpld_svn(ARGUMENTS args)
 {
-	return i2cReadByteData(args, MB_CPLD_SVN);
+	return ReadByteData(args, MB_CPLD_SVN);
 }
 
 static const char *get_plat_state(ARGUMENTS args, uint8_t *pstate)
 {
-	*pstate = i2cReadByteData(args, MB_PLATFORM_STATE);
+	*pstate = ReadByteData(args, MB_PLATFORM_STATE);
 	return g_plat_state[*pstate];
 }
 
 static uint8_t get_recovery_count(ARGUMENTS args)
 {
-	return i2cReadByteData(args, MB_RECOVERY_COUNT);
+	return ReadByteData(args, MB_RECOVERY_COUNT);
 }
 
 static const char *get_last_recovery_reason(ARGUMENTS args, uint8_t *last_recovery_reason)
 {
-	*last_recovery_reason = i2cReadByteData(args, MB_LAST_RECOVERY_REASON);
+	*last_recovery_reason = ReadByteData(args, MB_LAST_RECOVERY_REASON);
 	return g_last_recovery_reason[*last_recovery_reason];
 }
 
 static uint8_t get_panic_event_count(ARGUMENTS args)
 {
-	return i2cReadByteData(args, MB_PANIC_EVENT_COUNT);
+	return ReadByteData(args, MB_PANIC_EVENT_COUNT);
 }
 
 static const char *get_last_panic_reason(ARGUMENTS args, uint8_t *last_panic_reason)
 {
-	*last_panic_reason = i2cReadByteData(args, MB_LAST_PANIC_REASON);
+	*last_panic_reason = ReadByteData(args, MB_LAST_PANIC_REASON);
 	return g_last_panic_reason[*last_panic_reason];
 }
 
 static const char *get_major_err(ARGUMENTS args, uint8_t *major_err)
 {
-	 *major_err = i2cReadByteData(args, MB_MAJOR_ERROR_CODE);
+	 *major_err = ReadByteData(args, MB_MAJOR_ERROR_CODE);
 	return g_major_err[*major_err];
 }
 
 static const char *get_minor_auth_err(ARGUMENTS args, uint8_t *minor_err)
 {
-	*minor_err = i2cReadByteData(args, MB_MINOR_ERROR_CODE);
+	*minor_err = ReadByteData(args, MB_MINOR_ERROR_CODE);
 	return g_minor_auth_err[*minor_err];
 }
 
 static const char *get_minor_update_err(ARGUMENTS args, uint8_t *minor_err)
 {
-	*minor_err = i2cReadByteData(args, MB_MINOR_ERROR_CODE);
+	*minor_err = ReadByteData(args, MB_MINOR_ERROR_CODE);
 	return g_minor_update_err[*minor_err];
 }
 
@@ -408,7 +408,7 @@ static void get_ufm_provisioning_status(ARGUMENTS args, uint8_t *ufm_provisionin
 	uint8_t status;
 	int i;
 
-	*ufm_provisioning_status_code = i2cReadByteData(args, MB_PROVISION_STATUS);
+	*ufm_provisioning_status_code = ReadByteData(args, MB_PROVISION_STATUS);
 	status = *ufm_provisioning_status_code;
 
 	for (i = 0; i < 8; i++) {
@@ -425,7 +425,7 @@ static const char *get_pfr_activity_1(ARGUMENTS args, uint8_t *activity)
 {
 	uint8_t i, stat;
 
-	*activity = i2cReadByteData(args, MB_PFR_ACTIVITY_INFO_1);
+	*activity = ReadByteData(args, MB_PFR_ACTIVITY_INFO_1);
 	stat = *activity;
 
 	for (i = 0; i < 8; i++) {
@@ -441,7 +441,7 @@ static const char *get_pfr_activity_2(ARGUMENTS args, uint8_t *activity)
 {
 	uint8_t i, stat;
 
-	*activity = i2cReadByteData(args, MB_PFR_ACTIVITY_INFO_2);
+	*activity = ReadByteData(args, MB_PFR_ACTIVITY_INFO_2);
 	stat = *activity;
 
 	for (i = 0; i < 8; i++) {
@@ -458,7 +458,7 @@ static void get_cpld_hash(ARGUMENTS args, uint8_t *hash_buf, uint8_t len)
 	int i;
 
 	for (i = 0; i < len; i++)
-		hash_buf[i] = i2cReadByteData(args, MB_CPLD_HASH + i);
+		hash_buf[i] = ReadByteData(args, MB_CPLD_HASH + i);
 }
 
 void show_status(ARGUMENTS args)

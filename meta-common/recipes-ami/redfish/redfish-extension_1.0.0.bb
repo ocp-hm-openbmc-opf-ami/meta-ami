@@ -4,7 +4,7 @@ SUMMARY = "Redfish extension interface for bmcweb"
 SECTION = "redfish"
 # The list of source licenses for the recipe
 LICENSE = "Proprietary"
-LIC_FILES_CHKSUM = "file://${AMIBASE}/COPYING.AMI;md5=33abf79b43490ccebfe76ef9882fd8de"
+LIC_FILES_CHKSUM = "file://${AMIBASE}/COPYING.AMI;md5=65a69a674f34a9f30737c9f0abd4fc5c"
 # The version of the recipe
 PV = "1.0.0"
 # The revision of the recipe

@@ -1,7 +1,7 @@
 SUMMARY = "mail alert management application"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/email-alert-manager.git;protocol=https;branch=main"
-SRCREV = "8c1048ebef36e77188e996012f4d11ac1b405966"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/email-alert-manager.git;protocol=https;branch=main"
+SRCREV = "f67abbc8a19d14868c07f574f268d5f2334b8e0a"
 
 SRC_URI += " \
 	    file://primary_smtp_config.json \

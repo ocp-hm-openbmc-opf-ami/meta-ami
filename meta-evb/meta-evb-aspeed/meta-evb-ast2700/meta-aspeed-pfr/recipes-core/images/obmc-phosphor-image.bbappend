@@ -1,6 +1,11 @@
-PFR_IMAGE_MODE = "${@bb.utils.contains('MACHINE_FEATURES', 'cerberus-pfr', 'cerberus-pfr-signing-image', 'intel-pfr-signing-image', d)}"
+PFR_IMAGE_MODE = "${@bb.utils.contains('MACHINE_FEATURES', 'intel-pfr', 'intel-pfr-signing-image', 'cerberus-pfr-signing-image', d)}"
 inherit ${PFR_IMAGE_MODE}
 
+# Define an empty IMAGE_CMD for 'intel-pfr' to prevent BitBake parsing errors.
+# Note: We are not building the 'intel-pfr' image type for ast2700-dcsm,
+# but we use 'intel-pfr' as an identifier to enable PFR-related features in other modules.
+# This no-op command ensures that if BitBake checks for IMAGE_CMD_intel-pfr, it will not fail.
+#IMAGE_CMD:intel-pfr = "true"
 
 # Generate PFR image for provisioned Redfish firmware update.
 do_generate_static:append() {

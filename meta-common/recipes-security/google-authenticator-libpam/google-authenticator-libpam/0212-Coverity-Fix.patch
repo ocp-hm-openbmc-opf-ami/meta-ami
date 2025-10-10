@@ -1,0 +1,70 @@
+From 4892f77fe723686faf82fbf7663dbf3f884866f0 Mon Sep 17 00:00:00 2001
+From: Vijaysankar R <vijaysankarr@ami.com>
+Date: Mon, 2 Jun 2025 00:07:11 +0530
+Subject: [PATCH 212/212] Coverity-Fix
+
+---
+ src/pam_google_authenticator.c | 19 +++++++++++++++----
+ 1 file changed, 15 insertions(+), 4 deletions(-)
+
+diff --git a/src/pam_google_authenticator.c b/src/pam_google_authenticator.c
+index b7b5841..cb3a245 100644
+--- a/src/pam_google_authenticator.c
++++ b/src/pam_google_authenticator.c
+@@ -96,7 +96,13 @@ static void log_message(int priority, pam_handle_t *pamh,
+                         const char *format, ...) {
+   char *service = NULL;
+   if (pamh)
+-    pam_get_item(pamh, PAM_SERVICE, (void *)&service);
++  {
++    int retval = pam_get_item(pamh, PAM_SERVICE, (void *)&service);
++    if (retval != PAM_SUCCESS)
++    {
++	    return retval;
++    }
++  }
+   if (!service)
+     service = "";
+ 
+@@ -496,14 +502,14 @@ static char *read_file_contents(pam_handle_t *pamh,
+                                 const char *secret_filename, int *fd,
+                                 off_t filesize) {
+   // Arbitrary limit to prevent integer overflow.
+-  if (filesize > 1000000) {
++  if (filesize < 0 || filesize >= SIZE_MAX) {
+     close(*fd);
+     errno = E2BIG;
+     return NULL;
+   }
+ 
+   // Read file contents
+-  char *buf = malloc(filesize + 1);
++  char *buf = malloc((size_t)filesize + 1);
+   if (!buf) {
+     log_message(LOG_ERR, pamh, "Failed to malloc %d+1", filesize);
+     goto out;
+@@ -717,7 +723,8 @@ static uint8_t *get_shared_secret(pam_handle_t *pamh,
+     free(secret);
+     return NULL;
+   }
+-  memset(secret + *secretLen, 0, base32Len + 1 - *secretLen);
++  if((base32Len + 1 - *secretLen) > 0)
++  memset(secret + *secretLen, 0, (size_t)base32Len + 1 - *secretLen);
+ 
+   if(params->debug) {
+     log_message(LOG_INFO, pamh, "debug: shared secret in \"%s\" processed", secret_filename);
+@@ -1872,7 +1879,11 @@ static int google_authenticator(pam_handle_t *pamh,
+     // If user doesn't exist, use 'nobody'.
+     if (uid == -1) {
+       drop_username = nobody;
++      if (secret_filename)
++      {
++	      free(secret_filename);
+             secret_filename = get_secret_filename(pamh, &params, saved_channel, drop_username, &uid);
++      }
+             if (!secret_filename) {
+         // If 'nobody' doesn't exist, bail. We need to drop privs to *someone*.
+         goto out;
+-- 
+2.34.1
+

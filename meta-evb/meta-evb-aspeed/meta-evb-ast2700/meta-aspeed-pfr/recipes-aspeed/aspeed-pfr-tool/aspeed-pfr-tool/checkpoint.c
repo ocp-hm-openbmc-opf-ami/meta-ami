@@ -11,28 +11,28 @@
 #include <openssl/ec.h>
 #include <openssl/pem.h>
 #include <unistd.h>
-#include "i2c_utils.h"
+#include "utils.h"
 #include "mailbox_enums.h"
 #include "arguments.h"
 
 void checkpointStart(ARGUMENTS args)
 {
-	i2cWriteByteData(args, MB_BMC_CHECKPOINT, MB_CHKPT_START);
+	WriteByteData(args, MB_BMC_CHECKPOINT, MB_CHKPT_START);
 }
 
 void checkpointPause(ARGUMENTS args)
 {
-	i2cWriteByteData(args, MB_BMC_CHECKPOINT, MB_CHKPT_PAUSE);
+	WriteByteData(args, MB_BMC_CHECKPOINT, MB_CHKPT_PAUSE);
 }
 
 void checkpointResume(ARGUMENTS args)
 {
-	i2cWriteByteData(args, MB_BMC_CHECKPOINT, MB_CHKPT_RESUME);
+	WriteByteData(args, MB_BMC_CHECKPOINT, MB_CHKPT_RESUME);
 }
 
 void checkpointComplete(ARGUMENTS args)
 {
-	i2cWriteByteData(args, MB_BMC_CHECKPOINT, MB_CHKPT_COMPLETE);
+	WriteByteData(args, MB_BMC_CHECKPOINT, MB_CHKPT_COMPLETE);
 }
 
 void checkpoint(ARGUMENTS args)

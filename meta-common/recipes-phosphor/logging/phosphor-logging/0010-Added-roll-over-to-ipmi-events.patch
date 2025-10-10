@@ -1,0 +1,362 @@
+From b6f864a86cd93793e597e8775546e739acc15865 Mon Sep 17 00:00:00 2001
+From: shamim ali <ashamim@ami.com>
+Date: Fri, 4 Jul 2025 05:22:33 -0400
+Subject: [PATCH] Add roll over for ipmi events
+
+Signed-off-by: shamim ali <ashamim@ami.com>
+---
+ config/config.h.meson |   1 +
+ config_main.h         |   1 +
+ log_manager.cpp       | 243 +++++++++++++++++++++++++++++++-----------
+ log_manager.hpp       |   6 ++
+ 4 files changed, 191 insertions(+), 60 deletions(-)
+
+diff --git a/config/config.h.meson b/config/config.h.meson
+index 0740cdc..60ff556 100644
+--- a/config/config.h.meson
++++ b/config/config.h.meson
+@@ -36,6 +36,7 @@
+ extern const char *ERRLOG_PERSIST_PATH;
+ extern const char *ERRLOG_PERSIST_PATH_SEL;
+ extern const char *ERRLOG_PERSIST_PATH_RAID;
++extern const char *IPMI_BACKUP_PATH;
+ 
+ extern const char *EXTENSION_PERSIST_DIR;
+ extern const bool IS_UNIT_TEST;
+diff --git a/config_main.h b/config_main.h
+index b297264..fd0ce62 100644
+--- a/config_main.h
++++ b/config_main.h
+@@ -4,5 +4,6 @@ const char* ERRLOG_PERSIST_PATH = "/etc/extlog/phosphor-logging/errors";
+ const char* EXTENSION_PERSIST_DIR = "/etc/extlog/phosphor-logging/extensions";
+ const char* ERRLOG_PERSIST_PATH_SEL = "/etc/extlog/phosphor-logging/ipmi/errors";
+ const char* ERRLOG_PERSIST_PATH_RAID = "/etc/extlog/phosphor-logging/raid/errors";
++const char* IPMI_BACKUP_PATH = "/etc/extlog/phosphor-logging/ipmi_rollover_backup";
+ 
+ const bool IS_UNIT_TEST = false;
+diff --git a/log_manager.cpp b/log_manager.cpp
+index d4b715d..dcdca02 100644
+--- a/log_manager.cpp
++++ b/log_manager.cpp
+@@ -31,6 +31,7 @@
+ #include <string_view>
+ #include <variant>
+ #include <vector>
++#include <sys/stat.h>
+ 
+ using namespace std::chrono;
+ extern const std::map<
+@@ -319,6 +320,75 @@ void Manager::updateEntryLimits(LogType logType)
+     updateFlagIfChanged("InfoFlags", infoFlags, oldInfoFlag != newInfoFlag);
+ }
+ 
++void Manager::updateLastEntryId(uint16_t lastEntryId)
++{
++    auto methodCall = busLog.new_method_call(
++            "xyz.openbmc_project.Settings",
++            "/xyz/openbmc_project/logging/settings",
++            "org.freedesktop.DBus.Properties", "Set");
++
++    std::variant<uint16_t> value = lastEntryId;
++    methodCall.append(
++        "xyz.openbmc_project.Logging.Settings", "lastEntryId",
++           value);
++    try
++    {
++        busLog.call(methodCall);
++    }
++    catch (const sdbusplus::exception_t& e)
++    {
++        lg2::error("Failed to update lastEntryId : {ERROR}", "ERROR", e);
++    }
++}
++
++void backupIPMIEntries()
++{
++    namespace fs = std::filesystem;
++
++    try
++    {
++        fs::create_directories(IPMI_BACKUP_PATH);
++
++        for (const auto& file : fs::directory_iterator(IPMI_BACKUP_PATH))
++        {
++            fs::remove_all(file);
++        }
++
++        for (const auto& file : fs::directory_iterator(ERRLOG_PERSIST_PATH_SEL))
++        {
++            if (fs::is_regular_file(file))
++            {
++                fs::path dst = fs::path(IPMI_BACKUP_PATH) / file.path().filename();
++                fs::copy_file(file.path(), dst, fs::copy_options::overwrite_existing);
++            }
++        }
++
++        lg2::info("IPMI log backup completed to {PATH}", "PATH", IPMI_BACKUP_PATH);
++    }
++    catch (const std::exception& e)
++    {
++        lg2::error("Failed to backup IPMI logs: {ERROR}", "ERROR", e.what());
++    }
++}
++
++inline void Manager::enforceCappingLimit(LogType logType, Entry::Level errLvl)
++{
++    if (errLvl < Entry::sevLowerLimit)
++    {
++        if (realErrorsMap[logType].size() >= ERROR_CAP)
++        {
++            erase(logType, realErrorsMap[logType].front());
++        }
++    }
++    else
++    {
++        if (infoErrorsMap[logType].size() >= ERROR_INFO_CAP)
++        {
++            erase(logType, infoErrorsMap[logType].front());
++        }
++    }
++}
++
+ void Manager::createEntry(std::string errMsg, Entry::Level errLvl,
+                           std::vector<std::string> additionalData,
+                           const FFDCEntries& ffdc)
+@@ -395,39 +465,13 @@ void Manager::createEntry(std::string errMsg, Entry::Level errLvl,
+             }
+             else
+             {
+-                if (errLvl < Entry::sevLowerLimit)
+-                {
+-                    if (realErrorsMap[logType].size() >= ERROR_CAP)
+-                    {
+-                        erase(logType, realErrorsMap[logType].front());
+-                    }
+-                }
+-                else
+-                {
+-                    if (infoErrorsMap[logType].size() >= ERROR_INFO_CAP)
+-                    {
+-                        erase(logType, infoErrorsMap[logType].front());
+-                    }
+-                }
++		enforceCappingLimit(logType, errLvl);
+             }
+         }
+     }
+     else
+     {
+-        if (errLvl < Entry::sevLowerLimit)
+-        {
+-            if (realErrorsMap[logType].size() >= ERROR_CAP)
+-            {
+-                erase(logType, realErrorsMap[logType].front());
+-            }
+-        }
+-        else
+-        {
+-            if (infoErrorsMap[logType].size() >= ERROR_INFO_CAP)
+-            {
+-                erase(logType, infoErrorsMap[logType].front());
+-            }
+-        }
++	enforceCappingLimit(logType, errLvl);
+     }
+ 
+     // Generate new entry ID and update entryIdCounterMap
+@@ -443,8 +487,18 @@ void Manager::createEntry(std::string errMsg, Entry::Level errLvl,
+     }
+     else if (logType == LogType::IPMI)
+     {
++	if(entryId > std::numeric_limits<uint16_t>::max())
++        {
++             lg2::info("Maximum limit of two bytes reached roll over starts");
++	     std::string logTypeStr = "ipmi";
++	     backupIPMIEntries();
++             entryIdCounterMap[logType] = 1;
++             entryId = entryIdCounterMap[logType];
++	     eraseLogTypeEntries(logTypeStr, 0);
++        }
+         objPath = std::string(OBJ_ENTRY_SEL) + "/" + std::to_string(entryId);
+         entryPath = getEntrySerializePath(entryId, ERRLOG_PERSIST_PATH_SEL);
++	updateLastEntryId(static_cast<uint16_t>(entryId));
+     }
+     else
+     {
+@@ -871,54 +925,123 @@ void Manager::restore()
+             continue;
+         }
+ 
+-        for (auto& file : fs::directory_iterator(dir))
++	// Special handling for IPMI: sort files by modification time
++        if (logType == LogType::IPMI)
+         {
+-            auto id = file.path().filename().c_str();
+-            auto idNum = std::stol(id);
+-            auto e = std::make_unique<Entry>(busLog, objEntry + '/' + id, idNum,
+-                                             *this);
++            std::vector<std::tuple<time_t, long, fs::path>> sortedFiles;
+ 
+-            if (deserialize(file.path(), *e))
++            for (auto& file : fs::directory_iterator(dir))
+             {
+-                // validate the restored error entry id
+-                if (sanity(static_cast<uint32_t>(idNum), e->id()))
++                try
++                {
++                    auto id = file.path().filename().string();
++                    auto idNum = std::stol(id);
++                    struct stat st;
++                    if (stat(file.path().c_str(), &st) == 0)
++                    {
++                        sortedFiles.emplace_back(st.st_mtime, idNum, file.path());
++                    }
++                }
++                catch (...)
+                 {
+-                    e->path(file.path(), true);
++                    continue; // skip invalid files
++                }
++            }
++
++           std::stable_sort(sortedFiles.begin(), sortedFiles.end(),
++           [](const auto& a, const auto& b) {
++               auto t1 = std::get<0>(a), t2 = std::get<0>(b);
++                 if (t1 != t2)
++                   return t1 < t2;
++                 return std::get<1>(a) < std::get<1>(b);
++             });
++
++	   // Now restore in sorted order
++            for (const auto& [timestamp, idNum, path] : sortedFiles)
++            {
++                auto idStr = std::to_string(idNum);
++                auto e = std::make_unique<Entry>(busLog, objEntry + '/' + idStr, idNum, *this);
+ 
+-                    if (e->severity() >= Entry::sevLowerLimit)
++                if (deserialize(path, *e))
++                {
++                    if (sanity(static_cast<uint32_t>(idNum), e->id()))
+                     {
+-                        infoErrorsMap[logType].push_back(idNum);
++                        e->path(path, true);
++
++                        if (e->severity() >= Entry::sevLowerLimit)
++                        {
++                            infoErrorsMap[logType].push_back(idNum);
++                        }
++                        else
++                        {
++                            realErrorsMap[logType].push_back(idNum);
++                        }
++
++                        entries.emplace(std::make_pair(logType, idNum), std::move(e));
++                        entryIdCounterMap[logType] = idNum;
++                        updateLastEntryId(idNum);
+                     }
+                     else
+                     {
+-                        realErrorsMap[logType].push_back(idNum);
++                        lg2::error(
++                            "Failed in sanity check while restoring error entry. "
++                            "Ignoring error entry {ID_NUM}/{ENTRY_ID}.",
++                            "ID_NUM", idNum, "ENTRY_ID", e->id());
+                     }
+-
+-                    entries.emplace(std::make_pair(logType, idNum),
+-                                    std::move(e));
+                 }
+-                else
++            }
++        }
++	else
++	{
++            for (auto& file : fs::directory_iterator(dir))
++            {
++                auto id = file.path().filename().c_str();
++                auto idNum = std::stol(id);
++                auto e = std::make_unique<Entry>(busLog, objEntry + '/' + id, idNum,
++                                                 *this);
++
++                if (deserialize(file.path(), *e))
+                 {
+-                    lg2::error(
+-                        "Failed in sanity check while restoring error entry. "
+-                        "Ignoring error entry {ID_NUM}/{ENTRY_ID}.",
+-                        "ID_NUM", idNum, "ENTRY_ID", e->id());
++                    // validate the restored error entry id
++                    if (sanity(static_cast<uint32_t>(idNum), e->id()))
++                    {
++                        e->path(file.path(), true);
++
++                        if (e->severity() >= Entry::sevLowerLimit)
++                        {
++                            infoErrorsMap[logType].push_back(idNum);
++                        }
++                        else
++                        {
++                            realErrorsMap[logType].push_back(idNum);
++                        }
++
++                        entries.emplace(std::make_pair(logType, idNum),
++                                        std::move(e));
++                    }
++                    else
++                    {
++                        lg2::error(
++                            "Failed in sanity check while restoring error entry. "
++                            "Ignoring error entry {ID_NUM}/{ENTRY_ID}.",
++                            "ID_NUM", idNum, "ENTRY_ID", e->id());
++                    }
+                 }
+             }
+-        }
+-        auto it = entries.lower_bound(std::make_pair(logType, 0));
+-        if (it != entries.end())
+-        {
+-            auto lastIt = it;
+-            for (; lastIt != entries.end() && lastIt->first.first == logType;
+-                 ++lastIt)
+-            {}
+-            if (lastIt != it)
++            auto it = entries.lower_bound(std::make_pair(logType, 0));
++            if (it != entries.end())
+             {
+-                --lastIt;
+-                entryIdCounterMap[logType] = lastIt->first.second;
++                 auto lastIt = it;
++                 for (; lastIt != entries.end() && lastIt->first.first == logType;
++                      ++lastIt)
++                 {}
++                 if (lastIt != it)
++                 {
++                     --lastIt;
++                     entryIdCounterMap[logType] = lastIt->first.second;
++                 }
+             }
+-        }
++	}
+     }
+ }
+ 
+diff --git a/log_manager.hpp b/log_manager.hpp
+index 800bd8f..28ae34a 100644
+--- a/log_manager.hpp
++++ b/log_manager.hpp
+@@ -273,7 +273,13 @@ class Manager : public details::ServerObject<details::ManagerIface>
+     /** @brief update error and info limit is reached**/
+      virtual void updateEntryLimits(LogType logType);
+ 
++    /** @brief update last entry id into dbus **/
++     void updateLastEntryId(uint16_t lastEntryId);
++
+     std::map<uint32_t, LogType> entryIdToLogType;
++
++    /** @brief verifying the capping limits **/
++    inline void enforceCappingLimit(LogType logType, Entry::Level errLvl);
+   private:
+     /*
+      * @fn _commit()
+-- 
+2.34.1
+

@@ -9,9 +9,13 @@ MULTI_SOL_SRC_URI = " \
 	file://ttyS0.conf \
 	file://ttyS1.conf \
 	file://ttyS2.conf \
-	file://ttyS3.conf \
+	file://ttyS8.conf \
 	"
 SRC_URI += "${@bb.utils.contains('MULTI_SOL_ENABLED', '1', '${MULTI_SOL_SRC_URI}', '${SINGLE_SOL_SRC_URI}' , d)}"
+
+SRC_URI += "\
+        file://0001-Fix-for-OT-coverity-issue.patch \
+           "
 
 do_install:append() {
     install -m 0755 -d ${D}${sysconfdir}/${BPN}

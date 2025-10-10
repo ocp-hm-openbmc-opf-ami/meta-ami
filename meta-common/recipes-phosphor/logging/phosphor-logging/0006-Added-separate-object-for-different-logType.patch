@@ -1,0 +1,1015 @@
+From edd80b791b8188be1629117d28cab57a5451a615 Mon Sep 17 00:00:00 2001
+From: shamim ali <ashamim@ami.com>
+Date: Mon, 28 Apr 2025 06:45:33 -0400
+Subject: [PATCH] Added separate object for different logType
+
+This patch will add multi logType support such as ipmi,raid
+and default logging object used in community.
+
+Example:
+root@intel-obmc:~# busctl tree xyz.openbmc_project.Logging
+`- /xyz
+  `- /xyz/openbmc_project
+    `- /xyz/openbmc_project/logging
+      |- /xyz/openbmc_project/logging/entry
+      | |- /xyz/openbmc_project/logging/entry/1
+      | |- /xyz/openbmc_project/logging/entry/2
+      | `- /xyz/openbmc_project/logging/entry/3
+      |- /xyz/openbmc_project/logging/internal
+      | `- /xyz/openbmc_project/logging/internal/manager
+      |- /xyz/openbmc_project/logging/ipmi
+      | |- /xyz/openbmc_project/logging/ipmi/1
+      | |- /xyz/openbmc_project/logging/ipmi/10
+      | |- /xyz/openbmc_project/logging/ipmi/11
+      | |- /xyz/openbmc_project/logging/ipmi/12
+      | |- /xyz/openbmc_project/logging/ipmi/13
+      | |- /xyz/openbmc_project/logging/ipmi/14
+      | |- /xyz/openbmc_project/logging/ipmi/15
+      | |- /xyz/openbmc_project/logging/ipmi/16
+      | |- /xyz/openbmc_project/logging/ipmi/17
+      | |- /xyz/openbmc_project/logging/ipmi/18
+      | |- /xyz/openbmc_project/logging/ipmi/19
+      | |- /xyz/openbmc_project/logging/ipmi/2
+      | |- /xyz/openbmc_project/logging/ipmi/20
+      | |- /xyz/openbmc_project/logging/ipmi/21
+      | |- /xyz/openbmc_project/logging/ipmi/22
+      | |- /xyz/openbmc_project/logging/ipmi/23
+      | |- /xyz/openbmc_project/logging/ipmi/3
+      | |- /xyz/openbmc_project/logging/ipmi/4
+      | |- /xyz/openbmc_project/logging/ipmi/5
+      | |- /xyz/openbmc_project/logging/ipmi/6
+      | |- /xyz/openbmc_project/logging/ipmi/7
+      | |- /xyz/openbmc_project/logging/ipmi/8
+      | `- /xyz/openbmc_project/logging/ipmi/9
+      `- /xyz/openbmc_project/logging/raid
+        |- /xyz/openbmc_project/logging/raid/1
+        |- /xyz/openbmc_project/logging/raid/2
+        |- /xyz/openbmc_project/logging/raid/3
+        |- /xyz/openbmc_project/logging/raid/4
+        |- /xyz/openbmc_project/logging/raid/5
+
+Signed-off-by: shamim ali <ashamim@ami.com>
+---
+ config/config.h.meson |  11 ++
+ config_main.h         |   3 +
+ elog_entry.cpp        |   5 -
+ elog_entry.hpp        |   6 -
+ log_manager.cpp       | 446 ++++++++++++++++++++++++++++++++----------
+ log_manager.hpp       | 128 +++++++++---
+ log_manager_main.cpp  |   9 +-
+ 7 files changed, 463 insertions(+), 145 deletions(-)
+
+diff --git a/config/config.h.meson b/config/config.h.meson
+index cd91f80..0740cdc 100644
+--- a/config/config.h.meson
++++ b/config/config.h.meson
+@@ -17,8 +17,16 @@
+ #define CALLOUT_REV_ASSOCIATION "fault"
+ #define INVENTORY_ROOT "/xyz/openbmc_project/inventory"
+ #define OBJ_ENTRY "/xyz/openbmc_project/logging/entry"
++#define OBJ_ENTRY_SEL "/xyz/openbmc_project/logging/ipmi"
++#define OBJ_ENTRY_RAID "/xyz/openbmc_project/logging/raid"
++
+ #define OBJ_INTERNAL "/xyz/openbmc_project/logging/internal/manager"
+ #define OBJ_LOGGING "/xyz/openbmc_project/logging"
++
++#define OBJ_SEL_LOGGING "/xyz/openbmc_project/logging/ipmi"
++#define OBJ_RAID_LOGGING "/xyz/openbmc_project/logging/raid"
++
++
+ #define SYSTEMD_BUSNAME "org.freedesktop.systemd1"
+ #define SYSTEMD_INTERFACE "org.freedesktop.systemd1.Manager"
+ #define SYSTEMD_PATH "/org/freedesktop/systemd1"
+@@ -26,6 +34,9 @@
+ #define RSYSLOG_SERVER_CONFIG_FILE "@rsyslog_server_conf@"
+ 
+ extern const char *ERRLOG_PERSIST_PATH;
++extern const char *ERRLOG_PERSIST_PATH_SEL;
++extern const char *ERRLOG_PERSIST_PATH_RAID;
++
+ extern const char *EXTENSION_PERSIST_DIR;
+ extern const bool IS_UNIT_TEST;
+ 
+diff --git a/config_main.h b/config_main.h
+index 78c223e..313b163 100644
+--- a/config_main.h
++++ b/config_main.h
+@@ -2,4 +2,7 @@
+ 
+ const char* ERRLOG_PERSIST_PATH = "/var/lib/phosphor-logging/errors";
+ const char* EXTENSION_PERSIST_DIR = "/var/lib/phosphor-logging/extensions";
++const char* ERRLOG_PERSIST_PATH_SEL = "/var/lib/phosphor-logging/ipmi/errors";
++const char* ERRLOG_PERSIST_PATH_RAID = "/var/lib/phosphor-logging/raid/errors";
++
+ const bool IS_UNIT_TEST = false;
+diff --git a/elog_entry.cpp b/elog_entry.cpp
+index b4009a5..0a98db2 100644
+--- a/elog_entry.cpp
++++ b/elog_entry.cpp
+@@ -16,11 +16,6 @@ namespace logging
+ 
+ // TODO Add interfaces to handle the error log id numbering
+ 
+-void Entry::delete_()
+-{
+-    parent.erase(id());
+-}
+-
+ bool Entry::resolved(bool value)
+ {
+     auto current =
+diff --git a/elog_entry.hpp b/elog_entry.hpp
+index d4fa5ae..53f94d1 100644
+--- a/elog_entry.hpp
++++ b/elog_entry.hpp
+@@ -1,7 +1,6 @@
+ #pragma once
+ 
+ #include "xyz/openbmc_project/Logging/Entry/server.hpp"
+-#include "xyz/openbmc_project/Object/Delete/server.hpp"
+ #include "xyz/openbmc_project/Software/Version/server.hpp"
+ 
+ #include <sdbusplus/bus.hpp>
+@@ -18,7 +17,6 @@ namespace logging
+ 
+ using EntryIfaces = sdbusplus::server::object_t<
+     sdbusplus::server::xyz::openbmc_project::logging::Entry,
+-    sdbusplus::server::xyz::openbmc_project::object::Delete,
+     sdbusplus::server::xyz::openbmc_project::association::Definitions,
+     sdbusplus::server::xyz::openbmc_project::software::Version,
+     sdbusplus::server::xyz::openbmc_project::common::FilePath>;
+@@ -131,10 +129,6 @@ class Entry : public EntryIfaces
+ 
+     using sdbusplus::server::xyz::openbmc_project::logging::Entry::resolution;
+ 
+-    /** @brief Delete this d-bus object.
+-     */
+-    void delete_() override;
+-
+     /** @brief Severity level to check in cap.
+      *  @details Errors with severity lesser than this will be
+      *           considered as low priority and maximum ERROR_INFO_CAP
+diff --git a/log_manager.cpp b/log_manager.cpp
+index 58ad52a..64f9090 100644
+--- a/log_manager.cpp
++++ b/log_manager.cpp
+@@ -79,14 +79,14 @@ inline auto getLevel(const std::string& errMsg)
+     return reqLevel;
+ }
+ 
+-int Manager::getRealErrSize()
++int Manager::getRealErrSize(LogType logType)
+ {
+-    return realErrors.size();
++    return realErrorsMap[logType].size();
+ }
+ 
+-int Manager::getInfoErrSize()
++int Manager::getInfoErrSize(LogType logType)
+ {
+-    return infoErrors.size();
++    return infoErrorsMap[logType].size();
+ }
+ 
+ uint32_t Manager::commit(uint64_t transactionId, std::string errMsg)
+@@ -261,39 +261,90 @@ std::string Manager::getSelPolicy()
+     return std::get<std::string>(property);
+ }
+ 
+-void Manager::updateEntryLimits()
++inline std::string toString(LogType type)
+ {
+-  bool oldErrorFlag = errorFlag;
+-     bool oldInfoFlag = infoFlag;
+- 
+-     errorFlag = realErrors.size() >= ERROR_CAP;
+-     infoFlag = infoErrors.size() >= ERROR_INFO_CAP;
+- 
+-     // Helper function to handle the DBus method call
+-     auto sendFlagUpdate = [this](const std::string& flagName, bool flagValue) {
+-         auto methodCall = this->busLog.new_method_call(
+-             "xyz.openbmc_project.Settings", 
+-             "/xyz/openbmc_project/logging/settings",
+-             "org.freedesktop.DBus.Properties", 
+-             "Set"
+-         );
+-         methodCall.append("xyz.openbmc_project.Logging.Settings", flagName, std::variant<bool>(flagValue));
+-         this->busLog.call(methodCall);
+-     };
+- 
+-     // Send updates only if there are changes in flags
+-     if (oldInfoFlag != infoFlag) {
+-         sendFlagUpdate("InfoFlag", infoFlag);
+-     }
+-     if (oldErrorFlag != errorFlag) {
+-         sendFlagUpdate("ErrorFlag", errorFlag);
+-     }
+- }
++    switch (type)
++    {
++        case LogType::DEFAULT:
++            return "default";
++        case LogType::IPMI:
++            return "ipmi";
++        case LogType::RAID:
++            return "raid";
++        default:
++            return "unknown";
++    }
++}
++
++void Manager::updateEntryLimits(LogType logType)
++{
++    std::string logTypeStr = toString(logType);
++
++    bool newErrorFlag = realErrorsMap[logType].size() >= ERROR_CAP;
++    bool newInfoFlag  = infoErrorsMap[logType].size() >= ERROR_INFO_CAP;
++
++    // Update internal state
++    bool oldErrorFlag = errorFlags[logTypeStr];
++    bool oldInfoFlag  = infoFlags[logTypeStr];
++
++    errorFlags[logTypeStr] = newErrorFlag;
++    infoFlags[logTypeStr]  = newInfoFlag;
++
++    auto updateFlagIfChanged = [this](const std::string& flagName,
++                                      const std::map<std::string, bool>& fullFlagMap,
++                                      bool changed) {
++        if (!changed)
++            return;
++
++        auto methodCall = busLog.new_method_call(
++            "xyz.openbmc_project.Settings",
++            "/xyz/openbmc_project/logging/settings",
++            "org.freedesktop.DBus.Properties",
++            "Set");
++
++        methodCall.append("xyz.openbmc_project.Logging.Settings",
++                          flagName,
++                          std::variant<std::map<std::string, bool>>(fullFlagMap));
++
++        try
++        {
++            busLog.call(methodCall);
++        }
++        catch (const sdbusplus::exception_t& e)
++        {
++            lg2::error("Failed to update flag {FLAG} via D-Bus: {ERROR}",
++                       "FLAG", flagName, "ERROR", e);
++        }
++    };
++
++    updateFlagIfChanged("ErrorFlags", errorFlags, oldErrorFlag != newErrorFlag);
++    updateFlagIfChanged("InfoFlags", infoFlags, oldInfoFlag != newInfoFlag);
++}
+ 
+ void Manager::createEntry(std::string errMsg, Entry::Level errLvl,
+                           std::vector<std::string> additionalData,
+                           const FFDCEntries& ffdc)
+ {
++
++    LogType logType = LogType::DEFAULT;
++
++    for (const auto& item : additionalData)
++    {
++        if (item == "LOGTYPE=RAID")
++        {
++            logType = LogType::RAID;
++        }
++        else if (item.find("RECORD_TYPE=") != std::string::npos)
++        {
++            logType = LogType::IPMI;
++        }
++    }
++
++
++    // SEL policy check only for IPMI
++    if (logType == LogType::IPMI)
++    {
++
+     bool selEnabled;
+     sdbusplus::bus::bus bus = sdbusplus::bus::new_default();
+     auto method = bus.new_method_call(settingService, globalEnblObjpath,
+@@ -326,7 +377,7 @@ void Manager::createEntry(std::string errMsg, Entry::Level errLvl,
+         {
+             if (errLvl < Entry::sevLowerLimit)
+             {
+-                if (realErrors.size() >= ERROR_CAP)
++                if (realErrorsMap[logType].size() >= ERROR_CAP)
+                 {
+                     lg2::info(
+                         "Linear SEL: Error Capacity limit reached {ERROR_CAP}",
+@@ -336,7 +387,7 @@ void Manager::createEntry(std::string errMsg, Entry::Level errLvl,
+             }
+             else
+             {
+-                if (infoErrors.size() >= ERROR_INFO_CAP)
++                if (infoErrorsMap[logType].size() >= ERROR_INFO_CAP)
+                 {
+                     lg2::info("Linear SEL: Information Error Capacity limit "
+                               "reached {ERROR_CAP}",
+@@ -349,34 +400,76 @@ void Manager::createEntry(std::string errMsg, Entry::Level errLvl,
+         {
+             if (errLvl < Entry::sevLowerLimit)
+             {
+-                if (realErrors.size() >= ERROR_CAP)
++                if (realErrorsMap[logType].size() >= ERROR_CAP)
+                 {
+-                    erase(realErrors.front());
++                    erase(logType, realErrorsMap[logType].front());
+                 }
+             }
+             else
+             {
+-                if (infoErrors.size() >= ERROR_INFO_CAP)
++                if (infoErrorsMap[logType].size() >= ERROR_INFO_CAP)
+                 {
+-                    erase(infoErrors.front());
++                    erase(logType, infoErrorsMap[logType].front());
+                 }
+             }
+         }
+     }
+ 
+-    entryId++;
++    }
++     else
++        {
++            if (errLvl < Entry::sevLowerLimit)
++            {
++                if (realErrorsMap[logType].size() >= ERROR_CAP)
++                {
++                    erase(logType, realErrorsMap[logType].front());
++                }
++            }
++            else
++            {
++                if (infoErrorsMap[logType].size() >= ERROR_INFO_CAP)
++                {
++                    erase(logType, infoErrorsMap[logType].front());
++                }
++            }
++        }
++  
++    // Generate new entry ID and update entryIdCounterMap
++    entryId = ++entryIdCounterMap[logType];
++
++    std::string objPath;
++    std::string entryPath;
++
++    if (logType == LogType::RAID)
++    {
++        objPath = std::string(OBJ_ENTRY_RAID) + "/" + std::to_string(entryId);
++        entryPath = getEntrySerializePath(entryId,ERRLOG_PERSIST_PATH_RAID);
++    }
++    else if (logType == LogType::IPMI)
++    {
++        objPath = std::string(OBJ_ENTRY_SEL) + "/" + std::to_string(entryId);
++        entryPath = getEntrySerializePath(entryId,ERRLOG_PERSIST_PATH_SEL);
++    }
++    else
++    {
++        objPath = std::string(OBJ_ENTRY) + "/" + std::to_string(entryId);
++        entryPath = getEntrySerializePath(entryId,ERRLOG_PERSIST_PATH);
++    }
++
+     if (errLvl >= Entry::sevLowerLimit)
+     {
+-        infoErrors.push_back(entryId);
++        infoErrorsMap[logType].push_back(entryId);
+     }
+     else
+     {
+-        realErrors.push_back(entryId);
++        realErrorsMap[logType].push_back(entryId);
++
+     }
++
+     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::system_clock::now().time_since_epoch())
+                   .count();
+-    auto objPath = std::string(OBJ_ENTRY) + '/' + std::to_string(entryId);
++    //auto objPath = std::string(OBJ_ENTRY) + '/' + std::to_string(entryId);
+ 
+     AssociationList objects{};
+     processMetadata(errMsg, additionalData, objects);
+@@ -385,23 +478,40 @@ void Manager::createEntry(std::string errMsg, Entry::Level errLvl,
+         busLog, objPath, entryId,
+         ms, // Milliseconds since 1970
+         errLvl, std::move(errMsg), std::move(additionalData),
+-        std::move(objects), fwVersion, getEntrySerializePath(entryId), *this);
+-
+-    serialize(*e);
++        std::move(objects), fwVersion, entryPath, *this);
+ 
+-    if (isQuiesceOnErrorEnabled() && (errLvl < Entry::sevLowerLimit) &&
+-        isCalloutPresent(*e))
++     if (logType == LogType::RAID)
+     {
+-        quiesceOnError(entryId);
++        serialize(*e,ERRLOG_PERSIST_PATH_RAID);
+     }
++    else if (logType == LogType::IPMI)
++    {
++        serialize(*e,ERRLOG_PERSIST_PATH_SEL);
++    }
++    else
++    {
++        serialize(*e);
++    }
++
++    entries.insert(std::make_pair(std::make_pair(logType, entryId), std::move(e)));
++
++    if (logType == LogType::DEFAULT)
++    {
+ 
+-    // Add entry before calling the extensions so that they have access to it
+-    entries.insert(std::make_pair(entryId, std::move(e)));
++	// TODO: Currently, `quiesceOnError` and `Pels` are supported for default logging events.
++        // Support for different types of logs can be added in the future.
++        if (isQuiesceOnErrorEnabled() && (errLvl < Entry::sevLowerLimit) &&
++            isCalloutPresent(*e))
++        {
++            quiesceOnError(entryId);
++        }
+ 
+-    doExtensionLogCreate(*entries.find(entryId)->second, ffdc);
++        // Add entry before calling the extensions so that they have access to it
++        doExtensionLogCreate(*(entries.find(std::make_pair(logType, entryId))->second), ffdc);
++    }
+ 
+     // Note: No need to close the file descriptors in the FFDC.
+-    updateEntryLimits();
++    updateEntryLimits(logType);
+ }
+ 
+ bool Manager::isQuiesceOnErrorEnabled()
+@@ -453,9 +563,14 @@ void Manager::findAndRemoveResolvedBlocks()
+ {
+     for (auto& entry : entries)
+     {
++	const auto& [logType, entryId] = entry.first;
++	if (logType != LogType::DEFAULT)
++        {
++            continue;
++        }
+         if (entry.second->resolved())
+         {
+-            checkAndRemoveBlockingError(entry.first);
++            checkAndRemoveBlockingError(entryId);
+         }
+     }
+ }
+@@ -636,9 +751,10 @@ void Manager::checkAndRemoveBlockingError(uint32_t entryId)
+     return;
+ }
+ 
+-void Manager::erase(uint32_t entryId)
++void Manager::erase(LogType logType,  uint32_t entryId)
+ {
+-    auto entryFound = entries.find(entryId);
++//    auto entryFound = entries.find(entryId);
++    auto entryFound = entries.find(std::make_pair(logType, entryId));
+     if (entries.end() != entryFound)
+     {
+         for (auto& func : Extensions::getDeleteProhibitedFunctions())
+@@ -661,8 +777,21 @@ void Manager::erase(uint32_t entryId)
+             }
+         }
+ 
+-        // Delete the persistent representation of this error.
+-        fs::path errorPath(ERRLOG_PERSIST_PATH);
++        // Delete the persistent representation of these error.
++	fs::path errorPath;
++        if (logType == LogType::IPMI)
++        {
++            errorPath = ERRLOG_PERSIST_PATH_SEL;
++        }
++        else if (logType == LogType::DEFAULT)
++        {
++            errorPath = ERRLOG_PERSIST_PATH;
++        }
++        else if (logType == LogType::RAID)
++        {
++            errorPath = ERRLOG_PERSIST_PATH_RAID;
++        }
++
+         errorPath /= std::to_string(entryId);
+         fs::remove(errorPath);
+ 
+@@ -675,36 +804,39 @@ void Manager::erase(uint32_t entryId)
+         };
+         if (entryFound->second->severity() >= Entry::sevLowerLimit)
+         {
+-            removeId(infoErrors, entryId);
++            removeId(infoErrorsMap[logType], entryId);
+         }
+         else
+         {
+-            removeId(realErrors, entryId);
++            removeId(realErrorsMap[logType], entryId);
+         }
+         entries.erase(entryFound);
+ 
+-        checkAndRemoveBlockingError(entryId);
+-
+-        for (auto& remove : Extensions::getDeleteFunctions())
+-        {
+-            try
+-            {
+-                remove(entryId);
+-            }
+-            catch (const std::exception& e)
+-            {
+-                lg2::error("An extension's delete function threw an exception: "
+-                           "{ERROR}",
+-                           "ERROR", e);
+-            }
+-        }
++        if (logType == LogType::DEFAULT)
++	{
++             checkAndRemoveBlockingError(entryId);
++
++             for (auto& remove : Extensions::getDeleteFunctions())
++             {
++                 try
++                 {
++                     remove(entryId);
++                 }
++                 catch (const std::exception& e)
++                 {
++                     lg2::error("An extension's delete function threw an exception: "
++                                "{ERROR}",
++                                "ERROR", e);
++                 }
++             }
++	}
+     }
+     else
+     {
+         lg2::error("Invalid entry ID ({ID}) to delete", "ID", entryId);
+     }
+ 
+-    updateEntryLimits();
++    updateEntryLimits(logType);
+ }
+ 
+ void Manager::restore()
+@@ -713,51 +845,85 @@ void Manager::restore()
+         return id == restoredId;
+     };
+ 
+-    fs::path dir(ERRLOG_PERSIST_PATH);
+-    if (!fs::exists(dir) || fs::is_empty(dir))
++    // Iterate over all log types
++    for (const auto& logType : {LogType::DEFAULT, LogType::IPMI, LogType::RAID})
+     {
+-        return;
+-    }
++        fs::path dir;
++        std::string objEntry;
+ 
+-    for (auto& file : fs::directory_iterator(dir))
+-    {
+-        auto id = file.path().filename().c_str();
+-        auto idNum = std::stol(id);
+-        auto e = std::make_unique<Entry>(
+-            busLog, std::string(OBJ_ENTRY) + '/' + id, idNum, *this);
+-        if (deserialize(file.path(), *e))
++        switch (logType)
+         {
+-            // validate the restored error entry id
+-            if (sanity(static_cast<uint32_t>(idNum), e->id()))
++            case LogType::DEFAULT:
++                dir = ERRLOG_PERSIST_PATH;
++                objEntry = OBJ_ENTRY;
++                break;
++            case LogType::IPMI:
++                dir = ERRLOG_PERSIST_PATH_SEL;
++                objEntry = OBJ_ENTRY_SEL;
++                break;
++            case LogType::RAID:
++                dir = ERRLOG_PERSIST_PATH_RAID;
++                objEntry = OBJ_ENTRY_RAID;
++                break;
++        }
++
++        if (!fs::exists(dir) || fs::is_empty(dir))
++        {
++            continue;
++        }
++
++        for (auto& file : fs::directory_iterator(dir))
++        {
++            auto id = file.path().filename().c_str();
++            auto idNum = std::stol(id);
++            auto e = std::make_unique<Entry>(
++                busLog, objEntry + '/' + id, idNum, *this);
++
++            if (deserialize(file.path(), *e))
+             {
+-                e->path(file.path(), true);
+-                if (e->severity() >= Entry::sevLowerLimit)
++                // validate the restored error entry id
++                if (sanity(static_cast<uint32_t>(idNum), e->id()))
+                 {
+-                    infoErrors.push_back(idNum);
++                    e->path(file.path(), true);
++
++                    if (e->severity() >= Entry::sevLowerLimit)
++                    {
++                        infoErrorsMap[logType].push_back(idNum);
++                    }
++                    else
++                    {
++                        realErrorsMap[logType].push_back(idNum);
++                    }
++
++                    entries.emplace(std::make_pair(logType, idNum), std::move(e));
+                 }
+                 else
+                 {
+-                    realErrors.push_back(idNum);
++                    lg2::error(
++                        "Failed in sanity check while restoring error entry. "
++                        "Ignoring error entry {ID_NUM}/{ENTRY_ID}.",
++                        "ID_NUM", idNum, "ENTRY_ID", e->id());
+                 }
+-
+-                entries.insert(std::make_pair(idNum, std::move(e)));
+-            }
+-            else
+-            {
+-                lg2::error(
+-                    "Failed in sanity check while restoring error entry. "
+-                    "Ignoring error entry {ID_NUM}/{ENTRY_ID}.",
+-                    "ID_NUM", idNum, "ENTRY_ID", e->id());
+             }
+         }
+     }
+ 
+-    if (!entries.empty())
++    // Set last entryId from DEFAULT only
++    auto it = entries.lower_bound(std::make_pair(LogType::DEFAULT, 0));
++    if (it != entries.end())
+     {
+-        entryId = entries.rbegin()->first;
++        // Go to last entry with DEFAULT logType
++        auto lastIt = it;
++        for (; lastIt != entries.end() && lastIt->first.first == LogType::DEFAULT; ++lastIt) {}
++        if (lastIt != it)
++        {
++            --lastIt;
++            entryId = lastIt->first.second;
++        }
+     }
+ }
+ 
++
+ std::string Manager::readFWVersion()
+ {
+     auto version = util::getOSReleaseValue("VERSION_ID");
+@@ -781,6 +947,82 @@ void Manager::create(const std::string& message, Entry::Level severity,
+     createEntry(message, severity, ad, ffdc);
+ }
+ 
++uint16_t Manager::eraseLogTypeEntries(std::string& logTypeStr, uint32_t entryId)
++{
++    if (logTypeStr.empty())
++    {
++        // Case 1: logTypeStr is empty – not allowed
++        throw sdbusplus::xyz::openbmc_project::Common::Error::InvalidArgument();
++    }
++
++    LogType type;
++
++    // Convert logType string to enum
++    if (logTypeStr == "ipmi")
++    {
++        type = LogType::IPMI;
++    }
++    else if (logTypeStr == "raid")
++    {
++        type = LogType::RAID;
++    }
++    else if (logTypeStr == "default")
++    {
++        type = LogType::DEFAULT;
++    }
++    else
++    {
++        // Case 1: Invalid log type string
++        throw sdbusplus::xyz::openbmc_project::Common::Error::InvalidArgument();
++    }
++
++    uint16_t erasedCount = 0;
++
++    if (entryId == 0)
++    {
++        // Case 2: Delete all entries of the specified log type
++        for (auto iter = entries.begin(); iter != entries.end(); )
++        {
++            if (iter->first.first == type)
++            {
++                auto current = iter++;
++                erase(current->first.first, current->first.second);
++                ++erasedCount;
++            }
++            else
++            {
++                ++iter;
++            }
++        }
++
++        // Reset entry counter for this logType
++        entryIdCounterMap[type] = 0;
++    }
++    else
++    {
++        // Case 3: Delete specific entry ID of the specified log type
++        auto key = std::make_pair(type, entryId);
++        auto iter = entries.find(key);
++        if (iter != entries.end())
++        {
++            erase(type, entryId);
++            erasedCount = 1;
++        }
++        else
++        {
++            // Entry not found
++            throw sdbusplus::xyz::openbmc_project::Common::Error::InvalidArgument();
++        }
++    }
++
++    if(!entryId)
++    {
++	updateEntryLimits(type);
++    }
++
++    return erasedCount;
++}
++
+ } // namespace internal
+ } // namespace logging
+ } // namespace phosphor
+diff --git a/log_manager.hpp b/log_manager.hpp
+index ee20ac7..800bd8f 100644
+--- a/log_manager.hpp
++++ b/log_manager.hpp
+@@ -3,6 +3,7 @@
+ #include "elog_block.hpp"
+ #include "elog_entry.hpp"
+ #include "xyz/openbmc_project/Collection/DeleteAll/server.hpp"
++#include "xyz/openbmc_project/Collection/DeleteLogType/server.hpp"
+ #include "xyz/openbmc_project/Logging/Create/server.hpp"
+ #include "xyz/openbmc_project/Logging/Entry/server.hpp"
+ #include "xyz/openbmc_project/Logging/Internal/Manager/server.hpp"
+@@ -10,9 +11,16 @@
+ 
+ #include <phosphor-logging/log.hpp>
+ #include <sdbusplus/bus.hpp>
+-
++#include <deque>
+ #include <list>
+ 
++enum class LogType
++{
++    DEFAULT,
++    IPMI,
++    RAID
++};
++
+ namespace phosphor
+ {
+ namespace logging
+@@ -24,6 +32,8 @@ extern const std::map<std::string, level> g_errLevelMap;
+ using CreateIface = sdbusplus::server::xyz::openbmc_project::logging::Create;
+ using DeleteAllIface =
+     sdbusplus::server::xyz::openbmc_project::collection::DeleteAll;
++using DeleteLogTypeIface =
++    sdbusplus::server::xyz::openbmc_project::collection::DeleteLogType;
+ 
+ using Severity = sdbusplus::xyz::openbmc_project::Logging::server::Entry::Level;
+ using LogsCleared =
+@@ -110,7 +120,7 @@ class Manager : public details::ServerObject<details::ManagerIface>
+      *
+      * @param[in] entryId - unique identifier of the entry
+      */
+-    void erase(uint32_t entryId);
++    void erase(LogType logType, uint32_t entryId);
+ 
+     /** @brief Construct error d-bus objects from their persisted
+      *         representations.
+@@ -121,32 +131,59 @@ class Manager : public details::ServerObject<details::ManagerIface>
+      *
+      *  @return size_t - count of erased entries
+      */
+-    size_t eraseAll()
+-    {
+-        size_t entriesSize = entries.size();
+-        auto iter = entries.begin();
+-        while (iter != entries.end())
+-        {
+-            auto e = iter->first;
+-            ++iter;
+-            erase(e);
+-        }
+-        entryId = 0;
+-
+-        return entriesSize;
+-    }
++   
++   uint16_t eraseAll()
++   {
++       uint16_t totalErased = 0;
++       for (const auto& type : {LogType::IPMI, LogType::RAID, LogType::DEFAULT})
++       {
++           std::vector<uint32_t> idsToErase;
++           // Collect all ids for the current log type
++           for (const auto& [key, _] : entries)
++           {
++               if (key.first == type)
++               {
++                   idsToErase.push_back(key.second);
++               }
++           }
++           // Erase collected ids
++           for (const auto& id : idsToErase)
++           {
++               erase(type, id);
++               ++totalErased;
++           }
++           // Reset per-type ID counter
++           entryIdCounterMap[type] = 0;
++       }
++       // Reset global entryId if used
++       entryId = 0;
++       return totalErased;
++   }
++
++     /** @brief Erases log entries of the specified type
++      *
++      *  This function deletes log entries corresponding to the given log type.
++      *  If an entry ID is provided, it erases only that specific entry; otherwise,
++      *  it erases all entries of the given log type.
++      *
++      *  @param[in] logTypeStr - Log type as a string (e.g., "ipmi", "raid", "default")
++      *  @param[in] entryId - (Optional) Specific entry ID to erase (default is 0, meaning all)
++      *
++      *  @return uint16_t - Number of entries erased
++      */
++     uint16_t  eraseLogTypeEntries(std::string& logTypeStr, uint32_t entryId = 0);
+ 
+     /** @brief Returns the count of high severity errors
+      *
+      *  @return int - count of real errors
+      */
+-    int getRealErrSize();
++    int getRealErrSize(LogType logType);
+ 
+     /** @brief Returns the count of Info errors
+      *
+      *  @return int - count of info errors
+      */
+-    int getInfoErrSize();
++    int getInfoErrSize(LogType logType);
+ 
+     /** @brief Returns the number of blocking errors
+      *
+@@ -231,10 +268,12 @@ class Manager : public details::ServerObject<details::ManagerIface>
+     void checkAndRemoveBlockingError(uint32_t entryId);
+ 
+     /** @brief Persistent map of Entry dbus objects and their ID */
+-    std::map<uint32_t, std::unique_ptr<Entry>> entries;
++    std::map<std::pair<LogType, uint32_t>, std::unique_ptr<Entry>> entries;
+ 
+     /** @brief update error and info limit is reached**/
+-     virtual void updateEntryLimits();
++     virtual void updateEntryLimits(LogType logType);
++
++    std::map<uint32_t, LogType> entryIdToLogType;
+   private:
+     /*
+      * @fn _commit()
+@@ -310,14 +349,17 @@ class Manager : public details::ServerObject<details::ManagerIface>
+     sdbusplus::bus_t& busLog;
+ 
+     /** @brief List of error ids for high severity errors */
+-    std::list<uint32_t> realErrors;
++    std::map<LogType, std::list<uint32_t>> realErrorsMap;
+ 
+     /** @brief List of error ids for Info(and below) severity */
+-    std::list<uint32_t> infoErrors;
++    std::map<LogType, std::list<uint32_t>> infoErrorsMap;
+ 
+     /** @brief Id of last error log entry */
+     uint32_t entryId;
+ 
++    /** @brief record of all entries */
++    std::map<LogType, uint32_t> entryIdCounterMap;
++
+     /** @brief The BMC firmware version */
+     const std::string fwVersion;
+ 
+@@ -327,11 +369,19 @@ class Manager : public details::ServerObject<details::ManagerIface>
+     /** @brief Map of entry id to call back object on properties changed */
+     std::map<uint32_t, std::unique_ptr<sdbusplus::bus::match_t>>
+         propChangedEntryCallback;
++
+     /** @brief Flag maintained to inform error limit is reached **/
+-     bool errorFlag;
+-     
++    std::map<std::string, bool> errorFlags{
++    {"default", false},
++    {"ipmi", false},
++    {"raid", false}};
++
+     /** @brief Flag maintained to inform error limit is reached **/
+-     bool infoFlag;
++    std::map<std::string, bool> infoFlags{
++    {"default", false},
++    {"ipmi", false},
++    {"raid", false}};
++
+ };
+ 
+ } // namespace internal
+@@ -343,7 +393,7 @@ class Manager : public details::ServerObject<details::ManagerIface>
+  *           xyz.openbmc_project.Collection.DeleteAll and
+  *           xyz.openbmc_project.Logging.Create interfaces.
+  */
+-class Manager : public details::ServerObject<DeleteAllIface, CreateIface>
++class Manager : public details::ServerObject<DeleteAllIface, CreateIface, DeleteLogTypeIface>
+ {
+   public:
+     Manager() = delete;
+@@ -362,19 +412,35 @@ class Manager : public details::ServerObject<DeleteAllIface, CreateIface>
+      */
+     Manager(sdbusplus::bus_t& bus, const std::string& path,
+             internal::Manager& manager) :
+-        details::ServerObject<DeleteAllIface, CreateIface>(
++        details::ServerObject<DeleteAllIface, CreateIface, DeleteLogTypeIface>(
+             bus, path.c_str(),
+             details::ServerObject<DeleteAllIface,
+-                                  CreateIface>::action::defer_emit),
++                                  CreateIface, DeleteLogTypeIface>::action::defer_emit),
+         manager(manager) {};
+ 
+     /** @brief Delete all d-bus objects.
+      */
+     void deleteAll() override
+     {
+-        auto numbersOfLogs = manager.eraseAll();
+-        log<level::INFO>("Deleting all log entries",
+-                         entry("NUM_LOGS=%d", numbersOfLogs));
++           auto numbersOfLogs = manager.eraseAll();
++           log<level::INFO>("Deleting all log entries",
++                            entry("NUM_LOGS=%d", numbersOfLogs));
++    }
++
++    /** @brief Implementation for DeleteLogType
++         *  Delete a specific entry or all entries for the provided logType. 
++	 *  If 'entryId' is provided, only that entry is deleted. If 'entryId' 
++	 * is not provided, all entries of the given logType are deleted.
++         *
++         *  @param[in] logType - Type of log to delete (e.g., "IPMI", "RAID", "DEFAULT").
++         *  @param[in] entryId - ID of the specific log entry to delete.
++         */
++
++    void deleteLogType( std::string logType, uint32_t entryId ) override
++    {
++	   auto numbersOfLogs = manager.eraseLogTypeEntries(logType, entryId );
++           log<level::INFO>("Deleting log entry/entries",
++                            entry("NUM_LOGS=%d", numbersOfLogs));
+     }
+ 
+     /** @brief D-Bus method call implementation to create an event log.
+diff --git a/log_manager_main.cpp b/log_manager_main.cpp
+index 207c93c..62c03bb 100644
+--- a/log_manager_main.cpp
++++ b/log_manager_main.cpp
+@@ -22,13 +22,20 @@ int main(int /*argc*/, char* /*argv*/[])
+ 
+     // Add sdbusplus ObjectManager for the 'root' path of the logging manager.
+     sdbusplus::server::manager_t objManager(bus, OBJ_LOGGING);
++    sdbusplus::server::manager_t objSelManager(bus, OBJ_SEL_LOGGING);
++    sdbusplus::server::manager_t objRaidManager(bus, OBJ_RAID_LOGGING);
+ 
+-    phosphor::logging::internal::Manager iMgr(bus, OBJ_INTERNAL);
+ 
++    phosphor::logging::internal::Manager iMgr(bus, OBJ_INTERNAL);
+     phosphor::logging::Manager mgr(bus, OBJ_LOGGING, iMgr);
++    phosphor::logging::Manager selMgr(bus, OBJ_SEL_LOGGING, iMgr);
++    phosphor::logging::Manager raidMgr(bus, OBJ_RAID_LOGGING, iMgr);
++
+ 
+     // Create a directory to persist errors.
+     std::filesystem::create_directories(ERRLOG_PERSIST_PATH);
++    std::filesystem::create_directories(ERRLOG_PERSIST_PATH_SEL);
++    std::filesystem::create_directories(ERRLOG_PERSIST_PATH_RAID);
+ 
+     // Recreate error d-bus objects from persisted errors.
+     iMgr.restore();
+-- 
+2.34.1
+

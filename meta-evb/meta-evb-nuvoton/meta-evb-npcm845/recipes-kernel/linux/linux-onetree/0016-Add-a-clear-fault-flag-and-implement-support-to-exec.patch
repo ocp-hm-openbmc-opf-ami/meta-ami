@@ -1,0 +1,70 @@
+From faa323ccca03b0c00a1afab208b7faf6a127567a Mon Sep 17 00:00:00 2001
+From: saikumaru <saikumaru@ami.com>
+Date: Tue, 9 Sep 2025 14:46:44 +0530
+Subject: [PATCH] Add a clear fault flag and implement support to execute clear
+  fault when ltc4286 STATUS_WORD != 0
+
+Modifications introduced in this commit:
+1. Add a new clear-fault flag.
+2. When the DTS includes enable-clear-fault-flag, the clear-fault flag is set to true.
+3. Execute the clear-fault operation when the STATUS_WORD of ltc4286 is not equal to 0.
+
+Signed-off-by: saikumaru <saikumaru@ami.com>
+---
+ drivers/hwmon/pmbus/ltc4286.c    | 8 ++++++++
+ drivers/hwmon/pmbus/pmbus.h      | 4 ++++
+ drivers/hwmon/pmbus/pmbus_core.c | 4 +++-
+ 3 files changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/hwmon/pmbus/ltc4286.c b/drivers/hwmon/pmbus/ltc4286.c
+index aabd0bcdfeee..88f6321a4013 100644
+--- a/drivers/hwmon/pmbus/ltc4286.c
++++ b/drivers/hwmon/pmbus/ltc4286.c
+@@ -150,6 +150,14 @@ static int ltc4286_probe(struct i2c_client *client)
+ 
+ 	info->m[PSC_CURRENT_OUT] = 1024 * rsense;
+ 
++	/* Setup clear fault flag */
++	if (device_property_read_bool(dev, "enable-clear-fault-flag")) {
++		info->clear_fault_flag = true;
++	} else {
++		info->clear_fault_flag = false;
++	}
++
++
+ 	return pmbus_do_probe(client, info);
+ }
+ 
+diff --git a/drivers/hwmon/pmbus/pmbus.h b/drivers/hwmon/pmbus/pmbus.h
+index 9451f50d8def..a3d03503ab34 100644
+--- a/drivers/hwmon/pmbus/pmbus.h
++++ b/drivers/hwmon/pmbus/pmbus.h
+@@ -463,6 +463,10 @@ struct pmbus_driver_info {
+ 
+ 	/* custom attributes */
+ 	const struct attribute_group **groups;
++
++	/* Decide whether to use clear fault when STATUS_WORD(0x79) != 0. */
++	bool clear_fault_flag;
++
+ };
+ 
+ /* Regulator ops */
+diff --git a/drivers/hwmon/pmbus/pmbus_core.c b/drivers/hwmon/pmbus/pmbus_core.c
+index ff3271104305..97712bb2b1f9 100644
+--- a/drivers/hwmon/pmbus/pmbus_core.c
++++ b/drivers/hwmon/pmbus/pmbus_core.c
+@@ -644,7 +644,9 @@ static int pmbus_get_status(struct i2c_client *client, int page, int reg)
+ 		status = _pmbus_read_byte_data(client, page, reg);
+ 		break;
+ 	}
+-	if (status < 0)
++	if (data->info->clear_fault_flag && status != 0)
++		pmbus_clear_faults(client);
++	else if (status < 0)
+ 		pmbus_clear_faults(client);
+ 	return status;
+ }
+-- 
+2.47.1
+

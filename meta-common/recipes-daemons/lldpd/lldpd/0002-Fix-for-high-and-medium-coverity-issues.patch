@@ -1,0 +1,94 @@
+From 8d61d5b6729e9efc85eb6072277be3b377b5f0bc Mon Sep 17 00:00:00 2001
+From: sanjays <sanjays@ami.com>
+Date: Sun, 10 Aug 2025 12:19:58 +0530
+Subject: [PATCH 2/2] Fix for high and medium coverity issues
+
+---
+ src/daemon/lldpd.c | 22 ++++++++++++++--------
+ 1 file changed, 14 insertions(+), 8 deletions(-)
+
+diff --git a/src/daemon/lldpd.c b/src/daemon/lldpd.c
+index 4859fb8..68c28f6 100644
+--- a/src/daemon/lldpd.c
++++ b/src/daemon/lldpd.c
+@@ -350,7 +350,8 @@ lldpd_count_neighbors(struct lldpd *cfg)
+ 		neighbors++;
+ 		neighbor = chassis->c_name;
+ 	}
+-	neighbors--;
++	if (neighbors > 0)
++		neighbors--;
+ 	if (neighbors == 0)
+ 		setproctitle("no neighbor.");
+ 	else if (neighbors == 1 && neighbor && *neighbor != '\0')
+@@ -388,8 +389,8 @@ lldpd_reset_timer(struct lldpd *cfg)
+ 		ssize_t output_len;
+ 		char save[LLDPD_PORT_START_MARKER];
+ 		memcpy(save, port, sizeof(save));
+-		/* coverity[sizeof_mismatch]
+-		   We intentionally partially memset port */
++		/* Reason for False Positive - Intentional partial memset.Zero out fields that are not significant*/
++                /* coverity[suspicious_sizeof : FALSE]*/
+ 		memset(port, 0, sizeof(save));
+ 		output_len = lldpd_port_serialize(port, (void **)&output);
+ 		memcpy(port, save, sizeof(save));
+@@ -667,6 +668,7 @@ lldpd_decode(struct lldpd *cfg, char *frame, int s, struct lldpd_hardware *hardw
+ 		TAILQ_REMOVE(&hardware->h_rports, oport, p_entries);
+ 		lldpd_port_cleanup(oport, 1);
+ 		free(oport);
++		oport = NULL;
+ 	}
+ 	if (ochassis) {
+ 		if (port->p_ttl == 0) {
+@@ -713,8 +715,8 @@ lldpd_decode(struct lldpd *cfg, char *frame, int s, struct lldpd_hardware *hardw
+ 	   of the chassis that was attached to it is decreased.
+ 	*/
+ 	i = 0;
+-	/* coverity[use_after_free]
+-	   TAILQ_REMOVE does the right thing */
++	/* Reason for False Positive - TAILQ_REMOVE does the right thing*/
++        /* coverity[use_after_free : FALSE]*/
+ 	TAILQ_FOREACH (aport, &hardware->h_rports, p_entries)
+ 		i++;
+ 	log_debug("decode", "%d neighbors for %s", i, hardware->h_ifname);
+@@ -726,6 +728,8 @@ lldpd_decode(struct lldpd *cfg, char *frame, int s, struct lldpd_hardware *hardw
+ 	if (oport) {
+ 		TRACE(LLDPD_NEIGHBOR_UPDATE(hardware->h_ifname, chassis->c_name,
+ 		    port->p_descr, i));
++		/* Reason for False Positive - Execution might reach when oport in not NULL */
++                /* coverity[dead_error_line : FALSE]*/
+ 		levent_ctl_notify(hardware->h_ifname, NEIGHBOR_CHANGE_UPDATED, port);
+ #ifdef USE_SNMP
+ 		agent_notify(hardware, NEIGHBOR_CHANGE_UPDATED, port);
+@@ -800,6 +804,8 @@ lldpd_get_lsb_release()
+ 		close(pipefd[1]);
+ 		count = 0;
+ 		do {
++			/* Reason for False Positive - checking condition count < sizeof(release) before passing to the read system call  */
++                        /* coverity[overflow_sink : FALSE]*/
+ 			status =
+ 			    read(pipefd[0], release + count, sizeof(release) - count);
+ 			if ((status == -1) && (errno == EINTR)) continue;
+@@ -861,7 +867,7 @@ lldpd_get_os_release()
+ 		key = strtok(line, "=");
+ 		val = strtok(NULL, "=");
+ 
+-		if (strncmp(key, "PRETTY_NAME", sizeof(line)) == 0) {
++		if ((key != NULL) && strncmp(key, "PRETTY_NAME", sizeof(line)) == 0) {
+ 			strlcpy(release, val, sizeof(line));
+ 			break;
+ 		}
+@@ -1759,8 +1765,8 @@ lldpd_main(int argc, char *argv[], char *envp[])
+ 		/* So, we use syslog and we daemonize (or we are started by
+ 		 * systemd). No need to continue writing to stdout. */
+ 		int fd;
+-		/* coverity[resource_leak]
+-		   fd may be leaked if < 2, it's expected */
++		/* Reason for False Positive - Since fd 0, 1, 2 are file descriptors for standard IN,OUT,ERROR.fd may be leaked if < 2 */
++                /* coverity[resource_leak : FALSE]*/
+ 		if ((fd = open("/dev/null", O_RDWR, 0)) != -1) {
+ 			dup2(fd, STDIN_FILENO);
+ 			dup2(fd, STDOUT_FILENO);
+-- 
+2.34.1
+

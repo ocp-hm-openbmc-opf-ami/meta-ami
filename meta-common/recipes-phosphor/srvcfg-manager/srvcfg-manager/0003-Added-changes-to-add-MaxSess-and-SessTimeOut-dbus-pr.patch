@@ -79,7 +79,7 @@ new file mode 100644
 index 0000000..afd49df
 --- /dev/null
 +++ b/src/dropbear_srvcfgmgr.cpp
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,87 @@
 +#include <iostream>
 +#include <fstream>
 +#include <sstream>
@@ -87,6 +87,7 @@ index 0000000..afd49df
 +#include <sys/stat.h>
 +#include <cstdlib>
 +#include "dropbear_srvcfgmgr.hpp"
++#include "utils.hpp"
 +
 +const std::string DROPBEAR_DROPIN_DIR = "/etc/systemd/system/dropbear.socket.d/";
 +const std::string DROPBEAR_DROPIN_FILE = DROPBEAR_DROPIN_DIR + "maxsessions.conf";
@@ -142,20 +143,30 @@ index 0000000..afd49df
 +
 +void createOrUpdateDropinFile(int maxSessions) {
 +    createDropinDirectory();
-+    std::ofstream fileOut(DROPBEAR_DROPIN_FILE);
-+    if (!fileOut.is_open()) {
-+        std::cerr << "Failed to open drop-in file for writing: " << DROPBEAR_DROPIN_FILE << std::endl;
-+        exit(EXIT_FAILURE);
++    if(access(DROPBEAR_DROPIN_FILE.c_str(),F_OK) != 0)
++    {
++       std::ofstream fileOut(DROPBEAR_DROPIN_FILE);
++        if (!fileOut.is_open()) {
++            std::cerr << "Failed to open drop-in file for writing: " << DROPBEAR_DROPIN_FILE << std::endl;
++            exit(EXIT_FAILURE);
++        }
++
++        fileOut << "[Socket]\n";
++        fileOut << "MaxConnections=" << maxSessions << "\n";
++        fileOut.close();
++
++        try{
++            auto bus = sdbusplus::bus::new_default();
++            auto reloadUnit = bus.new_method_call(sysdService, sysdObjPath, sysdMgrIntf, sysdReloadMethod);
++            bus.call(reloadUnit);
++        }
++        catch (const sdbusplus::exception::SdBusError &e)
++        {
++            std::cerr << "Failed to reload" << e.what() << std::endl;
++        }
++        std::cout << "Drop-in file updated with MaxConnections=" << maxSessions << " in " << DROPBEAR_DROPIN_FILE << std::endl;
 +    }
-+
-+    fileOut << "[Socket]\n";
-+    fileOut << "MaxConnections=" << maxSessions << "\n";
-+    fileOut.close();
-+
-+    std::cout << "Drop-in file updated with MaxConnections=" << maxSessions << " in " << DROPBEAR_DROPIN_FILE << std::endl;
 +}
-+
-+
 diff --git a/src/main.cpp b/src/main.cpp
 index 453602d..2ff3502 100644
 --- a/src/main.cpp
@@ -368,7 +379,7 @@ index 69f639d..24b3e4a 100644
                  updatedFlag |=
                      (1 << static_cast<uint8_t>(UpdatedProp::enabledState));
                  startServiceRestartTimer();
-@@ -708,6 +867,37 @@ void ServiceConfig::registerProperties()
+@@ -708,6 +867,44 @@ void ServiceConfig::registerProperties()
          });
  
      srvCfgIface->initialize();
@@ -394,9 +405,16 @@ index 69f639d..24b3e4a 100644
 +                unitEnabledState = unitRunningState = EnabledStatus;
 +                srvCfgIface->set_property(srvCfgPropEnabled, unitEnabledState);
 +                srvCfgIface->set_property(srvCfgPropRunning, unitRunningState);
-+                updatedFlag |= (1<< static_cast<uint8_t>(UpdatedProp::runningState));
 +                updatedFlag |= (1<< static_cast<uint8_t>(UpdatedProp::enabledState));
++                updatedFlag |= (1<< static_cast<uint8_t>(UpdatedProp::runningState));
 +                startServiceRestartTimer();
++            }
++            if (unitEnabledState != unitRunningState)
++            {
++                unitRunningState = EnabledStatus;
++               srvCfgIface->set_property(srvCfgPropRunning, unitRunningState);
++               updatedFlag |= (1<< static_cast<uint8_t>(UpdatedProp::runningState));
++               startServiceRestartTimer();
 +            }
 +        }
 +        internalSet = false;

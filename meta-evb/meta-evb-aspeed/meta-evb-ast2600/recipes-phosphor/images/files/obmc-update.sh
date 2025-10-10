@@ -90,6 +90,27 @@ restore_uboot_env_data() {
 	then
 		echo "Restore u-boot-env parition failed"
 	fi
+	rm -f /run/initramfs/uboot_env_data.bin
+}
+
+
+#get_fw_env_var: Extracts the value of a U-Boot environment variable.
+
+get_fw_env_var() {
+    copies=2
+    envdev=$(findmtd u-boot-env)
+
+    if test -n "$envdev"; then
+
+        value=$(cat /dev/$envdev |
+            tr '\n\000' '\r\n' |
+            tail -c +5 | tail -c +${copies-1} |
+            sed -ne '/^$/,$d' -e "s/^$1=//p")
+
+        if test -n "$value"; then
+            echo "$value"
+        fi
+    fi
 }
 
 rwfs=$(findmtd rwfs)
@@ -113,6 +134,7 @@ checkmount=y
 dosave_lic=y
 
 whitelist=/run/initramfs/whitelist
+restore_uboot_env=/run/initramfs/uboot_env_data.bin
 image=/run/initramfs/image-
 imglist=
 
@@ -175,42 +197,64 @@ HERE
 	esac
 done
 
+# get u-boot variable
+is_factory_reset=$(get_fw_env_var openbmconce)
+
 if test "$dosave" = "y"
 then
-	if test ! -d $upper -a -n "$rwfs"
-	then
-		mkdir -p $rwdir
-		mount "$rwdev" $rwdir -t "$(probe_fs_type "$rwdev")" -o "$rorwopts"
-		mounted=$rwdir
-	fi
+	#  Check if factory reset is requested by U-Boot but not present in init-options.
+	if [ "$is_factory_reset" = "factory-reset" ] && ! grep -E -q '^factory-reset$' /run/initramfs/init-options; then
+	        continue
+        else
+		if test ! -d $upper -a -n "$rwfs"
+		then
+			mkdir -p $rwdir
+			mount "$rwdev" $rwdir -t "$(probe_fs_type "$rwdev")" -o "$rorwopts"
+			mounted=$rwdir
+		fi
 
-	while read -r f
-	do
-		# Entries shall start with /, no trailing /.. or embedded /../
-		if test "/${f#/}" != "$f" -o "${f%/..}" != "${f#*/../}"
+		# clear SEL and ExtLog
+		#rm -rf /etc/extlog/phosphor-logging > /dev/null 2>&1
+
+		if test -e "$upper/whitelist"
 		then
-			echo 1>&2 "WARNING: Skipping bad whitelist entry $f."
-			continue
+			cp $upper/whitelist $whitelist
+			if test -e "$upper/uboot_env_data.bin"
+			then
+				cp $upper/uboot_env_data.bin $restore_uboot_env
+				rm -rf $upper/uboot_env_data.bin > /dev/null 2>&1
+			fi
+			rm -rf $upper/whitelist > /dev/null 2>&1
 		fi
-		if ! test -e "$upper/$f"
-		then
-			continue
-		fi
-		d="$save/$f"
-		while test "${d%/}" != "${d%/.}"
+
+		while read -r f
 		do
-			d="${d%/.}"
-			d="${d%/}"
-		done
-		mkdir -p "${d%/*}"
-		cp -rp "$upper/$f" "${d%/*}/"
-	done < $whitelist
+			# Entries shall start with /, no trailing /.. or embedded /../
+			if test "/${f#/}" != "$f" -o "${f%/..}" != "${f#*/../}"
+			then
+				echo 1>&2 "WARNING: Skipping bad whitelist entry $f."
+				continue
+			fi
+			if ! test -e "$upper/$f"
+			then
+				continue
+			fi
+			d="$save/$f"
+			while test "${d%/}" != "${d%/.}"
+			do
+				d="${d%/.}"
+				d="${d%/}"
+			done
+			mkdir -p "${d%/*}"
+			cp -rp "$upper/$f" "${d%/*}/"
+		done < $whitelist
 
-	if test -n "$mounted"
-	then
-		umount $mounted
+		if test -n "$mounted"
+		then
+			umount $mounted
+		fi
 	fi
-fi
+fi	
 
 if test "$dosave_lic" = "y"
 then
@@ -300,8 +344,21 @@ then
 	done
 fi
 
-echo "Restore u-boot-env partition"
-restore_uboot_env_data
+if test -f "$restore_uboot_env"
+then
+	echo "Restore u-boot-env partition"
+	restore_uboot_env_data
+elif grep -w factory-reset /run/initramfs/init-options
+then
+	echo "Clear u-boot-env partition"
+	mtdPart=$( cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"u-boot-env\"" {print $1}')
+	flash_eraseall /dev/$mtdPart
+fi
+
+if grep -E -q '^factory-reset$' /run/initramfs/init-options; then
+    sed -i '/^factory-reset$/d' /run/initramfs/init-options
+fi
+
 
 if test -d "$save" -a "$toram" = "y"
 then

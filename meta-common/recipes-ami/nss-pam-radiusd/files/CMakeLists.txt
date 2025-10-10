@@ -20,6 +20,9 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDBUSPLUSPLUS sdbusplus REQUIRED)
 pkg_get_variable(SYSTEMD_SYSTEM_UNIT_DIR systemd systemdsystemunitdir)
 
+find_package(OpenSSL REQUIRED)
+pkg_check_modules(CRYPT libcrypto REQUIRED)
+
 #target_link_libraries(${PROJECT_NAME} systemd)
 #target_link_libraries(${PROJECT_NAME} boost_coroutine)
 #target_link_libraries(nss_pam_radius sdbusplus -lstdc++fs)
@@ -47,11 +50,13 @@ add_executable(nss_pam_radius src/nss_pam_radius_main.cpp)
 install(TARGETS nss_pam_radius DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 #link_directories(${CMAKE_INSTALL_LIBDIR})
+target_link_libraries(${PROJECT_NAME} OpenSSL::Crypto  OpenSSL::SSL)
 target_link_libraries(nss_pam_radius ${PROJECT_NAME})
 
 target_link_libraries(nss_pam_radius systemd)
 target_link_libraries(nss_pam_radius boost_coroutine)
 target_link_libraries(nss_pam_radius sdbusplus -lstdc++fs)
+target_link_libraries(nss_pam_radius OpenSSL::Crypto  OpenSSL::SSL)
 #target_link_libraries(nss_pam_radius ${Boost_LIBRARIES})
 link_directories(${EXTERNAL_INSTALL_LOCATION}/lib)
 

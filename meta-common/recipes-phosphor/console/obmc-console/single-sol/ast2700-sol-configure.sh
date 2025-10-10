@@ -1,6 +1,10 @@
 #!/bin/sh
 
-ROUTER=$(echo /sys/bus/platform/drivers/aspeed-uart-routing/*.uart-routing)
+# Note: Dual node is not supported at this time. SOL routing is performed only for node 1.
+for ROUTER in /sys/bus/platform/drivers/aspeed-uart-routing/*.uart-routing; do
+        break
+done
+
 [ -L "$ROUTER" ] || exit 2
 
 route() {

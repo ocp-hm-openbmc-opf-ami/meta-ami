@@ -1,0 +1,101 @@
+From bad1abb9d14d67127608d2e88f883f7aff0d4013 Mon Sep 17 00:00:00 2001
+From: saikumaru <saikumaru@ami.com>
+Date: Tue, 9 Sep 2025 15:06:12 +0530
+Subject: [PATCH] Add the function to set the number of ADC samples per average
+ ``
+
+Signed-off-by: saikumaru <saikumaru@ami.com>
+---
+ drivers/hwmon/pmbus/ltc4286.c | 43 ++++++++++++++++++++++++++++++++++-
+ 1 file changed, 42 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/hwmon/pmbus/ltc4286.c b/drivers/hwmon/pmbus/ltc4286.c
+index 88f6321a4013..d41de8405829 100644
+--- a/drivers/hwmon/pmbus/ltc4286.c
++++ b/drivers/hwmon/pmbus/ltc4286.c
+@@ -1,19 +1,25 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
++#include <linux/bitops.h>
+ #include <linux/err.h>
+ #include <linux/i2c.h>
+ #include <linux/init.h>
+ #include <linux/kernel.h>
++#include <linux/log2.h>
+ #include <linux/module.h>
+ #include <linux/pmbus.h>
+ #include "pmbus.h"
+ 
+ /* LTC4286 register */
++#define LTC4286_MFR_AVG_SEL (0xD9)
+ #define LTC4286_MFR_CONFIG1	0xF2
+ 
+ /* LTC4286 configuration */
+ #define VRANGE_SELECT_BIT	BIT(1)
+ 
++#define LTC4286_SAMPLES_AVG_MAX  65536
++#define LTC4286_ADC_AVG_SEL_MASK GENMASK(3, 0)
++
+ #define LTC4286_MFR_ID_SIZE	3
+ 
+ /*
+@@ -64,13 +70,30 @@ static const struct i2c_device_id ltc4286_id[] = {
+ };
+ MODULE_DEVICE_TABLE(i2c, ltc4286_id);
+ 
++static int ltc4286_write_adc_avg_sel(struct i2c_client *client, u8 value)
++{
++	int ret;
++	u8 mask;
++
++	ret = i2c_smbus_read_byte_data(client, LTC4286_MFR_AVG_SEL);
++	if (ret < 0)
++		return ret;
++
++	mask = LTC4286_ADC_AVG_SEL_MASK;
++	value = (ret & ~mask) | (value & mask);
++	ret = i2c_smbus_write_byte_data(client, LTC4286_MFR_AVG_SEL, value);
++	
++	return ret;
++}
++
++
+ static int ltc4286_probe(struct i2c_client *client)
+ {
+ 	int ret;
+ 	const struct i2c_device_id *mid;
+ 	u8 block_buffer[I2C_SMBUS_BLOCK_MAX + 1];
+ 	struct pmbus_driver_info *info;
+-	u32 rsense;
++	u32 rsense, avg;
+ 	int vrange_nval, vrange_oval;
+ 
+ 	ret = i2c_smbus_read_block_data(client, PMBUS_MFR_ID, block_buffer);
+@@ -156,6 +179,24 @@ static int ltc4286_probe(struct i2c_client *client)
+ 	} else {
+ 		info->clear_fault_flag = false;
+ 	}
++	/* Default of ADC_AVERAGE_SELECT = 5, using 64 samples */
++    if (of_property_read_u32(client->dev.of_node,
++                "lltc,adc-sample-average", &avg) == 0) {
++        if (!avg || avg > LTC4286_SAMPLES_AVG_MAX ||
++            BIT(__fls(avg)) != avg) {
++            dev_err(&client->dev,
++                "Invalid number of average samples");
++            return -EINVAL;
++        }
++
++		/* Setup MFR_AVG_SEL register bit[3:0] ADC_AVERAGE_SELECT */
++		ret = ltc4286_write_adc_avg_sel(client, ilog2(avg >> 1));
++		if (ret < 0) {
++			dev_err(&client->dev,
++				"Setting sample averaging failed with error %d", ret);
++			return ret;
++		}
++	}
+ 
+ 
+ 	return pmbus_do_probe(client, info);
+-- 
+2.47.1
+

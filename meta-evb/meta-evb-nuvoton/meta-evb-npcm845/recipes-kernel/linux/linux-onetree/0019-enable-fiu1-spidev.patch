@@ -1,0 +1,103 @@
+From 74c54e139e8eff07e2fa56b6f10d4ace6b09725c Mon Sep 17 00:00:00 2001
+From: saikumaru <saikumaru@ami.com>
+Date: Tue, 9 Sep 2025 15:11:31 +0530
+Subject: [PATCH] enable fiu1 spidev
+
+Signed-off-by: saikumaru <saikumaru@ami.com>
+---
+ drivers/spi/spi-npcm-fiu.c | 72 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 72 insertions(+)
+
+diff --git a/drivers/spi/spi-npcm-fiu.c b/drivers/spi/spi-npcm-fiu.c
+index a999614340d6..68b8b298e658 100644
+--- a/drivers/spi/spi-npcm-fiu.c
++++ b/drivers/spi/spi-npcm-fiu.c
+@@ -694,6 +694,77 @@ static const struct of_device_id npcm_fiu_dt_ids[] = {
+ 	{ /* sentinel */ }
+ };
+ 
++static int npcm_spi_uma_read(struct npcm_fiu_spi *fiu,
++			      u8 *data, u32 data_size)
++{		
++	u32 data_reg[16];
++	int ret;
++	u32 val;
++	u32 i;	
++	u32 uma_cfg;
++
++	regmap_update_bits(fiu->regmap, NPCM_FIU_UMA_CTS,
++			   NPCM_FIU_UMA_CTS_DEV_NUM,
++			   (0 <<
++			    NPCM_FIU_UMA_CTS_DEV_NUM_SHIFT));
++	
++	regmap_write(fiu->regmap, NPCM_FIU_UMA_ADDR, 0x0);
++	
++	regmap_read(fiu->regmap,NPCM_FIU_UMA_CFG,&uma_cfg);
++	uma_cfg |= data_size << NPCM_FIU_UMA_CFG_RDATSIZ_SHIFT;
++	regmap_write(fiu->regmap, NPCM_FIU_UMA_CFG, uma_cfg);
++	regmap_write_bits(fiu->regmap, NPCM_FIU_UMA_CTS,
++			  NPCM_FIU_UMA_CTS_EXEC_DONE,
++			  NPCM_FIU_UMA_CTS_EXEC_DONE);
++	ret = regmap_read_poll_timeout(fiu->regmap, NPCM_FIU_UMA_CTS, val,
++				       (!(val & NPCM_FIU_UMA_CTS_EXEC_DONE)), 0,
++				       UMA_MICRO_SEC_TIMEOUT);
++	if (ret)
++		return ret;
++
++	if (data_size) {
++		for (i = 0; i < DIV_ROUND_UP(data_size, 4); i++)
++			regmap_read(fiu->regmap, NPCM_FIU_UMA_DR0 + (i * 4),
++				    &data_reg[i]);
++		memcpy(data, data_reg, data_size);	
++	}
++
++	return 0;
++}
++
++
++static int npcm_spi_transfer_one(struct spi_controller *ctlr,
++				   struct spi_device *spi,
++				   struct spi_transfer *transfer)
++{
++
++	const u8 *tx_buf;
++	u8 *rx_buf;	
++	struct npcm_fiu_spi *fiu = spi_controller_get_devdata(spi->master);
++	
++	
++	tx_buf = transfer->tx_buf;
++	rx_buf = transfer->rx_buf;
++	if(tx_buf)		
++	{
++		int i;
++		u8 data_reg[16]={0};
++		u32 uma_cfg = BIT(10);		
++		memcpy(data_reg,&(tx_buf[1]),transfer->len-1);
++		regmap_update_bits(fiu->regmap, NPCM_FIU_UMA_CMD,
++			   NPCM_FIU_UMA_CMD_CMD, tx_buf[0]);			   
++		for (i = 0; i < DIV_ROUND_UP(transfer->len-1, 4); i++)
++			regmap_write(fiu->regmap, NPCM_FIU_UMA_DW0 + (i * 4),
++				     data_reg[i]);						
++		uma_cfg |= ((transfer->len-1) << NPCM_FIU_UMA_CFG_WDATSIZ_SHIFT);
++		regmap_write(fiu->regmap, NPCM_FIU_UMA_CFG, uma_cfg);
++	}
++	if(rx_buf)
++		npcm_spi_uma_read(fiu,rx_buf,transfer->len);	
++		
++	return 0;
++}
++
+ static int npcm_fiu_probe(struct platform_device *pdev)
+ {
+ 	const struct fiu_data *fiu_data_match;
+@@ -757,6 +828,7 @@ static int npcm_fiu_probe(struct platform_device *pdev)
+ 	ctrl->num_chipselect = fiu->info->max_cs;
+ 	ctrl->dev.of_node = dev->of_node;
+ 
++	ctrl->transfer_one = npcm_spi_transfer_one;
+ 	ret = devm_spi_register_controller(dev, ctrl);
+ 	if (ret)
+ 		clk_disable_unprepare(fiu->clk);
+-- 
+2.47.1
+

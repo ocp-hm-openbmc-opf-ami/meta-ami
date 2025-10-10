@@ -1,9 +1,11 @@
 SUMMARY = "backuprestore Backend implementation"
 DESCRIPTION = "Backup and Restore backend implementing Backup and Restoring Configurating"
-LICENSE = "CLOSED"
+LICENSE = "Proprietary"
+LIC_FILES_CHKSUM = "file://${AMIBASE}/COPYING.AMI;md5=65a69a674f34a9f30737c9f0abd4fc5c"
+
 # Modify these as desired
 PV = "1.0+git${SRCPV}"
-SRCREV = "14a47a31dbbd80cfd294aebb0e6e2666582a8763"
+SRCREV = "4a976bf8e873709eaf7b430ac4b38c1ecef86837"
 
 inherit meson pkgconfig
 inherit obmc-phosphor-dbus-service
@@ -20,7 +22,7 @@ DEPENDS += "openssl"
 
 DBUS_PACKAGES = "${PN}"
 
-SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/backup-restore.git;protocol=https;branch=main"
+SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/backup-restore.git;protocol=https;branch=main"
 SRC_URI += "file://xyz.openbmc_project.Backup.BackupRestore.service"
 SRC_URI += "file://backupconf.json"
 

@@ -18,6 +18,14 @@ UPDATE_PERCENT_FLASH_OR_STAGE_START=60
 UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE=95
 UPDATE_PERCENT_SUCCESS=100
 UPDATE_PERCENT_FAIL=100
+UPDATE_STATUS_STARTING=Starting
+UPDATE_STATUS_RUNNING=Running
+UPDATE_STATUS_COMPLETED=Completed
+UPDATE_STATUS_CANCELLED=Cancelled
+UPDATE_STATUS_EXCEPTION=Exception
+evt=""
+sev=""
+msg=""
 SECURE_BOOT_STRAP_ENABLED=1
 update=/run/initramfs/update
 SLOT_FILE=/run/media/slot
@@ -51,6 +59,23 @@ update_percentage() {
                /xyz/openbmc_project/software/$img_obj \
                xyz.openbmc_project.Software.ActivationProgress Progress \
                y $1 || return 0
+    fi
+}
+
+update_status() {
+    if [ -n "$img_obj" ]; then
+        busctl set-property xyz.openbmc_project.Software.BMC.Updater \
+               /xyz/openbmc_project/software/$img_obj \
+               xyz.openbmc_project.Common.Task Status \
+               s xyz.openbmc_project.Common.Task.OperationStatus.$1 || return 0
+    fi
+}
+
+get_firmware_version() {
+    if [ -n "$img_obj" ]; then
+        busctl get-property xyz.openbmc_project.Software.BMC.Updater \
+               /xyz/openbmc_project/software/$img_obj \
+               xyz.openbmc_project.Software.Version Version | awk -F'"' '{print $2}'
     fi
 }
 
@@ -110,13 +135,13 @@ IsMeetsMultiFirmwareRules() {
 }
 
 create_Phosphor_log() {
-    local evt=$1
-    local sev=$2
-    local msg=$3
+    # local evt=$1
+    # local sev=$2
+    # local msg=$3
     busctl call xyz.openbmc_project.Logging \
                /xyz/openbmc_project/logging \
                xyz.openbmc_project.Logging.Create Create \
-               ssa{ss} OpenBMC.0.4.0.FirmwareUpdateCompleted xyz.openbmc_project.Logging.Entry.Level.Critical 2 REDFISH_MESSAGE_ID OpenBMC.0.4.0.FirmwareUpdateCompleted  REDFISH_MESSAGE_ARGS NA,NA
+               ssa{ss} "$msg" xyz.openbmc_project.Logging.Entry.Level.$sev 2 FirmwareType $FWTYPE Status "$evt"
 }
 
 check_preserv_config() {
@@ -169,8 +194,8 @@ Check_and_update_whitelist() {
 
     for config_obj in $config_list; do
         isEnable=$(busctl get-property $service $config_obj $interface isEnable | awk '{print $2}')
+        filespath=$(busctl get-property $service $config_obj $interface filepath | awk -F'"' '{for(i=2;i<=NF;i+=2) print $i}')
         if [[ -n "$isEnable" && "$isEnable" = "true" ]]; then
-            filespath=$(busctl get-property $service $config_obj $interface filepath | awk -F'"' '{for(i=2;i<=NF;i+=2) print $i}')
             for file_path in $filespath; do
                 echo $file_path >> $whitelist
             done
@@ -182,13 +207,25 @@ Check_and_update_whitelist() {
             fi
         fi
     done
+
+    # Update preserve setting to default state
+    for config_obj in $config_list; do
+        isOptional=$(busctl get-property $service $config_obj $interface isOptional | awk '{print $2}')
+        if [[ -n "$isOptional" && "$isOptional" = "true" && "${config_obj##*/}" != "U_BOOT_ENV" ]]; then
+            busctl set-property $service $config_obj $interface isEnable b false
+        fi
+    done
 }
 
 Backup_bmc_config() {
     log "BMC Full Flash - Start Backup Configuration"
 
-    systemctl stop nv-sync.service
-    umount $TMP_RWFS
+    if [[ "$applytime" == "$immediate" || "$applytime" == "$atMaintenanceWindowStart" ]]; then
+	# Stop nv sync
+	systemctl stop nv-sync.service
+	# Unmount rwfs
+	umount $TMP_RWFS
+    fi
 
     while read -r f
     do
@@ -219,11 +256,38 @@ restore_bmc_config() {
         log "BMC Full Flash - Start Restore Configuration"
 
         rm -rf $TMP_OVERLAY
+
+        # clear SEL and ExtLog
+	#	rm -rf /etc/extlog/phosphor-logging > /dev/null 2>&1
+
+        # check and backup newly created and updated files to backup dir
+        while read -r f
+        do
+            # Entries shall start with /, no trailing /.. or embedded /../
+            if test "/${f#/}" != "$f" -o "${f%/..}" != "${f#*/../}"
+            then
+                echo 1>&2 "WARNING: Skipping bad whitelist entry $f."
+                continue
+            fi
+            if ! test -e "$f"
+            then
+                continue
+            fi
+            d="$BMC_PRESERVE_DIR/$f"
+            while test "${d%/}" != "${d%/.}"
+            do
+                d="${d%/.}"
+                d="${d%/}"
+            done
+            mkdir -p "${d%/*}"
+            cp -u -rp "$f" "${d%/*}/"
+        done < $whitelist
+
         #mount rwfs partation to restore configs
         mount -t jffs2 -o rw mtd:rwfs $TMP_RWFS
 
         # copy required configs from backup dir to overlaydir
-        cp -rp "$BMC_PRESERVE_DIR" "$TMP_OVERLAY"
+        cp -rp "$BMC_PRESERVE_DIR/." "$TMP_OVERLAY/"
 
         # unmount rwfs partation
         umount $TMP_RWFS
@@ -329,32 +393,33 @@ restore_bios_configs() {
 }
 
 redfish_log_fw_evt() {
-    local evt=$1
-    local sev=""
-    local msg=""
+    evt=$1
+    sev=""
+    msg=""
     [ -z "$FWTYPE" ] && return
     [ -z "$FWVER" ] && return
     case "$evt" in
         start)
-            update_percentage $UPDATE_PERCENT_INIT
+            update_percentage $UPDATE_PERCENT_PRESTAGE_VERIFY_COMPLETE
             evt=OpenBMC.0.4.0.FirmwareUpdateStarted
-            msg="${FWTYPE} firmware update to version ${FWVER} started."
-            sev=OK
+            msg="$FWTYPE firmware update to version $FWVER started."
+            sev=Informational
             ;;
         success)
             update_percentage $UPDATE_PERCENT_SUCCESS
             evt=OpenBMC.0.4.0.FirmwareUpdateCompleted
-            msg="${FWTYPE} firmware update to version ${FWVER} completed successfully."
-            sev=OK
+            msg="$FWTYPE firmware update to version $FWVER completed successfully."
+            sev=Informational
             ;;
         staged)
+            update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_START
             evt=OpenBMC.0.4.0.FirmwareUpdateStaged
-            msg="${FWTYPE} firmware update to version ${FWVER} staged successfully."
-            sev=OK
+            msg="$FWTYPE firmware update to version $FWVER staged successfully."
+            sev=Informational
             ;;
         *) return ;;
     esac
-    create_Phosphor_log $evt $sev $msg
+    create_Phosphor_log
     logger-systemd --journald <<-EOF
 		MESSAGE=$msg
 		PRIORITY=2
@@ -365,15 +430,17 @@ redfish_log_fw_evt() {
 }
 
 redfish_log_abort() {
-    local evt=""
-    local sev=""
-    local msg=""
+    # local evt=""
+    # local sev=""
+    # local msg=""
     local reason=$1
     [ -z "$FWTYPE" ] && return
     [ -z "$FWVER" ] && return
     evt=OpenBMC.0.1.FirmwareUpdateFailed
-    msg="${FWTYPE} firmware update to version ${FWVER} failed: ${reason}."
+    msg="$FWTYPE firmware update to version $FWVER failed: ${reason}."
     sev=Warning
+    update_status $UPDATE_STATUS_EXCEPTION
+    create_Phosphor_log
     logger-systemd --journald <<-EOF
 		MESSAGE=$msg
 		PRIORITY=2
@@ -422,6 +489,36 @@ get_requestedactivation_status() {
     fi
 }
 
+get_pushuri_target() {
+    busctl get-property xyz.openbmc_project.Software.BMC.Updater \
+        /xyz/openbmc_project/software \
+        xyz.openbmc_project.Software.FirmwareUpdateTarget HttpPushUriTargets \
+        | awk -F'"' '{for(i=2;i<=NF;i+=2) print $i}'
+}
+
+Clear_pushuri_target_and_busy_status() {
+    busctl set-property xyz.openbmc_project.Software.BMC.Updater \
+        /xyz/openbmc_project/software \
+        xyz.openbmc_project.Software.FirmwareUpdateTarget HttpPushUriTargets as 0
+
+    busctl set-property xyz.openbmc_project.Software.BMC.Updater \
+        /xyz/openbmc_project/software \
+        xyz.openbmc_project.Software.FirmwareUpdateTarget HttpPushUriTargetsBusy b false
+}
+
+get_default_target() {
+    local comp="$1"
+    comp_array=()
+    for obj in $(busctl --system call xyz.openbmc_project.ObjectMapper \
+        /xyz/openbmc_project/object_mapper xyz.openbmc_project.ObjectMapper GetSubTreePaths \
+        sias /xyz/openbmc_project/software 0 1 xyz.openbmc_project.Software.Version | tr -d '\"'); do
+        if [[ "${obj,,}" == *"$comp"* ]]; then
+            comp_array+=("${obj##*/}")
+        fi
+    done
+    echo "${comp_array[@]}"
+}
+
 exit_fail() { 
     update_percentage $UPDATE_PERCENT_FAIL
     log "${FWTYPE}:${FWVER} - UPDATE_FAILED"
@@ -435,8 +532,9 @@ exit_fail() {
 ifwi_full_flash() {
     # Reading the version from IFWI image(64MB) is not possible.
     # So setting FWVER to "NA".
-    FWTYPE="BIOS"
-    FWVER="NA"
+    # FWTYPE="BIOS"
+    # FWVER="NA"
+    redfish_log_fw_evt stage
 
     update_percentage $UPDATE_PERCENT_PRESTAGE_VERIFY_START
 
@@ -465,10 +563,9 @@ ifwi_full_flash() {
     check_preserve_bios_config
     log "IFWI Full Flash - Starting the SPI write. It will take ~5 minutes...."
     # local rc=$(mtd-util -d /dev/$mtdPart c $LOCAL_PATH 0)
-    local rc=$(flashcp $LOCAL_PATH /dev/$mtdPart)
-    # Log Event: Update percentage and log event
-    update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
-    if [[ "$rc" -eq 0 ]]; then
+    flashcp  $LOCAL_PATH /dev/$mtdPart
+    if [[ $? -eq 0 ]]; then
+        update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
         log "IFWI Full Flash - Image update successful"
         restore_bios_configs
         redfish_log_fw_evt success
@@ -508,8 +605,9 @@ restore_uboot_env_data() {
 bmc_full_flash() {
     # Reading the version from 128MB binary is not possible.
     # So setting FWVER to "NA".
-    FWTYPE="BMC"
-    FWVER="NA"
+    # FWTYPE="BMC"
+    # FWVER="NA"
+    redfish_log_fw_evt staged
 
     update_percentage $UPDATE_PERCENT_PRESTAGE_VERIFY_START
     Check_and_update_whitelist
@@ -535,37 +633,89 @@ bmc_full_flash() {
                     /usr/bin/reset-cs0-aspeed
                 fi
             elif [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
-                log "BMC Full Flash - Starting the SPI write on bkup CS1 spi...."
 		        regval=$(devmem 0x1e620064 )
                 bootmode=$(( ($regval >> 6) & 1 ))
                 if [ "$BOOT_SOURCE" -eq 0 ]; then
+                    log "BMC Full Flash - Starting the SPI write on bkup CS1 spi...."
                     if [ "$bootmode" -eq 1 ]; then
                         cp $LOCAL_PATH /run/initramfs/image-alt-singleabr
                     else
                         cp $LOCAL_PATH /run/initramfs/image-alt-bmc
                     fi
                 else
-                    cp $LOCAL_PATH /run/initramfs/
+                    log "BMC Full Flash - BMC booted from Backup SPI starting the SPI write on bkup CS1 spi...."
+                    regval=$(devmem 0x1e620064 )
+                    bootmode=$(( ($regval >> 6) & 1 ))
+                    if [ "$bootmode" -eq 1 ]; then
+                        cp $LOCAL_PATH /run/initramfs/image-alt-singleabr
+                    else
+                        cp $LOCAL_PATH /run/initramfs/
+                    fi
                 fi
             else
                 if [ "$BOOT_SOURCE" -eq 0 ]; then
                     log "BMC Full Flash - Starting the SPI write on active CS0 spi...."
                     cp $LOCAL_PATH /run/initramfs/
                 else
-                    log "BMC Full Flash - Starting the SPI write on bkup CS1 spi...."
-                    cp $LOCAL_PATH /run/initramfs/image-alt-bmc
+                    log "BMC Full Flash - BMC booted from Backup SPI starting the SPI write on active CS0 spi...."
+                    regval=$(devmem 0x1e620064 )
+                    bootmode=$(( ($regval >> 6) & 1 ))
+                    if [ "$bootmode" -eq 1 ]; then
+                        cp $LOCAL_PATH /run/initramfs/
+                    else
+                        cp $LOCAL_PATH /run/initramfs/image-alt-bmc
+                    fi
                     /usr/bin/reset-cs0-aspeed
                 fi
             fi
+
+            # Stop nv sync
+            systemctl stop nv-sync.service
+            systemctl stop xyz.openbmc_project.Software.Sync.service
+            for mtd in /dev/mtdblock*; do
+                mountpoint=$(mount | grep "$mtd" | awk '{print $3}')
+                if [ -n "$mountpoint" ]; then
+                    echo "Unmounting $mtd from $mountpoint"
+                    umount "$mountpoint"
+                fi
+            done
+            /run/initramfs/update
+            result=$?
+            if [[ "$result" -ne 0 ]]; then
+                log "BMC Full Flash - Image update failed"
+                redfish_log_abort "BMC Full Flash - Image update failed"
+                update_percentage $UPDATE_PERCENT_FAIL
+                log "Cleaning up image files from /run/initramfs"
+                rm -f /run/initramfs/image*
+                return 1
+            fi
             redfish_log_fw_evt success
             update_percentage $UPDATE_PERCENT_SUCCESS
+            log "Cleaning up image files from /run/initramfs"
+            rm -f /run/initramfs/image*
             return 0
         else
             log "BMC Full Flash - Starting the SPI write. It will take ~8 minutes...."
             # check_preserv_config $NON_INTEL_PLATFORMS_MODE
             cp $LOCAL_PATH /run/initramfs/
+            # Stop nv sync
+            systemctl stop nv-sync.service
+            # Unmount rwfs
+            umount $TMP_RWFS
+            /run/initramfs/update
+            result=$?
+            if [[ "$result" -ne 0 ]]; then
+                log "BMC Full Flash - Image update failed"
+                redfish_log_abort "BMC Full Flash - Image update failed"
+                update_percentage $UPDATE_PERCENT_FAIL
+                log "Cleaning up image files from /run/initramfs"
+                rm -f /run/initramfs/image*
+                return 1
+            fi
             redfish_log_fw_evt success
             update_percentage $UPDATE_PERCENT_SUCCESS
+            log "Cleaning up image files from /run/initramfs"
+            rm -f /run/initramfs/image*
             return 0
         fi  # This was missing
     else
@@ -587,7 +737,7 @@ bmc_full_flash() {
                 #     # unmount rwfs
                 #     umount /tmp/.rwfs
                 # fi 
-
+                systemctl stop xyz.openbmc_project.Software.Sync.service
                 Backup_bmc_config
 
                 local rc=$(mtd-util -d /dev/$mtdPart c $LOCAL_PATH 0)
@@ -635,9 +785,9 @@ bmc_full_flash() {
                 fi
                 update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
                 # check_preserv_config
+                redfish_log_fw_evt success
                 restore_bmc_config
                 log "BMC Full Flash - Image updated successful on bkup spi"
-                redfish_log_fw_evt success
                 update_percentage $UPDATE_PERCENT_SUCCESS
                 sleep 5
                 return 0
@@ -685,12 +835,12 @@ bmc_full_flash() {
                     return 1
                 fi
                 update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
+                redfish_log_fw_evt success
                 if [ "$BOOT_SOURCE" -eq 1 ]; then
                     # check_preserv_config
                     restore_bmc_config
                 fi
                 log "BMC Full Flash - Image update successful on bkup spi"
-                redfish_log_fw_evt success
                 update_percentage $UPDATE_PERCENT_SUCCESS
                 sleep 5
                 return 0
@@ -721,6 +871,7 @@ bmc_full_flash() {
                     return 1
                 fi
                 log "BMC Full Flash - Image update successful"
+                redfish_log_fw_evt success
                 if [ "$BOOT_SOURCE" -eq 0 ]; then
                     # check_preserv_config
                     restore_bmc_config
@@ -731,7 +882,6 @@ bmc_full_flash() {
                         echo 1 > "${ACCESS_CS0}"
                     fi
                 fi
-                redfish_log_fw_evt success
                 update_percentage $UPDATE_PERCENT_SUCCESS
                 sleep 5
                 return 0
@@ -744,7 +894,6 @@ bmc_full_flash() {
         #     umount /tmp/.rwfs
         # fi
         Backup_bmc_config
-
         # Flash: writing to BMC SPI device
         log "BMC Full Flash - Starting the SPI write. It will take ~8 minutes...."
         local rc=$(mtd-util -d /dev/mtd0 c $LOCAL_PATH 0)
@@ -759,8 +908,8 @@ bmc_full_flash() {
         fi
         log "BMC Full Flash - Image update successful"
         # check_preserv_config
-        restore_bmc_config
         redfish_log_fw_evt success
+        restore_bmc_config
         update_percentage $UPDATE_PERCENT_SUCCESS
         sleep 5
         return 0
@@ -789,11 +938,46 @@ ping_pong_update() {
         return 1
     fi
 
+    redfish_log_fw_evt staged
+    update_percentage $UPDATE_PERCENT_PRESTAGE_VERIFY_START
     if test -x $update
 	then
-        find $(dirname "$METAFILE_PATH") -type f -name "image-*" ! -name "*.sig" -exec cp {} /run/initramfs/ \;
+        update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_START
+        if [[ "$bmc_active_requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" && "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
+            log "Start Update Both BMC Active and Backup  images. It will take ~20 minutes...."
+            find $(dirname "$METAFILE_PATH") -type f -name "image-*" ! -name "*.sig" -exec cp {} /run/initramfs/ \;
+            find $(dirname "$METAFILE_PATH") -type f -name "image-*" ! -name "*.sig" -exec bash -c 'cp "$1" /run/initramfs/$(basename "$1" | sed "s/^image-/image-alt-/")' _ {} \;
+        elif [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
+            log "Start Update Both BMC Backup image. It will take ~8 minutes...."
+            find $(dirname "$METAFILE_PATH") -type f -name "image-*" ! -name "*.sig" -exec bash -c 'cp "$1" /run/initramfs/$(basename "$1" | sed "s/^image-/image-alt-/")' _ {} \;
+        else
+            log "Start Update Both BMC Active image. It will take ~8 minutes...."
+            find $(dirname "$METAFILE_PATH") -type f -name "image-*" ! -name "*.sig" -exec cp {} /run/initramfs/ \;
+        fi
+        # Stop nv sync
+        systemctl stop nv-sync.service
+        systemctl stop xyz.openbmc_project.Software.Sync.service
+        for mtd in /dev/mtdblock*; do
+            mountpoint=$(mount | grep "$mtd" | awk '{print $3}')
+            if [ -n "$mountpoint" ]; then
+                echo "Unmounting $mtd from $mountpoint"
+                umount "$mountpoint"
+            fi
+        done
+        /run/initramfs/update
+        result=$?
+        if [[ "$result" -ne 0 ]]; then
+            log "BMC Full Flash - Image update failed"
+            redfish_log_abort "BMC Full Flash - Image update failed"
+            update_percentage $UPDATE_PERCENT_FAIL
+            log "Cleaning up image files from /run/initramfs"
+            rm -f /run/initramfs/image*
+            return 1
+        fi
         redfish_log_fw_evt success
         update_percentage $UPDATE_PERCENT_SUCCESS
+        log "Cleaning up image files from /run/initramfs"
+        rm -f /run/initramfs/image*
         return 0
     fi
     # do a quick sanity check on the image
@@ -802,12 +986,13 @@ ping_pong_update() {
         redfish_log_abort "Update file too small"
         return 1
     fi
-    dtc -I dtb -O dtb "$LOCAL_PATH" > /dev/null 2>&1
-    if [ $? -ne 0 ]; then
-        log "Update file $LOCAL_PATH doesn't seem to be in the proper format"
-        redfish_log_abort "Invalid file format"
-        return 1
-    fi
+    update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_START
+    # dtc -I dtb -O dtb "$LOCAL_PATH" > /dev/null 2>&1
+    # if [ $? -ne 0 ]; then
+    #     log "Update file $LOCAL_PATH doesn't seem to be in the proper format"
+    #     redfish_log_abort "Invalid file format"
+    #     return 1
+    # fi
 
     # guess based on fw_env which partition we booted from
     # local BOOTADDR=$(fw_printenv bootcmd | awk '{print $2}')
@@ -817,23 +1002,80 @@ ping_pong_update() {
     #     22480000) TGT="/dev/mtd/image-a"; BOOTADDR="20080000" ;;
     #     *)        TGT="/dev/mtd/image-a"; BOOTADDR="20080000" ;;
     # esac
-    log "Updating $(basename $TGT) (use bootm $BOOTADDR)"
-    flash_erase $TGT 0 0
-    log "Writing $(stat -c "%s" "$LOCAL_PATH") bytes"
-    cat "$LOCAL_PATH" > "$TGT"
+    systemctl stop nv-sync.service
+    local requestedactivationstate=$(get_requestedactivation_status bmc_bkup)
+    local bmc_active_requestedactivationstate=$(get_requestedactivation_status bmc_active)
+    if [[ "$bmc_active_requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" && "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
+        log "Start Update Both BMC Active and Backup  images. It will take ~20 minutes...."
+        TGT="/dev/mtd/image-a"
+        log "Updating $(basename $TGT), It will take ~8 minutes...."
+        flash_erase $TGT 0 0
+        log "Writing $(stat -c "%s" "$LOCAL_PATH") bytes"
+        cat "$LOCAL_PATH" > "$TGT"
+        if [ $? -eq 0 ]; then
+            log "$(basename $TGT) updated successfully"
+        else
+            log "$(basename $TGT) updated failed"
+            redfish_log_abort " $(basename $TGT) - Image update failed"        
+            update_percentage $UPDATE_PERCENT_FAIL
+	        return 1
+        fi
+        TGT="/dev/mtd/alt-image-a"
+        log "Updating $(basename $TGT), It will take ~8 minutes...."
+        flash_erase $TGT 0 0
+        log "Writing $(stat -c "%s" "$LOCAL_PATH") bytes"
+        cat "$LOCAL_PATH" > "$TGT"
+        if [ $? -eq 0 ]; then
+            log "$(basename $TGT) updated successfully"
+        else
+            log "$(basename $TGT) updated failed"
+            redfish_log_abort " $(basename $TGT) - Image update failed"        
+            update_percentage $UPDATE_PERCENT_FAIL
+	        return 1
+        fi
+    elif [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
+        TGT="/dev/mtd/alt-image-a"
+        log "Updating $(basename $TGT), It will take ~8 minutes...."
+        flash_erase $TGT 0 0
+        log "Writing $(stat -c "%s" "$LOCAL_PATH") bytes"
+        cat "$LOCAL_PATH" > "$TGT"
+        if [ $? -eq 0 ]; then
+            log "$(basename $TGT) updated successfully"
+        else
+            log "$(basename $TGT) updated failed"
+            redfish_log_abort " $(basename $TGT) - Image update failed"        
+            update_percentage $UPDATE_PERCENT_FAIL
+	        return 1
+        fi
+    else
+        log "Updating $(basename $TGT), It will take ~8 minutes...."
+        flash_erase $TGT 0 0
+        log "Writing $(stat -c "%s" "$LOCAL_PATH") bytes"
+        cat "$LOCAL_PATH" > "$TGT"
+        if [ $? -eq 0 ]; then
+            log "$(basename $TGT) updated successfully"
+        else
+            log "$(basename $TGT) updated failed"
+            redfish_log_abort " $(basename $TGT) - Image update failed"        
+            update_percentage $UPDATE_PERCENT_FAIL
+	        return 1
+        fi
+    fi
+    systemctl start nv-sync.service
     # fw_setenv "bootcmd" "bootm ${BOOTADDR}"
+    redfish_log_fw_evt success
     wait_for_log_sync
     if [[ "$applytime" == "$immediate" || "$applytime" == "$atMaintenanceWindowStart"  ]];then
         # stop the nv-sync.service to trigger the overlay sync and unmount before 'reboot -f'
         systemctl stop nv-sync.service
     fi    
-    redfish_log_fw_evt success
     update_percentage $UPDATE_PERCENT_SUCCESS
     return 0
 }
 
 cpld_full_flash()
 {
+    redfish_log_fw_evt staged
     echo "cpld full falsh called"
     update_percentage $UPDATE_PERCENT_PRESTAGE_VERIFY_START
     update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_START
@@ -860,7 +1102,6 @@ cpld_full_flash()
     fi
         log "CPLD Flash - Image update successful"
         update_percentage $UPDATE_PERCENT_SUCCESS
-        redfish_log_fw_evt success
         cmd="cpld-tool $InputParameters -u"
         echo $cmd >&2
         cpld_output=$( $cmd )
@@ -879,21 +1120,237 @@ cpld_full_flash()
             $cpldpath \
             xyz.openbmc_project.Software.Version Version \
             s $usercode
+        redfish_log_fw_evt success
         return 0
 }
 
 pldm_update() {
-    busctl call xyz.openbmc_project.pldm /xyz/openbmc_project/pldm/fwu \
-        xyz.openbmc_project.PLDM.FWU.FWUBase StartFWUpdate s "$LOCAL_PATH"
-    if [ $? -ne 0 ]; then
-        log "initialising PLDM update failed"
-        exit_fail
+    redfish_log_fw_evt staged
+    local buffer=""
+    local found=0
+    local obj_path=""
+    local image_copied=0
+
+    while read -r line; do
+        # Ensure copy starts only once and after monitor begins
+        if [ "$image_copied" -eq 0 ]; then
+            echo "Copying image to ot-pldm directory..."
+            rand=$(printf "%06d" $((RANDOM % 1000000)))
+            cp "$LOCAL_PATH" "/tmp/images/ot-pldm/image$rand"
+            image_copied=1
+        fi
+
+        # Clean line formatting
+        line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+        # Look for object path line (dbus-monitor format)
+        if echo "$line" | grep -q '^object path'; then
+            obj_path=$(echo "$line" | awk -F'"' '{print $2}')
+            buffer=""
+            continue
+        fi
+
+        # Accumulate lines for parsing full block
+        buffer="${buffer}
+${line}"
+
+        # Check if Activation interface appeared
+        if echo "$buffer" | grep -q "xyz.openbmc_project.Software.Activation" && [ -n "$obj_path" ]; then
+            echo "Found object with Activation interface: $obj_path"
+            found=1
+            break
+        fi
+    done < <(timeout 40s dbus-monitor --system \
+        "type='signal',interface='org.freedesktop.DBus.ObjectManager',member='InterfacesAdded',path='/xyz/openbmc_project/software'") || {
+        log "Timeout expired while waiting for InterfacesAdded signal with xyz.openbmc_project.Software.Activation."
+        redfish_log_abort "PLDM Update - Activation interface not found"
+        update_percentage $UPDATE_PERCENT_FAIL
+        return 1
+    }
+
+    local image_activated=0
+    local found_progress=0
+    local found_activation=0
+    local found_activation_property=0
+
+    while read -r line; do
+        if [ "$image_activated" -eq 0 ]; then
+            if [ -n "$obj_path" ]; then
+                busctl set-property \
+                    xyz.openbmc_project.PLDM \
+                    "$obj_path" \
+                    xyz.openbmc_project.Software.Activation \
+                    RequestedActivation \
+                    s \
+                    xyz.openbmc_project.Software.Activation.RequestedActivations.Active || {
+                        log "Error: Failed to set RequestedActivation to 'Active'."
+                        return 1
+                    }
+            else
+                log "Error: obj_path is empty or invalid. Cannot set RequestedActivation."
+                redfish_log_abort "PLDM Update - RequestedActivation failed"
+                update_percentage $UPDATE_PERCENT_FAIL
+                return 1
+            fi
+            image_activated=1
+        fi
+
+        if echo "$line" | grep -q "xyz.openbmc_project.Software.ActivationProgress"; then
+            found_progress=1
+        elif [ "$found_progress" = "1" ] && echo "$line" | grep -q 'variant'; then
+            progress=$(echo "$line" | awk '/variant/ {print $NF}')
+            echo "Progress: $progress%"
+            found_progress=0
+        fi
+
+        if echo "$line" | grep -q 'string "xyz.openbmc_project.Software.Activation"'; then
+            found_activation=1
+            found_activation_property=0
+        fi
+
+        if [ "$found_activation" = "1" ] && echo "$line" | grep -q 'string "Activation"'; then
+            found_activation_property=1
+        fi
+
+        if [ "$found_activation" = "1" ] && [ "$found_activation_property" = "1" ] && echo "$line" | grep -q 'variant'; then
+            if echo "$line" | grep -q "xyz.openbmc_project.Software.Activation.Activations.Failed"; then
+                log "Activation failed."
+                redfish_log_abort "PLDM Update - Activation failed"
+                update_percentage "$UPDATE_PERCENT_FAIL"
+                return 1
+            elif echo "$line" | grep -q "xyz.openbmc_project.Software.Activation.Activations.Invalid"; then
+                log "Activation invalid."
+                redfish_log_abort "PLDM Update - Activation invalid"
+                update_percentage "$UPDATE_PERCENT_FAIL"
+                return 1
+            elif echo "$line" | grep -q "xyz.openbmc_project.Software.Activation.Activations.NotReady"; then
+                log "Activation not ready."
+                redfish_log_abort "PLDM Update - Activation NotReady"
+                update_percentage "$UPDATE_PERCENT_FAIL"
+                return 1
+            elif echo "$line" | grep -q "xyz.openbmc_project.Software.Activation.Activations.Active"; then
+                echo "Activation succeeded."
+                log "Activation completed successfully."
+                redfish_log_fw_evt success
+                return 0
+            fi
+
+            found_activation=0
+            found_activation_property=0
+        fi
+    done < <(timeout 1600s dbus-monitor --system \
+        "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path='$obj_path'") || {
+        log "Error: Failed to monitor D-Bus properties for activation progress due to timeout."
+        redfish_log_abort "PLDM Update - Activation progress monitoring failed"
+        update_percentage $UPDATE_PERCENT_FAIL
+        return 1
+    }
+
+    kill -9 $(pgrep -f "dbus-monitor --system type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path='$obj_path'") 2>/dev/null
+    return 0
+}
+
+raid_update() {
+    read -ra updaterList <<< "$(get_pushuri_target)"
+    if [[ ${#updaterList[@]} -eq 0 ]]; then
+        read -ra default_comp <<< "$(get_default_target raid)"
+        read -ra default_comp_hba <<< "$(get_default_target hba)"
+        read -ra default_mscc_raid <<< "$(get_default_target ctrl)"
+        default_comp+=("${default_mscc_raid[@]}")
+        default_comp+=("${default_comp_hba[@]}")
+        if [[ ${#default_comp[@]} -gt 1 ]]; then
+            log "Kindly update one RAID component in target to update Firmware"
+            log "RAID: ${default_comp[@]}"
+            exit_fail
+        else
+            updaterList=("${default_comp[@]}")
+        fi
     fi
+    outputfile=/tmp/signal_output.txt
+    SIGNAL_RECEIVED=0
+    update_percentage $UPDATE_PERCENT_PRESTAGE_VERIFY_START
+    update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_START
+    for targetPath in $updaterList; do
+        targetRaidId="${targetPath##*_}"
+        targetRAIDType="${targetPath%%_*}"
+        targetRAIDSubType=$(echo "${targetPath#*_}" | cut -d'_' -f1)
+        TIMEOUT=300  # Set a timeout in seconds
+        SECONDS=0
+
+        log "Start $targetPath RAID Firmware update"
+
+        if [ "$targetRAIDType" == "Broadcom" ]; then
+            raidSubType=$( [ "$targetRAIDSubType" == "HBA" ] && echo 'HBA' || echo 'Raid' )
+            raidSubTypeInterface=$( [ "$targetRAIDSubType" == "HBA" ] && echo 'hba' || echo 'raid' )
+
+            busctl monitor --match "type='signal',sender='xyz.openbmc_project.$raidSubTypeInterface.manager',member='MethodCompletedSignal'" > $outputfile &
+            buscall_id=$!
+            RaidId=$(busctl get-property xyz.openbmc_project.$raidSubTypeInterface.manager \
+                    /xyz/openbmc_project/$raidSubType/$targetRaidId \
+                    xyz.openbmc_project.$raidSubTypeInterface.Controller Id \
+                    | awk '{print $2}')
+
+            busctl call xyz.openbmc_project.$raidSubTypeInterface.manager /xyz/openbmc_project/$raidSubType \
+                    xyz.openbmc_project.$raidSubTypeInterface.Base FlashControllerFirmware us "$RaidId" "$LOCAL_PATH"
+
+         elif [ "$targetRAIDType" == "Microchip" ]; then
+
+            busctl monitor --match "type='signal',sender='com.ami.storage',member='MethodCompletedSignal'" > $outputfile &
+            buscall_id=$!
+            busctl call com.ami.storage /com/ami/storage/mscc/ctrl/$targetRaidId com.ami.storage.mscc.ctrl.Configuration \
+                FlashControllerFirmware s "$LOCAL_PATH"
+        fi
+
+        while [ $SECONDS -lt $TIMEOUT ]; do
+            if grep -q "MethodCompletedSignal" $outputfile; then
+                if [ "$targetRAIDType" == "Microchip" ]; then
+                    getStatus=$(grep 'STRING "com.ami.storage' $outputfile | tail -n 1 | cut -d '"' -f 2 | awk -F'.' '{print $NF}')
+                    if [[ "$getStatus" != "Progress" ]]; then
+                        SIGNAL_RECEIVED=1
+                        break
+                    fi
+                else
+                    SIGNAL_RECEIVED=1
+                    break
+                fi
+            fi
+            sleep 1
+            SECONDS+=1
+        done
+
+        kill $buscall_id
+
+        update_percentage $UPDATE_PERCENT_FLASH_OR_STAGE_COMPLETE
+
+        if [ $SIGNAL_RECEIVED -eq 1 ]; then
+            ERROR_CODE=$(grep 'STRING' $outputfile | head -n 1 | cut -d '"' -f 2)
+            STATUS_MESSAGE=$(grep 'STRING' $outputfile | tail -n 1 | cut -d '"' -f 2)
+
+            if [ "$STATUS_MESSAGE" == "Success" ]; then
+                log "$targetPath RAID updated successfully"
+            else
+                log "Failed to update RAID $targetPath"
+                update_percentage $UPDATE_PERCENT_FAIL
+                # exit_fail
+                Clear_pushuri_target_and_busy_status
+                return 1
+            fi
+
+            SIGNAL_RECEIVED=0
+        else
+            log "Failed to receive signal."
+            # exit_fail
+            Clear_pushuri_target_and_busy_status
+            return 1
+        fi
+    done
+    update_percentage $UPDATE_PERCENT_SUCCESS
+    Clear_pushuri_target_and_busy_status
+    return 0
 }
 
 
 fetch_fw() {
-    redfish_log_fw_evt start
     update_percentage $UPDATE_PERCENT_FETCH_START
     PROTO=$(echo "$URI" | sed 's,\([a-z]*\)://.*$,\1,')
     REMOTE=$(echo "$URI" | sed 's,.*://\(.*\)$,\1,')
@@ -931,7 +1388,7 @@ fetch_fw() {
                 fi
                 ;;
             http|https|ftp)
-                wget --no-check-certificate "$URI" -O "$LOCAL_PATH"
+                wget "$URI" -O "$LOCAL_PATH"
                 if [ $? -ne 0 ]; then
                     log "wget $URI failed!"
                     return 1
@@ -964,6 +1421,9 @@ update_fw() {
             if [ -f "$(dirname "$METAFILE_PATH")/image-runtime" ]; then LOCAL_PATH="$(dirname "$METAFILE_PATH")/image-runtime"; else LOCAL_PATH="$(dirname "$METAFILE_PATH")/image-kernel"; fi
             COMPONENTNAME="bmc"
             echo "Updating image $LOCAL_PATH"
+            FWTYPE=$COMPONENTNAME
+            FWVER=$(get_firmware_version)
+            redfish_log_fw_evt start
             ping_pong_update
             return $?
         elif [ -f "$(dirname "$METAFILE_PATH")/image-bmc" ]; then
@@ -978,9 +1438,14 @@ update_fw() {
         elif [ -f "$(dirname "$METAFILE_PATH")/image-pldm" ]; then
             LOCAL_PATH="$(dirname "$METAFILE_PATH")/image-pldm" 
             COMPONENTNAME="pldm"
+        elif [ -f "$(dirname "$METAFILE_PATH")/image-raid" ]; then
+            LOCAL_PATH="$(dirname "$METAFILE_PATH")/image-raid" 
+            COMPONENTNAME="raid"
         fi    
     fi  
-    
+    FWTYPE=$COMPONENTNAME
+    FWVER=$(get_firmware_version)
+    redfish_log_fw_evt start
     log "Check firmware update priority"
     IsMeetsMultiFirmwareRules ${img_obj}
     if [[ "$?" = "${RET_FAILED}" ]];then
@@ -1021,7 +1486,12 @@ update_fw() {
                 log "Unknown pldm file type Magic ${magicPLDM}"   
                 return 1 
             fi
-            ;;            
+            ;;    
+        "raid")
+            log "RAID Firmware update request"
+            raid_update
+            return $?
+            ;;        
         *)       
             log "Unknown component name ${componentName}"
             return 1
@@ -1055,10 +1525,6 @@ if [ $# -eq 0 ]; then
     URI="$DEFURI"
 else
     echo "path=$1"
-    # clear cache before start firmware update
-    if [ ! -f $update ]; then
-        echo 3 > /proc/sys/vm/drop_caches
-    fi
     if [[ "$1" == *"/"* ]]; then
         URI=$1 # local file
         local_file=1 ;

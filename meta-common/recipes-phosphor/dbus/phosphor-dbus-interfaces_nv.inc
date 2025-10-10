@@ -1,7 +1,4 @@
 SRC_URI:prepend = " \
-        file://nv/0001-Added-nvidia-related-yaml-files-for-pldm-integration.patch \
-        file://nv/0002-Add-SPDM-configurations.patch \
-        file://nv/0003-Integrate-dbus-interfaces-changes-required-for-meta-.patch \
         file://nv/0004-phosphorus-debug-collector-package-integration.patch \
 "
 SRC_URI:append = " \
@@ -11,11 +8,10 @@ SRC_URI:append = " \
         file://nv/PowerSystemInputs.interface.yaml \
         file://nv/OperationalStatus.interface.yaml \
 	file://nv/PortState.interface.yaml \
-	file://nv/OT-2.0-PLDM-rebase-PortState_yaml_meson_buld_file.patch \
-	file://nv/OT-2.0-PLDM-rebase-PortInfo_yaml.patch \
-	file://nv/0005-Modifying_Auto_Gen_D-Bus_Files_for_nsmd.patch \
-	file://nv/0006-Adding_Auto_Gen_D-Bus_Files_for_nsmd.patch \
-	file://nv/0007-Adding_D-BUS_Changes_for_nsmd.patch \
+        file://nv/BootStatus.interface.yaml \
+        file://nv/Update-all-meson-build-files.patch \
+        file://nv/0009-Add-csm-interfaces-for-state-manager.patch \
+        file://nv/0010-nvidia-sync-changes-from-gb300nvl-ws-2506-branch.patch \
 "
 
 do_replace_files() {
@@ -26,6 +22,8 @@ do_replace_files() {
     install -m 0644 ${WORKDIR}/nv/PowerSystemInputs.interface.yaml ${S}/yaml/xyz/openbmc_project/State/Decorator/
     install -m 0644 ${WORKDIR}/nv/OperationalStatus.interface.yaml ${S}/yaml/xyz/openbmc_project/State/Decorator/
     install -m 0644 ${WORKDIR}/nv/PortState.interface.yaml ${S}/yaml/xyz/openbmc_project/Inventory/Decorator/
+    install -d ${S}/yaml/com/nvidia/RoT/
+    install -m 0644 ${WORKDIR}/nv/BootStatus.interface.yaml ${S}/yaml/com/nvidia/RoT/
 }
 addtask replace_files after do_patch before do_configure
 

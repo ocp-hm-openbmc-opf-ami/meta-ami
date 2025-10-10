@@ -11,3 +11,57 @@
     systemctl reload rsyslog 2> /dev/null || true
     endscript
 }
+
+# Keep up to two 256k files for extended logs
+/etc/extlog/extended.log
+{
+    copytruncate
+    rotate 1
+    size 100k
+    missingok
+    postrotate
+    systemctl reload rsyslog 2> /dev/null || true
+    endscript
+}
+
+/var/log/*.log {
+
+        copytruncate
+        rotate 1
+        size 50000
+        missingok
+        nocompress
+        notifempty
+        create 0640 root adm
+        nodateext
+        prerotate
+        CONFIG_FILE="/etc/logrotate.d/logrotate.rsyslog"
+        ROTATE=$(awk '
+            BEGIN {inblock=0}
+            $0 ~ "^/var/log/\\*\\.log" {inblock=1; next}
+            inblock && /^\{/ {next}
+            inblock && /rotate[ \t]+[0-9]+/ {print $2; exit}
+            inblock && /^\}/ {inblock=0}
+        ' "$CONFIG_FILE")
+
+        if [ "$ROTATE" -ne 0 ]; then
+            mkdir -p /etc/extlog/syslogbkup
+            cp -p /var/log/*.log.1 /etc/extlog/syslogbkup/ 2>/dev/null || true
+        fi
+        endscript
+        postrotate
+        CONFIG_FILE="/etc/logrotate.d/logrotate.rsyslog"
+        ROTATE=$(awk '
+            BEGIN {inblock=0}
+            $0 ~ "^/var/log/\\*\\.log" {inblock=1; next}
+            inblock && /^\{/ {next}
+            inblock && /rotate[ \t]+[0-9]+/ {print $2; exit}
+            inblock && /^\}/ {inblock=0}
+        ' "$CONFIG_FILE")
+
+        if [ "$ROTATE" -eq 0 ]; then
+            cp -p /etc/extlog/syslogbkup/*.log.1 /var/log/ 2>/dev/null || true
+        fi
+        systemctl reload rsyslog > /dev/null 2>&1 || true
+        endscript
+}

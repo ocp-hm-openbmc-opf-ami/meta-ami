@@ -11,8 +11,12 @@ SRC_URI += " \
 	       file://0006-Add-support-to-applytime-property.patch \
 	       file://Add-pre-check-for-enable-power-saving-mode.patch \
            file://0007-Added-Dbus-object-path-interface-and-property-for-BM.patch \
-           file://0008-Add-SEL-Limit-Flags.patch \
+           file://0008-Added-errorFalg-and-infoFlags-for-multiple-logTypes.patch \
            file://0009-Added-Dbus-Object-for-DCMI-Thermal-Limit.patch \
+	   file://0010-sol-session-bond-ifc.patch \
+	   file://0011-Added-additional-boot-override-properties.patch \
+	   file://0012-Added-last-entryId-for-ipmi.patch \
+	   file://0013-Add-ipmi-entry-count.patch \
 "
 
 SRC_URI_evb_aspeed:append =  " \

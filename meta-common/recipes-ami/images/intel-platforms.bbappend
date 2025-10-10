@@ -18,6 +18,12 @@ write_flash_size_to_file() {
     echo "${image_size_hex}" > "${fw_size_file}"
 }
 
+# Disable root login when debug-tweaks is not enabled
+python __anonymous() {
+    if not bb.utils.contains_any("EXTRA_IMAGE_FEATURES", ["debug-tweaks", "allow-root-login"], True, False, d):
+        d.appendVar("EXTRA_USERS_PARAMS:pn-obmc-phosphor-image", " usermod -p \"!\" root;")
+}
+
 enable_radius_nsswitch() {
     sed -i 's/\(\(passwd\|group\):\s*\).*/\1files systemd ldap radius/' \
         "${IMAGE_ROOTFS}${sysconfdir}/nsswitch.conf"
@@ -27,7 +33,8 @@ enable_radius_nsswitch() {
 
 }
 
-ROOTFS_POSTPROCESS_COMMAND += "${@bb.utils.contains('IMAGE_INSTALL', 'radiusclient-ng', 'enable_radius_nsswitch; ', '', d)}"
+ROOTFS_POSTPROCESS_COMMAND += "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-radius-client', 'enable_radius_nsswitch; ', '', d)}"
 
 ROOTFS_POSTPROCESS_COMMAND += "write_flash_size_to_file; "
 
+inherit obmc-onetree-apps

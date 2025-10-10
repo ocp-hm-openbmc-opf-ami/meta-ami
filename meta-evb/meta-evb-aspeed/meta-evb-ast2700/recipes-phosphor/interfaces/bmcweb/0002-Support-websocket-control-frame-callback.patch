@@ -1,0 +1,144 @@
+From b73c7257428af2531b46512f0419d39e71f2a02a Mon Sep 17 00:00:00 2001
+From: Troy Lee <troy_lee@aspeedtech.com>
+Date: Thu, 25 May 2023 14:27:16 +0800
+Subject: [PATCH] Support websocket control frame callback
+
+boost::beast::websocket provide control_callback() to register control
+frame callback. This patch enables the callback and hook up with Handler
+implementation for onclose/onping/onpong.
+
+v2-v3: Fix coding style issue
+
+Signed-off-by: Troy Lee <troy_lee@aspeedtech.com>
+---
+ http/routing/websocketrule.hpp | 20 +++++++++++++--
+ http/websocket.hpp             | 45 ++++++++++++++++++++++++++++++++--
+ 2 files changed, 61 insertions(+), 4 deletions(-)
+
+diff --git a/http/routing/websocketrule.hpp b/http/routing/websocketrule.hpp
+index 0905b08e..adc0d682 100644
+--- a/http/routing/websocketrule.hpp
++++ b/http/routing/websocketrule.hpp
+@@ -37,7 +37,7 @@ class WebSocketRule : public BaseRule
+             myConnection = std::make_shared<
+                 crow::websocket::ConnectionImpl<boost::asio::ip::tcp::socket>>(
+                 req.url(), req.session, std::move(adaptor), openHandler,
+-                messageHandler, messageExHandler, closeHandler, errorHandler);
++                messageHandler, messageExHandler, closeHandler, errorHandler, pingHandler, pongHandler);
+         myConnection->start(req);
+     }
+ 
+@@ -52,7 +52,7 @@ class WebSocketRule : public BaseRule
+             myConnection = std::make_shared<crow::websocket::ConnectionImpl<
+                 boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>>(
+                 req.url(), req.session, std::move(adaptor), openHandler,
+-                messageHandler, messageExHandler, closeHandler, errorHandler);
++                messageHandler, messageExHandler, closeHandler, errorHandler, pingHandler, pongHandler);
+         myConnection->start(req);
+     }
+ 
+@@ -91,6 +91,20 @@ class WebSocketRule : public BaseRule
+         return *this;
+     }
+ 
++    template <typename Func>
++    self_t& onping(Func f)
++    {
++        pingHandler = f;
++        return *this;
++    }
++
++    template <typename Func>
++    self_t& onpong(Func f)
++    {
++        pongHandler = f;
++        return *this;
++    }
++
+   protected:
+     std::function<void(crow::websocket::Connection&)> openHandler;
+     std::function<void(crow::websocket::Connection&, const std::string&, bool)>
+@@ -102,5 +116,7 @@ class WebSocketRule : public BaseRule
+     std::function<void(crow::websocket::Connection&, const std::string&)>
+         closeHandler;
+     std::function<void(crow::websocket::Connection&)> errorHandler;
++    std::function<void(crow::websocket::Connection&, const std::string&)> pingHandler;
++    std::function<void(crow::websocket::Connection&, const std::string&)> pongHandler;
+ };
+ } // namespace crow
+diff --git a/http/websocket.hpp b/http/websocket.hpp
+index e8d7b125..c0eb20d8 100644
+--- a/http/websocket.hpp
++++ b/http/websocket.hpp
+@@ -61,14 +61,18 @@ class ConnectionImpl : public Connection
+                            std::function<void()>&& whenComplete)>
+             messageExHandlerIn,
+         std::function<void(Connection&, const std::string&)> closeHandlerIn,
+-        std::function<void(Connection&)> errorHandlerIn) :
++        std::function<void(Connection&)> errorHandlerIn,
++        std::function<void(Connection&, const std::string&)> pingHandlerIn,
++        std::function<void(Connection&, const std::string&)> pongHandlerIn) :
+         uri(urlViewIn),
+         ws(std::move(adaptorIn)), inBuffer(inString, 131088),
+         openHandler(std::move(openHandlerIn)),
+         messageHandler(std::move(messageHandlerIn)),
+         messageExHandler(std::move(messageExHandlerIn)),
+         closeHandler(std::move(closeHandlerIn)),
+-        errorHandler(std::move(errorHandlerIn)), session(sessionIn)
++        errorHandler(std::move(errorHandlerIn)),
++        pingHandler(std::move(pingHandlerIn)),
++        pongHandler(std::move(pongHandlerIn)), session(sessionIn)
+     {
+         /* Turn on the timeouts on websocket stream to server role */
+         ws.set_option(boost::beast::websocket::stream_base::timeout::suggested(
+@@ -132,6 +136,41 @@ class ConnectionImpl : public Connection
+         ws.async_accept(*ptr,
+                         std::bind_front(&self_t::acceptDone, this,
+                                         shared_from_this(), std::move(mobile)));
++
++        ws.control_callback([this, self(shared_from_this())](
++                                boost::beast::websocket::frame_type kind,
++                                std::string_view payload) {
++            switch (kind)
++            {
++                case boost::beast::websocket::frame_type::close:
++                {
++                    BMCWEB_LOG_DEBUG("Control frame [CLOSE]: {}", payload);
++                    if (closeHandler)
++                    {
++                        closeHandler(*this, std::string(payload));
++                    }
++                    break;
++                }
++                case boost::beast::websocket::frame_type::ping:
++                {
++                    BMCWEB_LOG_DEBUG("Control frame [PING]: {}", payload);
++                    if (pingHandler)
++                    {
++                        pingHandler(*this, std::string(payload));
++                    }
++                    break;
++                }
++                case boost::beast::websocket::frame_type::pong:
++                {
++                    BMCWEB_LOG_DEBUG("Control frame [PONG]: {}", payload);
++                    if (pongHandler)
++                    {
++                        pongHandler(*this, std::string(payload));
++                    }
++                    break;
++                }
++            }
++        });
+     }
+ 
+     void sendBinary(std::string_view msg) override
+@@ -359,6 +398,8 @@ class ConnectionImpl : public Connection
+         messageExHandler;
+     std::function<void(Connection&, const std::string&)> closeHandler;
+     std::function<void(Connection&)> errorHandler;
++    std::function<void(Connection&, const std::string&)> pingHandler;
++    std::function<void(Connection&, const std::string&)> pongHandler;
+     std::shared_ptr<persistent_data::UserSession> session;
+ 
+     std::shared_ptr<Connection> selfOwned;

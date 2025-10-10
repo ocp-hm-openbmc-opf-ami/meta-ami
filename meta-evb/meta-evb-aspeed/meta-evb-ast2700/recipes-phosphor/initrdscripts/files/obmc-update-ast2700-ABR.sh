@@ -100,6 +100,16 @@ probe_fs_type() {
 	echo "${fst:=jffs2}"
 }
 
+restore_uboot_env_data() {
+	uboot_env_bin_file="uboot_env_data.bin"
+	mtdPart=$( cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"u-boot-env\"" {print $1}')
+	rc=$(flashcp -v "/run/initramfs/${uboot_env_bin_file}" "/dev/${mtdPart}")
+	if test "$rc" == ""
+	then
+		echo "Restore u-boot-env parition failed"
+	fi
+}
+
 rwfs=$(findmtd rwfs)
 
 rwdev=/dev/mtdblock${rwfs#mtd}
@@ -120,6 +130,7 @@ checksize=y
 checkmount=y
 
 whitelist=/run/initramfs/whitelist
+restore_uboot_env=/run/initramfs/uboot_env_data.bin
 image=/run/initramfs/image-
 imglist=
 
@@ -188,6 +199,17 @@ then
 		mkdir -p $rwdir
 		mount "$rwdev" $rwdir -t "$(probe_fs_type "$rwdev")" -o "$rorwopts"
 		mounted=$rwdir
+	fi
+
+	if test -e "$upper/whitelist"
+	then
+		cp $upper/whitelist $whitelist
+		if test -e "$upper/uboot_env_data.bin"
+		then
+			cp $upper/uboot_env_data.bin $restore_uboot_env
+			rm -rf $upper/uboot_env_data.bin > /dev/null 2>&1
+		fi
+		rm -rf $upper/whitelist > /dev/null 2>&1
 	fi
 
 	while read -r f
@@ -263,6 +285,17 @@ then
 		echo "Updating ${f#"$image"}..."
 		flashcp -v "$f" "/dev/$m" && rm "$f"
 	done
+fi
+
+if test -f "$restore_uboot_env"
+then
+	echo "Restore u-boot-env partition"
+	restore_uboot_env_data
+elif grep -w factory-reset /run/initramfs/init-options
+then
+	echo "Clear u-boot-env partition"
+	mtdPart=$( cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"u-boot-env\"" {print $1}')
+	flash_eraseall /dev/$mtdPart
 fi
 
 if test -d "$save" -a "$toram" = "y"

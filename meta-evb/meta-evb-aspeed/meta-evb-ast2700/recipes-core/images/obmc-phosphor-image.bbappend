@@ -3,7 +3,6 @@ IMAGE_INSTALL:append = " \
         libmctp \
         entity-manager \
         virtual-media \
-        default-fru \
         "
 
 IMAGE_INSTALL:append = " \
@@ -15,7 +14,6 @@ IMAGE_INSTALL:append = " \
         packagegroup-aspeed-crypto \
         packagegroup-aspeed-ssif \
         packagegroup-aspeed-obmc-inband \
-        ${@bb.utils.contains('MACHINE_FEATURES', 'ast-ssp', 'packagegroup-aspeed-ssp', '', d)} \
         packagegroup-aspeed-mtdtest \
         packagegroup-aspeed-usbtools \
         ${@bb.utils.contains('DISTRO_FEATURES', 'tpm', \
@@ -33,6 +31,11 @@ IMAGE_INSTALL:remove:aspeed-g5 = " \
         packagegroup-oss-extra \
         "
 
+# packagegroup for ast2600
+IMAGE_INSTALL:append:aspeed-g6 = " \
+        ${@bb.utils.contains('MACHINE_FEATURES', 'ast-ssp', 'packagegroup-aspeed-coprocessor-ssp', '', d)} \
+        "
+
 # packagegroup for ast2700
 IMAGE_INSTALL:append:aspeed-g7 = " \
         packagegroup-oss-extended \
@@ -47,6 +50,19 @@ EXTRA_IMAGE_FEATURES:append = " \
 # Enable spi-nor-ecc.inc and unmask below to generate an image-rwfs with cleanmarker size set to 16.
 #OVERLAY_MKFS_OPTS:spi-nor-ecc = " -c 16 -e 262144 --pad=${RWFS_SIZE} "
 
-# defer the inheritance of image_types_phosphor_aspeed to ensure it overrides image_types_phosphor
-inherit_defer image_types_phosphor_aspeed
-#inherit image_types_phosphor_aspeed
+IMAGE_CLASSES:append:aspeed-g7 = " image_types_phosphor_aspeed_g7"
+
+# We use direct-with-blksz.py to create WIC file for UFS.
+# Do not generate scripts/lib/wic/plugins/imager/__pycache__/
+IMAGE_CMD:wic:prepend:ast-ufs () {
+        export PYTHONDONTWRITEBYTECODE="1"
+}
+
+clean_pubkey() {
+    pubkeypath=$(find ${IMAGE_ROOTFS} -name publickey)
+    if [ -n "$pubkeypath" ]; then
+      rm -rf ${pubkeypath}
+    fi
+}
+
+ROOTFS_POSTPROCESS_COMMAND += " clean_pubkey; "

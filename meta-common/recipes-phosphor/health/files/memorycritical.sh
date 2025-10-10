@@ -8,7 +8,7 @@ clear_caches() {
     echo "Clearing caches..."
 
     # Clear pagecache, dentries, and inodes
-    sync && echo 3 | tee /proc/sys/vm/drop_caches
+    # sync && echo 3 | tee /proc/sys/vm/drop_caches
 
     # Clear systemd journal logs older than 1 day
     journalctl --vacuum-time=1d
@@ -17,7 +17,7 @@ clear_caches() {
     systemctl restart systemd-resolved
 
     # Clear slab cache
-    echo 1 > /proc/sys/vm/drop_caches
+    # echo 1 > /proc/sys/vm/drop_caches
 
     # Clear swap cache
     swapoff -a && swapon -a
@@ -44,7 +44,9 @@ while true; do
         else
             # If not in exclusion list, output the process and kill it
             echo "Top memory-consuming service: $command (PID: $pid) using $rss KB of memory"
-            kill "$pid"
+            service_file=$(systemctl status "$pid" 2>/dev/null | head -n 1 | awk -F'[*-]' '{print $2}')
+            systemctl stop "$service_file"
+            #kill "$pid"
             echo "$command has been stopped."
             
             # Exit the loop after killing the first valid process
