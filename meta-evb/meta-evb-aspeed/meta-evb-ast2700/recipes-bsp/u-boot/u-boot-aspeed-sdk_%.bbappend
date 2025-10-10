@@ -1,5 +1,5 @@
 #require aspeed-ssp-tsp.inc
-# FILESEXTRAPATHS:append := "${THISDIR}/files:"
+# FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
 # SRC_URI:append:ast2700-a0-default = " \
 #         file://uboot-fdtspiaddr.cfg  \
