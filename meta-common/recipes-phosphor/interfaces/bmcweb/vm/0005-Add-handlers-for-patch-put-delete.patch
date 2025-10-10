@@ -1,0 +1,237 @@
+From 1a2cdc1ad674cfc05fbcd5362efbc8feeddc81b4 Mon Sep 17 00:00:00 2001
+From: Przemyslaw Czarnowski <przemyslaw.hawrylewicz.czarnowski@intel.com>
+Date: Tue, 31 May 2022 12:23:07 +0200
+Subject: [PATCH] Add handlers for patch/put/delete
+
+According to specification, for proxy mode
+https://github.com/openbmc/docs/blob/master/designs/virtual-media.md#proxy-mode
+insert media action is not serviced by redfish but via websocket
+handler. That's why GET on item for proxy mode does not contain
+InsertMedia action:
+
+- Legacy:
+curl -X GET https://some_addr/redfish/v1/Managers/bmc/VirtualMedia/Legacy
+{
+  "@odata.id": "/redfish/v1/Managers/bmc/VirtualMedia/Legacy",
+  "@odata.type": "#VirtualMedia.v1_3_0.VirtualMedia",
+  "Actions": {
+    "#VirtualMedia.EjectMedia": {
+      "target": "/redfish/v1/Managers/bmc/VirtualMedia/Legacy/Actions/VirtualMedia.EjectMedia"
+    },
+    "#VirtualMedia.InsertMedia": {
+      "target": "/redfish/v1/Managers/bmc/VirtualMedia/Legacy/Actions/VirtualMedia.InsertMedia"
+    }
+  },
+  [cut ...]
+
+- Proxy:
+curl -X GET https://some_addr/redfish/v1/Managers/bmc/VirtualMedia/Proxy
+{
+  "@odata.id": "/redfish/v1/Managers/bmc/VirtualMedia/Proxy",
+  "@odata.type": "#VirtualMedia.v1_3_0.VirtualMedia",
+  "Actions": {
+    "#VirtualMedia.EjectMedia": {
+      "target": "/redfish/v1/Managers/bmc/VirtualMedia/Proxy/Actions/VirtualMedia.EjectMedia"
+    }
+  },
+  [cut ...]
+
+This creates need to differentiate service of
+/redfish/v1/Managers/bmc/VirtualMedia/<item>/Action/VirtualMedia.IntertMedia
+for legacy mode items and proxy mode, reporting always 404 for the
+latter. It also applies to all methods handled automatically for nodes
+with existing default method - put, patch and delete. See table below
+for expected and default behavior.
+
+| mode   | method | expected | default |
+|--------+--------+----------+---------|
+| Proxy  | GET    |      405 |     404 |
+| Legacy | GET    |      404 |     404 |
+| Proxy  | POST   |      405 |     404 |
+| Legacy | POST   |      200 |     200 |
+| Proxy  | PUT    |      405 |     404 |
+| Legacy | PUT    |      404 |     404 |
+| Proxy  | PATCH  |      405 |     404 |
+| Legacy | PATCH  |      404 |     404 |
+| Proxy  | DELETE |      405 |     404 |
+| Legacy | DELETE |      404 |     404 |
+
+This commit adds custom handlers for PUT/PATCH/DELETE checking which
+mode endpoint serves and returns appropriate HTTP response.
+
+Tested:
+- proxy
+> for method in POST PUT PATCH DELETE GET ; do echo "Method: $method" ; curl  -X $method "https://some.url/redfish/v1/Managers/bmc/VirtualMedia/Proxy/Actions/VirtualMedia.InsertMedia" ; echo "" ; done
+Method: POST
+Not Found
+Method: PUT
+Not Found
+Method: PATCH
+Not Found
+Method: DELETE
+Not Found
+Method: GET
+Not Found
+
+- legacy (POST needs json with obligatory parameters)
+> for method in POST PUT PATCH DELETE GET ; do echo "Method: $method" ; curl  -X $method "https://some.url/redfish/v1/Managers/bmc/VirtualMedia/Legacy/Actions/VirtualMedia.InsertMedia" ; echo "" ; done
+Method: POST
+{
+  "error": {
+    "@Message.ExtendedInfo": [
+      {
+        "@odata.type": "#Message.v1_1_1.Message",
+        "Message": "The request body submitted was malformed JSON and could not be parsed by the receiving service.",
+        "MessageArgs": [],
+        "MessageId": "Base.1.11.0.MalformedJSON",
+        "MessageSeverity": "Critical",
+        "Resolution": "Ensure that the request body is valid JSON and resubmit the request."
+      }
+    ],
+    "code": "Base.1.11.0.MalformedJSON",
+    "message": "The request body submitted was malformed JSON and could not be parsed by the receiving service."
+  }
+}
+Method: PUT
+Method not allowed
+Method: PATCH
+Method not allowed
+Method: DELETE
+Method not allowed
+Method: GET
+Method not allowed
+
+Change-Id: I274fa71f88f69ea27e72e1044e8ba0d48d3ece77
+Signed-off-by: Przemyslaw Czarnowski <przemyslaw.hawrylewicz.czarnowski@intel.com>
+
+%% original patch: 0003-Add-handlers-for-patch-put-delete.patch
+Upstream-Status: Pending
+---
+ redfish-core/lib/virtual_media.hpp | 102 +++++++++++++++++++++++++++++
+ 1 file changed, 102 insertions(+)
+
+diff --git a/redfish-core/lib/virtual_media.hpp b/redfish-core/lib/virtual_media.hpp
+index a296885d..e016bb58 100644
+--- a/redfish-core/lib/virtual_media.hpp
++++ b/redfish-core/lib/virtual_media.hpp
+@@ -142,6 +142,54 @@ inline void
+     });
+ }
+ 
++/**
++ * @brief Function parses getManagedObject response, finds item, makes generic
++ *        validation and invokes callback handler on this item.
++ *
++ */
++void findItemAndRunHandler(const std::shared_ptr<bmcweb::AsyncResp>& aResp,
++                           const std::string& name, const std::string& resName,
++                           CheckItemHandler&& handler)
++{
++    if (name != "bmc")
++    {
++        messages::resourceNotFound(aResp->res, "VirtualMedia.InsertMedia",
++                                   resName);
++
++        return;
++    }
++
++    crow::connections::systemBus->async_method_call(
++        [aResp, resName, handler = std::move(handler)](
++            const boost::system::error_code ec,
++            const dbus::utility::MapperGetObject& getObjectType) mutable {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("ObjectMapper::GetObject call failed: {}", ec);
++            aResp->res.result(boost::beast::http::status::not_found);
++
++            return;
++        }
++
++        if (getObjectType.empty())
++        {
++            BMCWEB_LOG_ERROR("ObjectMapper : No Service found");
++            aResp->res.result(boost::beast::http::status::not_found);
++
++            return;
++        }
++
++        std::string service = getObjectType.begin()->first;
++        BMCWEB_LOG_DEBUG("GetObjectType: {}", service);
++
++        findAndParseObject(service, resName, aResp, std::move(handler));
++    },
++        "xyz.openbmc_project.ObjectMapper",
++        "/xyz/openbmc_project/object_mapper",
++        "xyz.openbmc_project.ObjectMapper", "GetObject",
++        "/xyz/openbmc_project/VirtualMedia", std::array<const char*, 0>());
++}
++
+ /**
+  * @brief Function extracts transfer protocol name from URI.
+  */
+@@ -1060,8 +1108,62 @@ inline void
+     });
+ }
+ 
++void insertMediaCheckMode(
++    [[maybe_unused]] const std::string& service,
++    [[maybe_unused]] const std::string& resName,
++    const std::shared_ptr<bmcweb::AsyncResp>& aResp,
++    const std::pair<sdbusplus::message::object_path,
++                    dbus::utility::DBusInterfacesMap>& item)
++{
++    auto mode = item.first.parent_path();
++    auto type = mode.parent_path();
++    // Check if dbus path is Legacy type
++    if (mode.filename() == legacyMode)
++    {
++        BMCWEB_LOG_DEBUG(
++            "InsertMedia only allowed with POST method in legacy mode");
++        aResp->res.result(boost::beast::http::status::method_not_allowed);
++
++        return;
++    }
++    // Check if dbus path is Proxy type
++    if (mode.filename() == proxyMode)
++    {
++        // Not possible in proxy mode
++        BMCWEB_LOG_DEBUG("InsertMedia not allowed in proxy mode");
++        aResp->res.result(boost::beast::http::status::not_found);
++    }
++}
++
+ inline void requestNBDVirtualMediaRoutes(App& app)
+ {
++    BMCWEB_ROUTE(app, "/redfish/v1/Managers/<str>/VirtualMedia/<str>/Actions/"
++                      "VirtualMedia.InsertMedia")
++        .privileges(redfish::privileges::patchVirtualMedia)
++        .methods(boost::beast::http::verb::patch)(
++            []([[maybe_unused]] const crow::Request& req,
++               const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++               const std::string& name, const std::string& resName) {
++        findItemAndRunHandler(asyncResp, name, resName, insertMediaCheckMode);
++    });
++    BMCWEB_ROUTE(app, "/redfish/v1/Managers/<str>/VirtualMedia/<str>/Actions/"
++                      "VirtualMedia.InsertMedia")
++        .privileges(redfish::privileges::putVirtualMedia)
++        .methods(boost::beast::http::verb::put)(
++            []([[maybe_unused]] const crow::Request& req,
++               const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++               const std::string& name, const std::string& resName) {
++        findItemAndRunHandler(asyncResp, name, resName, insertMediaCheckMode);
++    });
++    BMCWEB_ROUTE(app, "/redfish/v1/Managers/<str>/VirtualMedia/<str>/Actions/"
++                      "VirtualMedia.InsertMedia")
++        .privileges(redfish::privileges::deleteVirtualMedia)
++        .methods(boost::beast::http::verb::delete_)(
++            []([[maybe_unused]] const crow::Request& req,
++               const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++               const std::string& name, const std::string& resName) {
++        findItemAndRunHandler(asyncResp, name, resName, insertMediaCheckMode);
++    });
+     BMCWEB_ROUTE(
+         app,
+         "/redfish/v1/Managers/<str>/VirtualMedia/<str>/Actions/VirtualMedia.InsertMedia")
+-- 
+2.25.1
+

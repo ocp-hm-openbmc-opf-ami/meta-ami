@@ -1,0 +1,266 @@
+From 2ee53f2b0969adf6be8ac6977da8cfe2f8fcd196 Mon Sep 17 00:00:00 2001
+From: vamsikrishnareddyp <vamsikrishnareddyp@ami.com>
+Date: Sat, 20 Sep 2025 07:56:27 +0000
+Subject: [PATCH] EID-to-lladdr-mappings-implemented
+
+---
+ include/net/mctp.h |   2 +
+ net/mctp/af_mctp.c | 177 +++++++++++++++++++++++++++++++++++++++++++++
+ net/mctp/route.c   |  33 +++++++++
+ 3 files changed, 212 insertions(+)
+
+diff --git a/include/net/mctp.h b/include/net/mctp.h
+index fcc65a822a34..fdcf9def8420 100644
+--- a/include/net/mctp.h
++++ b/include/net/mctp.h
+@@ -290,6 +290,8 @@ int mctp_neigh_lookup(struct mctp_dev *dev, mctp_eid_t eid,
+ 		      void *ret_hwaddr);
+ void mctp_neigh_remove_dev(struct mctp_dev *mdev);
+ 
++int mctp_pid_map_lookup(const void *pid, mctp_eid_t *eid_out);
++
+ int mctp_routes_init(void);
+ void mctp_routes_exit(void);
+ 
+diff --git a/net/mctp/af_mctp.c b/net/mctp/af_mctp.c
+index 8032cfba22d1..3bd71cf54be1 100644
+--- a/net/mctp/af_mctp.c
++++ b/net/mctp/af_mctp.c
+@@ -20,6 +20,177 @@
+ #define CREATE_TRACE_POINTS
+ #include <trace/events/mctp.h>
+ 
++/* implement userdefined mappings for eids and lladdr*/
++#define MCTP_EID_INVALID 0
++
++#define SIOCMCTPSETPIDMAP  _IOW('m', 1, struct mctp_pid_map_req)
++#define SIOCMCTPDELPIDMAP  _IOW('m', 2, mctp_eid_t)
++#define SIOCMCTPGETPIDMAP  _IOR('m', 3, struct mctp_pid_map_bulk)
++
++#define MAX_PID_MAP_ENTRIES 64
++
++struct mctp_pid_map_entry_user {
++	mctp_eid_t eid;
++	unsigned char pid[6];
++};
++
++struct mctp_pid_map_bulk {
++	__u32 count;  // in/out
++	struct mctp_pid_map_entry_user entries[MAX_PID_MAP_ENTRIES];
++};
++
++struct mctp_pid_map_entry {
++	mctp_eid_t eid;
++	unsigned char pid[6];
++	struct list_head list;
++};
++
++struct mctp_pid_map_req {
++	mctp_eid_t eid;
++	unsigned char pid[6];
++};
++
++struct mctp_pid_only {
++	unsigned char pid[6];
++};
++
++static LIST_HEAD(mctp_pid_map);
++static DEFINE_MUTEX(mctp_pid_map_lock);
++
++int mctp_pid_map_remove(mctp_eid_t eid)
++{
++	struct mctp_pid_map_entry *entry, *tmp;
++	int found = 0;
++
++	pr_err("mctp_pid_map_remove called  : %x\n", eid);
++
++	mutex_lock(&mctp_pid_map_lock);
++	list_for_each_entry_safe(entry, tmp, &mctp_pid_map, list) {
++		if (entry->eid == eid) {
++			list_del(&entry->list);
++			kfree(entry);
++			found = 1;
++			break;
++		}
++	}
++	mutex_unlock(&mctp_pid_map_lock);
++
++	return found ? 0 : -ENOENT;
++}
++
++int mctp_pid_map_add(mctp_eid_t eid, const void *pid)
++{
++	struct mctp_pid_map_entry *entry, *tmp;
++	int ret;
++	mctp_eid_t remove_eid = MCTP_EID_INVALID;
++
++
++	//check for duplicate eid
++	mutex_lock(&mctp_pid_map_lock);
++	list_for_each_entry_safe(entry, tmp, &mctp_pid_map, list) {
++		if (entry->eid == eid) {
++			pr_err("mctp_pid_map_add entry duplicate : %x\n", eid);
++			mutex_unlock(&mctp_pid_map_lock); //unlock before return
++			return -EEXIST;
++		}
++	}
++
++	// Check if PID already exists, remove the old entry
++	list_for_each_entry_safe(entry, tmp, &mctp_pid_map, list) {
++		if (memcmp(entry->pid, pid, 6) == 0) {
++			pr_info("mctp_pid_map_add: removing existing PID mapped to EID: %x\n", eid);
++			remove_eid = entry->eid;
++			break;
++		}
++	}
++	mutex_unlock(&mctp_pid_map_lock);
++
++	if (remove_eid != MCTP_EID_INVALID) {
++		ret = mctp_pid_map_remove(remove_eid);
++		if (ret < 0)
++			return -ENOENT;
++	}
++
++	pr_info("mctp_pid_map_add: adding mapping EID:: %x\n", eid);
++	entry = kzalloc(sizeof(*entry), GFP_KERNEL);
++	if (!entry)
++		return -ENOMEM;
++
++	entry->eid = eid;
++	memcpy(entry->pid, pid, 6);
++
++	mutex_lock(&mctp_pid_map_lock);
++	list_add_tail(&entry->list, &mctp_pid_map);
++	mutex_unlock(&mctp_pid_map_lock);
++
++	return 0;
++}
++
++static int mctp_ioctl_getpidmap(struct mctp_sock *msk, unsigned long arg)
++{
++	struct mctp_pid_map_bulk bulk = {0};
++	struct mctp_pid_map_entry *entry;
++	int i = 0;
++
++	mutex_lock(&mctp_pid_map_lock);
++	list_for_each_entry(entry, &mctp_pid_map, list) {
++		if (i >= MAX_PID_MAP_ENTRIES)
++			break;
++		bulk.entries[i].eid = entry->eid;
++		memcpy(bulk.entries[i].pid, entry->pid, 6);
++		i++;
++	}
++	mutex_unlock(&mctp_pid_map_lock);
++
++	bulk.count = i;
++
++	if (copy_to_user((void __user *)arg, &bulk, sizeof(bulk)))
++	{
++		printk("mctp_ioctl_getpidmap copy_to_user error \n");
++		return -EFAULT;
++	}
++	return 0;
++}
++
++int mctp_pid_map_lookup(const void *pid, mctp_eid_t *eid_out)
++{
++	struct mctp_pid_map_entry *entry;
++	int found = 0;
++
++	mutex_lock(&mctp_pid_map_lock);
++	list_for_each_entry(entry, &mctp_pid_map, list) {
++		if (!memcmp(entry->pid, pid, 6)) {
++			*eid_out = entry->eid;
++			found = 1;
++			break;
++		}
++	}
++	mutex_unlock(&mctp_pid_map_lock);
++
++	return found ? 0 : -ENOENT;
++}
++
++static int mctp_ioctl_setpidmap(struct mctp_sock *msk, unsigned long arg)
++{
++	struct mctp_pid_map_req req;
++
++	if (copy_from_user(&req, (void __user *)arg, sizeof(req)))
++		return -EFAULT;
++
++	return mctp_pid_map_add(req.eid, req.pid);
++}
++
++static int mctp_ioctl_delpidmap(struct mctp_sock *msk, unsigned long arg)
++{
++	mctp_eid_t eid;
++
++	if (copy_from_user(&eid, (void __user *)arg, sizeof(eid)))
++		return -EFAULT;
++
++	return mctp_pid_map_remove(eid);
++}
++//ends here
++
+ /* socket implementation */
+ 
+ static void mctp_sk_expire_keys(struct timer_list *timer);
+@@ -445,6 +616,12 @@ static int mctp_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
+ 		return mctp_ioctl_alloctag(msk, arg);
+ 	case SIOCMCTPDROPTAG:
+ 		return mctp_ioctl_droptag(msk, arg);
++	case SIOCMCTPSETPIDMAP:
++		return mctp_ioctl_setpidmap(msk, arg);
++	case SIOCMCTPDELPIDMAP:
++		return mctp_ioctl_delpidmap(msk, arg);
++	case SIOCMCTPGETPIDMAP:
++		return mctp_ioctl_getpidmap(msk, arg);
+ 	}
+ 
+ 	return -EINVAL;
+diff --git a/net/mctp/route.c b/net/mctp/route.c
+index a6cd72b5e039..da12b5bc3fe1 100644
+--- a/net/mctp/route.c
++++ b/net/mctp/route.c
+@@ -945,6 +945,39 @@ int mctp_local_output(struct sock *sk, struct mctp_route *rt,
+ 		saddr = rt->dev->addrs[0];
+ 		rc = 0;
+ 	}
++
++    /* use different eids as src eids for communication based on userdefined mappings*/
++    char daddr_buf[MAX_ADDR_LEN];
++    bool has_pid = false;
++
++    if (cb->halen > 0)
++    {
++        memcpy(daddr_buf, cb->haddr, cb->halen);
++        has_pid = true;
++    }
++    else if (mctp_neigh_lookup(rt->dev, daddr, daddr_buf) == 0)
++    {
++        has_pid = true;
++    }
++
++    if (has_pid)
++    {
++        mctp_eid_t mapped_eid;
++        if (mctp_pid_map_lookup(daddr_buf, &mapped_eid) == 0)
++        {
++            for (int i = 0; i < rt->dev->num_addrs; i++)
++            {
++                if (rt->dev->addrs[i] == mapped_eid)
++                {
++                    //printk("Using mapped src EID 0x%02x for PID\n", mapped_eid);
++                    saddr = mapped_eid;
++                    break;
++                }
++            }
++        }
++    }
++    //ends here
++
+ 	spin_unlock_irqrestore(&rt->dev->addrs_lock, flags);
+ 
+ 	if (rc)
+-- 
+2.43.0
+

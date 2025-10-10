@@ -1,0 +1,54 @@
+From 05271464372765d1eb98e6ad0025d89295cf73a7 Mon Sep 17 00:00:00 2001
+From: athuljox <athulx.joseph@intel.com>
+Date: Thu, 7 Sep 2023 11:30:54 +0000
+Subject: [PATCH] Fix for SOL deactivate IPMI command
+
+User is unbale to deactivate active SOL session using IPMI command.
+To get SOL session ptr, getSession() from session manager was used,
+which throwing Session ID is not found error and Deactivate payload
+command was failing.
+
+So provided fix to use SOL session ptr obtained from Context to check
+if current session user has privilege to deactivate SOL payload.
+
+Tested:
+Verified using SOL IPMI commands.
+//Activate SOL
+~$ipmitool -I lanplus -H <BMC-IP> -U <UserID> -P <PWD> -C 17 raw 0x06
+          0x48 0x01 0x01 0xc0 0x00 0x00 0x00
+Response: 00 00 00 00 ff 00 ff 00 6f 02 ff ff
+//Check Payload Activation status
+~$ipmitool -I lanplus -H <BMC-IP> -U <UserID> -P <PWD> -C 17 raw 0x06
+           0x4A 0x01
+Response: 01 01 00
+//Deactivate SOL
+~$ipmitool -I lanplus -H <BMC-IP> -U <UserID> -P <PWD> -C 17 raw 0x06
+           0x49 0x01 0x01 0x00 0x00 0x00 0x00
+Response:              //Success
+//Check Payload Activation status
+~$ipmitool -I lanplus -H <BMC-IP> -U <UserID> -P <PWD> -C 17 raw 0x06
+           0x4A 0x01
+Response:  01 00 00
+
+Signed-off-by: athuljox <athulx.joseph@intel.com>
+---
+ command/payload_cmds.cpp | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/command/payload_cmds.cpp b/command/payload_cmds.cpp
+index e38473c..60cedc6 100644
+--- a/command/payload_cmds.cpp
++++ b/command/payload_cmds.cpp
+@@ -156,7 +156,8 @@ std::vector<uint8_t>
+         session::Manager::get().getSession(handler->sessionID);
+     auto solSessionID =
+         sol::Manager::get().getContext(request->payloadInstance).sessionID;
+-    auto solActiveSession = session::Manager::get().getSession(solSessionID);
++    auto solActiveSession =
++        sol::Manager::get().getContext(request->payloadInstance).session;
+     // The session owner or the ADMIN could deactivate the session
+     if (currentSession->userName != solActiveSession->userName &&
+         currentSession->currentPrivilege() !=
+-- 
+2.17.1
+

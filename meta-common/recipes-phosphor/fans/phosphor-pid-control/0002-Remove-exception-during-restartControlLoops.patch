@@ -1,0 +1,201 @@
+From 94f87e22cac75b5063a448e790ade969132c1543 Mon Sep 17 00:00:00 2001
+From: thrishalig <thrishalig@ami.com>
+Date: Thu, 12 Sep 2024 16:03:34 +0530
+Subject: [PATCH] Remove exception during restartControlLoops
+
+During pid-control init phase, an exception is thrown when fan pid class
+has invalid number of outputs. This can result in no fan speed control
+for the platform even for the good fan pid class. Exception is also
+thrown when dbus call to get sensor property fails and this can happen
+when sensor hosting service is busy.
+
+Replace these exceptions with error message and continue to allow the
+pid control service to run with other configuration that it can parse
+correctly.
+
+Tested:
+Code compiles and EB Build is provided to test team to run.
+CPU thermtrip was not reproduced.
+
+Signed-off-by: Zhikui Ren <zhikui.ren@intel.com>
+
+Due to sync activity 2.0 failed patch recreation ,
+Recreated intel patch 0002-Remove-exception-during-restartControlLoops.patch
+
+Signed-off-by: thrishalig <thrishalig@ami.com>
+---
+ dbus/dbusconfiguration.cpp | 33 +++++++++++++++++++++++++++++----
+ sensors/builder.cpp        | 34 ++++++++++++++++++++++------------
+ sensors/builder.hpp        |  5 ++---
+ sensors/sensor.hpp         | 23 +++++++++++++++++++++++
+ 4 files changed, 76 insertions(+), 19 deletions(-)
+
+diff --git a/dbus/dbusconfiguration.cpp b/dbus/dbusconfiguration.cpp
+index 87e665e..0fc9fa6 100644
+--- a/dbus/dbusconfiguration.cpp
++++ b/dbus/dbusconfiguration.cpp
+@@ -517,8 +517,9 @@ bool init(sdbusplus::bus_t& bus, boost::asio::steady_timer& timer,
+         catch (const sdbusplus::exception_t&)
+         {
+             // this shouldn't happen, probably means daemon crashed
+-            throw std::runtime_error(
+-                "Error getting managed objects from " + owner.first);
++            std::cerr << "Error getting managed objects from " << owner.first
++                      << "\n";
++            continue;
+         }
+ 
+         for (auto& pathPair : configuration)
+@@ -880,8 +881,32 @@ bool init(sdbusplus::bus_t& bus, boost::asio::steady_timer& timer,
+                     }
+                     else
+                     {
+-                        throw std::runtime_error(
+-                            "fan PID has invalid number of Outputs");
++                        /* This can be due to some of other sensor services that
++                         * host fan sensors are not working.
++                         * * Log error and continue, this allows the fan control
++                         * to work with other good fan pid class
++                         */
++                        std::cerr
++                            << "fan PID has invalid number of Outputs: input size "
++                            << inputSensorInterfaces.size() << " output size "
++                            << outputSensorInterfaces.size() << "\n";
++                        for (const SensorInterfaceType& inputSensorInterface :
++                             inputSensorInterfaces)
++                        {
++                            std::cerr
++                                << "fan PID has invalid number of Outputs: input "
++                                << inputSensorInterface.first << " : "
++                                << inputSensorInterface.second << "\n";
++                        }
++                        for (const SensorInterfaceType& outputSensorInterface :
++                             outputSensorInterfaces)
++                        {
++                            std::cerr
++                                << "fan PID has invalid number of Outputs: output "
++                                << outputSensorInterface.first << " : "
++                                << outputSensorInterface.second << "\n";
++                        }
++                        continue;
+                     }
+                     std::string fanSensorName;
+                     std::string pwmPath;
+diff --git a/sensors/builder.cpp b/sensors/builder.cpp
+index 7c335c6..45be00b 100644
+--- a/sensors/builder.cpp
++++ b/sensors/builder.cpp
+@@ -42,21 +42,21 @@ namespace pid_control
+ 
+ static constexpr bool deferSignals = true;
+ 
+-SensorManager
+-    buildSensors(const std::map<std::string, conf::SensorConfig>& config,
+-                 sdbusplus::bus_t& passive, sdbusplus::bus_t& host)
++SensorManager buildSensors(std::map<std::string, conf::SensorConfig>& config,
++                           sdbusplus::bus_t& passive, sdbusplus::bus_t& host)
+ {
+     SensorManager mgmr(passive, host);
+     auto& hostSensorBus = mgmr.getHostBus();
+     auto& passiveListeningBus = mgmr.getPassiveBus();
+ 
+-    for (const auto& it : config)
++    for (auto it = config.begin(); it != config.end();)
+     {
++        auto current = it++;
+         std::unique_ptr<ReadInterface> ri;
+         std::unique_ptr<WriteInterface> wi;
+ 
+-        std::string name = it.first;
+-        const conf::SensorConfig* info = &it.second;
++        std::string name = current->first;
++        const conf::SensorConfig* info = &current->second;
+ 
+         std::cerr << "Sensor: " << name << " " << info->type << " ";
+         std::cerr << info->readPath << " " << info->writePath << "\n";
+@@ -96,9 +96,14 @@ SensorManager
+                 }
+                 if (ri == nullptr)
+                 {
+-                    throw SensorBuildException(
+-                        "Failed to create dbus passive sensor: " + name +
+-                        " of type: " + info->type);
++                    std::cerr
++                        << " Failed to create dbus passive sensor :" << name
++                        << " of type: " << info->type << "\n";
++                    config.erase(current);
++                    auto sensor = std::make_unique<FailedSensor>(name,
++                                                                 info->timeout);
++                    mgmr.addSensor(info->type, name, std::move(sensor));
++                    continue;
+                 }
+                 break;
+             case IOInterfaceType::EXTERNAL:
+@@ -147,9 +152,14 @@ SensorManager
+ 
+                     if (wi == nullptr)
+                     {
+-                        throw SensorBuildException(
+-                            "Unable to create write dbus interface for path: " +
+-                            info->writePath);
++                        std::cerr
++                            << "Unable to create write dbus interface for path: "
++                            << info->writePath << "\n";
++                        config.erase(current);
++                        auto sensor =
++                            std::make_unique<FailedSensor>(name, info->timeout);
++                        mgmr.addSensor(info->type, name, std::move(sensor));
++                        continue;
+                     }
+ 
+                     break;
+diff --git a/sensors/builder.hpp b/sensors/builder.hpp
+index 14eabad..fe2d01f 100644
+--- a/sensors/builder.hpp
++++ b/sensors/builder.hpp
+@@ -15,8 +15,7 @@ namespace pid_control
+ /**
+  * Build the sensors and associate them with a SensorManager.
+  */
+-SensorManager
+-    buildSensors(const std::map<std::string, conf::SensorConfig>& config,
+-                 sdbusplus::bus_t& passive, sdbusplus::bus_t& host);
++SensorManager buildSensors(std::map<std::string, conf::SensorConfig>& config,
++                           sdbusplus::bus_t& passive, sdbusplus::bus_t& host);
+ 
+ } // namespace pid_control
+diff --git a/sensors/sensor.hpp b/sensors/sensor.hpp
+index a135c50..6f3f4f2 100644
+--- a/sensors/sensor.hpp
++++ b/sensors/sensor.hpp
+@@ -66,4 +66,27 @@ class Sensor
+     int64_t _timeout;
+ };
+ 
++class FailedSensor : public Sensor
++{
++  public:
++    FailedSensor(const std::string& name, int64_t timeout) :
++        Sensor(name, timeout)
++    {}
++
++    virtual ReadReturn read(void)
++    {
++        return ReadReturn{};
++    };
++
++    virtual void write(double value)
++    {
++        (void)value;
++    };
++
++    virtual bool getFailed(void)
++    {
++        return true;
++    };
++};
++
+ } // namespace pid_control
+-- 
+2.34.1
+

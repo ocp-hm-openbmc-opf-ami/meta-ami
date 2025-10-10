@@ -1,0 +1,196 @@
+From 096a321b73002d747af3f9d780a9a379f104b345 Mon Sep 17 00:00:00 2001
+From: Jennifer Lee <jennifer1.lee@intel.com>
+Date: Mon, 22 Jan 2024 16:48:10 +0530
+Subject: [PATCH] Modified firmware activation to launch fwupd.sh through
+
+ non-ubi fs code path to match more closely to the upstream design 	-
+ Added option FWUPD_SCRIPT to saperate intel customized code 	- Adopted
+ ActivationProgress from ubi fs activation code mainly for progress indicator
+ for ipmi update
+
+Signed-off-by: Jennifer Lee <jennifer1.lee@intel.com>
+Signed-off-by: James Feist <james.feist@linux.intel.com>
+Upstream-Status: Pending
+---
+ activation.cpp   | 53 ++++++++++++++++++++++++++++++++++++++----------
+ meson.build      |  1 +
+ meson.options    |  3 +++
+ static/flash.cpp | 10 +++++++++
+ ubi/flash.cpp    |  9 +++-----
+ 5 files changed, 59 insertions(+), 17 deletions(-)
+
+diff --git a/activation.cpp b/activation.cpp
+index 8f4c4c0..5c2e252 100644
+--- a/activation.cpp
++++ b/activation.cpp
+@@ -90,22 +90,52 @@ auto Activation::activation(Activations value) -> Activations
+ 
+     if (value == softwareServer::Activation::Activations::Activating)
+     {
+-#ifdef WANT_SIGNATURE_VERIFY
+-        fs::path uploadDir(IMG_UPLOAD_DIR);
+-        if (!verifySignature(uploadDir / versionId, SIGNED_IMAGE_CONF_PATH))
++#ifdef FWUPD_SCRIPT
++        if (!activationProgress)
+         {
+-            using InvalidSignatureErr = sdbusplus::error::xyz::openbmc_project::
+-                software::version::InvalidSignature;
+-            report<InvalidSignatureErr>();
+-            // Stop the activation process, if fieldMode is enabled.
+-            if (parent.control::FieldMode::fieldModeEnabled())
++            // Enable systemd signals
++            Activation::subscribeToSystemdSignals();
++            parent.freeSpace(*this);
++
++            activationProgress =
++                std::make_unique<ActivationProgress>(bus, path);
++
++#ifdef WANT_SIGNATURE_VERIFY
++            fs::path uploadDir(IMG_UPLOAD_DIR);
++            if (!verifySignature(uploadDir / versionId, SIGNED_IMAGE_CONF_PATH))
+             {
+-                return softwareServer::Activation::activation(
+-                    softwareServer::Activation::Activations::Failed);
++                using InvalidSignatureErr = sdbusplus::xyz::openbmc_project::
++                    Software::Version::Error::InvalidSignature;
++                report<InvalidSignatureErr>();
++                // Stop the activation process, if fieldMode is enabled.
++                if (parent.control::FieldMode::fieldModeEnabled())
++                {
++                    return softwareServer::Activation::activation(
++                        softwareServer::Activation::Activations::Failed);
++                }
+             }
+-        }
+ #endif
++            flashWrite();
++        }
++        else if (activationProgress->progress() == 100)
++        {
++            error("progress == 100...");
++            if (!redundancyPriority)
++            {
++                redundancyPriority =
++                    std::make_unique<RedundancyPriority>(bus, path, *this, 0);
++            }
++
++            // Remove version object from image manager
++            Activation::deleteImageManagerObject();
+ 
++            // Create active association
++            parent.createActiveAssociation(path);
++
++            return softwareServer::Activation::activation(
++                softwareServer::Activation::Activations::Active);
++        }
++#else // !FWUPD_SCRIPT
+         auto versionStr = parent.versions.find(versionId)->second->version();
+ 
+         if (!minimum_ship_level::verify(versionStr))
+@@ -167,6 +197,7 @@ auto Activation::activation(Activations value) -> Activations
+         }
+         // On secondary, wait for the service to complete
+ #endif
++#endif // FWUPD_SCRIPT
+     }
+     else
+     {
+diff --git a/meson.build b/meson.build
+index 194c69b..423227e 100644
+--- a/meson.build
++++ b/meson.build
+@@ -68,6 +68,7 @@ conf.set('MMC_LAYOUT', get_option('bmc-layout').contains('mmc'))
+ # Configurable features
+ conf.set('HOST_BIOS_UPGRADE', get_option('host-bios-upgrade').allowed())
+ conf.set('WANT_SIGNATURE_VERIFY', get_option('verify-signature').allowed())
++conf.set('FWUPD_SCRIPT', get_option('fwupd-script').allowed())
+ 
+ # Configurable variables
+ conf.set('ACTIVE_BMC_MAX_ALLOWED', get_option('active-bmc-max-allowed'))
+diff --git a/meson.options b/meson.options
+index b088a8d..35adaba 100644
+--- a/meson.options
++++ b/meson.options
+@@ -30,6 +30,9 @@ option(
+     description: 'Automatic flash side switch on boot',
+ )
+ 
++option('fwupd-script', type: 'feature', value: 'enabled',
++    description: 'Enable fwupd script support.')
++
+ # Variables
+ option(
+     'active-bmc-max-allowed', type: 'integer',
+diff --git a/static/flash.cpp b/static/flash.cpp
+index a478644..fdaee67 100644
+--- a/static/flash.cpp
++++ b/static/flash.cpp
+@@ -28,9 +28,11 @@ PHOSPHOR_LOG2_USING;
+ 
+ namespace fs = std::filesystem;
+ using namespace phosphor::software::image;
++namespace softwareServer = sdbusplus::xyz::openbmc_project::Software::server;
+ 
+ void Activation::flashWrite()
+ {
++#ifndef FWUPD_SCRIPT
+ #ifdef BMC_STATIC_DUAL_IMAGE
+     if (parent.runningImageSlot != 0)
+     {
+@@ -57,10 +59,17 @@ void Activation::flashWrite()
+         fs::copy_file(uploadDir / versionId / bmcImage, toPath / bmcImage,
+                       fs::copy_options::overwrite_existing, ec);
+     }
++#else  // FWUPD_SCRIPT
++    auto method = bus.new_method_call(SYSTEMD_BUSNAME, SYSTEMD_PATH,
++                                      SYSTEMD_INTERFACE, "StartUnit");
++    method.append("fwupd@" + versionId + ".service", "replace");
++    bus.call_noreply(method);
++#endif // FWUPD_SCRIPT
+ }
+ 
+ void Activation::onStateChanges([[maybe_unused]] sdbusplus::message_t& msg)
+ {
++#ifndef FWUPD_SCRIPT
+ #ifdef BMC_STATIC_DUAL_IMAGE
+     uint32_t newStateID;
+     auto serviceFile = FLASH_ALT_SERVICE_TMPL + versionId + ".service";
+@@ -84,6 +93,7 @@ void Activation::onStateChanges([[maybe_unused]] sdbusplus::message_t& msg)
+                                    software::Activation::Activations::Failed);
+     }
+ #endif
++#endif // FWUPD_SCRIPT
+ }
+ 
+ } // namespace updater
+diff --git a/ubi/flash.cpp b/ubi/flash.cpp
+index 2cff5ba..64c9ea5 100644
+--- a/ubi/flash.cpp
++++ b/ubi/flash.cpp
+@@ -16,13 +16,10 @@ void Activation::flashWrite()
+ {
+     auto method = bus.new_method_call(SYSTEMD_BUSNAME, SYSTEMD_PATH,
+                                       SYSTEMD_INTERFACE, "StartUnit");
+-    std::string rwServiceFile =
+-        "obmc-flash-bmc-ubirw@" + versionId + ".service";
+-    method.append(rwServiceFile, "replace");
++    method.append("obmc-flash-bmc-ubirw.service", "replace");
+     bus.call_noreply(method);
+ 
+-    std::string roServiceFile =
+-        "obmc-flash-bmc-ubiro@" + versionId + ".service";
++    auto roServiceFile = "obmc-flash-bmc-ubiro@" + versionId + ".service";
+     method = bus.new_method_call(SYSTEMD_BUSNAME, SYSTEMD_PATH,
+                                  SYSTEMD_INTERFACE, "StartUnit");
+     method.append(roServiceFile, "replace");
+@@ -41,7 +38,7 @@ void Activation::onStateChanges(sdbusplus::message_t& msg)
+     // Read the msg and populate each variable
+     msg.read(newStateID, newStateObjPath, newStateUnit, newStateResult);
+ 
+-    auto rwServiceFile = "obmc-flash-bmc-ubirw@" + versionId + ".service";
++    auto rwServiceFile = "obmc-flash-bmc-ubirw.service";
+     auto roServiceFile = "obmc-flash-bmc-ubiro@" + versionId + ".service";
+     auto flashId = parent.versions.find(versionId)->second->path();
+     auto ubootVarsServiceFile = "obmc-flash-bmc-updateubootvars@" + flashId +
+-- 
+2.34.1

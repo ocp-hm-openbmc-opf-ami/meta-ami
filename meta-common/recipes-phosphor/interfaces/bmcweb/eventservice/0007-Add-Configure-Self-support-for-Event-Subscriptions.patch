@@ -1,0 +1,231 @@
+From 38fa342c07de732235ccb57096c22303dc241995 Mon Sep 17 00:00:00 2001
+From: P Dheeraj Srujan Kumar <p.dheeraj.srujan.kumar@intel.com>
+Date: Fri, 11 Feb 2022 05:26:19 +0530
+Subject: [PATCH] Add Configure Self support for Event Subscriptions
+
+PATCH and DELETE operations on event subscriptions require
+ConfigureManager or ConfigureSelf privilege.
+Currently, only ConfigureManager support was enabled, which implies only
+Admin user will be able to PATCH and DELETE any given subscription.
+This commits adds the support to enable ConfigureSelf, which implies, an
+Operator user will be able to PATCH or DELETE self created subscription.
+This support is enabled by adding SubscriptionOwner field to the
+Subscriptions class, so that the Owner of the subscription will be
+stored when a subscription is created.
+
+Tested:
+ - Created 2 Operator level users - Operator1 and Operator2
+ - Created subscription by POST to
+   /redfish/v1/EventService/Subscriptions using Operator1
+ - PATCH and DELETE on the subscription failed successfully when using
+   Operator2 user.
+ - PATCH and DELETE was successfull when using Operator1 user.
+ - Admin user was able to successfully PATCH and DELETE subscriptions
+   created by Operator1 and Operator2
+
+Change-Id: Ic2ea28bf652bca87d4545c4be1fe5242c23c0a86
+Signed-off-by: P Dheeraj Srujan Kumar <p.dheeraj.srujan.kumar@intel.com>
+Signed-off-by: Gayathri Leburu <gayathri.leburu@intel.com>
+Signed-off-by: AppaRao Puli <apparao.puli@intel.com>
+
+Change-Id: I5146f230b2a5670137efc20c4aecc7dc4a00a5d5
+Upstream-Status: Pending
+---
+ include/event_service_store.hpp               | 11 +++
+ include/persistent_data.hpp                   |  1 +
+ .../include/event_service_manager.hpp         |  2 +
+ redfish-core/lib/event_service.hpp            | 74 ++++++++++++++++---
+ 4 files changed, 77 insertions(+), 11 deletions(-)
+
+diff --git a/include/event_service_store.hpp b/include/event_service_store.hpp
+index 8a39fe58..d5ccdb53 100644
+--- a/include/event_service_store.hpp
++++ b/include/event_service_store.hpp
+@@ -24,6 +24,7 @@ struct UserSubscription
+     boost::beast::http::fields httpHeaders;
+     std::vector<std::string> metricReportDefinitions;
+     std::string state;
++    std::string owner;
+ 
+     static std::shared_ptr<UserSubscription>
+         fromJson(const nlohmann::json& j, const bool loadFromOldConfig = false)
+@@ -190,6 +191,16 @@ struct UserSubscription
+                 }
+                 subvalue->state = *value;
+             }
++            else if (element.key() == "Owner")
++            {
++                const std::string* value =
++                    element.value().get_ptr<const std::string*>();
++                if (value == nullptr)
++                {
++                    continue;
++                }
++                subvalue->owner = *value;
++            }
+             else
+             {
+                 BMCWEB_LOG_ERROR(
+diff --git a/include/persistent_data.hpp b/include/persistent_data.hpp
+index bd8b8a0b..09273db9 100644
+--- a/include/persistent_data.hpp
++++ b/include/persistent_data.hpp
+@@ -310,6 +310,7 @@ class ConfigFile
+             subscription["MetricReportDefinitions"] =
+                 subValue->metricReportDefinitions;
+             subscription["State"] = subValue->state;
++            subscription["Owner"] = subValue->owner;
+ 
+             subscriptions.emplace_back(std::move(subscription));
+         }
+diff --git a/redfish-core/include/event_service_manager.hpp b/redfish-core/include/event_service_manager.hpp
+index 3ddd3103..fa53d0bd 100644
+--- a/redfish-core/include/event_service_manager.hpp
++++ b/redfish-core/include/event_service_manager.hpp
+@@ -727,6 +727,7 @@ class EventServiceManager
+             subValue->httpHeaders = newSub->httpHeaders;
+             subValue->metricReportDefinitions = newSub->metricReportDefinitions;
+             subValue->state = newSub->state;
++            subValue->owner = newSub->owner;
+ 
+             if (subValue->id.empty())
+             {
+@@ -979,6 +980,7 @@ class EventServiceManager
+         newSub->httpHeaders = subValue->httpHeaders;
+         newSub->metricReportDefinitions = subValue->metricReportDefinitions;
+         newSub->state = subValue->state;
++        newSub->owner = subValue->owner;
+ 
+         persistent_data::EventServiceStore::getInstance()
+             .subscriptionsConfigMap.emplace(newSub->id, newSub);
+diff --git a/redfish-core/lib/event_service.hpp b/redfish-core/lib/event_service.hpp
+index 8abcdd83..07d56f18 100644
+--- a/redfish-core/lib/event_service.hpp
++++ b/redfish-core/lib/event_service.hpp
+@@ -405,10 +405,18 @@ inline void requestRoutesEventDestinationCollection(App& app)
+             return;
+         }
+ 
++        if (req.session == nullptr || req.session->username.empty())
++        {
++            BMCWEB_LOG_ERROR("Request Session Undefined");
++            messages::noValidSession(asyncResp->res);
++            return;
++        }
++
+         std::shared_ptr<Subscription> subValue =
+             std::make_shared<Subscription>(*url, app.ioContext());
+ 
+         subValue->destinationUrl = std::move(*url);
++        subValue->owner = req.session->username;
+ 
+         if (subscriptionType)
+         {
+@@ -628,6 +636,43 @@ inline void requestRoutesEventDestinationCollection(App& app)
+     });
+ }
+ 
++bool isConfigureManagerOrSelf(const crow::Request& req,
++                              const std::shared_ptr<Subscription>& subValue)
++{
++    Privileges effectiveUserPrivileges =
++        redfish::getUserPrivileges(*req.session);
++    bool isConfigureManager =
++        effectiveUserPrivileges.isSupersetOf({"ConfigureManager"});
++
++    if (!isConfigureManager)
++    {
++        // If the user does not have Configure manager privilege
++        // then the user must be an Operator (i.e. Configure
++        // Components and Self)
++        // We need to ensure that the User is the actual owner of
++        // the Subscription being patched
++        // This also supports backward compatibility as subscription
++        // owner would be empty which would not be equal to current
++        // user, enabling only Admin to be able to patch the
++        // Subscription
++
++        if (req.session == nullptr || req.session->username.empty())
++        {
++            BMCWEB_LOG_ERROR(
++                "Insufficient Privilege. Request Session Undefined");
++            return false;
++        }
++
++        if (subValue->owner != req.session->username)
++        {
++            BMCWEB_LOG_ERROR(
++                "Insufficient Privilege. User is not the owner of this Subscription");
++            return false;
++        }
++    }
++    return true;
++}
++
+ inline void requestRoutesEventDestination(App& app)
+ {
+     BMCWEB_ROUTE(app, "/redfish/v1/EventService/Subscriptions/<str>/")
+@@ -688,11 +733,7 @@ inline void requestRoutesEventDestination(App& app)
+         asyncResp->res.jsonValue["MetricReportDefinitions"] = mrdJsonArray;
+     });
+     BMCWEB_ROUTE(app, "/redfish/v1/EventService/Subscriptions/<str>/")
+-        // The below privilege is wrong, it should be ConfigureManager OR
+-        // ConfigureSelf
+-        // https://github.com/openbmc/bmcweb/issues/220
+-        //.privileges(redfish::privileges::patchEventDestination)
+-        .privileges({{"ConfigureManager"}})
++        .privileges(redfish::privileges::patchEventDestination)
+         .methods(boost::beast::http::verb::patch)(
+             [&app](const crow::Request& req,
+                    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+@@ -709,6 +750,12 @@ inline void requestRoutesEventDestination(App& app)
+             return;
+         }
+ 
++        if (!isConfigureManagerOrSelf(req, subValue))
++        {
++            messages::insufficientPrivilege(asyncResp->res);
++            return;
++        }
++
+         std::optional<std::string> context;
+         std::optional<std::string> retryPolicy;
+         std::optional<std::vector<nlohmann::json>> headers;
+@@ -762,11 +809,7 @@ inline void requestRoutesEventDestination(App& app)
+         EventServiceManager::getInstance().updateSubscription(param);
+     });
+     BMCWEB_ROUTE(app, "/redfish/v1/EventService/Subscriptions/<str>/")
+-        // The below privilege is wrong, it should be ConfigureManager OR
+-        // ConfigureSelf
+-        // https://github.com/openbmc/bmcweb/issues/220
+-        //.privileges(redfish::privileges::deleteEventDestination)
+-        .privileges({{"ConfigureManager"}})
++        .privileges(redfish::privileges::deleteEventDestination)
+         .methods(boost::beast::http::verb::delete_)(
+             [&app](const crow::Request& req,
+                    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+@@ -783,11 +826,20 @@ inline void requestRoutesEventDestination(App& app)
+             return;
+         }
+ 
+-        if (!EventServiceManager::getInstance().isSubscriptionExist(param))
++        std::shared_ptr<Subscription> subValue =
++            EventServiceManager::getInstance().getSubscription(param);
++        if (subValue == nullptr)
+         {
+             asyncResp->res.result(boost::beast::http::status::not_found);
+             return;
+         }
++
++        if (!isConfigureManagerOrSelf(req, subValue))
++        {
++            messages::insufficientPrivilege(asyncResp->res);
++            return;
++        }
++
+         EventServiceManager::getInstance().deleteSubscription(param);
+     });
+ }
+-- 
+2.25.1
+

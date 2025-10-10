@@ -1,0 +1,115 @@
+From 96caf31a1817fa2cbbba8e747ccb45471550ec07 Mon Sep 17 00:00:00 2001
+From: Priyanka Chikane <priyanka.chikane@intel.com>
+Date: Thu, 9 Jun 2022 12:02:50 +0000
+Subject: [PATCH] If FFUJ is enabled serial console must be disabled
+
+FFUJ mode user is not allowed to enter uboot command
+line interface. Serial console is disabled by creating
+an indefinite sleep if FFUJ is enabled, same
+functionality is used in whitely platforms
+
+Since, boot failure check and FFUJ check were handled
+by a single function, U-boot was disabling serial console which was the
+expected behaviour of FFUJ mode.
+That single fuction was splitted into two separate function for FFUJ
+check and boot failure check. So in case of failed boot check, BMC
+is going for #ast mode.
+
+Since in FFUJ mode user is not allowed to enter uboot command
+line interface, checking of uboot shell login is done before the FFUJ
+jumper check.
+
+Tested:
+Serial console is disabled in FFUJ mode
+
+After 3rd terminating command for watchdog,this is the output:
+Board ID: 0x02
+Net: eth1: ftgmac@1e680000
+FFUJ: 0
+Intel failed boot check
+ast#
+
+Uboot shell login is checked before the FFUJ jumper.
+-With some bootdelay and autoboot stopped (FFUJ set), output is:-
+Hit any key to stop autoboot:  0
+ast#
+-With bootdelay and autoboot continued (FFUJ set), output is:-
+Hit any key to stop autoboot:  0
+FFUJ: 1
+#### BMC is in disabled state(FFU Jumper is asserted), So BMC serial console disabled. ####
+
+Signed-off-by: gokulsanker <gokul.sanker.v.g@intel.com>
+Signed-off-by: Anjaliintel-21 <anjali.ray@intel.com>
+Signed-off-by: Priyanka Chikane <priyanka.chikane@intel.com>
+
+%% original patch: 0038-Disabling-serial-console-if-FFUJ-is-enabled.patch
+Upstream-Status: Pending
+---
+ board/aspeed/ast2600_intel/intel.c |  6 ++----
+ common/autoboot.c                  | 19 ++++++++++++++++++-
+ 2 files changed, 20 insertions(+), 5 deletions(-)
+
+diff --git a/board/aspeed/ast2600_intel/intel.c b/board/aspeed/ast2600_intel/intel.c
+index 425ed91f31..d7d93791e7 100644
+--- a/board/aspeed/ast2600_intel/intel.c
++++ b/board/aspeed/ast2600_intel/intel.c
+@@ -60,7 +60,8 @@ int intel_failed_boot(void)
+ 		ret = led_get_by_label("id", &dev);
+ 		if (!ret)
+ 			led_set_state(dev, LEDST_ON);
+-
++		printf("Intel failed boot check \n");
++		
+ 		return 1;
+ 	}
+ 
+@@ -114,9 +115,6 @@ int gpio_abort(void)
+ {
+ 	int value;
+ 
+-	if (intel_failed_boot())
+-		return 1;
+-
+ 	/* check ffuj to abort the autoboot */
+ 	value = read_ffuj();
+ 	printf("FFUJ: %d\n", value);
+diff --git a/common/autoboot.c b/common/autoboot.c
+index e23de568fe..339cc8c870 100644
+--- a/common/autoboot.c
++++ b/common/autoboot.c
+@@ -19,6 +19,7 @@ DECLARE_GLOBAL_DATA_PTR;
+ 
+ #define MAX_DELAY_STOP_STR 32
+ 
++#define WAIT_STATE_TIMEOUT	10000
+ #ifndef DEBUG_BOOTKEYS
+ #define DEBUG_BOOTKEYS 0
+ #endif
+@@ -275,7 +276,23 @@ static int abortboot(int bootdelay)
+ 		abort = __abortboot(bootdelay);
+ 
+ 	if (!abort)
+-		abort =	gpio_abort();
++	{
++		abort = gpio_abort();
++		if (abort)
++		{
++			printf("#### BMC is in disabled state(FFU Jumper is asserted), "
++					"So BMC serial console disabled. ####\n");
++			while (1) {
++				mdelay(WAIT_STATE_TIMEOUT);
++			}
++		}
++	}
++
++	if (intel_failed_boot())
++	{
++		abort=1;
++		goto exit;
++	}
+ 
+ #ifdef CONFIG_SILENT_CONSOLE
+ 	if (abort)
+-- 
+2.25.1
+

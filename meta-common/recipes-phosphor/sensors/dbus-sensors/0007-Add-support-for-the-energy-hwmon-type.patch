@@ -1,0 +1,259 @@
+From 9c829149b2aab4f0c6cfbfeca48f046bfc7d5aa7 Mon Sep 17 00:00:00 2001
+From: Szymon Dompke <szymon.dompke@intel.com>
+Date: Tue, 18 May 2021 05:22:33 +0200
+Subject: [PATCH] Add support for the energy hwmon type
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+With this commit CPUSensors should be able detect hwmon files of type
+‘energy’ described here:
+
+   https://www.kernel.org/doc/Documentation/hwmon/sysfs-interface
+
+These files hold a cumulative energy [micro Joule].
+Values read from these type of files will be exposed on dbus as a new
+sensor. An example:
+
+└─/xyz
+  └─/xyz/openbmc_project
+    └─/xyz/openbmc_project/sensors
+      ├─/xyz/openbmc_project/sensors/energy
+      │ └─/xyz/openbmc_project/sensors/energy/Cumulative_Energy_CPU1
+
+The energy counter will have different scale factor and different
+default min/max values than other types of CPU sensors (power/temp).
+
+Tested:
+    Tested on physical machine where the `energy_input` files were present,
+    works as desired no regression detected.
+
+Authored-by: Zbigniew Kurzynski <zbigniew.kurzynski@intel.com>
+Signed-off-by: Szymon Dompke <szymon.dompke@intel.com>
+Upstream-Status: Pending
+---
+ src/IntelCPUSensor.cpp     | 61 ++++++++++++--------------------------
+ src/IntelCPUSensor.hpp     | 13 ++++++--
+ src/IntelCPUSensorMain.cpp | 30 ++++++++++++++++---
+ 3 files changed, 56 insertions(+), 48 deletions(-)
+
+diff --git a/src/IntelCPUSensor.cpp b/src/IntelCPUSensor.cpp
+index eb39f70..1b1074a 100644
+--- a/src/IntelCPUSensor.cpp
++++ b/src/IntelCPUSensor.cpp
+@@ -41,52 +41,31 @@ IntelCPUSensor::IntelCPUSensor(
+     boost::asio::io_context& io, const std::string& sensorName,
+     std::vector<thresholds::Threshold>&& thresholdsIn,
+     const std::string& sensorConfiguration, int cpuId, bool show,
+-    double dtsOffset) :
++    double dtsOffset, const SensorProperties& sensorProperties) :
+     Sensor(escapeName(sensorName), std::move(thresholdsIn), sensorConfiguration,
+-           objectType, false, false, 0, 0, conn, PowerState::on),
++           objectType, false, false, sensorProperties.max, sensorProperties.min,
++           conn, PowerState::on),
+     objServer(objectServer), inputDev(io), waitTimer(io),
+     nameTcontrol("Tcontrol CPU" + std::to_string(cpuId)), path(path),
+     privTcontrol(std::numeric_limits<double>::quiet_NaN()),
+-    dtsOffset(dtsOffset), show(show), pollTime(IntelCPUSensor::sensorPollMs)
++    dtsOffset(dtsOffset), show(show), pollTime(IntelCPUSensor::sensorPollMs),
++    scaleFactor(sensorProperties.scaleFactor)
+ 
+ {
+     if (show)
+     {
+-        if (auto fileParts = splitFileName(path))
++        std::string interfacePath = sensorProperties.path + name;
++        sensorInterface = objectServer.add_interface(
++            interfacePath, "xyz.openbmc_project.Sensor.Value");
++        for (const auto& threshold : thresholds)
+         {
+-            auto& [type, nr, item] = *fileParts;
+-            std::string interfacePath;
+-            const char* units = nullptr;
+-            if (type == "power")
+-            {
+-                interfacePath = "/xyz/openbmc_project/sensors/power/" + name;
+-                units = sensor_paths::unitWatts;
+-                minValue = 0;
+-                maxValue = 511;
+-            }
+-            else
+-            {
+-                interfacePath = "/xyz/openbmc_project/sensors/temperature/" +
+-                                name;
+-                units = sensor_paths::unitDegreesC;
+-                minValue = -128;
+-                maxValue = 127;
+-            }
+-
+-            sensorInterface = objectServer.add_interface(
+-                interfacePath, "xyz.openbmc_project.Sensor.Value");
+-            for (const auto& threshold : thresholds)
+-            {
+-                std::string interface =
+-                    thresholds::getInterface(threshold.level);
+-                thresholdInterfaces[static_cast<size_t>(threshold.level)] =
+-                    objectServer.add_interface(interfacePath, interface);
+-            }
+-            association = objectServer.add_interface(interfacePath,
+-                                                     association::interface);
+-
+-            setInitialProperties(units);
++            std::string interface = thresholds::getInterface(threshold.level);
++            thresholdInterfaces[static_cast<size_t>(threshold.level)] =
++                objectServer.add_interface(interfacePath, interface);
+         }
++        association = objectServer.add_interface(interfacePath,
++                                                 association::interface);
++        setInitialProperties(sensorProperties.units);
+     }
+ 
+     // call setup always as not all sensors call setInitialProperties
+@@ -265,8 +244,7 @@ void IntelCPUSensor::updateMinMaxValues(void)
+             {
+                 const auto& [suffix, oldValue, dbusName, newValue] = vectorItem;
+                 auto attrPath = boost::replace_all_copy(path, fileItem, suffix);
+-                if (auto tmp = readFile(attrPath,
+-                                        IntelCPUSensor::sensorScaleFactor))
++                if (auto tmp = readFile(attrPath, scaleFactor))
+                 {
+                     newValue.get() = *tmp;
+                 }
+@@ -335,7 +313,7 @@ void IntelCPUSensor::handleResponse(const boost::system::error_code& err)
+         try
+         {
+             rawValue = std::stod(response);
+-            double nvalue = rawValue / IntelCPUSensor::sensorScaleFactor;
++            double nvalue = rawValue / scaleFactor;
+ 
+             if (show)
+             {
+@@ -360,9 +338,8 @@ void IntelCPUSensor::handleResponse(const boost::system::error_code& err)
+                 if (!thresholds.empty())
+                 {
+                     std::vector<thresholds::Threshold> newThresholds;
+-                    if (parseThresholdsFromAttr(
+-                            newThresholds, path,
+-                            IntelCPUSensor::sensorScaleFactor, dtsOffset))
++                    if (parseThresholdsFromAttr(newThresholds, path,
++                                                scaleFactor, dtsOffset))
+                     {
+                         if (!std::equal(thresholds.begin(), thresholds.end(),
+                                         newThresholds.begin(),
+diff --git a/src/IntelCPUSensor.hpp b/src/IntelCPUSensor.hpp
+index 5c8639c..82cb43c 100644
+--- a/src/IntelCPUSensor.hpp
++++ b/src/IntelCPUSensor.hpp
+@@ -17,6 +17,15 @@
+ #include <variant>
+ #include <vector>
+ 
++struct SensorProperties
++{
++    std::string path;
++    std::string units;
++    double max;
++    double min;
++    unsigned int scaleFactor;
++};
++
+ class IntelCPUSensor :
+     public Sensor,
+     public std::enable_shared_from_this<IntelCPUSensor>
+@@ -28,7 +37,7 @@ class IntelCPUSensor :
+                    boost::asio::io_context& io, const std::string& sensorName,
+                    std::vector<thresholds::Threshold>&& thresholds,
+                    const std::string& configuration, int cpuId, bool show,
+-                   double dtsOffset);
++                   double dtsOffset, const SensorProperties& sensorProperties);
+ 
+     // Create a CPUSensor without a path to sensor value
+     IntelCPUSensor(const std::string& objectType,
+@@ -39,7 +48,6 @@ class IntelCPUSensor :
+                    const std::string& sensorConfiguration);
+ 
+     ~IntelCPUSensor() override;
+-    static constexpr unsigned int sensorScaleFactor = 1000;
+     static constexpr unsigned int sensorPollMs = 1000;
+     static constexpr size_t warnAfterErrorCount = 10;
+     static constexpr const char* labelTcontrol = "Tcontrol";
+@@ -59,6 +67,7 @@ class IntelCPUSensor :
+     bool loggedInterfaceDown = false;
+     uint8_t minMaxReadCounter{0};
+     int fd{};
++    unsigned int scaleFactor;
+     void handleResponse(const boost::system::error_code& err);
+     void checkThresholds(void) override;
+     void updateMinMaxValues(void);
+diff --git a/src/IntelCPUSensorMain.cpp b/src/IntelCPUSensorMain.cpp
+index 7cefec8..f391663 100644
+--- a/src/IntelCPUSensorMain.cpp
++++ b/src/IntelCPUSensorMain.cpp
+@@ -97,6 +97,18 @@ static constexpr auto sensorTypes{std::to_array<const char*>({"XeonCPU"})};
+ static constexpr auto hiddenProps{std::to_array<const char*>(
+     {IntelCPUSensor::labelTcontrol, "Tthrottle", "Tjmax"})};
+ 
++static const boost::container::flat_map<std::string, SensorProperties>
++    sensorPropertiesMap = {
++        {"power",
++         {"/xyz/openbmc_project/sensors/power/", sensor_paths::unitWatts, 511,
++          0, 1000}},
++        {"energy",
++         {"/xyz/openbmc_project/sensors/energy/", sensor_paths::unitJoules,
++          std::numeric_limits<uint32_t>::max() / 1000000, 0.0, 1000000}},
++        {"temp",
++         {"/xyz/openbmc_project/sensors/temperature/",
++          sensor_paths::unitDegreesC, 127.0, -128.0, 1000}}};
++
+ void detectCpuAsync(
+     boost::asio::steady_timer& pingTimer, const size_t pingSeconds,
+     boost::asio::steady_timer& creationTimer, boost::asio::io_context& io,
+@@ -299,7 +311,8 @@ bool createSensors(boost::asio::io_context& io,
+ 
+         auto directory = hwmonNamePath.parent_path();
+         std::vector<fs::path> inputPaths;
+-        if (!findFiles(directory, R"((temp|power)\d+_(input|average|cap)$)",
++        if (!findFiles(directory,
++                       R"((temp|power|energy)\d+_(input|average|cap)$)",
+                        inputPaths, 0))
+         {
+             std::cerr << "No temperature sensors in system\n";
+@@ -367,6 +380,16 @@ bool createSensors(boost::asio::io_context& io,
+                 }
+             }
+ 
++            const auto& it = sensorPropertiesMap.find(type);
++            if (it == sensorPropertiesMap.end())
++            {
++                std::cerr
++                    << "Failure getting sensor properties for sensor type: "
++                    << type << "\n";
++                continue;
++            }
++            const SensorProperties& prop = it->second;
++
+             std::vector<thresholds::Threshold> sensorThresholds;
+             std::string labelHead = label.substr(0, label.find(' '));
+             parseThresholdsFromConfig(*sensorData, sensorThresholds,
+@@ -374,8 +397,7 @@ bool createSensors(boost::asio::io_context& io,
+             if (sensorThresholds.empty())
+             {
+                 if (!parseThresholdsFromAttr(sensorThresholds, inputPathStr,
+-                                             IntelCPUSensor::sensorScaleFactor,
+-                                             dtsOffset))
++                                             prop.scaleFactor, dtsOffset))
+                 {
+                     std::cerr << "error populating thresholds for "
+                               << sensorName << "\n";
+@@ -387,7 +409,7 @@ bool createSensors(boost::asio::io_context& io,
+             sensorPtr = std::make_shared<IntelCPUSensor>(
+                 inputPathStr, sensorType, objectServer, dbusConnection, io,
+                 sensorName, std::move(sensorThresholds), *interfacePath, cpuId,
+-                show, dtsOffset);
++                show, dtsOffset, prop);
+             sensorPtr->setupRead();
+             createdSensors.insert(sensorName);
+             if (debug)
+-- 
+2.25.1
+

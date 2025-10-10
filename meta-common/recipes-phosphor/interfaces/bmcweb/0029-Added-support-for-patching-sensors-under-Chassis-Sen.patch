@@ -1,0 +1,203 @@
+From be352bf5baa643dd50d1558c15f21732b1640ff2 Mon Sep 17 00:00:00 2001
+From: Gokul Sanker V G <gokul.sanker.v.g@intel.com>
+Date: Tue, 6 Sep 2022 14:47:05 +0530
+Subject: [PATCH] Added support for patching sensors under /Chassis/<>/Sensors
+
+The following path will add the functionality to patch the
+reading property of each sensors exposed under
+/Chassis//Sensors. Patching will return internal
+Server error if the senor reading is not writable in D-bus
+
+Patching sensors value via Redfish violates the standard.
+Even though patching functionality works only in
+manufacturing mode, upstream community is not supporting
+this functionality
+
+https://gerrit.openbmc-project.xyz/c/openbmc/bmcweb/+/49193
+
+Tested:
+Sensor patching is working in manufactering mode
+
+Signed-off-by: Gokul Sanker V G <gokul.sanker.v.g@intel.com>
+Signed-off-by: Jayaprakash Mutyala <mutyalax.jayaprakash@intel.com>
+Upstream-Status: Pending
+---
+ redfish-core/include/redfish.hpp     |   2 +
+ redfish-core/lib/sensor_patching.hpp | 145 +++++++++++++++++++++++++++
+ 2 files changed, 147 insertions(+)
+ create mode 100644 redfish-core/lib/sensor_patching.hpp
+
+diff --git a/redfish-core/include/redfish.hpp b/redfish-core/include/redfish.hpp
+index 540bb070..4aaff9fd 100644
+--- a/redfish-core/include/redfish.hpp
++++ b/redfish-core/include/redfish.hpp
+@@ -45,6 +45,7 @@
+ #include "redfish_sessions.hpp"
+ #include "redfish_v1.hpp"
+ #include "roles.hpp"
++#include "sensor_patching.hpp"
+ #include "sensors.hpp"
+ #include "service_root.hpp"
+ #include "storage.hpp"
+@@ -221,6 +222,7 @@ class RedfishService
+ 
+         requestRoutesSensorCollection(app);
+         requestRoutesSensor(app);
++        requestRoutesSensorPatching(app);
+ 
+         requestRoutesTaskMonitor(app);
+         requestRoutesTaskService(app);
+diff --git a/redfish-core/lib/sensor_patching.hpp b/redfish-core/lib/sensor_patching.hpp
+new file mode 100644
+index 00000000..680bd3a4
+--- /dev/null
++++ b/redfish-core/lib/sensor_patching.hpp
+@@ -0,0 +1,145 @@
++#pragma once
++
++#include <app.hpp>
++#include <boost/algorithm/string/predicate.hpp>
++#include <boost/algorithm/string/split.hpp>
++#include <boost/container/flat_map.hpp>
++#include <boost/range/algorithm/replace_copy_if.hpp>
++#include <dbus_singleton.hpp>
++#include <dbus_utility.hpp>
++#include <registries/privilege_registry.hpp>
++#include <sdbusplus/asio/property.hpp>
++#include <utils/json_utils.hpp>
++
++#include <cmath>
++#include <utility>
++#include <variant>
++
++namespace redfish
++{
++
++/**
++ * @brief Entry point for overriding sensor values of given sensor
++ *
++ * @param sensorAsyncResp   response object
++ * @param overrideMap   Collections of sensors to be updated
++ */
++inline void
++    setSensor(const std::shared_ptr<SensorsAsyncResp>& sensorAsyncResp,
++              std::unordered_map<std::string, std::pair<double, std::string>>&
++                  overrideMap)
++{
++    auto getChassisSensorListCb =
++        [sensorAsyncResp, overrideMap](
++            const std::shared_ptr<std::set<std::string>>& sensorsList) {
++        // Match sensor names in the PATCH request to those managed by the
++        // chassis node
++        const std::shared_ptr<std::set<std::string>> sensorNames =
++            std::make_shared<std::set<std::string>>();
++        for (const auto& item : overrideMap)
++        {
++            const auto& sensor = item.first;
++            if (!findSensorNameUsingSensorPath(sensor, *sensorsList,
++                                               *sensorNames))
++            {
++                BMCWEB_LOG_INFO("Unable to find memberId {}", item.first);
++                messages::resourceNotFound(sensorAsyncResp->asyncResp->res,
++                                           item.second.second, item.first);
++                return;
++            }
++        }
++        // Get the connection to which the memberId belongs
++        auto getObjectsWithConnectionCb =
++            [sensorAsyncResp,
++             overrideMap](const std::set<std::string>& /*connections*/,
++                          const std::set<std::pair<std::string, std::string>>&
++                              objectsWithConnection) {
++            if (objectsWithConnection.size() != overrideMap.size())
++            {
++                BMCWEB_LOG_INFO(
++                    "Unable to find all objects with proper connection {} requested {}",
++                    objectsWithConnection.size(), overrideMap.size());
++                messages::resourceNotFound(sensorAsyncResp->asyncResp->res,
++                                           sensorAsyncResp->chassisSubNode ==
++                                                   sensors::node::thermal
++                                               ? "Temperatures"
++                                               : "Voltages",
++                                           "Count");
++                return;
++            }
++            for (const auto& item : objectsWithConnection)
++            {
++                sdbusplus::message::object_path path(item.first);
++                std::string sensorName = path.filename();
++                if (sensorName.empty())
++                {
++                    messages::internalError(sensorAsyncResp->asyncResp->res);
++                    return;
++                }
++
++                const auto& iterator = overrideMap.find(sensorName);
++                if (iterator == overrideMap.end())
++                {
++                    BMCWEB_LOG_INFO("Unable to find sensor object {}",
++                                    item.first);
++                    messages::internalError(sensorAsyncResp->asyncResp->res);
++                    return;
++                }
++                crow::connections::systemBus->async_method_call(
++                    [sensorAsyncResp](const boost::system::error_code ec) {
++                    if (ec)
++                    {
++                        BMCWEB_LOG_DEBUG(
++                            "setOverrideValueStatus DBUS error: {}", ec);
++                        messages::internalError(
++                            sensorAsyncResp->asyncResp->res);
++                        return;
++                    }
++                    },
++                    item.second, item.first, "org.freedesktop.DBus.Properties",
++                    "Set", "xyz.openbmc_project.Sensor.Value", "Value",
++                    std::variant<double>(iterator->second.first));
++            }
++        };
++        // Get object with connection for the given sensor name
++        getObjectsWithConnection(sensorAsyncResp, sensorNames,
++                                 std::move(getObjectsWithConnectionCb));
++    };
++    // get full sensor list for the given chassisId and cross verify the sensor.
++    getChassis(sensorAsyncResp->asyncResp, sensorAsyncResp->chassisId,
++               sensorAsyncResp->chassisSubNode, sensorAsyncResp->types,
++               std::move(getChassisSensorListCb));
++}
++
++inline void requestRoutesSensorPatching(App& app)
++{
++    BMCWEB_ROUTE(app, "/redfish/v1/Chassis/<str>/Sensors/<str>/")
++        .privileges(redfish::privileges::patchSensor)
++        .methods(boost::beast::http::verb::patch)(
++            [](const crow::Request& req,
++               const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++               const std::string& chassisName, const std::string&) {
++        std::unordered_map<std::string, std::pair<double, std::string>>
++            overrideMap;
++        std::string memberId;
++        double value = 0;
++
++        auto sensorsAsyncResp = std::make_shared<SensorsAsyncResp>(
++            asyncResp, chassisName, sensors::dbus::sensorPaths,
++            sensors::node::sensors);
++
++        if (!json_util::readJsonPatch(req, sensorsAsyncResp->asyncResp->res,
++                                      "Id", memberId, "Reading", value))
++        {
++            return;
++        }
++
++        std::pair<std::string, std::string> nameType =
++            splitSensorNameAndType(memberId);
++        overrideMap.emplace(nameType.second, std::make_pair(value, "Reading"));
++
++        setSensor(sensorsAsyncResp, overrideMap);
++    });
++}
++
++} // namespace redfish
+-- 
+2.25.1
+

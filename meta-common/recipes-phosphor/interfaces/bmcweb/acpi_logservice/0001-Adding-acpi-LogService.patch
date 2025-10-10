@@ -1,0 +1,218 @@
+From 01d05b09441f974057ce43311e25f4915be4ebcd Mon Sep 17 00:00:00 2001
+From: Arun Thomas Baby <arunx.thomas.baby.baby.mathew@intel.com>
+Date: Tue, 4 Oct 2022 22:58:14 -0700
+Subject: [PATCH] Adding acpi LogService.
+
+Added the support for acpi log under System Logservice.
+
+Tested: Able to view the response for all the URI's under acpi logservice
+
+Signed-off-by: Arun Thomas Baby <arunx.thomas.baby.baby.mathew@intel.com>
+Upstream-Status: Pending
+---
+ redfish-core/include/redfish.hpp  |   5 +
+ redfish-core/lib/log_services.hpp | 160 ++++++++++++++++++++++++++++++
+ 2 files changed, 165 insertions(+)
+
+diff --git a/redfish-core/include/redfish.hpp b/redfish-core/include/redfish.hpp
+index 4f608a31..f29cb8ba 100644
+--- a/redfish-core/include/redfish.hpp
++++ b/redfish-core/include/redfish.hpp
+@@ -177,6 +177,11 @@ class RedfishService
+         requestRoutesCrashdumpCollect(app);
+ #endif // BMCWEB_ENABLE_REDFISH_CPU_LOG
+ 
++        requestRoutesAcpiService(app);
++        requestRoutesAcpiEntryCollection(app);
++        requestRoutesAcpiEntry(app);
++        requestRoutesAcpiFile(app);
++
+         requestRoutesProcessorCollection(app);
+         requestRoutesProcessor(app);
+         requestRoutesOperatingConfigCollection(app);
+diff --git a/redfish-core/lib/log_services.hpp b/redfish-core/lib/log_services.hpp
+index 791dbcb6..843bc3fd 100644
+--- a/redfish-core/lib/log_services.hpp
++++ b/redfish-core/lib/log_services.hpp
+@@ -67,6 +67,8 @@ constexpr const char* crashdumpOnDemandInterface =
+     "com.intel.crashdump.OnDemand";
+ constexpr const char* crashdumpTelemetryInterface =
+     "com.intel.crashdump.Telemetry";
++static const char* acpiFilePath = "/var/lib/acpi/acpi2";
++static const char* acpiFileName = "acpi2";
+ 
+ enum class DumpCreationProgress
+ {
+@@ -1286,6 +1288,10 @@ inline void requestRoutesSystemLogServiceCollection(App& app)
+         logServiceArray.emplace_back(std::move(crashdump));
+ #endif
+ 
++        nlohmann::json::object_t acpilogger;
++        acpilogger["@odata.id"] = "/redfish/v1/Systems/system/LogServices/acpi";
++        logServiceArray.push_back(std::move(acpilogger));
++
+ #ifdef BMCWEB_ENABLE_REDFISH_HOST_LOGGER
+         nlohmann::json::object_t hostlogger;
+         hostlogger["@odata.id"] =
+@@ -4352,4 +4358,158 @@ inline void requestRoutesPostCodesEntry(App& app)
+     });
+ }
+ 
++static bool getAcpiFileTimestamp(std::string& timestamp)
++{
++    struct stat fileInfo;
++    if (stat(acpiFilePath, &fileInfo) != 0)
++    {
++        return false;
++    }
++    timestamp = redfish::time_utils::getDateTimeUint(
++        static_cast<uint64_t>(fileInfo.st_ctime));
++    return true;
++}
++
++static void
++    logAcpiDumpEntry(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                     nlohmann::json& logEntryJson)
++{
++    std::string AcpiLogURI =
++        "/redfish/v1/Systems/system/LogServices/acpi/Entries/0/acpi2.bin";
++    nlohmann::json::object_t logEntry;
++    logEntry["@odata.type"] = "#LogEntry.v1_7_0.LogEntry";
++    logEntry["@odata.id"] =
++        "/redfish/v1/Systems/system/LogServices/acpi/Entries/0";
++    logEntry["Name"] = "Acpi Log";
++    logEntry["Id"] = "0";
++    logEntry["EntryType"] = "Oem";
++    logEntry["AdditionalDataURI"] = std::move(AcpiLogURI);
++    logEntry["DiagnosticDataType"] = "OEM";
++    logEntry["OEMDiagnosticDataType"] = "Acpi Log";
++    std::string timestamp;
++    if (getAcpiFileTimestamp(timestamp))
++    {
++        logEntry["Created"] = std::move(timestamp);
++    }
++    // If logEntryJson references an array of LogEntry resources
++    // ('Members' list), then push this as a new entry, otherwise set it
++    // directly
++    if (logEntryJson.is_array())
++    {
++        logEntryJson.push_back(logEntry);
++        asyncResp->res.jsonValue["Members@odata.count"] = logEntryJson.size();
++    }
++    else
++    {
++        logEntryJson.update(logEntry);
++    }
++}
++
++inline void requestRoutesAcpiService(App& app)
++{
++    BMCWEB_ROUTE(app, "/redfish/v1/Systems/system/LogServices/acpi/")
++        .privileges({{"ConfigureManager"}})
++        .methods(boost::beast::http::verb::get)(
++            [&app](const crow::Request& req,
++                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp) {
++        if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++        {
++            return;
++        }
++        asyncResp->res.jsonValue["@odata.id"] =
++            "/redfish/v1/Systems/system/LogServices/acpi";
++        asyncResp->res.jsonValue["@odata.type"] =
++            "#LogService.v1_2_0.LogService";
++        asyncResp->res.jsonValue["Name"] = "Open BMC Oem Acpi LogService";
++        asyncResp->res.jsonValue["Description"] = "Oem Acpi LogService";
++        asyncResp->res.jsonValue["Id"] = "acpi";
++        asyncResp->res.jsonValue["OverWritePolicy"] = "WrapsWhenFull";
++        asyncResp->res.jsonValue["MaxNumberOfRecords"] = 1;
++
++        std::pair<std::string, std::string> redfishDateTimeOffset =
++            redfish::time_utils::getDateTimeOffsetNow();
++        asyncResp->res.jsonValue["DateTime"] = redfishDateTimeOffset.first;
++        asyncResp->res.jsonValue["DateTimeLocalOffset"] =
++            redfishDateTimeOffset.second;
++
++        asyncResp->res.jsonValue["Entries"]["@odata.id"] =
++            "/redfish/v1/Systems/system/LogServices/acpi/Entries";
++    });
++}
++
++inline void requestRoutesAcpiEntryCollection(App& app)
++{
++    BMCWEB_ROUTE(app, "/redfish/v1/Systems/system/LogServices/acpi/Entries/")
++        .privileges({{"ConfigureComponents"}})
++        .methods(boost::beast::http::verb::get)(
++            [&app](const crow::Request& req,
++                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp) {
++        if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++        {
++            return;
++        }
++
++        asyncResp->res.jsonValue["@odata.type"] =
++            "#LogEntryCollection.LogEntryCollection";
++        asyncResp->res.jsonValue["@odata.id"] =
++            "/redfish/v1/Systems/system/LogServices/acpi/Entries";
++        asyncResp->res.jsonValue["Name"] = "Open BMC Acpi Log Entries";
++        asyncResp->res.jsonValue["Description"] =
++            "Collection of Acpi Log Entries";
++        asyncResp->res.jsonValue["Members"] = nlohmann::json::array();
++        asyncResp->res.jsonValue["Members@odata.count"] = 0;
++        if (!std::filesystem::exists(acpiFilePath))
++        {
++            return;
++        }
++        logAcpiDumpEntry(asyncResp, asyncResp->res.jsonValue["Members"]);
++    });
++}
++
++inline void requestRoutesAcpiEntry(App& app)
++{
++    BMCWEB_ROUTE(app, "/redfish/v1/Systems/system/LogServices/acpi/Entries/0/")
++        .privileges({{"ConfigureComponents"}})
++        .methods(boost::beast::http::verb::get)(
++            [&app](const crow::Request& req,
++                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp) {
++        if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++        {
++            return;
++        }
++        if (!std::filesystem::exists(acpiFilePath))
++        {
++            messages::resourceNotFound(asyncResp->res, "AcpiLog", "0");
++            return;
++        }
++        logAcpiDumpEntry(asyncResp, asyncResp->res.jsonValue);
++    });
++}
++
++inline void requestRoutesAcpiFile(App& app)
++{
++    BMCWEB_ROUTE(app,
++                 "/redfish/v1/Systems/system/LogServices/acpi/Entries/0/<str>/")
++        .privileges(redfish::privileges::getLogEntry)
++        .methods(boost::beast::http::verb::get)(
++            [&app](const crow::Request& req,
++                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                   const std::string& fileName) {
++        if (fileName != acpiFileName)
++        {
++            messages::resourceMissingAtURI(asyncResp->res, req.url());
++            return;
++        }
++        if (!asyncResp->res.openFile(acpiFilePath))
++        {
++            messages::resourceMissingAtURI(asyncResp->res, req.url());
++            return;
++        }
++
++        // Configure this to be a file download when accessed
++        // from a browser
++        asyncResp->res.addHeader("Content-Disposition", "attachment");
++    });
++}
++
+ } // namespace redfish
+-- 
+2.25.1
+

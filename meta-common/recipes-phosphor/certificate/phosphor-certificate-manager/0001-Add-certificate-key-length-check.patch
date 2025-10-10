@@ -1,0 +1,157 @@
+From d35a0e45cb2e6493ed9835dbae7f7fad9a4a5b5d Mon Sep 17 00:00:00 2001
+From: AppaRao Puli <apparao.puli@intel.com>
+Date: Tue, 16 May 2023 16:55:40 +0000
+Subject: [PATCH] Add certificate key length check
+
+Current implementation of certificate manager doesn't
+have check for minimum and maximum supported key length
+certificate upload. This leads to security issues.
+
+NIST recommends the use of keys with a minimum strength of 112 bits
+of security to protect data until 2030, and 128 bits of security
+thereafter. A 2048-bit RSA key provides 112-bit of security.
+
+When more 8192-bit RSA key size certificates are uploaded as HTTPS
+its crashing the bmcweb and not allowing https communication. So
+currently max key length is set to 4096-bit RAS key to avoid the
+bmcweb.
+
+Tested:
+Tried uploading 8K+ key length certificate and its failed to
+upload as expected and bmcweb crash is avoided.
+
+Tried uploading 2k & 4K key length certificate and it worked
+as expected.
+
+Tried uploading 8192 and 1024 key length RSA-certificates and its
+failed to upload,
+Tried uploading 3072 and 2048 key length RSA-certificates and it worked
+as expected.
+
+Tried uploading 521 and 128 key length ECDSA-certificates and its
+failed to upload,
+Tried uploading 348 and 512 key length EDSA-certificates and it worked.
+
+Signed-off-by: AppaRao Puli <apparao.puli@intel.com>
+Signed-off-by: arunkumarrajappa <arunkumarx.rajappa@intel.com>
+Signed-off-by: Anoop S <anoopx.s@intel.com>
+
+Upstream-Status: Pending
+
+%% original patch: 0001-Add-certificate-key-length-check.patch
+---
+ certificate.cpp |  2 ++
+ x509_utils.cpp  | 50 +++++++++++++++++++++++++++++++++++++++++++++++++
+ x509_utils.hpp  |  8 ++++++++
+ 3 files changed, 60 insertions(+)
+
+diff --git a/certificate.cpp b/certificate.cpp
+index e3fe609..5fbb04e 100644
+--- a/certificate.cpp
++++ b/certificate.cpp
+@@ -349,6 +349,7 @@ void Certificate::install(const std::string& certSrcFilePath, bool restore)
+     // Perform validation
+     validateCertificateAgainstStore(*x509Store, *cert);
+     validateCertificateStartDate(*cert);
++    validateCertificateKeyLength(*cert);
+     validateCertificateInSSLContext(*cert);
+ 
+     // Invoke type specific append private key function.
+@@ -422,6 +423,7 @@ void Certificate::install(X509_STORE& x509Store, const std::string& pem,
+     // Perform validation; no type specific compare keys function
+     validateCertificateAgainstStore(x509Store, *cert);
+     validateCertificateStartDate(*cert);
++    validateCertificateKeyLength(*cert);
+     validateCertificateInSSLContext(*cert);
+ 
+     // Copy the PEM to the installation path
+diff --git a/x509_utils.cpp b/x509_utils.cpp
+index bc3ccbb..74fa52c 100644
+--- a/x509_utils.cpp
++++ b/x509_utils.cpp
+@@ -41,6 +41,8 @@ using X509Ptr = std::unique_ptr<X509, decltype(&::X509_free)>;
+ using BIOMemPtr = std::unique_ptr<BIO, decltype(&::BIO_free)>;
+ using ASN1TimePtr = std::unique_ptr<ASN1_TIME, decltype(&ASN1_STRING_free)>;
+ using SSLCtxPtr = std::unique_ptr<SSL_CTX, decltype(&::SSL_CTX_free)>;
++using EVPPkeyPtr = std::unique_ptr<EVP_PKEY, decltype(&::EVP_PKEY_free)>;
++using EVPPkeyTypePtr = std::unique_ptr<EVP_PKEY, decltype(&::EVP_PKEY_free)>;
+ 
+ // Trust chain related errors.`
+ constexpr bool isTrustChainError(int error)
+@@ -140,6 +142,54 @@ void validateCertificateStartDate(X509& cert)
+     }
+ }
+ 
++int validateCertificateKeyType(X509& cert)
++{
++    EVPPkeyTypePtr pubKey(X509_get_pubkey(&cert), ::EVP_PKEY_free);
++    if (!pubKey)
++    {
++        lg2::error("X509_get_pubkey() failed, ERRCODE:{ERRCODE}", "ERRCODE",  ERR_get_error());
++        elog<InvalidCertificate>(Reason("Failed to get public key info"));
++    }
++    int keyType = EVP_PKEY_id(pubKey.get());
++    int pkeyType = EVP_PKEY_type(keyType);
++    lg2::info("Certificate cryptographic keyType, KEYTYPE:{KEYTYPE}", "KEYTYPE",  pkeyType);
++    return pkeyType;
++}
++void validateCertificateKeyLength(X509& cert)
++{
++    EVPPkeyPtr pubKey(X509_get_pubkey(&cert), ::EVP_PKEY_free);
++    if (!pubKey)
++    {
++        lg2::error("X509_get_pubkey() failed, ERRCODE:{ERRCODE}", "ERRCODE",  ERR_get_error());
++        elog<InvalidCertificate>(Reason("Failed to get public key info"));
++    }
++    int minKeyBitLength = 0;
++    int maxKeyBitLength = 0;
++    int keyLen = EVP_PKEY_bits(pubKey.get());
++    int pkeyType = validateCertificateKeyType(cert);
++    if ((pkeyType == EVP_PKEY_RSA) || (pkeyType == EVP_PKEY_RSA2))
++    {
++        minKeyBitLength = 2048;
++        maxKeyBitLength = 4096;
++    }
++    else if (pkeyType == EVP_PKEY_EC)
++    {
++        minKeyBitLength = 384;
++        maxKeyBitLength = 512;
++    }
++    else
++    {
++        lg2::error("Invalid cryptographic KeyType certificate uploaded, KEYTYPE:{KEYTYPE}", "KEYTYPE",  pkeyType);
++        elog<InvalidCertificate>(Reason("Invalid key type certificate"));
++    }
++    lg2::info("Certificate cryptographic length, KEYLENGTH:{KEYLENGTH}", "KEYLENGTH",  keyLen);
++    if (keyLen < minKeyBitLength || keyLen > maxKeyBitLength )
++    {
++        lg2::error("Invalid cryptographic length certificate uploaded, KEYLENGTH:{KEYLENGTH}", "KEYLENGTH",  keyLen);
++        elog<InvalidCertificate>(Reason("Invalid key length certificate"));
++    }
++}
++
+ void validateCertificateAgainstStore(X509_STORE& x509Store, X509& cert)
+ {
+     int errCode = X509_V_OK;
+diff --git a/x509_utils.hpp b/x509_utils.hpp
+index 6e193fc..4947b45 100644
+--- a/x509_utils.hpp
++++ b/x509_utils.hpp
+@@ -32,6 +32,14 @@ std::unique_ptr<X509, decltype(&::X509_free)>
+  */
+ void validateCertificateStartDate(X509& cert);
+ 
++/**
++ * @brief Parses the certificate and throws error if certificate key length
++ * is in not supported range
++ * @param[in] cert Reference to certificate object uploaded
++ * @return void
++ */
++void validateCertificateKeyLength(X509& cert);
++
+ /**
+  * @brief Validates the certificate against the trusted certificates store and
+  * throws error if certificate is not valid
+-- 
+2.34.1
+

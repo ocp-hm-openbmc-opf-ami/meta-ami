@@ -1,0 +1,70 @@
+From 97be6caa5b38931d6a981eadad81ee6354202202 Mon Sep 17 00:00:00 2001
+From: Johnathan Mantey <johnathanx.mantey@intel.com>
+Date: Fri, 8 Sep 2023 13:21:05 -0700
+Subject: [PATCH] Revert "ethernet_interface: Fix link local autoconfiguration
+ functio
+
+This reverts commit 721d8f75fb6d8d22cc4afc11b06288a47a1a600d.
+
+Commit 721d8f75 causes undesirable behavior when working with Link
+Local addresses.
+
+Automatic Link Local addressing needs to allow the systemd-network
+stack to automatically add/remove a link local address. When DHCPv4
+addressing is enabled the link local needs to be automatically
+disabled. When DHCPv4 addressing is disabled the link local address
+must automatically be activated.
+
+With commit 721d8f75 active this behavior does not occur. What happens
+instead is when DHCPv4 is disabled, and then re-enabled a STATIC Link
+Local address is added to the networkd.conf file. Once there the Link
+Local address is present until actively removed. This causes the Link
+Local addressing to quit being "automatic".
+
+Automatic Link Local addressing creates an address with the "scope"
+assigned to LINK_LOCAL_AUTOCONFIGURATION, and a "address origin" equal
+to IP::AddressOrigin::Static (i.e. IFA_F_PERMANENT is true).
+
+ethernet_interface.cpp addAddr():  adr: 169.254.147.57/16 scp:
+000000fd flg: 00000080
+ethernet_interface.cpp addAddr():  adr: fe80::207:e9ff:fe34:3c6f/64
+scp: 000000fd flg: 00000080
+
+There are also undesirable side effects in the IPMI Get LAN
+Configuration command when querying IPv6 Dynamic Addresses (Param
+59). The Link Local address now gets included in the DHCPv6 assigned
+addresses despite the IFA_F_PERMANENT flag being asserted.
+
+Tested:
+Reverted the commit.
+Disabled and Enabled DHCPv4 and confirmed 169.x.x.x addresses are no
+longer written to the network.conf file.
+Confirmed LLv6 addresses are no longer reported via the IPMI Get LAN
+Config command.
+
+Change-Id: I272653dca61b96b360f03dfdf00d7ca57b7e0b63
+Signed-off-by: Johnathan Mantey <johnathanx.mantey@intel.com>
+---
+ src/ethernet_interface.cpp | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index 0427363..8f20a91 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -162,10 +162,10 @@ bool EthernetInterface::originIsManuallyAssigned(IP::AddressOrigin origin)
+ {
+     return (
+ #ifdef LINK_LOCAL_AUTOCONFIGURATION
++        (origin == IP::AddressOrigin::Static)
++#else
+         (origin == IP::AddressOrigin::Static ||
+          origin == IP::AddressOrigin::LinkLocal)
+-#else
+-        (origin == IP::AddressOrigin::Static)
+ #endif
+ 
+     );
+-- 
+2.41.0
+

@@ -1,0 +1,240 @@
+From b1abbe911d3effc343483adff0d17ec23f665dd9 Mon Sep 17 00:00:00 2001
+From: Iwona Winiarska <iwona.winiarska@intel.com>
+Date: Sat, 18 Mar 2023 23:20:07 +0100
+Subject: [PATCH] intelcpusensor: Update CPUConfig set based on udev
+ events
+
+If IntelCPUSensor is started before all PECI adapters are up, CPUConfig
+may never be created for missing adapters.
+
+Let's start udev event monitoring to update CPUConfig set based on
+device add/remove udev actions.
+
+Also, fix CPUConfig creation for peci-i3c by verifying socket id related
+to PECI device.
+
+Tested:
+Run IntelCpuSensor - all expected PECI client devices could be found in
+sysfs.
+Unbind peci-i3c driver - pecidev and PECI client devices were removed
+from sysfs.
+Bind peci-i3c driver - pecidev and PECI client devices were added in
+sysfs.
+
+Signed-off-by: Iwona Winiarska <iwona.winiarska@intel.com>
+Signed-off-by: Oleksandr Shulzhenko <oleksandr.shulzhenko.viktorovych@intel.com>
+---
+ meson.build                |   2 +
+ src/IntelCPUSensorMain.cpp | 139 +++++++++++++++++++++++++++++++++++++
+ src/meson.build            |   1 +
+ 3 files changed, 142 insertions(+)
+
+diff --git a/meson.build b/meson.build
+index 6af27d1..800a204 100644
+--- a/meson.build
++++ b/meson.build
+@@ -88,6 +88,8 @@ if not uring.found()
+   uring = uring.as_system('system')
+ endif
+ 
++libudev = dependency('libudev', required : false, include_type: 'system')
++
+ default_deps = [
+     boost,
+     boost_dep,
+diff --git a/src/IntelCPUSensorMain.cpp b/src/IntelCPUSensorMain.cpp
+index 533f624..e9a6387 100644
+--- a/src/IntelCPUSensorMain.cpp
++++ b/src/IntelCPUSensorMain.cpp
+@@ -19,9 +19,11 @@
+ #include "VariantVisitors.hpp"
+ 
+ #include <fcntl.h>
++#include <libudev.h>
+ #include <peci.h>
+ 
+ #include <boost/algorithm/string/replace.hpp>
++#include <boost/asio/posix/stream_descriptor.hpp>
+ #include <boost/container/flat_map.hpp>
+ #include <boost/container/flat_set.hpp>
+ #include <sdbusplus/asio/connection.hpp>
+@@ -877,6 +879,19 @@ void addConfigsForOtherPeciAdapters(
+             peciAdapterName = "wire";
+         }
+ 
++        if (peciAdapterName->compare("i3c") == 0)
++        {
++            std::string p = peciAdapterNamePath.string();
++            auto pos = p.find("peci-");
++            std::string pecidev = p.substr(pos, 6);
++            int cpu = peci_i3c_chardev_to_cpu(pecidev.c_str());
++
++            if (int(addr) != cpu + 0x30)
++            {
++                continue;
++            }
++        }
++
+         cpuConfigs.emplace(*peciDeviceNum, addr, name + "_" + *peciAdapterName, *peciAdapterName, state);
+     }
+ }
+@@ -1028,6 +1043,110 @@ bool getCpuConfig(std::shared_ptr<sdbusplus::asio::connection>& systemBus,
+     return false;
+ }
+ 
++void udevAction(udev_device* dev,
++                boost::container::flat_set<CPUConfig>& cpuConfigs)
++{
++    std::string action = udev_device_get_action(dev);
++    if (action.empty())
++    {
++        return;
++    }
++
++    std::string devpath = udev_device_get_devpath(dev);
++
++    auto pos = devpath.find("peci-");
++    std::string pecidevName = devpath.substr(pos);
++
++    pos = pecidevName.find("/");
++    std::string peciAdapterName = pecidevName.substr(5, pos - 5);
++    pecidevName = pecidevName.substr(pos + 1);
++
++    pos = pecidevName.find("/");
++    if (pos != std::string::npos)
++    {
++        return; // skip peci-client paths
++    }
++
++    pos = pecidevName.find("-");
++    int bus = std::stoi(pecidevName.substr(pos + 1));
++
++    pos = peciAdapterName.find(".");
++    if (pos != std::string::npos)
++    {
++        peciAdapterName = peciAdapterName.substr(0, pos);
++    }
++
++    if (action.compare("add") == 0)
++    {
++        for (CPUConfig& config : cpuConfigs)
++        {
++            if (config.bus != 0)
++            {
++                continue;
++            }
++
++            if (peciAdapterName.compare("i3c") == 0)
++            {
++                int cpu = peci_i3c_chardev_to_cpu(pecidevName.c_str());
++
++                if (int(config.addr) != cpu + 0x30)
++                {
++                    continue;
++                }
++            }
++            cpuConfigs.emplace(bus, config.addr,
++                               config.name + "_" + peciAdapterName, peciAdapterName, State::OFF);
++        }
++    }
++    else if (action.compare("remove") == 0)
++    {
++        for (CPUConfig& config : cpuConfigs)
++        {
++            if (config.bus == bus)
++            {
++                cpuConfigs.erase(config);
++            }
++        }
++    }
++}
++
++void udevAsync(boost::asio::posix::stream_descriptor& udevDescriptor,
++               udev_monitor* umonitor,
++               boost::container::flat_set<CPUConfig>& cpuConfigs)
++{
++    udevDescriptor.async_wait(boost::asio::posix::stream_descriptor::wait_read,
++                              [&udevDescriptor, umonitor, &cpuConfigs](
++                                  const boost::system::error_code& ec) {
++        if (ec)
++        {
++            if (ec == boost::asio::error::operation_aborted)
++            {
++                return;
++            }
++
++            std::cerr << "error reading uevents: " << ec.message().c_str()
++                      << "\n";
++
++            udevAsync(udevDescriptor, umonitor, cpuConfigs);
++            return;
++        }
++
++        udev_device* dev = udev_monitor_receive_device(umonitor);
++        if (dev)
++        {
++            udevAction(dev, cpuConfigs);
++            udev_device_unref(dev);
++        }
++        else
++        {
++            std::cerr << "udevmonitor get device failed: "
++                      << ec.message().c_str() << "\n";
++        }
++
++        udevAsync(udevDescriptor, umonitor, cpuConfigs);
++    });
++}
++
+ int main()
+ {
+     boost::asio::io_context io;
+@@ -1042,6 +1161,10 @@ int main()
+     waitTimer = std::make_unique<boost::asio::steady_timer>(io);
+     ManagedObjectType sensorConfigs;
+ 
++    udev* udevContext;
++    udev_monitor* umonitor;
++    boost::asio::posix::stream_descriptor udevDescriptor(io);
++
+     filterTimer.expires_after(std::chrono::seconds(1));
+     filterTimer.async_wait([&](const boost::system::error_code& ec) {
+         if (ec == boost::asio::error::operation_aborted)
+@@ -1088,6 +1211,22 @@ int main()
+         });
+     };
+ 
++    udevContext = udev_new();
++    if (!udevContext)
++    {
++        std::cerr << "can't create udev library context\n";
++    }
++    umonitor = udev_monitor_new_from_netlink(udevContext, "udev");
++    if (!umonitor)
++    {
++        std::cerr << "can't create udev monitor\n";
++    }
++    udev_monitor_filter_add_match_subsystem_devtype(umonitor, "peci", NULL);
++    udev_monitor_enable_receiving(umonitor);
++
++    udevDescriptor.assign(udev_monitor_get_fd(umonitor));
++    udevAsync(udevDescriptor, umonitor, cpuConfigs);
++
+     std::vector<std::unique_ptr<sdbusplus::bus::match_t>> matches =
+         setupPropertiesChangedMatches(*systemBus, sensorTypes, eventHandler);
+ 
+diff --git a/src/meson.build b/src/meson.build
+index 9f56c31..94f123b 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -94,6 +94,7 @@ if get_option('intel-cpu').enabled()
+         dependencies: [
+             default_deps,
+             gpiodcxx,
++            libudev,
+             thresholds_dep,
+             utils_dep,
+             peci_dep,
+-- 
+2.25.1
+

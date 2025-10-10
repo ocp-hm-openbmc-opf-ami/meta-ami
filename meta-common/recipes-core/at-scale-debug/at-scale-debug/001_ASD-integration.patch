@@ -1,0 +1,83 @@
+diff --git a/server/asd_main.c b/server/asd_main.c
+index 2cc1098..dc75b09 100644
+--- a/server/asd_main.c
++++ b/server/asd_main.c
+@@ -59,15 +59,35 @@ int main(int argc, char** argv)
+ }
+ #endif
+ 
++QMSG_AMI_ASD gASDmsg[MAX_QUEUE_COUNT];
+ int asd_main(int argc, char** argv)
+ {
+     STATUS result = ST_ERR;
++    int shmid = 0;
++    key_t msgkey = 1234;
++    QMSG_AMI_ASD *pMsg = NULL;
+ 
+     ASD_initialize_log_settings(DEFAULT_LOG_LEVEL, DEFAULT_LOG_STREAMS, false,
+                                 false, NULL, NULL);
++    if ((shmid = shmget(msgkey, sizeof(gASDmsg), IPC_CREAT | 0666)) < 0) {
++        perror("shmget");
++    }
+ 
+     if (process_command_line(argc, argv, &main_state.args))
+     {
++        //Using the shared memory, send the Intel ASD if it takes enabling TLS.
++        pMsg = (QMSG_AMI_ASD*) shmat(shmid, NULL, 0);
++        if ((main_state.args.session.e_extnet_type == EXTNET_HDLR_NON_ENCRYPT) &&
++            (main_state.args.session.e_auth_type == AUTH_HDLR_NONE))
++        {
++            printf("ASD TLS status is disable\n");
++            strcpy(gASDmsg[0].mtext, "disable");
++        } else {
++            printf("ASD TLS status is enable\n");
++            strcpy(gASDmsg[0].mtext, "enable");
++        }
++        memcpy(pMsg, gASDmsg, sizeof(gASDmsg));
++
+         result = init_asd_state();
+ 
+         if (result == ST_OK)
+diff --git a/server/asd_main.h b/server/asd_main.h
+index 3ac3449..4a1939f 100644
+--- a/server/asd_main.h
++++ b/server/asd_main.h
+@@ -39,14 +39,17 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ #include "logging.h"
+ #include "session.h"
+ #include "sys/time.h"
++#include <sys/types.h>
++#include <sys/ipc.h>
++#include <sys/shm.h>
+ 
+ // DEFAULTS
+ #define DEFAULT_I2C_ENABLE false
+ #define DEFAULT_I3C_ENABLE false
+ #define DEFAULT_SPP_ENABLE false
+ #define DEFAULT_I2C_BUS 0x04
+-#define DEFAULT_PORT 5123
+-#define DEFAULT_CERT_FILE "/etc/ssl/certs/https/server.pem"
++#define DEFAULT_PORT 5125
++#define DEFAULT_CERT_FILE "/etc/ssl/certs/asd/server.pem"
+ #define DEFAULT_LOG_TO_SYSLOG false
+ #define DEFAULT_LOG_LEVEL ASD_LogLevel_Warning
+ #define DEFAULT_LOG_STREAMS ASD_LogStream_All
+@@ -103,6 +106,11 @@ typedef enum
+ int main(int argc, char** argv);
+ #endif
+ 
++#define MAX_QUEUE_COUNT 1
++typedef struct message {
++    char mtext[100];
++} QMSG_AMI_ASD;
++
+ int asd_main(int argc, char** argv);
+ 
+ bool process_command_line(int argc, char** argv, asd_args* args);
+@@ -135,4 +143,4 @@ bool is_data_pending(void);
+ STATUS close_connection(asd_state* state);
+ void log_client_address(const extnet_conn_t* p_extcon);
+ 
+-#endif // _ASD_MAIN_H_
+\ No newline at end of file
++#endif // _ASD_MAIN_H_

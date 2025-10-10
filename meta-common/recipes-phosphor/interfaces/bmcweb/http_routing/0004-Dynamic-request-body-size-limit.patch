@@ -1,0 +1,223 @@
+From fa43d8147999da9a755b0af451e58684edd40968 Mon Sep 17 00:00:00 2001
+From: P Dheeraj Srujan Kumar <p.dheeraj.srujan.kumar@intel.com>
+Date: Wed, 15 Nov 2023 13:28:35 +0530
+Subject: [PATCH] Dynamic request body size limit
+
+In the current implementation, the body size limit defined from the
+configurable options is applied on all the routes.
+In order to support BMC/BIOS full flash update, this limit was increased
+to accept upto 128MB of body size. This change enables all the URI's to
+accept huge payloads which is not desired also leading to increase in
+OOM error possibility.
+
+This commit cuts down the default size of payload to be in KB's, and
+adds a condition to only allow huge payload in case of firmware update.
+This reduces the possibility of OOM error only to one URI (Update
+Service)
+
+TESTED:
+ - Verified by performing GET/POST/PATCH on multiple URI's with varying
+   payload size. Only POST on /redfish/v1/UpdateService accepts 128MB
+   image and rest of the URI's are capped at 8KB.
+
+Signed-off-by: P Dheeraj Srujan Kumar <p.dheeraj.srujan.kumar@intel.com>
+---
+ config/bmcweb_config.h.in           |  4 +-
+ config/meson.build                  |  3 +-
+ http/http_connection.hpp            | 60 ++++++++++++++++++++++++-----
+ meson_options.txt                   | 11 +++++-
+ redfish-core/lib/update_service.hpp |  4 +-
+ 5 files changed, 68 insertions(+), 14 deletions(-)
+
+diff --git a/config/bmcweb_config.h.in b/config/bmcweb_config.h.in
+index 1b9d0398..52bb1159 100644
+--- a/config/bmcweb_config.h.in
++++ b/config/bmcweb_config.h.in
+@@ -9,7 +9,7 @@ constexpr const int bmcwebInsecureDisableXssPrevention =
+
+ constexpr const bool bmcwebInsecureEnableQueryParams = @BMCWEB_INSECURE_ENABLE_QUERY_PARAMS@ == 1;
+
+-constexpr const size_t bmcwebHttpReqBodyLimitMb = @BMCWEB_HTTP_REQ_BODY_LIMIT_MB@;
++constexpr const size_t bmcwebHttpReqBodyLimitKb = @BMCWEB_HTTP_REQ_BODY_LIMIT_KB@;
+
+ constexpr const char* mesonInstallPrefix = "@MESON_INSTALL_PREFIX@";
+
+@@ -28,4 +28,6 @@ constexpr const bool bmcwebEnableHTTP2 = @BMCWEB_ENABLE_HTTP2@ == 1;
+ constexpr const bool bmcwebMTLSCommonNameParsingMeta = @BMCWEB_ENABLE_MTLS_COMMON_NAME_PARSING_META@ == 1;
+
+ constexpr const char* imageUploadDir = "@IMAGE_UPLOAD_DIR@";
++
++constexpr const size_t imagePayloadLimitMb = @IMAGE_PAYLOAD_LIMIT_MB@;
+ // clang-format on
+diff --git a/config/meson.build b/config/meson.build
+index 241430ff..26d2b3e7 100644
+--- a/config/meson.build
++++ b/config/meson.build
+@@ -1,7 +1,8 @@
+ # Gather the Configuration data
+
+ conf_data = configuration_data()
+-conf_data.set('BMCWEB_HTTP_REQ_BODY_LIMIT_MB', get_option('http-body-limit'))
++conf_data.set('BMCWEB_HTTP_REQ_BODY_LIMIT_KB', get_option('http-body-limit'))
++conf_data.set('IMAGE_PAYLOAD_LIMIT_MB', get_option('image-payload-limit'))
+ conf_data.set('IMAGE_UPLOAD_DIR', get_option('image-upload-dir'))
+ xss_enabled = get_option('insecure-disable-xss')
+ conf_data.set10('BMCWEB_INSECURE_DISABLE_XSS_PREVENTION', xss_enabled.allowed())
+diff --git a/http/http_connection.hpp b/http/http_connection.hpp
+index e0d76361..8615afbc 100644
+--- a/http/http_connection.hpp
++++ b/http/http_connection.hpp
+@@ -36,9 +36,19 @@ namespace crow
+ // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+ static int connectionCount = 0;
+ 
+-// request body limit size set by the bmcwebHttpReqBodyLimitMb option
+-constexpr uint64_t httpReqBodyLimit = 1024UL * 1024UL *
+-                                      bmcwebHttpReqBodyLimitMb;
++// request body limit size set by the bmcwebHttpReqBodyLimitKb option
++constexpr uint64_t httpReqBodyLimit = 1024UL * bmcwebHttpReqBodyLimitKb;
++constexpr uint64_t maxPayloadLimit = 1024UL * 1024UL * imagePayloadLimitMb;
++constexpr uint64_t smallPayloadLimit = 1024UL * 1024UL;
++constexpr uint64_t peciCmdsReqBodyLimit = smallPayloadLimit * 2; // 2 MiB
++// clang-format off
++constexpr static auto perRouteReqBodyLimit =
++  std::to_array<std::pair<std::string_view, uint64_t>>({
++    {"/redfish/v1/Systems/system/LogServices/Crashdump/Actions/Oem/Crashdump.SendRawPeci", peciCmdsReqBodyLimit},
++    {"/redfish/v1/UpdateService", maxPayloadLimit},
++    {"/redfish/v1/UpdateService/update", maxPayloadLimit},
++  });
++// clang-format on
+ 
+ constexpr uint64_t loggedOutPostBodyLimit = 4096;
+ 
+@@ -59,7 +63,7 @@ class Connection :
+         getCachedDateStr(getCachedDateStrF)
+     {
+         parser.emplace(std::piecewise_construct, std::make_tuple());
+-        parser->body_limit(httpReqBodyLimit);
++        parser->body_limit(maxPayloadLimit);
+         parser->header_limit(httpHeaderLimit);
+ 
+ #ifdef BMCWEB_ENABLE_MUTUAL_TLS_AUTHENTICATION
+@@ -410,6 +414,26 @@ class Connection :
+     }
+ 
+   private:
++    uint64_t getMaxRequestBodySize(boost::beast::http::verb method,
++                                   std::string_view target)
++    {
++        uint64_t maxBodySize = httpReqBodyLimit;
++
++        if (method == boost::beast::http::verb::post)
++        {
++            for (const std::pair<std::string_view, uint64_t>& limit :
++                 perRouteReqBodyLimit)
++            {
++                if (target == limit.first)
++                {
++                    maxBodySize = limit.second;
++                }
++            }
++        }
++
++        return maxBodySize;
++    }
++
+     void doReadHeaders()
+     {
+         BMCWEB_LOG_DEBUG("{} doReadHeaders", logPtr(this));
+@@ -460,6 +484,27 @@ class Connection :
+                 return;
+             }
+ 
++            // Determine size of Request body based on Target
++            boost::beast::http::verb method = parser->get().method();
++            std::string_view target = parser->get().target();
++
++            const uint64_t maxReqBodySize = getMaxRequestBodySize(method,
++                                                                  target);
++            const boost::optional<uint64_t> contentLength =
++                parser->content_length();
++
++            if (contentLength && *contentLength > maxReqBodySize)
++            {
++                BMCWEB_LOG_DEBUG(
++                    "Closing HTTP connection. HTTP request body size "
++                    "({} bytes) has exceed max allowed value ({} bytes)",
++                    *contentLength, maxReqBodySize);
++                close();
++                return;
++            }
++
++            parser->body_limit(maxReqBodySize);
++
+             readClientIp();
+ 
+             boost::asio::ip::address ip;
+@@ -487,15 +487,12 @@ class Connection :
+             if constexpr (!std::is_same_v<Adaptor, boost::beast::test::stream>)
+             {
+ #ifndef BMCWEB_INSECURE_DISABLE_AUTHX
+-                boost::beast::http::verb method = parser->get().method();
+                 userSession = crow::authentication::authenticate(
+                     ip, res, method, parser->get().base(), mtlsSession);
+
+                 bool loggedIn = userSession != nullptr;
+                 if (!loggedIn)
+                 {
+-                    const boost::optional<uint64_t> contentLength =
+-                        parser->content_length();
+                     if (contentLength &&
+                         *contentLength > loggedOutPostBodyLimit)
+                     {
+@@ -566,8 +608,8 @@ class Connection :
+         BMCWEB_LOG_DEBUG("{} Clearing response", logPtr(this));
+         res.clear();
+         parser.emplace(std::piecewise_construct, std::make_tuple());
+-        parser->body_limit(httpReqBodyLimit); // reset body limit for
+-                                              // newly created parser
++        parser->body_limit(maxPayloadLimit); // reset body limit for
++                                             // newly created parser
+         buffer.consume(buffer.size());
+ 
+         userSession = nullptr;
+diff --git a/meson_options.txt b/meson_options.txt
+index baeff269..f6e63cbf 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -206,7 +206,16 @@ option(
+     min: 0,
+     max: 512,
+     value: 30,
+-    description: 'Specifies the http request body length limit'
++    description: 'Specifies the http request body length limit in KB'
++)
++
++option(
++    'image-payload-limit',
++    type: 'integer',
++    min: 0,
++    max: 512,
++    value: 128,
++    description: 'Specifies the maximum image size limit in MB'
+ )
+ 
+ option(
+diff --git a/redfish-core/lib/update_service.hpp b/redfish-core/lib/update_service.hpp
+index 30976f30..30cfb46d 100644
+--- a/redfish-core/lib/update_service.hpp
++++ b/redfish-core/lib/update_service.hpp
+@@ -890,8 +890,8 @@ inline void requestRoutesUpdateService(App& app)
+         asyncResp->res.jsonValue["FirmwareInventory"]["@odata.id"] =
+             "/redfish/v1/UpdateService/FirmwareInventory";
+         // Get the MaxImageSizeBytes
+-        asyncResp->res.jsonValue["MaxImageSizeBytes"] =
+-            bmcwebHttpReqBodyLimitMb * 1024 * 1024;
++        asyncResp->res.jsonValue["MaxImageSizeBytes"] = imagePayloadLimitMb *
++                                                        1024 * 1024;
+ 
+ #ifdef BMCWEB_INSECURE_ENABLE_REDFISH_FW_TFTP_UPDATE
+         // Update Actions object.
+-- 
+2.34.1
+

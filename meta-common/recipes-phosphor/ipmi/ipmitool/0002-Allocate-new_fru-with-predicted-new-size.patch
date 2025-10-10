@@ -1,0 +1,79 @@
+From 6098af3df9782408d82478538163def065fbdaab Mon Sep 17 00:00:00 2001
+From: Zhikui Ren <zhikui.ren@intel.com>
+Date: Fri, 22 Sep 2023 18:30:58 -0700
+Subject: [PATCH] Allocate new_fru with predicted new size
+
+fru edit can increase fru size. Allocate new_fru_data with the
+new bigger size. This fixes potential memory corruption and ipmitool
+crash.
+
+Tested:
+ipmtool fru edit command with a bigger record run successfully.
+
+Signed-off-by: Zhikui Ren <zhikui.ren@intel.com>
+---
+ lib/ipmi_fru.c | 27 ++++++++++++++++++---------
+ 1 file changed, 18 insertions(+), 9 deletions(-)
+
+diff --git a/lib/ipmi_fru.c b/lib/ipmi_fru.c
+index c27d24b..f776642 100644
+--- a/lib/ipmi_fru.c
++++ b/lib/ipmi_fru.c
+@@ -130,7 +130,8 @@ static int ipmi_fru_set_field_string(struct ipmi_intf * intf, unsigned
+ static int
+ ipmi_fru_set_field_string_rebuild(struct ipmi_intf * intf, uint8_t fruId,
+ 											struct fru_info fru, struct fru_header header,
+-											uint8_t f_type, uint8_t f_index, char *f_string);
++											uint8_t f_type, uint8_t f_index, char *f_string,
++											int new_size);
+ 
+ static void
+ fru_area_print_multirec_bloc(struct ipmi_intf * intf, struct fru_info * fru,
+@@ -4835,12 +4836,19 @@ f_type, uint8_t f_index, char *f_string)
+ 			rc = -1;
+ 			goto ipmi_fru_set_field_string_out;
+ 		}
+-	}
+-	else {
+-		printf("String size are not equal, resizing fru to fit new string\n");
+-		if(
+-				ipmi_fru_set_field_string_rebuild(intf,fruId,fru,header,f_type,f_index,f_string)
+-		)
++    }
++    else {
++		int new_fru_size = fru.size;
++		int change =
++			strlen((const char *)f_string) - strlen((const char *)fru_area);
++		if (change > 0)
++		{
++			/* Fru record is padded to be 8 bytes aligned */
++			new_fru_size = fru.size + change + 8;
++		}
++		if (ipmi_fru_set_field_string_rebuild(intf, fruId, fru, header,
++                                                f_type, f_index, f_string,
++                                                new_fru_size))
+ 		{
+ 			rc = -1;
+ 			goto ipmi_fru_set_field_string_out;
+@@ -4886,7 +4894,8 @@ ipmi_fru_set_field_string_out:
+ static int
+ ipmi_fru_set_field_string_rebuild(struct ipmi_intf * intf, uint8_t fruId,
+ 											struct fru_info fru, struct fru_header header,
+-											uint8_t f_type, uint8_t f_index, char *f_string)
++											uint8_t f_type, uint8_t f_index, char *f_string,
++											int new_size)
+ {
+ 	int i = 0;
+ 	uint8_t *fru_data_old = NULL;
+@@ -4903,7 +4912,7 @@ ipmi_fru_set_field_string_rebuild(struct ipmi_intf * intf, uint8_t fruId,
+ 
+ 	fru_data_old = calloc( fru.size, sizeof(uint8_t) );
+ 
+-	fru_data_new = malloc( fru.size );
++	fru_data_new = malloc( new_size );
+ 
+ 	if (!fru_data_old || !fru_data_new) {
+ 		printf("Out of memory!\n");
+-- 
+2.25.1
+
