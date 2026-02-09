@@ -4,7 +4,7 @@
 # SRC_URI = "git://github.com/openbmc/obmc-console;branch=master;protocol=https"
 SRCREV = "3453084b579970cd368357bf091f173924ecba5e"
 
-FILESEXTRAPATHS:append := ":${THISDIR}/${PN}"
+FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 OBMC_CONSOLE_HOST_TTY = "ttyS2"
 SRC_URI += "file://sol-configure.sh \
             file://pre-post-routing.conf \

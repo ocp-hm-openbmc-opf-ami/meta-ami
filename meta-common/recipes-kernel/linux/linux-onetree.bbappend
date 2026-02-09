@@ -21,8 +21,12 @@ SRC_URI:append:intel-ast2600 = " file://0001-Enabled-the-RTC-driver.patch \
 				 file://0019-add-aspeed-bmc-misc.patch \
 				 file://0020-Enabled-mctp-i3c-socket-based-driver.patch \
 				 file://0021-EID-to-lladdr-mappings-implemented.patch \
+				 file://0022-SDK-v09.08-Fixes-For-PECI.patch \
+                                 file://0023-kernel-aspeed-espi-oob-coverity-fix.patch \
+				 file://0024-jtagDriver-coverity-fix.patch \
 				 file://intel-i3c-hub.cfg \
 				 file://intel-base.cfg \
+				 file://0023-Fix-the-I3C-medium-Coverity-issue-about-double-lock.patch \
 			       "
 
 SRC_URI += "file://defconfig \

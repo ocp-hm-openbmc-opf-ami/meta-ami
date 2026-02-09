@@ -1,0 +1,66 @@
+From f6511bf25c0737626c8af85080e0c8f2ddce00fd Mon Sep 17 00:00:00 2001
+From: ub18043_230323 <rexlin@ami.com>
+Date: Fri, 12 Dec 2025 15:25:32 +0800
+Subject: [PATCH] Fix the I3C medium Coverity issue about double lock
+
+---
+ drivers/i3c/master/dw-i3c-master.c | 44 +++++++++++++++++-------------
+ 1 file changed, 25 insertions(+), 19 deletions(-)
+
+diff --git a/drivers/i3c/master/dw-i3c-master.c b/drivers/i3c/master/dw-i3c-master.c
+index 3a7d96968688..9a825afd1a85 100644
+--- a/drivers/i3c/master/dw-i3c-master.c
++++ b/drivers/i3c/master/dw-i3c-master.c
+@@ -1023,25 +1023,31 @@ static int dw_i3c_master_alloc_and_get_hw_dat_index_locked(struct dw_i3c_master
+ 
+ static int dw_i3c_master_alloc_and_get_hw_dat_index(struct dw_i3c_master *master, int index)
+ {
+-	int hw_dat_index, ret;
+-
+-	if (!master->sw_dat_enabled)
+-		return index;
+-
+-	spin_lock(&master->hw_dat_lock);
+-	hw_dat_index = dw_i3c_master_alloc_and_get_hw_dat_index_locked(master, index);
+-	spin_unlock(&master->hw_dat_lock);
+-	if (hw_dat_index < 0) {
+-		ret = wait_event_interruptible_timeout(master->hw_slot_wait_queue,
+-						       (hw_dat_index =
+-							dw_i3c_master_link_empty_hw_dat(master,
+-											index))
+-							>= 0, XFER_TIMEOUT);
+-		if (ret <= 0)
+-			hw_dat_index = -ENODEV;
+-	}
+-
+-	return hw_dat_index;
++    int hw_dat_index, ret;
++
++    if (!master->sw_dat_enabled)
++        return index;
++
++    spin_lock(&master->hw_dat_lock);
++    hw_dat_index = dw_i3c_master_alloc_and_get_hw_dat_index_locked(master, index);
++    spin_unlock(&master->hw_dat_lock);
++    
++    if (hw_dat_index >= 0)
++        return hw_dat_index;
++
++    /* 
++     * No HW DAT slot available, wait for one to become free.
++     * dw_i3c_master_link_empty_hw_dat() handles its own locking.
++     */
++    ret = wait_event_interruptible_timeout(
++        master->hw_slot_wait_queue,
++        (hw_dat_index = dw_i3c_master_link_empty_hw_dat(master, index)) >= 0,
++        XFER_TIMEOUT);
++
++    if (ret <= 0)
++        return -ENODEV;
++
++    return hw_dat_index;
+ }
+ 
+ static void dw_i3c_master_wr_tx_fifo(struct dw_i3c_master *master,
+-- 
+2.34.1

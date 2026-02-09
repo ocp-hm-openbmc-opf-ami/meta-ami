@@ -10,6 +10,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 SRC_URI:append = " \
     file://0001-Fix-Build-issue-downstream.patch \
     file://0002-Default-to-enable-all-clock-outputs.patch \
+    file://0001-hsbp-manager-Removed-Werror-to-not-treat-warnings-as.patch \
     "
 
 LICENSE = "Apache-2.0"

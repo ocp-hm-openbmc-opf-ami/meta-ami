@@ -14,4 +14,5 @@ SRC_URI += " \
     file://001_ASD-integration.patch \
     file://002_OT-12593_fixJtagTestFailed.patch \
     file://003_OT-12607-fixCoverityIssue.patch \
+    file://004_OT-20873_ClangFormat \
 "

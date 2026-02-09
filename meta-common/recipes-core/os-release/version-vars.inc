@@ -62,11 +62,11 @@ python() {
 
     # If no tag, provide default version
     #    if meta_vers.startswith('fatal:'):
-	    #    ver_list = obmc_vers.split('-')
-	    #obmc_tag_list = ver_list[1].split('.')
-	    #obmc_major_revision = 0
-	    #obmc_minor_revision = 0
-	    #obmc_minor_spare = 
+        #    ver_list = obmc_vers.split('-')
+        #obmc_tag_list = ver_list[1].split('.')
+        #obmc_major_revision = 0
+        #obmc_minor_revision = 0
+        #obmc_minor_spare =
     try:
         obmc_major_revision = 1
         obmc_minor_revision = 2

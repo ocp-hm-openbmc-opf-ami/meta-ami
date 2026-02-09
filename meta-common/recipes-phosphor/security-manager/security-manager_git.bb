@@ -9,6 +9,8 @@ LICENSE = "Apache-2.0"
 LIC_FILES_CHKSUM = "file://${COREBASE}/meta/files/common-licenses/Apache-2.0;md5=89aea4e17d99a7cacdbeed46a0096b10"
 inherit cmake pkgconfig systemd
 
+FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
+
 SRC_URI = "git://git@github.com/intel-bmc/firmware.bmc.openbmc.applications.security-manager.git;protocol=ssh;branch=main"
 SRCREV = "969e945f0e9d756527aceba7c76ff710a39f1cca"
 
@@ -22,3 +24,4 @@ DEPENDS += " \
     phosphor-logging \
     boost \
     "
+SRC_URI:append = " file://0001-security-manager-Removed-Werror-to-not-treat-warning.patch "

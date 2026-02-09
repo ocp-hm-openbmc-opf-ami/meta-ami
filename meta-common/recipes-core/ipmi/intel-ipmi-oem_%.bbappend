@@ -9,7 +9,7 @@ EXTRA_OECMAKE += "-DUSING_ENTITY_MANAGER_DECORATORS=OFF"
 SRCREV = "77a44298a726b20e595ee596ce0018e00493ef7e"
 
 inherit pkgconfig
-FILESEXTRAPATHS:append := ":${THISDIR}/${PN}"
+FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 INTEL_SRC_URI += " \
         file://0007-Adding-the-ACPI-agent-support-to-Mdrv2-OEM-commands.patch \

@@ -9,3 +9,6 @@ do_install:append() {
 
 # Enable dropbear.socket and dropbearkey.service only for debug-tweaks
 SYSTEMD_AUTO_ENABLE:${PN} = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'debug-tweaks', 'enable', 'disable', d)}"
+
+# Since not enabling last in busybox, don't use lastlog
+EXTRA_OECONF:append = " --disable-wtmp --disable-utmp --disable-lastlog"
