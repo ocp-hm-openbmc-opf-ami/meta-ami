@@ -1,0 +1,238 @@
+From 09c3b61222c3cb484336487f165ccf2433299ba4 Mon Sep 17 00:00:00 2001
+From: Tommy Huang <tommy_huang@aspeedtech.com>
+Date: Tue, 9 Sep 2025 19:26:46 +0800
+Subject: [PATCH 04/10] cmd: aspeed_mbox: add ltpi access command
+
+Add ltpi read and write command test sample code.
+In this patch, we introduce the ltpi_ipc_data structure
+for bootmcu sharing the access loading from main CPU.
+The access behavior includes the register reading
+and writing.
+
+Signed-off-by: Tommy Huang <tommy_huang@aspeedtech.com>
+Change-Id: I68bf10421ad3e505347b86cdf8fa72d9ad60c8c3
+(cherry picked from commit 73607fa48c7399e290e86aa173b912cf57930fd8)
+Signed-off-by: Vasanthakumar K <vasanthakumark@ami.com>
+---
+ cmd/aspeed/aspeed_mbox.c | 172 ++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 170 insertions(+), 2 deletions(-)
+
+diff --git a/cmd/aspeed/aspeed_mbox.c b/cmd/aspeed/aspeed_mbox.c
+index 095a62266e..a5d604c74a 100644
+--- a/cmd/aspeed/aspeed_mbox.c
++++ b/cmd/aspeed/aspeed_mbox.c
+@@ -11,6 +11,11 @@
+ #include <malloc.h>
+ #include <memalign.h>
+ 
++#define I2CGLOBAL		0x14c0f000
++#define LTPISHEADER		0xf0000000
++#define LTPIMISCREAD	0x0
++#define LTPIMISCWRITE	0x1
++
+ enum misc_op {
+ 	MISC_OP_READ,
+ 	MISC_OP_WRITE
+@@ -33,6 +38,12 @@ static char *mbox_ioctl_str[] = {
+ 	"recv"
+ };
+ 
++struct ltpi_ipc_data {
++	u32 misc;
++	u32 port;
++	u32 value;
++};
++
+ static int do_mbox_stress(struct cmd_tbl *cmdtp, int flag,
+ 			  int argc, char *const argv[])
+ {
+@@ -234,6 +245,159 @@ static int do_misc_write(struct cmd_tbl *cmdtp, int flag,
+ 	return do_misc_op(cmdtp, flag, argc, argv, MISC_OP_WRITE);
+ }
+ 
++static int do_mbox_ltpi_read(struct cmd_tbl *cmdtp, int flag,
++			     int argc, char *const argv[])
++{
++	struct udevice *dev;
++	u32 *buf = NULL;
++	struct ltpi_ipc_data *data = NULL;
++	u32 msg[8];
++	int ret = 0, i;
++	u32 channel = 0, offset, size, data_size;
++
++	ret = uclass_get_device_by_name(UCLASS_MISC, argv[0], &dev);
++	if (ret) {
++		printf("Unable to find device %s\n", argv[0]);
++		return ret;
++	}
++
++	channel = hextoul(argv[1], NULL);
++	offset = hextoul(argv[2], NULL);
++	size = hextoul(argv[3], NULL);
++
++	data_size = sizeof(struct ltpi_ipc_data) * size;
++
++	/* prepare local buffer */
++	buf = malloc_cache_aligned(data_size);
++	if (!buf) {
++		printf("NO MEM\n");
++		return -ENOMEM;
++	}
++
++	data = (struct ltpi_ipc_data *)buf;
++
++	/* fill read data */
++	for (i = 0; i < size ; i++) {
++		/* read the port data and save into value */
++		data->misc = LTPIMISCREAD;
++		data->port = offset + (i << 2);
++		data->value = 0;
++
++		data++;
++	}
++
++	/* copy the communication data into tx share buffer */
++	ret = misc_write(dev, 0, buf, data_size);
++	if (ret != data_size) {
++		printf("buffer write not enough, %d\n", ret);
++		return ret;
++	}
++
++	/* fill the header with struture count in the low byte */
++	msg[0] = LTPISHEADER | size;
++
++	/* send messgae with mailbox */
++	ret = misc_ioctl(dev, MBOX_IOCTL_SEND, msg);
++	if (ret != 0) {
++		printf("send message failed, msg (0x%x 0x%x), %d\n",
++		       msg[0], msg[1], ret);
++		return ret;
++	}
++
++	/* copy the communication data from rx share buffer back */
++	ret = misc_read(dev, 0, buf, data_size);
++	if (ret != data_size) {
++		printf("buffer read not enough, %d\n", ret);
++		return ret;
++	}
++
++	data = (struct ltpi_ipc_data *)buf;
++
++	/* print out the result from received buffer */
++	for (i = 0; i < size ; i++) {
++		printf("R<-[0x%08x]: [0x%08x]\n", data->port, data->value);
++		data++;
++	}
++
++	free(buf);
++	return 0;
++}
++
++static int do_mbox_ltpi_write(struct cmd_tbl *cmdtp, int flag,
++			      int argc, char *const argv[])
++{
++	struct udevice *dev;
++	u32 *buf = NULL;
++	struct ltpi_ipc_data *data = NULL;
++	u32 msg[8];
++	int ret = 0, i;
++	u32 channel = 0, offset, value, data_size;
++
++	ret = uclass_get_device_by_name(UCLASS_MISC, argv[0], &dev);
++	if (ret) {
++		printf("Unable to find device %s\n", argv[0]);
++		return ret;
++	}
++
++	channel = hextoul(argv[1], NULL);
++	offset = hextoul(argv[2], NULL);
++	value = hextoul(argv[3], NULL);
++
++	data_size = sizeof(struct ltpi_ipc_data);
++
++	/* prepare local buffer */
++	buf = malloc_cache_aligned(data_size);
++	if (!buf) {
++		printf("NO MEM\n");
++		return -ENOMEM;
++	}
++
++	data = (struct ltpi_ipc_data *)buf;
++
++	/* fill read data */
++	for (i = 0; i < 1 ; i++) {
++		/* read the port data and save into value */
++		data->misc = LTPIMISCWRITE;
++		data->port = offset + (i << 2);
++		data->value = value;
++
++		data++;
++	}
++
++	/* copy the communication data into tx share buffer */
++	ret = misc_write(dev, 0, buf, data_size);
++	if (ret != data_size) {
++		printf("buffer write not enough, %d\n", ret);
++		return ret;
++	}
++
++	/* fill the header with struture count in the low byte */
++	msg[0] = LTPISHEADER | 1;
++
++	/* send messgae with mailbox */
++	ret = misc_ioctl(dev, MBOX_IOCTL_SEND, msg);
++	if (ret != 0) {
++		printf("send message failed, msg (0x%x 0x%x), %d\n",
++		       msg[0], msg[1], ret);
++		return ret;
++	}
++
++	/* copy the communication data from rx share buffer back */
++	ret = misc_read(dev, 0, buf, data_size);
++	if (ret != data_size) {
++		printf("buffer read not enough, %d\n", ret);
++		return ret;
++	}
++
++	data = (struct ltpi_ipc_data *)buf;
++
++	/* print out the result from received buffer */
++	printf("W->[0x%08x]: [0x%08x]\n", data->port, data->value);
++
++	free(buf);
++	return 0;
++}
++
+ static struct cmd_tbl mbox_commands[] = {
+ 	U_BOOT_CMD_MKENT(list, 0, 1, do_misc_list, "", ""),
+ 	U_BOOT_CMD_MKENT(stress, 1, 1, do_mbox_stress, "", ""),
+@@ -241,6 +405,8 @@ static struct cmd_tbl mbox_commands[] = {
+ 	U_BOOT_CMD_MKENT(recv, 2, 1, do_mbox_recv, "", ""),
+ 	U_BOOT_CMD_MKENT(read, 4, 1, do_misc_read, "", ""),
+ 	U_BOOT_CMD_MKENT(write, 4, 1, do_misc_write, "", ""),
++	U_BOOT_CMD_MKENT(ltpi_r, 4, 1, do_mbox_ltpi_read, "", ""),
++	U_BOOT_CMD_MKENT(ltpi_w, 4, 1, do_mbox_ltpi_write, "", ""),
+ };
+ 
+ static int do_mbox(struct cmd_tbl *cmdtp, int flag,
+@@ -264,7 +430,7 @@ static int do_mbox(struct cmd_tbl *cmdtp, int flag,
+ }
+ 
+ U_BOOT_CMD(
+-	aspeed_mbox,	6,	0,	do_mbox,
++	aspeed_mbox,	7,	0,	do_mbox,
+ 	"Access ASPEED maiilbox devices. All number parameters in hex format.",
+ 	"list                       - list all devices related aspeed mbox\n"
+ 	"aspeed_mbox stress name                - stress test. recv & send\n"
+@@ -277,5 +443,7 @@ U_BOOT_CMD(
+ 	"					 to memory at `addr'\n"
+ 	"aspeed_mbox write name offset addr len - write `len' bytes starting at\n"
+ 	"					 `offset' of device `name'\n"
+-	"					 from memory at `addr'"
++	"					 from memory at `addr'\n"
++	"aspeed_mbox ltpi_r name ltpi_channel offset len - read from ltpi channel\n"
++	"aspeed_mbox ltpi_w name ltpi_channel offset value - write into ltpi channel\n"
+ );
+-- 
+2.34.1
+

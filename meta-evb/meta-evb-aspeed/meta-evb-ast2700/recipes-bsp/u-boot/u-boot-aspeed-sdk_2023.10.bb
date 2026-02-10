@@ -6,6 +6,7 @@ require recipes-bsp/u-boot/u-boot-aspeed.inc
 
 PROVIDES += "u-boot"
 DEPENDS += "bc-native dtc-native"
+DEPENDS += "${@bb.utils.contains('MACHINE_FEATURES', 'ast-secure', 'aspeed-secure-config-native', '', d)}"
 
 python __anonymous() {
     if d.getVar("SPL_SIGN_ENABLE") == "1":

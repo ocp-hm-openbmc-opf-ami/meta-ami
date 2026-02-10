@@ -11,3 +11,9 @@ do_install:append() {
     fi
 
 }
+
+SRC_URI += " \
+	file://CVE-2025-9230.patch \
+	file://CVE-2025-9231.patch \
+	file://CVE-2025-9232.patch \
+	"

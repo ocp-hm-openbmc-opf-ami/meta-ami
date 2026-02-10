@@ -4,9 +4,12 @@
 #include "redfish-core/lib/redfish_util.hpp"
 #include "redfish-core/lib/storage.hpp"
 #include "registries/privilege_registry.hpp"
+#if (BMCWEB_AMI_REP_MACRO)
+#include "ext/lib/rep/storage_header.hpp" //Added this header file to call the BiosStorageInstance from the existing route using REP macro
+#endif
 
-#if (BMCWEB_AMI_NVME_MACRO) || (BMCWEB_AMI_RAIDMSCC_MACRO) ||                  \
-    (BMCWEB_AMI_RAIDBRCM_MACRO)
+#if (BMCWEB_AMI_REP_MACRO) || (BMCWEB_AMI_NVME_MACRO) || (BMCWEB_AMI_RAIDMSCC_MACRO) ||                  \
+    (BMCWEB_AMI_RAIDBRCM_MACRO) || (BMCWEB_AMI_SL8_MACRO)
 #include "ext/include/collection_ext.hpp"
 #endif
 
@@ -86,6 +89,15 @@ inline void afterSystemsStorageGetSubtree(
             }
         }
 #endif
+#if BMCWEB_AMI_SL8_MACRO
+        {
+            std::size_t sl8 = storageId.find("Raidsl8_");
+            if (sl8 != std::string::npos)
+            {
+                return;
+            }
+        }
+#endif
 #if BMCWEB_AMI_RAIDMSCC_MACRO
         {
             std::size_t mscc = storageId.find("mscc_");
@@ -127,6 +139,7 @@ inline void handleSystemsStorageGet(
     const std::string& systemName, const std::string& storageId)
 {
     asyncResp->res.clearHeader(boost::beast::http::field::allow);
+    asyncResp->res.jsonValue["Description"] = "Storage " + storageId;
     if (!redfish::setUpRedfishRoute(app, req, asyncResp))
     {
         return;
@@ -143,11 +156,6 @@ inline void handleSystemsStorageGet(
         return;
     }
     asyncResp->res.addHeader("Allow", "GET");
-    if (storageId == "1")
-    {
-        redfish::handleSystemsStorageGetSingleInstance(asyncResp);
-        return;
-    }
 #if BMCWEB_AMI_RAIDBRCM_MACRO
     {
         std::size_t raid = storageId.find("Raid_");
@@ -156,6 +164,15 @@ inline void handleSystemsStorageGet(
         if ((raid != std::string::npos) || (hba != std::string::npos))
         {
             redfish::getBRCMStorageInstance(asyncResp, storageId);
+        }
+    }
+#endif
+#if BMCWEB_AMI_SL8_MACRO
+    {
+        std::size_t sl8 = storageId.find("Raidsl8_");
+        if (sl8 != std::string::npos)
+        {
+            redfish::getSl8StorageInstance(asyncResp, storageId);
         }
     }
 #endif
@@ -178,6 +195,15 @@ inline void handleSystemsStorageGet(
         if (storageId == "Nvme")
         {
             redfish::getStorageNvmeInstance(asyncResp);
+        }
+    }
+#endif
+#if BMCWEB_AMI_REP_MACRO
+    {
+        if (storageId.find("StorageUnit_") != std::string::npos)
+        {
+            redfish::handleStorageRep(asyncResp, storageId);
+            return;
         }
     }
 #endif

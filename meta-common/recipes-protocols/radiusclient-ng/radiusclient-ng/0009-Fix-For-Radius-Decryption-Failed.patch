@@ -1,0 +1,170 @@
+From 52400971c5076dcfc66b964f4360ea2aa3fb18c2 Mon Sep 17 00:00:00 2001
+From: madhankumars <madhankumars@ami.com>
+Date: Wed, 10 Dec 2025 23:44:52 +0530
+Subject: [PATCH 9/9] Fix-For-Radius-Decryption-Failed
+
+---
+ include/Encryption.h | 65 ++++++++++++++++++++++++++++++++++++--------
+ lib/config.c         |  4 ++-
+ src/radiusclient.c   |  2 +-
+ 3 files changed, 58 insertions(+), 13 deletions(-)
+
+diff --git a/include/Encryption.h b/include/Encryption.h
+index 23080b6..5ed7799 100644
+--- a/include/Encryption.h
++++ b/include/Encryption.h
+@@ -79,7 +79,12 @@ static inline int AES_GetKeyFromFile(const char* filename, unsigned char* buffer
+     return 0;
+ }
+ 
+-static inline char* decryptString(const unsigned char* ciphertext, int ciphertext_len) {
++static inline char* decryptString(const unsigned char* b64Ciphertext, int* out_plaintext_len) {
++	if (!b64Ciphertext || b64Ciphertext[0] == '\0')
++	{
++		if (out_plaintext_len) *out_plaintext_len = 0;
++		return NULL;
++	}
+     // Check if key files exist
+     FILE* keyFile = fopen(aesKeyFile, "rb");
+     FILE* ivFile = fopen(aesIVFile, "rb");
+@@ -105,26 +110,50 @@ static inline char* decryptString(const unsigned char* ciphertext, int ciphertex
+         return "";
+     }
+ 
++        int ciphertext_len = 0;
++	unsigned char* ciphertext = base64_decode(b64Ciphertext, &ciphertext_len);
++	if (!ciphertext || ciphertext_len <= 0)
++	{
++		fprintf(stderr, "Base64 decoding failed\n");
++		if (ciphertext) free(ciphertext);
++		if (out_plaintext_len) *out_plaintext_len = 0;
++		return NULL;
++	}
++
+     EVP_CIPHER_CTX *ctx;
+-    int len;
+-    int plaintext_len;
++    if(!(ctx = EVP_CIPHER_CTX_new())) {
++        free(ciphertext);
++	if (out_plaintext_len)
++	{
++		*out_plaintext_len = 0;
++	}
++        fprintf(stderr, "Failed to create EVP context\n");
++        return NULL;
++    }
+ 
+     // Allocate buffer for plaintext
+     unsigned char *plaintext = (unsigned char *)malloc(ciphertext_len + EVP_MAX_BLOCK_LENGTH);
+     if (!plaintext) {
+         fprintf(stderr, "Memory allocation failed\n");
++	EVP_CIPHER_CTX_free(ctx);
++	free(ciphertext);
++	if (out_plaintext_len)
++	{
++		*out_plaintext_len = 0;
++	}
+         return NULL;
+     }
+ 
+-    if(!(ctx = EVP_CIPHER_CTX_new())) {
+-        free(plaintext);
+-        fprintf(stderr, "Failed to create EVP context\n");
+-        return NULL;
+-    }
+-
++    int len = 0;
++    int plaintext_len = 0;
+     if(1 != EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv)) {
+         EVP_CIPHER_CTX_free(ctx);
+         free(plaintext);
++	free(ciphertext);
++	if (out_plaintext_len)
++	{
++		*out_plaintext_len = 0;
++	}
+         fprintf(stderr, "Failed to initialize decryption\n");
+         return NULL;
+     }
+@@ -132,23 +161,37 @@ static inline char* decryptString(const unsigned char* ciphertext, int ciphertex
+     if(1 != EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_len)) {
+         EVP_CIPHER_CTX_free(ctx);
+         free(plaintext);
++	free(ciphertext);
++	if (out_plaintext_len)
++	{
++		*out_plaintext_len = 0;
++	}
+         fprintf(stderr, "Decryption update failed\n");
+         return NULL;
+     }
+-    plaintext_len = len;
+ 
++    plaintext_len = len;
+     if(1 != EVP_DecryptFinal_ex(ctx, plaintext + len, &len)) {
+         EVP_CIPHER_CTX_free(ctx);
+         free(plaintext);
++	free(ciphertext);
++	if (out_plaintext_len)
++	{
++		*out_plaintext_len = 0;
++	}
+         fprintf(stderr, "Decryption finalization failed\n");
+         return NULL;
+     }
+     plaintext_len += len;
+ 
+     EVP_CIPHER_CTX_free(ctx);
++    free(ciphertext);
+ 
+-    // Add null terminator
+     plaintext[plaintext_len] = '\0';
++    if (out_plaintext_len)
++    {
++	    *out_plaintext_len = plaintext_len;
++    }
+ 
+     return (char*)plaintext;
+ }
+diff --git a/lib/config.c b/lib/config.c
+index eeb533d..4b36bfc 100644
+--- a/lib/config.c
++++ b/lib/config.c
+@@ -598,6 +598,7 @@ int rc_find_server (rc_handle *rh, char *server_name, UINT4 *ip_addr, char *secr
+ 	char           *host2;
+ 	char            buffer[128];
+ 	char            hostnm[AUTH_ID_LEN + 1];
++	int		outlen = 0;
+ 
+ 	/* Get the IP address of the authentication server */
+ 	if ((*ip_addr = rc_get_ipaddr (server_name)) == (UINT4) 0)
+@@ -632,11 +633,12 @@ int rc_find_server (rc_handle *rh, char *server_name, UINT4 *ip_addr, char *secr
+ 
+ 		memset (secret, '\0', MAX_SECRET_LENGTH);
+ 		len = strlen (s);
+-		char *decryptedpwd = decryptString(s, len);
++		char *decryptedpwd = decryptString(s, &outlen);
+ 		if (decryptedpwd != NULL)
+ 		{
+ 			strncpy(secret, decryptedpwd, MAX_SECRET_LENGTH);
+ 			secret[MAX_SECRET_LENGTH] = '\0';
++			free(decryptedpwd);
+ 		}
+ 		else
+ 		{
+diff --git a/src/radiusclient.c b/src/radiusclient.c
+index 673505d..66bd6d5 100644
+--- a/src/radiusclient.c
++++ b/src/radiusclient.c
+@@ -954,7 +954,7 @@ int process(void *rh, VALUE_PAIR *send, int acct, int nas_port,
+     if (received != NULL) {
+ 		    rc_avpair_free(send);
+ 		    send = NULL;
+-	    if(radiusEnableEapTLSStatus == true)
++	    if(radiusEnableEapTLSStatus == true && i==0)
+ 	    {
+ 		    rc_avpair_free(received);
+ 		    received = NULL;
+-- 
+2.34.1
+

@@ -4,8 +4,9 @@
 #include "redfish-core/lib/redfish_util.hpp"
 #include "redfish-core/lib/storage.hpp"
 #include "registries/privilege_registry.hpp"
+#include "redfish-core/lib/log_service_header.hpp"
 
-namespace redfish::ext::core::resource
+namespace redfish
 {
 
 inline void fillRaidLogEntryFromPropertyMap(
@@ -22,13 +23,23 @@ inline void fillRaidLogEntryFromPropertyMap(
     }
     DbusEventLogEntry entry = optEntry.value();
 
-    objectToFillOut["@odata.type"] = "#LogEntry.v1_9_0.LogEntry";
+    objectToFillOut["@odata.type"] = json_util::odataType("LogEntry");
     objectToFillOut["@odata.id"] = boost::urls::format(
         "/redfish/v1/Systems/{}/LogServices/Raid/Entries/{}",
         BMCWEB_REDFISH_SYSTEM_URI_NAME, std::to_string(entry.Id));
     objectToFillOut["Name"] = "System Raid Log Entry";
     objectToFillOut["Id"] = std::to_string(entry.Id);
-    objectToFillOut["Message"] = entry.Message;
+    std::string msgID, msgForm;
+    LogParseError status = fillMessageEntry(entry.Message, msgID, msgForm);
+    if (status != LogParseError::success)
+    {
+        objectToFillOut["Message"] = entry.Message;
+    }
+    else
+    {
+        objectToFillOut["MessageID"] = std::move(msgID);
+        objectToFillOut["Message"] = std::move(msgForm);
+    }
     objectToFillOut["Resolved"] = entry.Resolved;
     std::optional<bool> notifyAction =
         getProviderNotifyAction(entry.ServiceProviderNotify);
@@ -44,9 +55,9 @@ inline void fillRaidLogEntryFromPropertyMap(
     objectToFillOut["Severity"] =
         translateSeverityDbusToRedfish(entry.Severity);
     objectToFillOut["Created"] =
-        redfish::time_utils::getDateTimeUintMs(entry.Timestamp);
+        std::move(timeFormat(redfish::time_utils::getDateTimeUintMs(entry.Timestamp)));
     objectToFillOut["Modified"] =
-        redfish::time_utils::getDateTimeUintMs(entry.UpdateTimestamp);
+        std::move(timeFormat(redfish::time_utils::getDateTimeUintMs(entry.UpdateTimestamp)));
     if (entry.Path != nullptr)
     {
         objectToFillOut["AdditionalDataURI"] = boost::urls::format(
@@ -130,11 +141,14 @@ inline void
         [asyncResp, dumpType,
          entryID](const boost::system::error_code& ec,
                   const std::vector<std::string>& additionalData) {
+            if (ec.value() == EBADR)
+            {
+                messages::resourceNotFound(asyncResp->res, "LogEntry", entryID);
+                return;
+            }
             if (ec)
             {
-                BMCWEB_LOG_DEBUG(
-                    "Got DBUS response error while getting AdditionalData in {}",
-                    dumpType);
+                BMCWEB_LOG_DEBUG("Got DBUS response error while getting AdditionalData in {}", dumpType);
                 return;
             }
             nlohmann::json jsonData = nlohmann::json::object();
@@ -178,17 +192,7 @@ inline void handleDBusRaidEntryDownloadGet(
     downloadRaidEntry(asyncResp, systemName, entryID, dumpType);
 }
 
-inline void requestRoutesDBusRaidEntryDownload(App& app)
-{
-    BMCWEB_ROUTE(
-        app,
-        "/redfish/v1/Systems/<str>/LogServices/Raid/Entries/<str>/attachment/")
-        .privileges(redfish::privileges::getLogEntry)
-        .methods(boost::beast::http::verb::get)(std::bind_front(
-            handleDBusRaidEntryDownloadGet, std::ref(app), "RAID"));
-}
-
-inline void dBusEntryDelete(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+inline void dBusRaidEntryDelete(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
                             std::string logType, std::string entryID)
 {
     dbus::utility::escapePathForDbus(entryID);
@@ -222,7 +226,6 @@ inline void dBusEntryDelete(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
         logType, static_cast<uint32_t>(std::stoi(entryID)));
 }
 
-
 inline void
     dBusRaidEntryPatch(const crow::Request& req,
                        const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
@@ -241,7 +244,6 @@ inline void
                     "xyz.openbmc_project.Logging.Entry", "Resolved",
                     resolved.value_or(false));
 }
-
 
 inline void dBusRaidEntryGet(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp, std::string entryID)
@@ -273,10 +275,105 @@ inline void dBusRaidEntryGet(
         });
 }
 
-inline void requestRoutesDBusRaidEntry(App& app)
+inline void
+    dBusRaidEntryCollection(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
 {
-    BMCWEB_ROUTE(app,
-                 "/redfish/v1/Systems/<str>/LogServices/Raid/Entries/<str>/")
+    // Collections don't include the static data added by SubRoute
+    // because it has a duplicate entry for members
+    asyncResp->res.jsonValue["@odata.type"] = json_util::odataType("LogEntryCollection"); 
+    asyncResp->res.jsonValue["@odata.id"] =
+        std::format("/redfish/v1/Systems/{}/LogServices/Raid/Entries",
+                    BMCWEB_REDFISH_SYSTEM_URI_NAME);
+    asyncResp->res.jsonValue["Name"] = "System Raid Log Entries";
+    asyncResp->res.jsonValue["Description"] =
+        "Collection of System Raid Log Entries";
+
+    // DBus implementation of EventLog/Entries
+    // Make call to Logging Service to find all log entry objects
+    sdbusplus::message::object_path path("/xyz/openbmc_project/logging/raid");
+    dbus::utility::getManagedObjects(
+        "xyz.openbmc_project.Logging", path,
+        [asyncResp](const boost::system::error_code& ec,
+                    const dbus::utility::ManagedObjectType& resp) {
+            afterRaidLogEntriesGetManagedObjects(asyncResp, ec, resp);
+        });
+}
+
+inline void requestRoutesRaidLog(App& app)
+{
+    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/LogServices/Raid/")
+        .privileges(redfish::privileges::getLogService)
+        .methods(
+            boost::beast::http::verb::
+                get)([&app](const crow::Request& req,
+                            const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+                            const std::string& systemName) {
+            if (!redfish::setUpRedfishRoute(app, req, asyncResp))
+            {
+                return;
+            }
+            if (systemName != BMCWEB_REDFISH_SYSTEM_URI_NAME)
+            {
+                messages::resourceNotFound(asyncResp->res, "ComputerSystem",
+                                           systemName);
+                return;
+            }
+            asyncResp->res.jsonValue["@odata.id"] =
+                std::format("/redfish/v1/Systems/{}/LogServices/Raid",
+                            BMCWEB_REDFISH_SYSTEM_URI_NAME);
+            asyncResp->res.jsonValue["@odata.type"] = json_util::odataType("LogService");
+            asyncResp->res.jsonValue["Name"] = "Raid Log Service";
+            asyncResp->res.jsonValue["Description"] = "System Raid Log Service";
+            asyncResp->res.jsonValue["Id"] = "Raid";
+            asyncResp->res.jsonValue["OverWritePolicy"] =
+                log_service::OverWritePolicy::WrapsWhenFull;
+            asyncResp->res.jsonValue["MaxNumberOfRecords"] = 150;
+
+            std::pair<std::string, std::string> redfishDateTimeOffset =
+                redfish::time_utils::getDateTimeOffsetNow();
+
+            asyncResp->res.jsonValue["DateTime"] = redfishDateTimeOffset.first;
+            asyncResp->res.jsonValue["DateTimeLocalOffset"] =
+                redfishDateTimeOffset.second;
+
+            asyncResp->res.jsonValue["Entries"]["@odata.id"] =
+                std::format("/redfish/v1/Systems/{}/LogServices/Raid/Entries",
+                            BMCWEB_REDFISH_SYSTEM_URI_NAME);
+            asyncResp->res
+                .jsonValue["Actions"]["#LogService.ClearLog"]["target"]
+
+                = std::format(
+                    "/redfish/v1/Systems/{}/LogServices/Raid/Actions/LogService.ClearLog",
+                    BMCWEB_REDFISH_SYSTEM_URI_NAME);
+        });
+
+    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/LogServices/Raid/Entries/")
+        .privileges(redfish::privileges::getLogEntryCollection)
+        .methods(boost::beast::http::verb::get)(
+            [&app](const crow::Request& req,
+                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+                   const std::string& systemName) {
+                if (!redfish::setUpRedfishRoute(app, req, asyncResp))
+                {
+                    return;
+                }
+                if constexpr (BMCWEB_EXPERIMENTAL_REDFISH_MULTI_COMPUTER_SYSTEM)
+                {
+                    // Option currently returns no systems.  TBD
+                    messages::resourceNotFound(asyncResp->res, "ComputerSystem",
+                                               systemName);
+                    return;
+                }
+                if (systemName != BMCWEB_REDFISH_SYSTEM_URI_NAME)
+                {
+                    messages::resourceNotFound(asyncResp->res, "ComputerSystem",
+                                               systemName);
+                    return;
+                }
+                dBusRaidEntryCollection(asyncResp);
+            });
+
+    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/LogServices/Raid/Entries/<str>/")
         .privileges(redfish::privileges::getLogEntry)
         .methods(boost::beast::http::verb::get)(
             [&app](const crow::Request& req,
@@ -303,8 +400,7 @@ inline void requestRoutesDBusRaidEntry(App& app)
                 dBusRaidEntryGet(asyncResp, entryId);
             });
 
-    BMCWEB_ROUTE(app,
-                 "/redfish/v1/Systems/<str>/LogServices/Raid/Entries/<str>/")
+    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/LogServices/Raid/Entries/<str>/")
         .privileges(redfish::privileges::patchLogEntry)
         .methods(boost::beast::http::verb::patch)(
             [&app](const crow::Request& req,
@@ -330,10 +426,8 @@ inline void requestRoutesDBusRaidEntry(App& app)
                 dBusRaidEntryPatch(req, asyncResp, entryId);
             });
 
-    BMCWEB_ROUTE(app,
-                 "/redfish/v1/Systems/<str>/LogServices/Raid/Entries/<str>/")
+    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/LogServices/Raid/Entries/<str>/")
         .privileges(redfish::privileges::deleteLogEntry)
-
         .methods(boost::beast::http::verb::delete_)(
             [&app](const crow::Request& req,
                    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
@@ -355,125 +449,20 @@ inline void requestRoutesDBusRaidEntry(App& app)
                                                systemName);
                     return;
                 }
-                dBusEntryDelete(asyncResp, "raid", param);
+                dBusRaidEntryDelete(asyncResp, "raid", param);
             });
-}
 
-inline void
-    dBusRaidEntryCollection(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
-{
-    // Collections don't include the static data added by SubRoute
-    // because it has a duplicate entry for members
-    asyncResp->res.jsonValue["@odata.type"] =
-        "#LogEntryCollection.LogEntryCollection";
-    asyncResp->res.jsonValue["@odata.id"] =
-        std::format("/redfish/v1/Systems/{}/LogServices/Raid/Entries",
-                    BMCWEB_REDFISH_SYSTEM_URI_NAME);
-    asyncResp->res.jsonValue["Name"] = "System Raid Log Entries";
-    asyncResp->res.jsonValue["Description"] =
-        "Collection of System Raid Log Entries";
+    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/LogServices/Raid/Entries/<str>/attachment/")
+        .privileges(redfish::privileges::getLogEntry)
+        .methods(boost::beast::http::verb::get)(std::bind_front(
+            handleDBusRaidEntryDownloadGet, std::ref(app), "RAID"));
 
-    // DBus implementation of EventLog/Entries
-    // Make call to Logging Service to find all log entry objects
-    sdbusplus::message::object_path path("/xyz/openbmc_project/logging/raid");
-    dbus::utility::getManagedObjects(
-        "xyz.openbmc_project.Logging", path,
-        [asyncResp](const boost::system::error_code& ec,
-                    const dbus::utility::ManagedObjectType& resp) {
-            afterRaidLogEntriesGetManagedObjects(asyncResp, ec, resp);
-        });
-}
-
-inline void requestRoutesDBusRaidEntryCollection(App& app)
-{
-    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/LogServices/Raid/Entries/")
-        .privileges(redfish::privileges::getLogEntryCollection)
-        .methods(boost::beast::http::verb::get)(
-            [&app](const crow::Request& req,
-                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-                   const std::string& systemName) {
-                if (!redfish::setUpRedfishRoute(app, req, asyncResp))
-                {
-                    return;
-                }
-                if constexpr (BMCWEB_EXPERIMENTAL_REDFISH_MULTI_COMPUTER_SYSTEM)
-                {
-                    // Option currently returns no systems.  TBD
-                    messages::resourceNotFound(asyncResp->res, "ComputerSystem",
-                                               systemName);
-                    return;
-                }
-                if (systemName != BMCWEB_REDFISH_SYSTEM_URI_NAME)
-                {
-                    messages::resourceNotFound(asyncResp->res, "ComputerSystem",
-                                               systemName);
-                    return;
-                }
-                dBusRaidEntryCollection(asyncResp);
-            });
-}
-
-inline void requestRoutesRaidService(App& app)
-{
-    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/LogServices/Raid/")
-        .privileges(redfish::privileges::getLogService)
-        .methods(
-            boost::beast::http::verb::
-                get)([&app](const crow::Request& req,
-                            const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-                            const std::string& systemName) {
-            if (!redfish::setUpRedfishRoute(app, req, asyncResp))
-            {
-                return;
-            }
-            if (systemName != BMCWEB_REDFISH_SYSTEM_URI_NAME)
-            {
-                messages::resourceNotFound(asyncResp->res, "ComputerSystem",
-                                           systemName);
-                return;
-            }
-            asyncResp->res.jsonValue["@odata.id"] =
-                std::format("/redfish/v1/Systems/{}/LogServices/Raid",
-                            BMCWEB_REDFISH_SYSTEM_URI_NAME);
-            asyncResp->res.jsonValue["@odata.type"] =
-                "#LogService.v1_2_0.LogService";
-            asyncResp->res.jsonValue["Name"] = "Raid Log Service";
-            asyncResp->res.jsonValue["Description"] = "System Raid Log Service";
-            asyncResp->res.jsonValue["Id"] = "Raid";
-            asyncResp->res.jsonValue["OverWritePolicy"] =
-                log_service::OverWritePolicy::WrapsWhenFull;
-            asyncResp->res.jsonValue["MaxNumberOfRecords"] = 1250;
-
-            std::pair<std::string, std::string> redfishDateTimeOffset =
-                redfish::time_utils::getDateTimeOffsetNow();
-
-            asyncResp->res.jsonValue["DateTime"] = redfishDateTimeOffset.first;
-            asyncResp->res.jsonValue["DateTimeLocalOffset"] =
-                redfishDateTimeOffset.second;
-
-            asyncResp->res.jsonValue["Entries"]["@odata.id"] =
-                std::format("/redfish/v1/Systems/{}/LogServices/Raid/Entries",
-                            BMCWEB_REDFISH_SYSTEM_URI_NAME);
-            asyncResp->res
-                .jsonValue["Actions"]["#LogService.ClearLog"]["target"]
-
-                = std::format(
-                    "/redfish/v1/Systems/{}/LogServices/Raid/Actions/LogService.ClearLog",
-                    BMCWEB_REDFISH_SYSTEM_URI_NAME);
-        });
-}
-
-inline void requestRoutesDBusRaidLogServiceActionsClear(App& app)
-{
     /**
      * Function handles POST method request.
      * The Clear Log actions does not require any parameter.The action deletes
      * all raid entries found in the Entries collection for this Log Service.
      */
-
-    BMCWEB_ROUTE(
-        app,
-        "/redfish/v1/Systems/<str>/LogServices/Raid/Actions/LogService.ClearLog/")
+    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/LogServices/Raid/Actions/LogService.ClearLog/")
         .privileges(redfish::privileges::postLogService)
         .methods(boost::beast::http::verb::post)(
             [&app](const crow::Request& req,
@@ -496,8 +485,8 @@ inline void requestRoutesDBusRaidLogServiceActionsClear(App& app)
                                                systemName);
                     return;
                 }
-                dBusEntryDelete(asyncResp, "raid", "0");
+                dBusRaidEntryDelete(asyncResp, "raid", "0");
             });
 }
-} // namespace redfish::ext::core::resource
+} // namespace redfish
 

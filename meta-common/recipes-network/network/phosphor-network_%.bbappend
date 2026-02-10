@@ -1,8 +1,8 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/phosphor-networkd;protocol=https;branch=main;name=override;"
+SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-networkd;branch=main;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "94a8e947e2f41879e8820fd73b72017a7a63b768"
+SRCREV_override = "a6317d5e715a8866e66c26a9b7f1c4869ad297b6"
 
 SRC_URI:append = " \
              file://ipv4-advanced-route.sh \
@@ -13,11 +13,12 @@ SRC_URI:append = " \
 
 do_install:append() {
     install -d ${D}${bindir}
-    if [ "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-network-nsupdate-support', 'true', '', d)}" == "true" ];  then
+
+    if ${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-network-nsupdate-support', 'true', 'false', d)}; then
         install -m 0755 ${WORKDIR}/nsupdate.sh ${D}${bindir}
     fi
 
-    if [ "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-network-advanced-route-support', 'true', '', d)}" == "true" ]; then
+    if ${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-network-advanced-route-support', 'true', 'false', d)}; then
         install -m 0755 ${WORKDIR}/ipv6-advanced-route.sh ${D}${bindir}
         install -m 0755 ${WORKDIR}/ipv4-advanced-route.sh ${D}${bindir}
     fi
@@ -25,7 +26,7 @@ do_install:append() {
     install -d -m 0755 ${D}/etc/sysctl.d
     echo "net.ipv4.tcp_timestamps=0" >> ${D}/etc/sysctl.d/99-network.conf
 
-    if [ "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-network-disable-ping-support', 'true', '', d)}" == "true" ]; then
+    if ${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-network-disable-ping-support', 'true', 'false', d)}; then
         echo "net.ipv4.icmp_echo_ignore_all=1" >> ${D}/etc/sysctl.d/99-network.conf
         echo "net.ipv6.icmp.echo_ignore_all=1" >> ${D}/etc/sysctl.d/99-network.conf
         echo "net.ipv4.conf.all.arp_ignore=1" >> ${D}/etc/sysctl.d/99-network.conf
@@ -67,3 +68,4 @@ EXTRA_OEMESON:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-ne
 EXTRA_OEMESON:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-network-persist-mac-support', ' -Dpersist-mac=true','', d)}"
 EXTRA_OEMESON:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-network-phy-configuration-support', ' -Denable-phy-configuration=true','', d)}"
 EXTRA_OEMESON:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-network-ncsi-support', ' -Denable-ncsi=true -Ddefault-ncsi-interface=eth2','', d)}"
+EXTRA_OEMESON:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-network-ncsi-manual-detect-support', ' -Dncsi-manual-detect=true',' -Dncsi-manual-detect=false ', d)}"

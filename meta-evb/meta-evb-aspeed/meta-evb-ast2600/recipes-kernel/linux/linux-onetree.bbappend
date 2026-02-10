@@ -12,7 +12,7 @@ SRC_URI += "file://dts-evb-ast2600/ \
             file://0002-I2C-bus-error-message-for-fault-alarm-support.patch \
             "
 
-do_configure:append:evb-ast2600(){
+do_configure:append (){
     cp ${WORKDIR}/dts-evb-ast2600/aspeed-ast2600-evb.dts ${S}/arch/arm/boot/dts/aspeed/
     cp ${WORKDIR}/dts-evb-ast2600/openbmc-flash-layout-ami-evb-64.dtsi ${S}/arch/arm/boot/dts/aspeed/
 
@@ -28,7 +28,7 @@ do_configure:append:evb-ast2600(){
 
     if ${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-network-ncsi-support', 'true', 'false', d)}; then
         cp ${WORKDIR}/dts-evb-ast2600/aspeed-ast2600-evb-ncsi.dtsi ${S}/arch/arm/boot/dts/aspeed/
-        echo -e '\n#include "aspeed-ast2600-evb-ncsi.dtsi"' >> ${S}/arch/arm/boot/dts/aspeed/aspeed-ast2600-evb.dts
+        echo '#include "aspeed-ast2600-evb-ncsi.dtsi"' >> ${S}/arch/arm/boot/dts/aspeed/aspeed-ast2600-evb.dts
     fi
 }
 

@@ -59,4 +59,9 @@ do_install:append:evb-npcm845 () {
     #install -m 0644 ${WORKDIR}/systemd/mctp-i2c8-ctrl.service  ${D}${nonarch_base_libdir}/systemd/system/
     #install -m 0644 ${WORKDIR}/systemd/mctp-i2c8-demux.service ${D}${nonarch_base_libdir}/systemd/system/
     #install -m 0644 ${WORKDIR}/systemd/mctp-i2c8-demux.socket  ${D}${nonarch_base_libdir}/systemd/system/
+
+    # Remove empty systemd directory if it exists
+    if [ -d ${D}${systemd_system_unitdir} ]; then
+        rmdir --ignore-fail-on-non-empty ${D}${systemd_system_unitdir}
+    fi
 }

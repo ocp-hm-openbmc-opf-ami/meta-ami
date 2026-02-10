@@ -1,4 +1,4 @@
-FILESEXTRAPATHS:append := ":${THISDIR}/${PN}"
+FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 LIC_FILES_CHKSUM = "file://LICENSE;md5=75859989545e37968a99b631ef42722e"
 SRC_URI:nuvoton := "git://github.com/Nuvoton-Israel/obmc-ikvm.git;branch=upstream-v4l2;protocol=https"

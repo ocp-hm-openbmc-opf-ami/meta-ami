@@ -108,6 +108,7 @@ restore_uboot_env_data() {
 	then
 		echo "Restore u-boot-env parition failed"
 	fi
+	rm -f /run/initramfs/uboot_env_data.bin
 }
 
 rwfs=$(findmtd rwfs)

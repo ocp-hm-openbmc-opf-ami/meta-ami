@@ -248,6 +248,10 @@ Backup_bmc_config() {
         mkdir -p "${d%/*}"
         cp -rp "$f" "${d%/*}/"
     done < $whitelist
+    
+    if ! grep -q "^/etc/extlog" "$whitelist" 2>/dev/null; then
+        rm -rf /etc/extlog/extended.log* > /dev/null 2>&1
+    fi
 
     log "BMC Full Flash - Backup Configuration Done" 
 }
@@ -616,13 +620,13 @@ bmc_full_flash() {
         if [ -f $SLOT_FILE ]; then
             SLOT_FILE="/run/media/slot"
             BOOT_SOURCE=$(cat "$SLOT_FILE")
+            ABR_BOOT_MODE="/sys/class/spi_master/spi0/device/abr_bootmode"
+            bootmode=$(cat "$ABR_BOOT_MODE")
             # check_preserv_config $NON_INTEL_PLATFORMS_MODE
             local requestedactivationstate=$(get_requestedactivation_status bmc_bkup)
             local bmc_active_requestedactivationstate=$(get_requestedactivation_status bmc_active)
             if [[ "$bmc_active_requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" && "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
                 log "Start Update Both BMC Active and Backup  images. It will take ~20 minutes...."
-                regval=$(devmem 0x1e620064 )
-                bootmode=$(( ($regval >> 6) & 1 ))
                 log "BMC Full Flash - Starting the SPI write on active CS0 spi...."
                 cp $LOCAL_PATH /run/initramfs/
                 log "BMC Full Flash - Starting the SPI write on bkup CS1 spi...."
@@ -633,8 +637,6 @@ bmc_full_flash() {
                     /usr/bin/reset-cs0-aspeed
                 fi
             elif [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
-		        regval=$(devmem 0x1e620064 )
-                bootmode=$(( ($regval >> 6) & 1 ))
                 if [ "$BOOT_SOURCE" -eq 0 ]; then
                     log "BMC Full Flash - Starting the SPI write on bkup CS1 spi...."
                     if [ "$bootmode" -eq 1 ]; then
@@ -644,8 +646,6 @@ bmc_full_flash() {
                     fi
                 else
                     log "BMC Full Flash - BMC booted from Backup SPI starting the SPI write on bkup CS1 spi...."
-                    regval=$(devmem 0x1e620064 )
-                    bootmode=$(( ($regval >> 6) & 1 ))
                     if [ "$bootmode" -eq 1 ]; then
                         cp $LOCAL_PATH /run/initramfs/image-alt-singleabr
                     else
@@ -658,8 +658,6 @@ bmc_full_flash() {
                     cp $LOCAL_PATH /run/initramfs/
                 else
                     log "BMC Full Flash - BMC booted from Backup SPI starting the SPI write on active CS0 spi...."
-                    regval=$(devmem 0x1e620064 )
-                    bootmode=$(( ($regval >> 6) & 1 ))
                     if [ "$bootmode" -eq 1 ]; then
                         cp $LOCAL_PATH /run/initramfs/
                     else
@@ -754,8 +752,8 @@ bmc_full_flash() {
                 sleep 5
                 # After First Update Image update successfully update Backup image
                 log "BMC Full Flash - Starting the SPI write on bkup CS1 spi. It will take ~8 minutes...."
-                regval=$(devmem 0x1e620064 )
-                bootmode=$(( ($regval >> 6) & 1 ))
+                ABR_BOOT_MODE="/sys/class/spi_master/spi0/device/abr_bootmode"
+                bootmode=$(cat "$ABR_BOOT_MODE")
 
                 if [ "$bootmode" -eq 1 ]; then
                     local mtdPart=$( cat /proc/mtd | awk '{print $1 $4}' | awk -F: '$2=="\"bmc\"" {print $1}')
@@ -792,8 +790,8 @@ bmc_full_flash() {
                 sleep 5
                 return 0
             elif [[ "$requestedactivationstate" == "xyz.openbmc_project.Software.Activation.RequestedActivations.Active" ]]; then
-                regval=$(devmem 0x1e620064 )
-                bootmode=$(( ($regval >> 6) & 1 ))
+                ABR_BOOT_MODE="/sys/class/spi_master/spi0/device/abr_bootmode"
+                bootmode=$(cat "$ABR_BOOT_MODE")
                 if [ "$BOOT_SOURCE" -eq 0 ]; then
                     log "BMC Full Flash - Starting the SPI write on bkup CS1 spi. It will take ~8 minutes...."
 		    if [ "$bootmode" -eq 1 ]; then
@@ -1274,26 +1272,33 @@ raid_update() {
         targetRaidId="${targetPath##*_}"
         targetRAIDType="${targetPath%%_*}"
         targetRAIDSubType=$(echo "${targetPath#*_}" | cut -d'_' -f1)
-        TIMEOUT=300  # Set a timeout in seconds
+        TIMEOUT=600  # Set a timeout in seconds (10 min)
         SECONDS=0
 
         log "Start $targetPath RAID Firmware update"
 
         if [ "$targetRAIDType" == "Broadcom" ]; then
-            raidSubType=$( [ "$targetRAIDSubType" == "HBA" ] && echo 'HBA' || echo 'Raid' )
-            raidSubTypeInterface=$( [ "$targetRAIDSubType" == "HBA" ] && echo 'hba' || echo 'raid' )
+            if [ "$targetRAIDSubType" == "CTRL" ]; then
+                busctl monitor --match "type='signal',sender='com.ami.storage',member='MethodCompletedSignal'" > $outputfile &
+                buscall_id=$!
 
-            busctl monitor --match "type='signal',sender='xyz.openbmc_project.$raidSubTypeInterface.manager',member='MethodCompletedSignal'" > $outputfile &
-            buscall_id=$!
-            RaidId=$(busctl get-property xyz.openbmc_project.$raidSubTypeInterface.manager \
-                    /xyz/openbmc_project/$raidSubType/$targetRaidId \
-                    xyz.openbmc_project.$raidSubTypeInterface.Controller Id \
-                    | awk '{print $2}')
+                busctl call com.ami.storage /com/ami/storage/brcm8/ctrl/$targetRaidId com.ami.storage.brcm8.ctrl.Configuration \
+                FlashFirmware s "$LOCAL_PATH"
+            else
+                raidSubType=$( [ "$targetRAIDSubType" == "HBA" ] && echo 'HBA' || echo 'Raid' )
+                raidSubTypeInterface=$( [ "$targetRAIDSubType" == "HBA" ] && echo 'hba' || echo 'raid' )
 
-            busctl call xyz.openbmc_project.$raidSubTypeInterface.manager /xyz/openbmc_project/$raidSubType \
-                    xyz.openbmc_project.$raidSubTypeInterface.Base FlashControllerFirmware us "$RaidId" "$LOCAL_PATH"
+                busctl monitor --match "type='signal',sender='xyz.openbmc_project.$raidSubTypeInterface.manager',member='MethodCompletedSignal'" > $outputfile &
+                buscall_id=$!
+                RaidId=$(busctl get-property xyz.openbmc_project.$raidSubTypeInterface.manager \
+                        /xyz/openbmc_project/$raidSubType/$targetRaidId \
+                        xyz.openbmc_project.$raidSubTypeInterface.Controller Id \
+                        | awk '{print $2}')
 
-         elif [ "$targetRAIDType" == "Microchip" ]; then
+                busctl call xyz.openbmc_project.$raidSubTypeInterface.manager /xyz/openbmc_project/$raidSubType \
+                        xyz.openbmc_project.$raidSubTypeInterface.Base FlashControllerFirmware us "$RaidId" "$LOCAL_PATH"
+            fi
+        elif [ "$targetRAIDType" == "Microchip" ]; then
 
             busctl monitor --match "type='signal',sender='com.ami.storage',member='MethodCompletedSignal'" > $outputfile &
             buscall_id=$!

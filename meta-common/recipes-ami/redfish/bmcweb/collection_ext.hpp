@@ -75,34 +75,22 @@ inline void handleCollectionMembers(
         member["@odata.id"] = std::move(url);
         members.emplace_back(std::move(member));
     }
-    std::string additionalUrl;
-
-    if (collectionPath.buffer() == "/redfish/v1/Systems/system/Storage")
-    {
-        additionalUrl = "/redfish/v1/Systems/system/Storage/1";
-    }
-
-    else if (collectionPath.buffer() == "/redfish/v1/Storage")
-    {
-        additionalUrl = "/redfish/v1/Storage/1";
-    }
-
-    if (!additionalUrl.empty())
-    {
-        nlohmann::json::object_t additionalMember;
-        additionalMember["@odata.id"] = std::move(additionalUrl);
-        members.emplace_back(std::move(additionalMember));
-    }
     asyncResp->res.jsonValue[jsonCountKeyName] = members.size();
     if (check)
     {
+#if (BMCWEB_AMI_RAIDBRCM_MACRO) || (BMCWEB_AMI_SL8_MACRO) ||                  \
+    (BMCWEB_AMI_RAIDMSCC_MACRO) || (BMCWEB_AMI_NVME_MACRO)
         nlohmann::json& count = asyncResp->res.jsonValue[jsonCountKeyName];
         nlohmann::json& storageControllerArray = members;
+#endif
 #if BMCWEB_AMI_RAIDBRCM_MACRO
         {
             redfish::getRaidDevices(asyncResp, count, storageControllerArray);
             redfish::getHBADevices(asyncResp, count, storageControllerArray);
         }
+#endif
+#if BMCWEB_AMI_SL8_MACRO
+        redfish::getSl8Devices(asyncResp, count, storageControllerArray);
 #endif
 #if BMCWEB_AMI_RAIDMSCC_MACRO
         redfish::getMSCCDevices(asyncResp, count, storageControllerArray);

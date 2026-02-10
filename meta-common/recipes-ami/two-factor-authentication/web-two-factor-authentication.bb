@@ -7,7 +7,10 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/two-factor-authentication.git;protocol=https;branch=main"
-SRCREV = "3ca95c8b7b5ce7783d833c74c7253ade823cd9f8"
+
+
+
+SRCREV = "ecb0e7a82cde1b346c4252965ce922b3c193df5d"
 
 
 S = "${WORKDIR}/git"

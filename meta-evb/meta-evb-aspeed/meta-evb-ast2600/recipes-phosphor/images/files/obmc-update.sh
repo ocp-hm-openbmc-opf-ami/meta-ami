@@ -248,6 +248,10 @@ then
 			mkdir -p "${d%/*}"
 			cp -rp "$upper/$f" "${d%/*}/"
 		done < $whitelist
+		
+		if ! grep -q "^/etc/extlog" "$whitelist" 2>/dev/null; then
+        		rm -rf /etc/extlog/extended.log* > /dev/null 2>&1
+    		fi	
 
 		if test -n "$mounted"
 		then

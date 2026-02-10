@@ -1,6 +1,11 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-
+DEPENDS += "nlohmann-json"
+DEPENDS += "openssl"
+DEPENDS += "libpam"
+CXXFLAGS:append = " -I${STAGING_INCDIR}/nlohmann"
+CXXFLAGS:append = " -I${STAGING_INCDIR}/openssl"
+TARGET_LDFLAGS += "-lssl -lcrypto -lpam"
 
 EXTRA_OECONF += "${@bb.utils.contains_any("IMAGE_FEATURES", [ 'debug-tweaks', 'allow-root-login' ], '', '--disable-root_user_mgmt', d)}"
 
@@ -29,6 +34,11 @@ SRC_URI += " \
              file://0204-Added-Radius-In-Pamorder.patch \
              file://0205-Removed-ipmi-Group-Check-Internal-Users.patch \
              file://0206-Rename-Sync-Snmp-User.patch \
+             file://0207-channel-support.patch \
+             file://0209-Preserved-User-SNMP-Access-FB.patch \
+             file://0210-ForgotPaswordFeature.patch \
+             file://0211-Channel-Privilege-Support-VLAN.patch \
+             file://0212-Fixed-Rename-User.patch \
            "
 #OEM Privilege
 SRC_URI_OEM_PRIV:append = "file://upgrade_media_group.sh \

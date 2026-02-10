@@ -170,19 +170,19 @@ void updateServerFile(const std::string& filename, int IpOrPassword,
 
     if (Buffer.empty())
     {
-        Buffer = "servername\t\tsecretcode";
+        Buffer = "servername\tsecretcode";
     }
 
-    char* token = strtok((char*)Buffer.c_str(), "\t\t");
+    char* token = strtok((char*)Buffer.c_str(), "\t");
     if (IpOrPassword == 0)
     {
 	EncryptedPswd=encryptString(src);
-	outfile << token << "\t\t" << EncryptedPswd;
+	outfile << token << "\t" << EncryptedPswd;
     }
     else
     {
-        token = strtok(NULL, "\t\t");
-        outfile << src << "\t\t" << token;
+        token = strtok(NULL, "\t");
+        outfile << src << "\t" << token;
     }
 
     infile.close();
@@ -195,199 +195,6 @@ void updateServerFile(const std::string& filename, int IpOrPassword,
     }
 
     return;
-}
-
-int radiusPAMHandler()
-{
-    pamusrpkt_t req, res;
-    int i = 0, j = 0;
-    int handle = 0, ret = 0;
-
-    PAMH_CREATE_Q(PAM_HELPER_Q);
-    PAMH_OPEN_Q(PAM_HELPER_Q, handle);
-    if (handle < 0)
-    {
-        printf("--------- %s : error openig queue %s \n", __FILE__,
-               PAM_HELPER_Q);
-        return -1;
-    }
-    while (1)
-    {
-        memset(&req, 0, sizeof(pamusrpkt_t));
-        if (0 !=
-            get_pam_userinfo(&req, PAM_HELPER_Q, handle, WAIT_INFINITE_TIME))
-        {
-            printf(" %s : error fetching messages from queue %s \n", __FILE__,
-                   PAM_HELPER_Q);
-            continue;
-        }
-        memset(&res, 0, sizeof(pamusrpkt_t));
-        res.action = PAM_RESPONSE;
-
-        if (req.pt >= NUM_OF_TBLTYPES)
-        {
-            res.ret = INVALID_TBL_TYPE;
-            post_pam_userinfo(&res, req.srcq);
-            continue;
-        }
-
-        res.pt = req.pt;
-
-        switch (req.action)
-        {
-            case ADD_PAM_USER:
-            {
-                int i, j, user_found = 0, index = 0;
-                pamusr_t *pusr_head, *pusr_next = &pamusrtbl[req.pt][0];
-                index = (tblinfo[req.pt].index == 0)
-                            ? (NUM_OF_PAM_USERS - 1)
-                            : (tblinfo[req.pt].index - 1);
-                for (i = 0, j = index; i < NUM_OF_PAM_USERS; i++)
-                {
-                    pusr_head = (pusr_next + j);
-                    if (strncmp(pusr_head->name, req.usr.name,
-                                strlen(pusr_head->name) + 1) == 0)
-                    {
-                        printf("%s :User already present in the queue\n",
-                               __FILE__);
-                        memcpy((char*)&res.usr, (char*)&pusr_head,
-                               sizeof(pamusr_t));
-                        user_found = 1;
-                        break;
-                    }
-                    j = (j == NUM_OF_PAM_USERS - 1) ? 0 : j + 1;
-                }
-                if (user_found == 0)
-                {
-                    pamusr_t* u = &pamusrtbl[req.pt][tblinfo[req.pt].index];
-                    printf("Add Index: %d\n", tblinfo[req.pt].index);
-                    ret =
-                        snprintf(u->name, sizeof(u->name), "%s", req.usr.name);
-                    if (ret < 0 || ret >= (signed)sizeof(u->name))
-                    {
-                        printf("Buffer Overflow\n");
-                        return -1;
-                    }
-                    u->priv = req.usr.priv;
-                    u->uid = tblinfo[req.pt].uid++;
-                    tblinfo[req.pt].index++;
-
-                    printf("Add Name : %s\n", u->name);
-                    printf("Add UID  : %d\n", u->uid);
-
-                    if ((tblinfo[req.pt].uid - 1) == tblinfo[req.pt].last_uid)
-                    {
-                        tblinfo[req.pt].uid = tblinfo[req.pt].first_uid;
-                        printf("UID: Change to %d\n", tblinfo[req.pt].uid);
-                    }
-                    if (tblinfo[req.pt].index == NUM_OF_PAM_USERS)
-                    {
-                        tblinfo[req.pt].index = 0;
-                        printf("Index: Change to 0\n");
-                    }
-                }
-                res.ret = PAM_USER_ADDED_SUCCESSFULLY;
-                post_pam_userinfo(&res, req.srcq);
-                /* This function is used to call whenever user added in any
-                 * table.*
-                 * * when adding user, check whether any other database has the
-                 * same name..
-                 * * if then delete that user...*/
-                remove_pam_user(req.usr.name, req.pt);
-            }
-            break;
-            case GET_USERINFO_BY_NAME:
-            {
-                int indexloop = 0;
-                pamusr_t *u, *ut = &pamusrtbl[req.pt][0];
-
-                res.ret = PAM_USER_NOT_FOUND;
-
-                indexloop = (tblinfo[req.pt].index == 0)
-                                ? (NUM_OF_PAM_USERS - 1)
-                                : (tblinfo[req.pt].index - 1);
-
-                printf("Index lopp: %d\n", indexloop);
-                for (i = 0, j = indexloop; i < NUM_OF_PAM_USERS; i++)
-                {
-                    u = (ut + j);
-                    if (strncmp(u->name, req.usr.name, strlen(u->name) + 1) ==
-                        0)
-                    {
-                        printf("Search Found: %d\n", j);
-                        memcpy((char*)&res.usr, (char*)u, sizeof(pamusr_t));
-                        res.ret = PAM_USER_RETRIEVED_SUCCESSFULLY;
-                        break;
-                    }
-                    j = (j == (NUM_OF_PAM_USERS - 1)) ? 0 : (j + 1);
-                }
-                printf("Search Not Found: %d\n", j);
-                post_pam_userinfo(&res, req.srcq);
-            }
-            break;
-            case GET_USERINFO_BY_UID:
-            {
-                int indexloop = 0;
-                pamusr_t *u, *ut = &pamusrtbl[req.pt][0];
-
-                res.ret = PAM_USER_NOT_FOUND;
-
-                indexloop = (tblinfo[req.pt].index == 0)
-                                ? (NUM_OF_PAM_USERS - 1)
-                                : (tblinfo[req.pt].index - 1);
-
-                for (i = 0, j = indexloop; i < NUM_OF_PAM_USERS; i++)
-                {
-                    u = (ut + j);
-                    if (u->uid == req.usr.uid)
-                    {
-                        printf("UID Search Found: %d\n", j);
-                        memcpy((char*)&res.usr, (char*)u, sizeof(pamusr_t));
-                        res.ret = PAM_USER_RETRIEVED_SUCCESSFULLY;
-                        break;
-                    }
-                    j = (j == (NUM_OF_PAM_USERS - 1)) ? 0 : (j + 1);
-                }
-                printf("UID Search Not Found: %d\n", j);
-                post_pam_userinfo(&res, req.srcq);
-            }
-            break;
-            case DEL_PAM_USER:
-            {
-                int indexloop = 0;
-                pamusr_t *u, *ut = &pamusrtbl[req.pt][0];
-
-                res.ret = PAM_USER_NOT_FOUND;
-
-                indexloop = (tblinfo[req.pt].index == 0)
-                                ? (NUM_OF_PAM_USERS - 1)
-                                : (tblinfo[req.pt].index - 1);
-
-                printf("Index lopp: %d\n", indexloop);
-                for (i = 0, j = indexloop; i < NUM_OF_PAM_USERS; i++)
-                {
-                    u = (ut + j);
-                    if (strncmp(u->name, req.usr.name, strlen(u->name) + 1) ==
-                        0)
-                    {
-                        printf("Search Found: %d\n", j);
-                        memset((char*)u, 0, sizeof(pamusr_t));
-                        res.ret = PAM_USER_DELETED_SUCCESSFULLY;
-                    }
-                    j = (j == (NUM_OF_PAM_USERS - 1)) ? 0 : (j + 1);
-                }
-                printf("Search Not Found: %d\n", j);
-                post_pam_userinfo(&res, req.srcq);
-            }
-            break;
-            default:
-            {
-                res.ret = INVALID_ACTION_REQUEST;
-                post_pam_userinfo(&res, req.srcq);
-            }
-            break;
-        }
-    }
 }
 
 bool isPortInUse(int port)
@@ -719,11 +526,11 @@ int main()
                        __FILE__, PAM_HELPER_Q);
                 continue;
             }
-	    unsigned int CheckSum=calculate_checksum(&req);
-	    if(CheckSum != req.checksum)
-	    {
-		    continue;
-	    }
+            unsigned int CheckSum = calculate_checksum(&req);
+            if (CheckSum != req.checksum)
+            {
+                continue;
+            }
             memset(&res, 0, sizeof(pamusrpkt_t));
             res.action = PAM_RESPONSE;
 
@@ -755,6 +562,10 @@ int main()
                                    __FILE__);
                             memcpy((char*)&res.usr, (char*)&pusr_head,
                                    sizeof(pamusr_t));
+                            if (pusr_head->priv != req.usr.priv)
+                            {
+                                pusr_head->priv = req.usr.priv;
+                            }
                             user_found = 1;
                             break;
                         }
@@ -818,8 +629,8 @@ int main()
                         }
                         j = (j == (NUM_OF_PAM_USERS - 1)) ? 0 : (j + 1);
                     }
-		    res.checksum = 0;
-		    res.checksum = calculate_checksum(&res);
+                    res.checksum = 0;
+                    res.checksum = calculate_checksum(&res);
                     post_pam_userinfo(&res, req.srcq);
                 }
                 break;

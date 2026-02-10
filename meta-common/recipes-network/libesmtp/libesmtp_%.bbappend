@@ -5,4 +5,5 @@ SRC_URI += " \
             file://0001-added-IPV6-suppport-to-library.patch \
 	    file://0002-Authenticate-to-quit-on-state-machine.patch \
 	    file://0110-Coverity-Fix.patch \
+	    file://0004-Added-Coverity-Fix.patch \
            "

@@ -18,4 +18,6 @@ SRC_URI += " \
             file://0010-Add-new-certificate-data-fields-support.patch \
 	    file://0011-clang-format.patch \
             file://0012-populate-properties-from-PEM-chain.patch \
+	    file://0013-High-Coverity-fix-CM-4-phosphor-certificate-manager.patch \
+	    file://0014-Response-Time-Error.patch \
            "

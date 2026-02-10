@@ -4,8 +4,8 @@ DESCRIPTION = "collecting of all the sensor values every given interval"
 LICENSE = "Proprietary"
 LIC_FILES_CHKSUM = "file://${AMIBASE}/COPYING.AMI;md5=65a69a674f34a9f30737c9f0abd4fc5c"
 
-SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/sensor-history-reader.git;protocol=https;branch=master"
-SRCREV = "ae0782c7b817a338dca803f0c40f82babe26019d"
+SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/sensor-history-reader.git;protocol=https;branch=master"
+SRCREV = "4e9c5b31bb9f7fe502de30604caf701279690f54"
 
 PV = "0.0+git${SRCPV}"
 

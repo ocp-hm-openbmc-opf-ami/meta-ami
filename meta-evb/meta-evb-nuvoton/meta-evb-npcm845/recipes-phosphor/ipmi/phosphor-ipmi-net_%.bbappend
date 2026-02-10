@@ -1,4 +1,4 @@
-FILESEXTRAPATHS:append := "${THISDIR}/${PN}:"
+FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 
 ALT_RMCPP_IFACE_ETH1 = "eth1"

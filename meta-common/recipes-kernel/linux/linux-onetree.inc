@@ -29,6 +29,7 @@ SRC_URI:append:evb-ast2600-rm = " \
              file://defconfig \
 	     "
 LINUX_VERSION_EXTENSION ?= "-${SRCREV}"
+KERNEL_LOCALVERSION = "-ami"
 
 PV = "${LINUX_VERSION}+git${SRCPV}"
 
@@ -42,34 +43,4 @@ UBOOT_MKIMAGE:append:npcm8xx = " -E -B 8"
 
 # From 4.16+ the COPYING file changed
 LIC_FILES_CHKSUM:evb-npcm845 = "file://COPYING;md5=6bc538ed5bd9a7fc9398086aedcd7e46"
-
-python do_set_local_version() {
-    s = d.getVar("S")
-    b = d.getVar("B")
-    conf_local_ver = ""
-
-    with open("%s/.config" % b, "r+") as f:
-        lines = f.readlines()
-        f.seek(0)
-        for line in lines:
-            if line.find("CONFIG_LOCALVERSION") == -1:
-                f.write(line)
-        f.truncate()
-
-    try:
-        res=bb.process.run("git -C %s describe --tags --exact-match" %  s)[0].strip("\n")
-
-        if res.find("devtool") != -1:
-            version_ext = bb.process.run("git -C %s rev-parse --verify --short HEAD" % s)[0].strip("\n")
-            conf_local_ver = ('CONFIG_LOCALVERSION=\"-%s-%s\"' % res, version_ext)
-        else:
-            conf_local_ver = ('CONFIG_LOCALVERSION=\"-%s\"' % res)
-    except Exception as e:
-        version=bb.process.run("git -C %s rev-parse --verify --short HEAD" % s)[0].strip("\n")
-        conf_local_ver = ('CONFIG_LOCALVERSION=\"-dirty-%s\"' % version)
-    with open("%s/.config" % b, "a") as f:
-        f.write(conf_local_ver)
-}
-
-addtask set_local_version:evb-ast2700 before do_configure after do_kernel_configme
 

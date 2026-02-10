@@ -10,14 +10,17 @@ KERNEL_VERSION_SANITY_SKIP="1"
 
 EXTRA_OEMAKE += "KCFLAGS=-DCONFIG_I3C_MCTP_HELPERS"
 
-KBRANCH = "ocp"
-KSRC = "git://git.ami.com/core/ami-bmc/base-tech/linux-lf.git;protocol=https;branch=${KBRANCH}"
+#KSRC = "git://git.ami.com/core/ami-bmc/base-tech/linux-lf.git;protocol=https;branch=onetree-dev-6.6"
 
 # Include this as a comment only for downstream auto-bump
 # SRC_URI = "git://git@github.com/intel-bmc/os.linux.kernel.openbmc.linux.git;protocol=ssh;branch=dev-6.1-intel"
-SRCREV = "b12ab38770c3afc3cf0ba5ee888fe74127396eef"
+SRC_URI:append = "git://git.ami.com/core/ami-bmc/base-tech/linux-lf.git;protocol=https;branch=onetree-dev-6.6 "
 
-SRC_URI:append = "${KSRC}"
+# KBRANCH is added for devtool to checkout to the same branch as the linux-lf branch. This variable is only used by the devtool utility and must be updated whenever the linux-lf branch changes.
+KBRANCH = "onetree-dev-6.6"
+
+SRCREV = "0d4833fe2c5da12700510296ff1f04d0bb4d5456"
+
 
 do_compile:prepend(){
    # device tree compiler flags
@@ -31,18 +34,86 @@ SRC_URI += "file://dts-ami/ \
 	    file://bootlogo.cfg \
 	    file://Enable_i2c_slave.cfg \
 	    file://iptables.cfg \
-	    file://0001-MCTP-driver-memoryleak-fix.patch \
-            file://0002-MCTP-coverity-issues.patch \
 	    file://CVE-2025-21786.patch \
 	    file://0003-Add-I2C-slave-mqueue-support.patch \
 	    file://0004-Fix-I2C-Coverity-for-linux-onetree.patch \
 	    file://0004-Fix-common-kernel-I2C-patch-error-in-OT-AMD.patch \
 	    file://0005-Add-the-M-Hold-patch-and-I2C-Driver-change-from-INTEL.patch \
+	    file://CVE-2025-38335.patch \
+	    file://CVE-2025-38622.patch \
+	    file://CVE-2025-38653.patch \
+	    file://CVE-2025-38572.patch \
+	    file://CVE-2025-3857.patch \
+	    file://CVE-2025-38566.patch \
+            file://CVE-2025-38639.patch \
+	    file://CVE-2025-38670.patch \
+	    file://CVE-2025-38555.patch \
+	    file://CVE-2025-38565.patch \
+	    file://CVE-2025-38563.patch \
+            file://CVE-2025-38694.patch \
+            file://CVE-2025-38725.patch \
+            file://CVE-2025-38716.patch \
+            file://CVE-2025-38707.patch \
+            file://CVE-2025-38685.patch \
+            file://CVE-2025-38693.patch \
+            file://CVE-2025-38691.patch \
+            file://CVE-2025-38728.patch \
+            file://CVE-2025-38688.patch \
+            file://CVE-2025-39711.patch \
+            file://CVE-2025-39715.patch \
+            file://CVE-2025-39713.patch \
+            file://CVE-2025-39675.patch \
+            file://CVE-2025-39693.patch \
+            file://CVE-2025-39691.patch \
+            file://CVE-2025-38732.patch \
+            file://CVE-2025-39718.patch \
+            file://CVE-2025-39703.patch \
+            file://CVE-2025-39692.patch \
+            file://CVE-2025-38734.patch \
+            file://CVE-2025-39730.patch \
+            file://CVE-2025-39751.patch \
+            file://CVE-2025-39776.patch \
+            file://CVE-2025-39835.patch \
+            file://CVE-2025-39808.patch \
+            file://CVE-2025-39824.patch \
+            file://CVE-2025-39828.patch \
+            file://CVE-2025-39823.patch \
+            file://CVE-2025-39846.patch \
+            file://CVE-2025-39865.patch \
+            file://CVE-2025-39864.patch \
+            file://CVE-2025-39863.patch \
+            file://CVE-2025-39860.patch \
+            file://CVE-2025-39857.patch \
+            file://CVE-2025-39849.patch \
+            file://CVE-2025-39838.patch \
+            file://CVE-2025-39839.patch \
+            file://CVE-2025-39848.patch \
+            file://CVE-2025-39873.patch \
+            file://CVE-2025-39881.patch \
+            file://CVE-2025-39877.patch \
+            file://CVE-2025-39880.patch \
+	    file://CVE-2025-39827.patch \
+	    file://CVE-2025-39826.patch \
+	    file://CVE-2025-38632.patch \
+            file://CVE-2025-38681.patch \
+            file://CVE-2025-38701.patch \
+            file://CVE-2025-38702.patch \
+            file://CVE-2025-38709.patch \
+            file://CVE-2025-39689.patch \
+            file://CVE-2025-39724.patch \
+            file://CVE-2025-38721.patch \
+            file://CVE-2025-39683.patch \
+            file://CVE-2025-39697.patch \
             "
 
 SRC_CPLD_SPI = " file://cpld-spidev.cfg \
-		file://0006-enable-spidev-in-driver-file.patch"
+                 file://0006-enable-spidev-in-driver-file.patch \
+               "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-fwupdate', SRC_CPLD_SPI,'', d)}"
+
+SRC_IPMI_SSIF = " file://0006-Add-SSIF-and-SBMR-support.patch \
+                "
+SRC_URI:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-ipmi-ssif', SRC_IPMI_SSIF,'', d)}"
 
 SRC_URI_NM += "file://disable_nm_sensor.cfg \
                file://disable_smart.cfg \
@@ -58,6 +129,42 @@ SRC_URI:append = "${@bb.utils.contains('USB_Port_B_Function', 'Gadget-Device', S
 NETWORK_BONDING_SRC_URI += "file://bond.cfg \
                            "
 SRC_URI += "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
+
+SRC_URI:append = " ${@bb.utils.contains('ENABLE_MCTP_KERNEL_MODE', '1', ' file://Enable_MCTP_vdm.cfg ', '', d)}"
+SRC_URI:append = " ${@bb.utils.contains('ENABLE_MCTP_KERNEL_MODE', '1', ' file://0007-Receive-MCTP-Broadcast-Package.patch.patch ', '', d)}"
+
+# ABR mode detection patch for AST2600
+SRC_URI_ABR_PATCH = "file://0001-spi-aspeed-Add-ABR-mode-detection-support-for-AST260.patch"
+
+# Apply to evb-ast2600
+SRC_URI:append:evb-ast2600 = " \
+    ${@bb.utils.contains('IMAGE_FEATURES', 'onetree-hw-failsafe-boot', \
+        '${SRC_URI_ABR_PATCH}', '', d)} \
+"
+
+# Apply to intel-ast2600
+SRC_URI:append:intel-ast2600 = " \
+    ${@bb.utils.contains('IMAGE_FEATURES', 'onetree-hw-failsafe-boot', \
+        '${SRC_URI_ABR_PATCH}', '', d)} \
+"
+
+do_configure:append(){
+    if ${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-network-ncsi-non-aen-support', 'true', 'false', d)}; then
+       echo "CONFIG_NCSI_AMI_NON_AEN_SUPPORT=y" >> ${B}/.config
+    fi
+
+    if ${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-network-ncsi-non-aen-support', 'true', 'false', d)}; then
+       echo "CONFIG_NCSI_AMI_TIMER_INTERVAL_FOR_GET_LINK_STATUS=${NCSI_POLLING_INTERVAL}" >> ${B}/.config
+    fi
+
+    if ${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-network-ncsi-manual-detect-support', 'true', 'false', d)}; then
+       echo "CONFIG_NCSI_AMI_MANUAL_DETECT=y" >> ${B}/.config
+    fi
+
+    if ${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-network-ncsi-async-reset-support', 'true', 'false', d)}; then
+       echo "CONFIG_NCSI_AMI_ASYNC_RESET=y" >> ${B}/.config
+    fi
+}
 
 # Replacing existing kernel_do_install() with the fix from commit, https://git.yoctoproject.org/poky/commit/meta/classes-recipe/kernel.bbclass?h=styhead&id=5533d33d1e3b9be299230530c8e6ac6d0968631f
 # This function can be removed in next LF sync

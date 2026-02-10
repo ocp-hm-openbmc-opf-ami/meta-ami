@@ -1,4 +1,4 @@
-FILESEXTRAPATHS:append:= "${THISDIR}/files:"
+FILESEXTRAPATHS:prepend:= "${THISDIR}/files:"
 
 SRC_URI:append = " \
     file://ast2600_a3.json \
@@ -12,6 +12,8 @@ SRC_URI += " \
 	"
 
 SRC_URI:append:evb-ast2600 = "file://0007-Save-env-variables-before-autoboot.patch "
+
+SRC_URI:append:oks-features = " file://0008-update-address-of-fdt-location.patch "
 
 EVB_SRC_URI = " file://spl.cfg"
 AC_SRC_URI = " file://spl_archercity.cfg"
@@ -57,3 +59,6 @@ SRC_URI:append = " ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_UR
 SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', ' file://flash-layout-update.cfg  ', d)}"
 
 SRC_URI:append = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'debug-tweaks', '', 'file://boot_delay.cfg', d)}"
+
+SRC_URI:append = " file://0001-board-ast2600-Remove-eSPI-PC-and-VW-initialization-c.patch "
+SRC_URI:append = " file://0001-dts-ast2600-evb-tee-Refine-sd-emmc-for-ultra-high-sp.patch "

@@ -1,0 +1,78 @@
+From d432b6be5af32c4349bde6798707649727ef9e3d Mon Sep 17 00:00:00 2001
+From: Neal Liu <neal_liu@aspeedtech.com>
+Date: Wed, 10 Sep 2025 15:43:54 +0800
+Subject: [PATCH 19/32] lib: ecdsa-verify: add stash measurement for
+ attestation
+
+Integrate the cptra stash measurement on signature verification
+success for attestation.
+
+Signed-off-by: Neal Liu <neal_liu@aspeedtech.com>
+Change-Id: Id5f39a0077f9d678b8e2332b3e5780fab25fa468
+(cherry picked from commit aa79fe254959ab8b4f3879b39bc2d38f70eb10b8)
+Signed-off-by: Vasanthakumar K <vasanthakumark@ami.com>
+---
+ lib/ecdsa/ecdsa-verify.c | 33 +++++++++++++++++++++++++++++----
+ 1 file changed, 29 insertions(+), 4 deletions(-)
+
+diff --git a/lib/ecdsa/ecdsa-verify.c b/lib/ecdsa/ecdsa-verify.c
+index e29959f134..6dfb5dffd7 100644
+--- a/lib/ecdsa/ecdsa-verify.c
++++ b/lib/ecdsa/ecdsa-verify.c
+@@ -11,6 +11,7 @@
+ #include <crypto/ecdsa-uclass.h>
+ #include <dm/uclass.h>
+ #include <u-boot/ecdsa.h>
++#include <u-boot/cptra_ipc.h>
+ 
+ /*
+  * Derive size of an ECDSA key from the curve name
+@@ -71,8 +72,18 @@ static int ecdsa_verify_hash(struct udevice *dev,
+ 		if (ret < 0)
+ 			return ret;
+ 
+-		return ops->verify(dev, &key, hash, algo->checksum_len,
+-				   sig, sig_len);
++		ret = ops->verify(dev, &key, hash, algo->checksum_len, sig,
++				  sig_len);
++		if (ret)
++			return ret;
++
++		if (IS_ENABLED(CONFIG_ASPEED_AST2700))
++			/* Do stash measurement if signature verification pass */
++			return cptra_stash_measurement((char *)fdt_get_name(info->fdt_blob,
++									    info->required_keynode, NULL),
++						       (uint8_t *)hash, algo->checksum_len);
++		else
++			return 0;
+ 	}
+ 
+ 	sig_node = fdt_subnode_offset(info->fdt_blob, 0, FIT_SIG_NODENAME);
+@@ -89,8 +100,22 @@ static int ecdsa_verify_hash(struct udevice *dev,
+ 				  sig, sig_len);
+ 
+ 		/* On success, don't worry about remaining keys */
+-		if (!ret)
+-			return 0;
++		if (!ret) {
++			if (IS_ENABLED(CONFIG_ASPEED_AST2700)) {
++				int olen;
++
++				/* Do stash measurement if signature verification pass */
++				ret = cptra_stash_measurement((char *)fdt_get_name(info->fdt_blob,
++										   key_node, &olen),
++							      (uint8_t *)hash, algo->checksum_len);
++				if (ret)
++					printf("Failed to stash measurement: %d\n", ret);
++
++				return ret;
++			} else {
++				return 0;
++			}
++		}
+ 	}
+ 
+ 	return -EPERM;
+-- 
+2.34.1
+

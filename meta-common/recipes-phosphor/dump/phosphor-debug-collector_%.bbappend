@@ -1,5 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
+SRCREV = "218bf9119e45f2a46601e709af39d5b338ee944e"
 
 SRC_URI += "file://plugins.d/arpcntlconf \
 	    file://plugins.d/arptableinfo  \

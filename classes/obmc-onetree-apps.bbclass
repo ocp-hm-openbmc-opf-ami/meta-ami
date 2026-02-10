@@ -6,6 +6,7 @@ IMAGE_FEATURES:append = " ${EXTRA_IMAGE_FEATURES} "
 # Below are the Extension Packages (EPs) which can be enabled by including them in IMAGE_FEATURES.
 # Each EP corresponds to a specific feature set and includes the necessary package group.
 FEATURE_PACKAGES_onetree-brcmraid ?= "packagegroup-onetree-apps-brcmraid" 
+FEATURE_PACKAGES_onetree-brcmraid8 ?= "packagegroup-onetree-apps-brcmraid8"
 FEATURE_PACKAGES_onetree-nic ?= "packagegroup-onetree-apps-nic" 
 FEATURE_PACKAGES_onetree-nvme ?= "packagegroup-onetree-apps-nvme" 
 FEATURE_PACKAGES_onetree-nvmebasic ?= "packagegroup-onetree-apps-nvmebasic" 
@@ -59,6 +60,9 @@ FEATURE_PACKAGES_onetree-host-interface ?= "packagegroup-onetree-apps-host-inter
 FEATURE_PACKAGES_onetree-extlog ?= "packagegroup-onetree-apps-extlog"
 FEATURE_PACKAGES_onetree-mctp-i3c-sock ?= "packagegroup-onetree-apps-mctp-i3c-sock"
 FEATURE_PACKAGES_onetree-bmc-services-ready ?= "packagegroup-onetree-apps-bmc-services-ready"
+FEATURE_PACKAGES_onetree-pdk ?= "packagegroup-onetree-apps-pdk"
+FEATURE_PACKAGES_onetree-telemetry ?= "packagegroup-onetree-apps-telemetry"
+FEATURE_PACKAGES_onetree-ipmb ?= "packagegroup-onetree-apps-ipmb"
 
 # NVIDIA Features
 FEATURE_PACKAGES_onetree-nvidiasipack ?= "packagegroup-onetree-apps-nvidiasipack"
@@ -80,6 +84,9 @@ FEATURE_PACKAGES_onetree-network-nsupdate-support ?= "packagegroup-onetree-apps-
 FEATURE_PACKAGES_onetree-network-tsig-support ?= "packagegroup-onetree-apps-network-tsig-support"
 FEATURE_PACKAGES_onetree-network-persist-mac-support ?= "packagegroup-onetree-apps-network-persist-mac-support"
 FEATURE_PACKAGES_onetree-network-avahi-support ?= "packagegroup-onetree-apps-network-avahi-support"
+FEATURE_PACKAGES_onetree-network-ncsi-non-aen-support ?= "packagegroup-onetree-apps-network-ncsi-non-aen-support"
+FEATURE_PACKAGES_onetree-network-ncsi-channel-timer ?= "packagegroup-onetree-apps-network-ncsi-channel-timer"
+FEATURE_PACKAGES_onetree-network-ncsi-asycn-reset-support ?= "packagegroup-onetree-apps-network-ncsi-async-reset-support"
 
 # Firmware update core features
 FEATURE_PACKAGES_onetree-fwupdate-cpld-update ?= "packagegroup-onetree-apps-fwupdate-cpld-update "
@@ -95,3 +102,9 @@ FEATURE_PACKAGES_onetree-tools ?= "packagegroup-onetree-apps-tools"
 
 # PLDM core feature
 FEATURE_PACKAGES_onetree-pldm ?= "packagegroup-onetree-apps-pldm"
+
+FEATURE_PACKAGES_onetree-multi-host-support ?= "packagegroup-onetree-apps-multi-host-support"
+
+# Rack Manager and Power Shelf features
+FEATURE_PACKAGES_onetree-rm ?= "packagegroup-onetree-apps-rm"
+FEATURE_PACKAGES_onetree-psm ?= "packagegroup-onetree-apps-psm"

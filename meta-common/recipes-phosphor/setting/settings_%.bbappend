@@ -17,6 +17,10 @@ SRC_URI += " \
 	   file://0011-Added-additional-boot-override-properties.patch \
 	   file://0012-Added-last-entryId-for-ipmi.patch \
 	   file://0013-Add-ipmi-entry-count.patch \
+	   file://0014-Add-dual-node-support.patch \
+           file://0014-Update-new-usb-vhub-dev-node-name.patch \
+	   file://0015-Added-sel-delete-status-property.patch \
+           file://0016-Make-HostMode-Mode-property-read-only.patch \
 "
 
 SRC_URI_evb_aspeed:append =  " \

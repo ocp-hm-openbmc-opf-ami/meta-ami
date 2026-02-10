@@ -4,6 +4,11 @@ EXTRA_OEMESON:append= " \
     -Dhttp-body-limit=264 \
     "
 
+# Use the old updater.
+EXTRA_OEMESON:append = " \
+    -Dredfish-updateservice-use-dbus=disabled \
+"
+
 SRC_URI:append = " \
     file://0001-bmcweb-fixes-virtual-media-buffer-overflow.patch \    
     "

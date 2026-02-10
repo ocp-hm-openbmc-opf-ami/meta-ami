@@ -10,16 +10,17 @@ inherit obmc-phosphor-dbus-service obmc-phosphor-systemd
 PACKAGECONFIG[systemd] = ""
 PACKAGECONFIG[pcap] = ""
 
+PACKAGECONFIG:append = "${@bb.utils.contains('ENABLE_MCTP_KERNEL_MODE', '1', ' libmctp-kernel-mode', '', d)}"
+
 SRC_URI:append: = " \
-                file://mctp_cfg_smbus8.json \
-                file://systemd/mctp-i2c8-ctrl.service \
-                file://systemd/mctp-i2c8-demux.service \
-                file://systemd/mctp-i2c8-demux.socket \
                 file://systemd/start_mctp.sh \
                 file://systemd/cpu-boot-complete.sh \
                 file://systemd/check_failed_host_boot.sh \
                 file://systemd/perst_udev_event.sh \
    "
+   
+SRC_URI:append = "${@bb.utils.contains('ENABLE_MCTP_KERNEL_MODE', '1', 'file://mctp_cfg_kernel.cfg ', 'file://mctp_cfg_smbus8.json ', d)}"
+SRC_URI:append = "${@bb.utils.contains('ENABLE_MCTP_KERNEL_MODE', '1', 'file://systemd/mctp-kernel-ctrl.service ', 'file://systemd/mctp-i2c8-ctrl.service file://systemd/mctp-i2c8-demux.service file://systemd/mctp-i2c8-demux.socket', d)}"
 
 SYSTEMD_SERVICE:${PN}:remove:evb-ast2600 = " mctp-spi-ctrl.service "
 SYSTEMD_SERVICE:${PN}:remove:evb-ast2600 = " mctp-spi-demux.service "
@@ -27,9 +28,7 @@ SYSTEMD_SERVICE:${PN}:remove:evb-ast2600 = " mctp-spi-demux.socket "
 SYSTEMD_SERVICE:${PN}:remove:evb-ast2600 = " mctp-pcie-ctrl.service "
 SYSTEMD_SERVICE:${PN}:remove:evb-ast2600 = " mctp-pcie-demux.service "
 SYSTEMD_SERVICE:${PN}:remove:evb-ast2600 = " mctp-pcie-demux.socket "
-SYSTEMD_SERVICE:${PN}:append:evb-ast2600 = " mctp-i2c8-ctrl.service"
-SYSTEMD_SERVICE:${PN}:append:evb-ast2600 = " mctp-i2c8-demux.service"
-SYSTEMD_SERVICE:${PN}:append:evb-ast2600 = " mctp-i2c8-demux.socket"
+SYSTEMD_SERVICE:${PN}:append:evb-ast2600 = "${@bb.utils.contains('ENABLE_MCTP_KERNEL_MODE', '1', 'mctp-kernel-ctrl.service', 'mctp-i2c8-ctrl.service mctp-i2c8-demux.service mctp-i2c8-demux.socket', d)}"
 
 # GraceBMC - all just clones of skinnyjoe for now
 do_install:append:evb-ast2600() {
@@ -53,11 +52,17 @@ do_install:append:evb-ast2600() {
     install -m 0755 ${WORKDIR}/systemd/check_failed_host_boot.sh ${D}${bindir}/
     install -m 0755 ${WORKDIR}/systemd/perst_udev_event.sh ${D}${bindir}/
 
-    install -m 0644 ${WORKDIR}/mctp_cfg_smbus8.json ${D}${datadir}/mctp/mctp_cfg_smbus8.json
     rm -f ${D}${nonarch_base_libdir}/systemd/system/mctp-spi-ctrl.service
     rm -f ${D}${nonarch_base_libdir}/systemd/system/mctp-spi-demux.service
     rm -f ${D}${nonarch_base_libdir}/systemd/system/mctp-spi-demux.socket
-    install -m 0644 ${WORKDIR}/systemd/mctp-i2c8-ctrl.service  ${D}${nonarch_base_libdir}/systemd/system/
-    install -m 0644 ${WORKDIR}/systemd/mctp-i2c8-demux.service ${D}${nonarch_base_libdir}/systemd/system/
-    install -m 0644 ${WORKDIR}/systemd/mctp-i2c8-demux.socket  ${D}${nonarch_base_libdir}/systemd/system/
+    
+    if ${@bb.utils.contains('ENABLE_MCTP_KERNEL_MODE', '1', 'true', 'false', d)}; then
+ 	    install -m 0644 ${WORKDIR}/mctp_cfg_kernel.cfg ${D}${datadir}/mctp/mctp_cfg_kernel.cfg
+	    install -m 0644 ${WORKDIR}/systemd/mctp-kernel-ctrl.service  ${D}${nonarch_base_libdir}/systemd/system/    
+    else
+	    install -m 0644 ${WORKDIR}/mctp_cfg_smbus8.json ${D}${datadir}/mctp/mctp_cfg_smbus8.json
+	    install -m 0644 ${WORKDIR}/systemd/mctp-i2c8-ctrl.service  ${D}${nonarch_base_libdir}/systemd/system/
+	    install -m 0644 ${WORKDIR}/systemd/mctp-i2c8-demux.service ${D}${nonarch_base_libdir}/systemd/system/
+	    install -m 0644 ${WORKDIR}/systemd/mctp-i2c8-demux.socket  ${D}${nonarch_base_libdir}/systemd/system/
+    fi
 }

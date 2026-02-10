@@ -17,10 +17,14 @@ SRC_URI += " \
            file://0009-Fix-sel-logger-crash-and-add-discrete-event-severity.patch \
            file://0010-coverity-fix.patch \
            file://0011-crashErrorEventMonitor-coredump-fixed.patch \
+	   file://0012-Added-Extended-SEL-support.patch \
+	   file://0012-High-Coverity-Fix-CM-4-phosphor-sel-logger.patch \
+	   file://0013-Update-SEL-message-format-for-Temperature-Threshold.patch \
            "
 
 
 DEPENDS += "intel-ipmi-oem"
 RDEPENDS:${PN} += "intel-ipmi-oem"
+EXTRA_OEMESON +=  "-Dsel-extended=true"
 
 PACKAGECONFIG:append = " send-to-logger log-threshold log-crash"

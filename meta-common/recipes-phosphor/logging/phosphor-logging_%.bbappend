@@ -1,6 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-EXTRA_OEMESON:append = " -Derror_cap=350 -Derror_info_cap=900"
+EXTRA_OEMESON:append = " -Derror_cap=350 -Derror_info_cap=900 -Dstorage-select=emmc_sdcard"
 
 #SRCREV = "e8026679f89642e3336b8c5e495f6ab694988e7a"
 
@@ -20,4 +20,5 @@ SRC_URI += "\
     file://0012-update-clang-format.patch \
     file://0013-Add-tcp-modules-enable-disable-using-transmission-protocols.patch \
     file://0014-Added-ObjectManager-Interface-For-EventEntry.patch \
+    file://0015-Select-storage-type-for-error-log-storage.patch \
 "

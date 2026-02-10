@@ -1,0 +1,137 @@
+From b8155b9ea7584b784f6ff308c705037552f1d4c7 Mon Sep 17 00:00:00 2001
+From: santhoshs <santhoshs@ami.com>
+Date: Fri, 31 Oct 2025 11:37:38 +0000
+Subject: [PATCH] Fixed the dula image booting issue
+
+Signed-off-by: santhoshs <santhoshs@ami.com>
+---
+ drivers/spi/spi-aspeed-smc.c | 47 +++++++++++++++++++++---------------
+ 1 file changed, 28 insertions(+), 19 deletions(-)
+
+diff --git a/drivers/spi/spi-aspeed-smc.c b/drivers/spi/spi-aspeed-smc.c
+index 212d1304c33b..32d2096a7cf0 100644
+--- a/drivers/spi/spi-aspeed-smc.c
++++ b/drivers/spi/spi-aspeed-smc.c
+@@ -93,14 +93,19 @@
+ #define ASPEED_SPI_OP_BUF_LEN		0x10000
+ 
+ #define OFFSET_ABR_CTRL_STATUS 0x0c
+-#define OFFSET_ABR_TIMER_RELOAD 0x10
+-#define OFFSET_ABR_TIMER_RESTART 0x14
++#define OFFSET_ABR_TIMER_RELOAD 0x04
++#define OFFSET_ABR_TIMER_RESTART 0x08
+ 
+-#define ABR_WDT_ENABLE BIT(1)
++#define ABR_WDT_ENABLE  0x3
+ #define ABR_BOOT_SRC_INDICATE BIT(1)
+ #define ABR_RESTART_MAGIC 0x4755
+ #define ABR_CLEAR_BOOT_SRC_MAGIC (0xEA << 16)
+ #define ABR_RELOAD_MAX_VALUE 0x3ff
++#define ABR_WDT_TIMEOUT_STATUS 0x10
++
++#define WDT_BASE_ADDR  0x14c37400
++#define WDT_SCRATCH_ADDR 0x4C //Boot indicator
++static void __iomem *wdt_base;
+ 
+ static spinlock_t g_lock;
+ 
+@@ -193,7 +198,7 @@ static inline ssize_t _access_primary_show(void __iomem *regs,
+ 					   struct device_attribute *attr,
+ 					   char *buf)
+ {
+-	u32 status = readl(regs + OFFSET_ABR_CTRL_STATUS);
++	u32 status = readl(wdt_base + WDT_SCRATCH_ADDR);
+ 
+ 	return sysfs_emit(buf, "%u\n", !(status & ABR_BOOT_SRC_INDICATE));
+ }
+@@ -209,9 +214,9 @@ static inline ssize_t _access_primary_store(void __iomem *regs,
+ 
+ 	/* write bit[23:16] = 0xEA */
+ 	if (val)
+-		writel(readl(regs + OFFSET_ABR_CTRL_STATUS) |
++		writel(readl(wdt_base + OFFSET_ABR_CTRL_STATUS) |
+ 			       ABR_CLEAR_BOOT_SRC_MAGIC,
+-		       regs + OFFSET_ABR_CTRL_STATUS);
++		       wdt_base + OFFSET_ABR_CTRL_STATUS);
+ 
+ 	return size;
+ }
+@@ -220,8 +225,8 @@ static inline ssize_t _access_backup_show(void __iomem *regs,
+ 					  struct device_attribute *attr,
+ 					  char *buf)
+ {
+-	u32 status = readl(regs + OFFSET_ABR_CTRL_STATUS);
+-	u32 timer_reload = readl(regs + OFFSET_ABR_TIMER_RELOAD);
++	u32 status = readl(wdt_base + OFFSET_ABR_CTRL_STATUS);
++	u32 timer_reload = readl(wdt_base + OFFSET_ABR_TIMER_RELOAD);
+ 
+ 	if (!(status & ABR_WDT_ENABLE))
+ 		return sysfs_emit(buf, "%u\n", 0);
+@@ -240,25 +245,25 @@ static inline ssize_t _access_backup_store(void __iomem *regs,
+ 
+ 	/* disable watchdog */
+ 	if (count == 0) {
+-		writel(0, regs + OFFSET_ABR_CTRL_STATUS);
++		writel(0, wdt_base + OFFSET_ABR_CTRL_STATUS);
+ 		return size;
+ 	}
+-
+ 	/*
+ 	 * bit[12:0] : Reload value of expire time
+ 	 * The time unit is 0.1 second. Default set at 22 seconds
+ 	 * 0: Immediately timeout
+ 	 */
+ 	count = count < ABR_RELOAD_MAX_VALUE ? count : ABR_RELOAD_MAX_VALUE;
++	
++	writel(0, wdt_base + OFFSET_ABR_CTRL_STATUS);
++	writel(count, wdt_base + OFFSET_ABR_TIMER_RELOAD);
+ 
+-	writel(0, regs + OFFSET_ABR_CTRL_STATUS);
+-	writel(count, regs + OFFSET_ABR_TIMER_RELOAD);
+-
++	writel(1, wdt_base + WDT_SCRATCH_ADDR); //boot indicator to 1 for secondary
+ 	/* Write 0x4755 value to load the reload value into watchdog counter */
+-	writel(ABR_RESTART_MAGIC, regs + OFFSET_ABR_TIMER_RESTART);
+-
++	writel(ABR_RESTART_MAGIC, wdt_base + OFFSET_ABR_TIMER_RESTART);
++	writel(0, wdt_base + ABR_WDT_TIMEOUT_STATUS);
+ 	/* Enable watchdog */
+-	writel(ABR_WDT_ENABLE, regs + OFFSET_ABR_CTRL_STATUS);
++	writel(ABR_WDT_ENABLE, wdt_base + OFFSET_ABR_CTRL_STATUS);
+ 	return size;
+ }
+ 
+@@ -266,7 +271,7 @@ static inline ssize_t _current_boot_show(void __iomem *regs,
+ 					  struct device_attribute *attr,
+ 					  char *buf)
+ {
+-	bool current_boot = (readl(regs + OFFSET_ABR_CTRL_STATUS) & ABR_BOOT_SRC_INDICATE) ? 1 : 0 ;
++	bool current_boot = (readl(wdt_base + WDT_SCRATCH_ADDR) & ABR_BOOT_SRC_INDICATE) ? 1 : 0 ;
+ 	return sysfs_emit(buf, "%u\n", current_boot);
+ }
+ 
+@@ -1769,7 +1774,11 @@ static int aspeed_spi_probe(struct platform_device *pdev)
+ 	reset = devm_reset_control_get_exclusive(dev, NULL);
+ 	if (!IS_ERR(reset))
+ 		reset_control_deassert(reset);
+-
++	wdt_base = ioremap(WDT_BASE_ADDR, SZ_4K);
++		if (!wdt_base) {
++    			printk("Failed to map WDT base address\n");
++    		return -ENOMEM;
++	}
+ 	aspi->flag = 0;
+ 	if (of_property_read_bool(dev->of_node, "fmc-spi-normal-mode"))
+ 		aspi->flag |= ASPEED_SPI_NORMAL_MODE;
+@@ -1897,7 +1906,7 @@ static int aspeed_spi_probe(struct platform_device *pdev)
+ 	if (devm_device_add_groups(dev, bcurrent_boot_groups))
+ 			dev_warn(dev, "Could not add current_boot\n");
+ 	/* if boot from alt source, show access_primary, otherwise show access_backup */
+-	if (readl(aspi->regs + OFFSET_ABR_CTRL_STATUS) &
++	if (readl(wdt_base + WDT_SCRATCH_ADDR) &
+ 	    ABR_BOOT_SRC_INDICATE) {
+ 
+ 		if (devm_device_add_groups(dev, bswitch_primary_groups))
+-- 
+2.34.1
+

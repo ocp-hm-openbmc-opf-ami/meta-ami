@@ -89,6 +89,7 @@ restore_uboot_env_data() {
 	then
 		echo "Restore u-boot-env parition failed"
 	fi
+	rm -f /run/initramfs/uboot_env_data.bin
 }
 
 #get_fw_env_var: Extracts the value of a U-Boot environment variable.
@@ -246,6 +247,7 @@ then
 		# Clear SEL and ExtLog if not whitelisted
 		if ! grep -q "^/etc/extlog" "$whitelist" 2>/dev/null; then
 			rm -rf /etc/extlog/phosphor-logging > /dev/null 2>&1
+		        rm -rf /etc/extlog/extended.log* > /dev/null 2>&1
 		fi
 
 		if test -n "$mounted"

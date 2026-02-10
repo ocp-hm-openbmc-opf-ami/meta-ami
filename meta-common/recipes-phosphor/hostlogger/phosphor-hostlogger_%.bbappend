@@ -1,6 +1,9 @@
 SOL_PATH = "${@'${THISDIR}/${PN}/multi-sol' if d.getVar('MULTI_SOL_ENABLED') == '1' else '${THISDIR}/${PN}/single-sol'}"
 
 FILESEXTRAPATHS:prepend := "${SOL_PATH}:"
+
+SRCREV = "531629353c56b8cc78610081c430d5250e34b3c1"
+
 SINGLE_SOL_SRC_URI = " \
 	file://ttyS2.conf \
 	"

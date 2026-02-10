@@ -6,6 +6,7 @@ SRC_URI += " \
            file://psu.json \
 	   file://phos-psu-monitor.service \
            file://0001-phosphor-power-psu-monitor.patch \
+           file://0002-Coverity-fix.patch \
            "
 SRCREV = "2d068dc70d1ab893315edaaaffd84160cd90c9fd"
 

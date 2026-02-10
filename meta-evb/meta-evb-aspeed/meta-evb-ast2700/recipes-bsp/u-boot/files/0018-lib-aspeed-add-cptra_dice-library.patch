@@ -1,0 +1,171 @@
+From 6a21bb4fd3fc43a2ad3989e11ca1e53a7ada1996 Mon Sep 17 00:00:00 2001
+From: Neal Liu <neal_liu@aspeedtech.com>
+Date: Wed, 10 Sep 2025 15:41:14 +0800
+Subject: [PATCH 18/32] lib: aspeed: add cptra_dice library
+
+Add one implementation for measurement stashing in
+cptra_dice library.
+
+Signed-off-by: Neal Liu <neal_liu@aspeedtech.com>
+Change-Id: Icb3335718f77b89d0c2596160aa9fcb3a2fa07b6
+(cherry picked from commit 8ab312c85c9c32e2c97a4803061cb629b5a68ea5)
+Signed-off-by: Vasanthakumar K <vasanthakumark@ami.com>
+---
+ include/u-boot/cptra_ipc.h | 74 ++++++++++++++++++++++++++++++++++++++
+ lib/aspeed/Makefile        |  1 +
+ lib/aspeed/cptra_dice.c    | 53 +++++++++++++++++++++++++++
+ 3 files changed, 128 insertions(+)
+ create mode 100644 include/u-boot/cptra_ipc.h
+ create mode 100644 lib/aspeed/cptra_dice.c
+
+diff --git a/include/u-boot/cptra_ipc.h b/include/u-boot/cptra_ipc.h
+new file mode 100644
+index 0000000000..72b64baa38
+--- /dev/null
++++ b/include/u-boot/cptra_ipc.h
+@@ -0,0 +1,74 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright 2025 ASPEED Technology Inc.
++ */
++
++#ifndef _CPTRA_H
++#define _CPTRA_H
++
++#define IPC_CHANNEL_1_BOOTMCU_IN_ADDR		        0xB1880000
++#define IPC_CHANNEL_1_BOOTMCU_OUT_ADDR		        0xB1980000
++#define IPC_CHANNEL_1_NS_CA35_IN_ADDR		        0x431880000
++#define IPC_CHANNEL_1_NS_CA35_OUT_ADDR		        0x431980000
++#define SHARED_MEM_SIZE				        0x100000
++
++#define MBOX_BOOTMCU_DEVICE_NAME		        "mbox-bootmcu-1"
++
++enum cptra_ipc_cmd {
++	CPTRA_IPCCMD_ECDSA384_SIGNATURE_VERIFY = 0,
++	CPTRA_IPCCMD_SHA384_DIGEST,
++	CPTRA_IPCCMD_SHA384_INIT,
++	CPTRA_IPCCMD_SHA384_UPDATE,
++	CPTRA_IPCCMD_SHA384_FINAL,
++	CPTRA_IPCCMD_LMS_SIGNATURE_VERIFY,
++	CPTRA_IPCCMD_CALIPTRA_FW_LOAD,
++	CPTRA_IPCCMD_STASH_MEASUREMENT,
++	CPTRA_IPCCMD_QUOTE_PCRS,
++	CPTRA_IPCCMD_GET_IDEV_CERT,
++	CPTRA_IPCCMD_GET_IDEV_INFO,
++	CPTRA_IPCCMD_POPULATE_IDEV_CERT,
++	CPTRA_IPCCMD_GET_LDEV_CERT,
++	CPTRA_IPCCMD_GET_FMC_ALIAS_CERT,
++	CPTRA_IPCCMD_GET_RT_ALIAS_CERT,
++	CPTRA_IPCCMD_INVOKE_DPE_COMMAND,
++	CPTRA_IPCCMD_DISABLE_ATTESTATION,
++	CPTRA_IPCCMD_FW_INFO,
++	CPTRA_IPCCMD_DPE_TAG_TCI,
++	CPTRA_IPCCMD_DPE_GET_TAGGED_TCI,
++	CPTRA_IPCCMD_INCREMENT_PCR_RESET_COUNTER,
++	CPTRA_IPCCMD_EXTEND_PCR,
++	CPTRA_IPCCMD_ADD_SUBJECT_ALT_NAME,
++	CPTRA_IPCCMD_CERTIFY_KEY_EXTENDED,
++	CPTRA_IPCCMD_FIPS_VERSION,
++	CPTRA_IPCCMD_SHUTDOWN,
++	CPTRA_IPCCMD_CAPABILITIES,
++	CPTRA_IPCCMD_SET_AUTH_MANIFEST,
++	CPTRA_IPCCMD_AUTHORIZE_AND_STASH,
++	CPTRA_IPCCMD_GET_FMC_ALIAS_CSR,
++	CPTRA_IPCCMD_SIGN_WITH_EXPORTED_ECDSA,
++	CPTRA_IPCCMD_REVOKE_EXPORTED_CDI_HANDLE,
++};
++
++enum cptra_ipc_rx_type {
++	CPTRA_IPC_RX_TYPE_INTERNAL = 0,
++	CPTRA_IPC_RX_TYPE_EXTERNAL = 1,
++};
++
++int cptra_ipc_trigger(enum cptra_ipc_cmd cmd);
++int cptra_ipc_receive(enum cptra_ipc_rx_type type, void *output, int output_size);
++int cptra_stash_measurement(char *metadata, uint8_t *hash, int hash_len);
++
++struct cptra_stash_measurement_ia {
++	uint8_t metadata[4];
++	uint8_t measure[48];
++	uint8_t context[48];
++	uint32_t svn;
++};
++
++struct cptra_stash_measurement_oa {
++	uint32_t chksum;
++	uint32_t fips_status;
++	uint32_t dpe_result;
++};
++
++#endif /* _CPTRA_H */
+diff --git a/lib/aspeed/Makefile b/lib/aspeed/Makefile
+index 69a23a3137..d76ab15c6f 100644
+--- a/lib/aspeed/Makefile
++++ b/lib/aspeed/Makefile
+@@ -1,3 +1,4 @@
+ # SPDX-License-Identifier: GPL-2.0+
+ 
+ obj-$(CONFIG_ASPEED_FMC_HEADER) += fmc_hdr.o
++obj-$(CONFIG_ASPEED_CPTRA) += cptra_ipc.o cptra_dice.o
+diff --git a/lib/aspeed/cptra_dice.c b/lib/aspeed/cptra_dice.c
+new file mode 100644
+index 0000000000..807cf19b26
+--- /dev/null
++++ b/lib/aspeed/cptra_dice.c
+@@ -0,0 +1,53 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * Copyright 2025 ASPEED Technology Inc.
++ */
++#include <config.h>
++#include <common.h>
++#include <dm.h>
++#include <misc.h>
++#include <u-boot/cptra_ipc.h>
++
++int cptra_stash_measurement(char *metadata, uint8_t *hash, int hash_len)
++{
++	enum cptra_ipc_cmd ipccmd = CPTRA_IPCCMD_STASH_MEASUREMENT;
++	uint8_t *p8 = (uint8_t *)IPC_CHANNEL_1_NS_CA35_IN_ADDR;
++	struct cptra_stash_measurement_ia input;
++	struct cptra_stash_measurement_oa output;
++	int ret;
++
++	if (hash_len != 48) {
++		pr_err("%s: invalid hash length %d\n", __func__, hash_len);
++		return -1;
++	}
++
++	/* Initialize input data */
++	memset(&input, 0, sizeof(struct cptra_stash_measurement_ia));
++	memset(&output, 0, sizeof(struct cptra_stash_measurement_oa));
++
++	memcpy(input.metadata, metadata, 4);
++	memcpy(input.measure, hash, hash_len);
++
++	/* Copy input data into shared memory */
++	memcpy(p8, &input, sizeof(struct cptra_stash_measurement_ia));
++
++	ret = cptra_ipc_trigger(ipccmd);
++	if (ret) {
++		pr_err("cptra_ipc_trigger:0x%x is failure, ret:0x%x\n", ipccmd,
++		       ret);
++		goto end;
++	}
++
++	ret = cptra_ipc_receive(CPTRA_IPC_RX_TYPE_EXTERNAL, &output,
++				sizeof(struct cptra_stash_measurement_oa));
++	if (ret) {
++		pr_err("cptra_ipc_receive:0x%x is failure, ret:0x%x\n", ipccmd,
++		       ret);
++		goto end;
++	}
++
++	return output.dpe_result;
++
++end:
++	return ret;
++}
+-- 
+2.34.1
+

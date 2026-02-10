@@ -3,8 +3,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI += " \
-            file://0002-Removed-SIO_POWER_GOOD-and-IdButton.patch \
-	    file://0004-Updating-PowerState-currentHostState.patch \
-	    file://0001-Removed-NMI-Button.patch \
+            file://0001-Removed-NMI-SIO_PWR_GOOD-ID_BUTTON.patch \
            "
 

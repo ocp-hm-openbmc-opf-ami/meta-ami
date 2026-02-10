@@ -1,4 +1,4 @@
-FILESEXTRAPATHS:append := ":${THISDIR}/${PN}"
+FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 
 SRC_URI:append = " \

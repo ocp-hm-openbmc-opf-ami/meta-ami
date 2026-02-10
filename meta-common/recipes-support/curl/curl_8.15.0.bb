@@ -104,7 +104,7 @@ do_install:append:class-nativesdk() {
 	fix_absolute_paths
 
 	mkdir -p ${D}${SDKPATHNATIVE}/environment-setup.d
-	install -m 644 ${UNPACKDIR}/environment.d-curl.sh ${D}${SDKPATHNATIVE}/environment-setup.d/curl.sh
+	install -m 644 ${WORKDIR}/environment.d-curl.sh ${D}${SDKPATHNATIVE}/environment-setup.d/curl.sh
 }
 
 do_compile_ptest() {
@@ -132,7 +132,7 @@ do_install_ptest() {
 	cp -r ${S}/tests/data ${D}${PTEST_PATH}/tests/
 
 	# More tests that we disable for automated QA as they're not reliable
-	cat ${UNPACKDIR}/disable-tests >>${D}${PTEST_PATH}/tests/data/DISABLED
+	cat ${WORKDIR}/disable-tests >>${D}${PTEST_PATH}/tests/data/DISABLED
 }
 
 DEPENDS:append:class-target = "${@bb.utils.contains('PTEST_ENABLED', '1', ' openssl-native', '', d)}"
