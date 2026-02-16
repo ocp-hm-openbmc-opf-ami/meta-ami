@@ -1,4 +1,4 @@
-FILESEXTRAPATHS:append := ":${THISDIR}/${PN}"
+FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 # Use the latest to support obmc-ikvm properly
 # The URI is required for the autobump script but keep it commented

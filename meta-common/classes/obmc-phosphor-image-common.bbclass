@@ -32,7 +32,6 @@ IMAGE_FEATURES += " \
 IMAGE_INSTALL:append = " \
         dbus-broker \
         intel-ipmi-oem \
-        phosphor-ipmi-ipmb \
         smbios-mdr \
         system-watchdog \
         callback-manager \
@@ -50,15 +49,20 @@ IMAGE_INSTALL:append = " \
         telemetry \
         i3c-tools \
         zip \
-        peci-pcie \
-        libespi \
+	peci-pcie \
+	libespi \
         "
+
+IMAGE_INSTALL:remove:oks-features = " peci-pcie "
+
+IMAGE_INSTALL:append:oks-features = " mctpd mctp-cmd-tool cxl-cci mmbi-ipmi "
 
 #IMAGE_INSTALL:append:bhs-features = " \
 #        power-feature-discovery \
 #        "
 
 IMAGE_INSTALL:append = " ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', 'pfr-manager', '', d)}"
+IMAGE_INSTALL:append = " ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', 'secure-pfr-manager', '', d)}"
 
 IMAGE_INSTALL:append = " ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', 'ncsi-monitor', '', d)}"
 IMAGE_INSTALL:append = " ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-secboot', 'ncsi-monitor', '', d)}"

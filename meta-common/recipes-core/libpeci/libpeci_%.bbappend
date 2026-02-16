@@ -1,18 +1,11 @@
-# Enable downstream autobump
-# The URI is required for the autobump script but keep it commented
-# to not override the upstream value
-# SRC_URI = "git://github.com/openbmc/libpeci;branch=master;protocol=https"
-SRCREV = "f6e3f1629dd3d98d205707faa2a1c8267a0a38a7"
-
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
+
+SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/libpeci.git;branch=main;protocol=https"
+
+SRCREV = "82788584f9bcdb6648a2d6e24440653f41f5e9df"
 
 SRC_URI += " \
         file://99-peci.rules \
-	file://0001-Enable-64-bit-RdPkgConfig-and-WrPkgConfig-transfers.patch \
-        file://0002-Add-PECI-Telemetry-command.patch \
-        file://0003-Add-single-dev-peci-i3c-node-abstraction.patch \
-        file://0005-Added_peci_wakeup_support_for_lib_peci.patch \
-        file://0006-fix-for-cups-context-switch.patch \
 "
 
 do_install:append() {

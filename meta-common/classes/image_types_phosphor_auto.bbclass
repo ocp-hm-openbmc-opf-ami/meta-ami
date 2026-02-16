@@ -23,7 +23,6 @@ image_dst ?= "image-u-boot"
 python() {
     import json
     types = d.getVar('IMAGE_FSTYPES', True).split()
-    pfr_config = d.getVar('PFR_CONFIG', True).split()
     spl_enabled = d.getVar('SPL_BINARY', True)
 
     # TODO: find partition list in DTS
@@ -33,6 +32,7 @@ python() {
     d.setVar('UBOOT_SEC_SIZE', str(1024*1024))
 
     if 'intel-pfr' in types:
+        pfr_config = d.getVar('PFR_CONFIG', True).split()
         if 'pfr-256' in pfr_config:
             gen = d.getVar('PRODUCT_GENERATION', True).split()
             if 'egs' in gen:
@@ -58,11 +58,32 @@ python() {
             else :
                 DTB_FULL_FIT_IMAGE_OFFSETS = [0xb00000]
     else:
-        d.setVar('FLASH_SIZE', str(64*1024))
+        flash_size = d.getVar('FLASH_SIZE', True)
+        if flash_size:
+            d.setVar('FLASH_SIZE', str(int(flash_size)))
+        else:
+            d.setVar('FLASH_SIZE', str(64*1024))
+
         gen = d.getVar('PRODUCT_GENERATION', True).split()
-        if 'egs' in gen or 'bhs' in gen:
-            d.setVar('FIT_SECTOR_SIZE', str(0x3300000))
+        fit_offset = d.getVar('FLASH_FIT_IMAGE_OFFSET', True)
+        if fit_offset:
+            DTB_FULL_FIT_IMAGE_OFFSETS = [int(fit_offset) * 1024]
+        elif 'egs' in gen or 'bhs' in gen:
+            d.setVar('FIT_SECTOR_SIZE', str(0x3500000))
             DTB_FULL_FIT_IMAGE_OFFSETS = [0x100000]
+    new_offset = d.getVar('DTB_FULL_FIT_IMAGE_OFFSETS', True)
+    if new_offset:
+        DTB_FULL_FIT_IMAGE_OFFSETS = [int(new_offset, 16)]
+    fit_image_size = d.getVar('FLASH_FIT_IMAGE_SIZE', True)
+    if fit_image_size:
+        d.setVar('FIT_SECTOR_SIZE', str(int(fit_image_size) * 1024))  
+    else:
+        new_fit_sector_size = d.getVar('FULL_FIT_SECTOR_SIZE', True)
+        if new_fit_sector_size:
+            d.setVar('FIT_SECTOR_SIZE', str(int(new_fit_sector_size, 16)))
+    flash_sec_size = d.getVar('FLASH', True)
+    if flash_sec_size:
+        d.setVar('FLASH_SIZE', str(int(flash_sec_size)))
 
     d.setVar('FLASH_RUNTIME_OFFSETS', ' '.join(
         [str(int(x/1024)) for x in DTB_FULL_FIT_IMAGE_OFFSETS]

@@ -536,6 +536,9 @@ do_copy_signing_pubkey[depends] += " \
         phosphor-image-signing:do_populate_sysroot \
         "
 
+FLASH_UBOOT_SPL_IMAGE ?= "u-boot-spl"
+FLASH_UBOOT_IMAGE ?= "u-boot"
+image_dst ?= "image-u-boot"
 do_image_fitimage_rootfs() {
     bbdebug 1 "check for rootfs phosphor fitimage"
     cd ${B}
@@ -557,7 +560,18 @@ do_image_fitimage_rootfs() {
     mkdir -p "${B}/img"
     cd "${B}/img"
     # add symlinks for the contents
-    ln -sf "${DEPLOY_DIR_IMAGE}/u-boot.${UBOOT_SUFFIX}" "image-u-boot"
+    if [ ! -z ${SPL_BINARY} ]; then
+        dd bs=1k conv=notrunc seek="${FLASH_UBOOT_OFFSET}" \
+            if="${DEPLOY_DIR_IMAGE}/${FLASH_UBOOT_SPL_IMAGE}.${UBOOT_SUFFIX}" \
+            of="${DEPLOY_DIR_IMAGE}/${image_dst}"
+        uboot_offset="${FLASH_UBOOT_SPL_SIZE}"
+        dd bs=1k conv=notrunc seek="${uboot_offset}" \
+            if="${DEPLOY_DIR_IMAGE}/${FLASH_UBOOT_IMAGE}.${UBOOT_SUFFIX}" \
+            of="${DEPLOY_DIR_IMAGE}/${image_dst}"
+        ln -sf "${DEPLOY_DIR_IMAGE}/${image_dst}" "image-u-boot"
+    else
+        ln -sf "${DEPLOY_DIR_IMAGE}/u-boot.${UBOOT_SUFFIX}" "image-u-boot"
+    fi
     ln -sf "${DEPLOY_DIR_IMAGE}/fitImage-rootfs-${MACHINE}.bin" "image-runtime"
     # add the manifest
     bbdebug 1 "Manifest file: ${B}/MANIFEST"

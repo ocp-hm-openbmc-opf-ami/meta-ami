@@ -1,17 +1,18 @@
-From 4f7257d97c0703236f5631a9375fe1a4f9d328c3 Mon Sep 17 00:00:00 2001
-From: vamsikrishnareddyp <vamsikrishnareddyp@ami.com>
-Date: Sat, 20 Sep 2025 09:10:46 +0000
-Subject: [PATCH] Enabled-mctp-i3c-socket-based-driver
+From 5b21859376cb19841661063e7c55af0faddd77ea Mon Sep 17 00:00:00 2001
+From: roycheng <roycheng@ami.com>
+Date: Tue, 4 Nov 2025 18:09:50 +0800
+Subject: [PATCH] Enabled-mctp-i3c-socket-based-driver.patch
 
+Signed-off-by: desmondwu <desmondwu@ami.com>
 ---
  drivers/i3c/Makefile               |   1 +
  drivers/i3c/mctp-i3c-misc.c        |  11 +
- drivers/net/mctp/Kconfig           |  18 +
- drivers/net/mctp/Makefile          |   2 +
- drivers/net/mctp/mctp-i3c-target.c | 691 +++++++++++++++++++++++++++++
+ drivers/net/mctp/Kconfig           |   9 +
+ drivers/net/mctp/Makefile          |   1 +
+ drivers/net/mctp/mctp-i3c-target.c | 690 +++++++++++++++++++++++++++++
  drivers/net/mctp/mctp-i3c.c        | 201 +++++++--
  net/mctp/route.c                   |  11 +-
- 7 files changed, 897 insertions(+), 38 deletions(-)
+ 7 files changed, 886 insertions(+), 38 deletions(-)
  create mode 100644 drivers/i3c/mctp-i3c-misc.c
  create mode 100644 drivers/net/mctp/mctp-i3c-target.c
 
@@ -45,22 +46,13 @@ index 000000000000..daf733549764
 +       return NULL;
 +}
 diff --git a/drivers/net/mctp/Kconfig b/drivers/net/mctp/Kconfig
-index 569cb5cfba62..55c0002585e6 100644
+index df6f0257ac16..b7a00b03c7c0 100644
 --- a/drivers/net/mctp/Kconfig
 +++ b/drivers/net/mctp/Kconfig
-@@ -42,6 +42,24 @@ config MCTP_TRANSPORT_I3C
+@@ -42,6 +42,15 @@ config MCTP_TRANSPORT_I3C
  	  A MCTP protocol network device is created for each I3C bus
  	  having a "mctp-controller" devicetree property.
  
-+config MCTP_TRANSPORT_I3C
-+       tristate "MCTP I3C transport"
-+       depends on I3C
-+       help
-+         Provides a driver to access MCTP devices over I3C transport,
-+         from DMTF specification DSP0233.
-+         A MCTP protocol network device is created for each I3C bus
-+         having a "mctp-controller" devicetree property.
-+
 +config MCTP_TRANSPORT_I3C_TARGET
 +      tristate "MCTP I3C target transport"
 +      depends on I3C
@@ -74,22 +66,22 @@ index 569cb5cfba62..55c0002585e6 100644
  	tristate "MCTP USB transport"
  	depends on USB
 diff --git a/drivers/net/mctp/Makefile b/drivers/net/mctp/Makefile
-index c36006849a1e..f2b7aa1c9d36 100644
+index 4acd04d7eb32..444568301540 100644
 --- a/drivers/net/mctp/Makefile
 +++ b/drivers/net/mctp/Makefile
-@@ -1,4 +1,6 @@
+@@ -1,5 +1,6 @@
  obj-$(CONFIG_MCTP_SERIAL) += mctp-serial.o
  obj-$(CONFIG_MCTP_TRANSPORT_I2C) += mctp-i2c.o
  obj-$(CONFIG_MCTP_TRANSPORT_I3C) += mctp-i3c.o
 +obj-$(CONFIG_MCTP_TRANSPORT_I3C_TARGET) += mctp-i3c-target.o
-+obj-$(CONFIG_MCTP_TRANSPORT_I3C) += mctp-i3c.o
  obj-$(CONFIG_MCTP_TRANSPORT_USB) += mctp-usb.o
+ obj-$(CONFIG_MCTP_TRANSPORT_PCIE_VDM) += mctp-pcie-vdm.o
 diff --git a/drivers/net/mctp/mctp-i3c-target.c b/drivers/net/mctp/mctp-i3c-target.c
 new file mode 100644
-index 000000000000..80f618bf9cf1
+index 000000000000..5ecf68686132
 --- /dev/null
 +++ b/drivers/net/mctp/mctp-i3c-target.c
-@@ -0,0 +1,691 @@
+@@ -0,0 +1,690 @@
 +#include <linux/module.h>
 +#include <linux/netdevice.h>
 +#include <linux/i3c/device.h>
@@ -192,7 +184,7 @@ index 000000000000..80f618bf9cf1
 +	int net_status;
 +	size_t len;
 +	u8 addr, pec;
-+	
++
 +	len = count - 1;
 +	skb = netdev_alloc_skb(mi->mbus->ndev, len);
 +	if (!skb) {
@@ -201,14 +193,14 @@ index 000000000000..80f618bf9cf1
 +			"Socket Buffer allocation failed \n");
 +		return;
 +	}
-+	
++
 +	skb->protocol = htons(ETH_P_MCTP);
 +	skb_reset_mac_header(skb);
 +	ihdr = skb_put(skb, sizeof(struct mctp_i3c_target_internal_hdr));
 +	put_unaligned_be48(mi->pid, ihdr->source);
 +	put_unaligned_be48(mi->mbus->pid, ihdr->dest);
 +	skb_pull(skb, sizeof(struct mctp_i3c_target_internal_hdr));
-+	
++
 +	if (count < (I3C_MCTP_MIN_PACKET_SIZE + 1) || count > (I3C_MCTP_PACKET_SIZE + 1)) {
 +		dev_err(i3cdev_to_dev(i3cdev),
 +			" MCTP packet length invalid \n");
@@ -225,23 +217,23 @@ index 000000000000..80f618bf9cf1
 +		kfree_skb(skb);
 +		return;
 +	}
-+	
++
 +	skb_put_data(skb, data, len);
 +	skb_trim(skb, len);
-+	
++
 +	cb = __mctp_cb(skb);
 +	cb->halen = PID_SIZE;
 +	put_unaligned_be48(mi->pid, cb->haddr);
-+	
++
 +	net_status = netif_rx(skb);
-+	
++
 +	if (net_status == NET_RX_SUCCESS) {
 +		stats->rx_packets++;
 +		stats->rx_bytes += len;
 +	} else {
 +		stats->rx_dropped++;
 +	}
-+	
++
 +}
 +
 +static struct i3c_target_read_setup i3c_target_mctp_rx_packet_setup = {
@@ -573,7 +565,7 @@ index 000000000000..80f618bf9cf1
 +
 +	struct device_node *np;
 +	int ret;
-+	
++
 +	if (!master->dev.of_node){
 +                return -ENOENT;
 +        }
@@ -780,7 +772,6 @@ index 000000000000..80f618bf9cf1
 +MODULE_DESCRIPTION("MCTP I3C Target device");
 +MODULE_LICENSE("GPL");
 +MODULE_AUTHOR("Venkateshwaran R <venkateshwaranr@ami.com>");
-+
 diff --git a/drivers/net/mctp/mctp-i3c.c b/drivers/net/mctp/mctp-i3c.c
 index ec5400378ffe..78e9aa4dd5cb 100644
 --- a/drivers/net/mctp/mctp-i3c.c
@@ -1107,5 +1098,5 @@ index cf5ae2adf1df..a6cd72b5e039 100644
  	mctp_route_release(rt);
  	mctp_dev_put(mdev);
 -- 
-2.43.0
+2.52.0
 
