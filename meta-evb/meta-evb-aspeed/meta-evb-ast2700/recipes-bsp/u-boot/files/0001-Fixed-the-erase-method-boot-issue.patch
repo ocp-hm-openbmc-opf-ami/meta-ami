@@ -1,0 +1,186 @@
+From 03ae30fdf8cc08dcbbb26beefb813b420198f1bf Mon Sep 17 00:00:00 2001
+From: saikumaru <saikumaru@ami.com>
+Date: Wed, 5 Nov 2025 12:44:53 +0530
+Subject: [PATCH] Fixed the erase method boot issue
+
+Signed-off-by: saikumaru <saikumaru@ami.com>
+---
+ arch/arm/mach-aspeed/ast2700/board_common.c | 14 ++++
+ common/autoboot.c                           | 72 +++++++++++++++------
+ include/configs/evb_ast2700.h               | 49 +++++++-------
+ 3 files changed, 92 insertions(+), 43 deletions(-)
+
+diff --git a/arch/arm/mach-aspeed/ast2700/board_common.c b/arch/arm/mach-aspeed/ast2700/board_common.c
+index a4a980e8c1..7c8245869d 100644
+--- a/arch/arm/mach-aspeed/ast2700/board_common.c
++++ b/arch/arm/mach-aspeed/ast2700/board_common.c
+@@ -89,5 +89,19 @@ int board_init(void)
+ 			break;
+ 	}
+ 
++       // Check boot source and set environment variable
++       uint32_t boot_indicator = readl(0x14c3744c);
++       if (boot_indicator & 0x2) { // ABR_BOOT_SRC_INDICATE
++           env_set("bootfrom", "alternate");
++           printf("Booting from alternate flash\n");
++       } else {
++           env_set("bootfrom", "primary");
++       }
++
++       writel((readl(0x14C02030) | 0x1), 0x14C02030);//enable ABR mode
++       writel((readl(0x14c3740c) | 0x1), 0x14c3740c);//enable FMC WDT
++       writel(0x23A9F65B, 0x14c37404);//10 min WDT time out
++       writel(0x4755, 0x14c37408);//reload timer value
++
+ 	return 0;
+ }
+diff --git a/common/autoboot.c b/common/autoboot.c
+index 5d331991c1..eefcf61649 100644
+--- a/common/autoboot.c
++++ b/common/autoboot.c
+@@ -488,26 +488,56 @@ void autoboot_command(const char *s)
+ {
+ 	debug("### main_loop: bootcmd=\"%s\"\n", s ? s : "<UNDEFINED>");
+ 
+-	if (s && (stored_bootdelay == -2 ||
+-		 (stored_bootdelay != -1 && !abortboot(stored_bootdelay)))) {
+-		bool lock;
+-		int prev;
++  writel((readl(0x14c3740c) & 0xFFFE), 0x14c3740c);//disable FMC_WDT2
++
++    // Check if we're booting from alternate source
++    uint32_t boot_source = readl(0x14c3744c);
++    bool is_alternate_boot = (boot_source & 0x2); // Check ABR_BOOT_SRC_INDICATE
++
++    // Only clear boot source after successful boot, not during autoboot
++    // This should be done after kernel loads successfully
++
++    writel((readl(0x14c3740c) | 0x1), 0x14c3740c);//enable FMC_WDT2
++
++    // If booting from alternate, adjust the bootcmd to use correct flash device
++    if (is_alternate_boot && s) {
++        // Modify bootcmd to use sf probe 1 instead of sf probe 0
++        char *modified_cmd = malloc(strlen(s) + 100);
++        if (modified_cmd) {
++            // Replace "sf probe 0" with "sf probe 1" in the boot command
++            char *probe_pos = strstr(s, "sf probe 0");
++            if (probe_pos) {
++                strncpy(modified_cmd, s, probe_pos - s);
++                modified_cmd[probe_pos - s] = '\0';
++                strcat(modified_cmd, "sf probe 1");
++                strcat(modified_cmd, probe_pos + strlen("sf probe 0"));
++                s = modified_cmd;
++                printf("Adjusted bootcmd for alternate flash: %s\n", s);
++            }
++        }
++    }
++
++    if (s && (stored_bootdelay == -2 ||
++             (stored_bootdelay != -1 && !abortboot(stored_bootdelay)))) {
++        bool lock;
++        int prev;
++
++        lock = autoboot_keyed() &&
++            !IS_ENABLED(CONFIG_AUTOBOOT_KEYED_CTRLC);
++        if (lock)
++            prev = disable_ctrlc(1); /* disable Ctrl-C checking */
++
++        run_command_list(s, -1, 0);
++
++        if (lock)
++            disable_ctrlc(prev);    /* restore Ctrl-C checking */
++    }
++
++    if (IS_ENABLED(CONFIG_AUTOBOOT_USE_MENUKEY) &&
++        menukey == AUTOBOOT_MENUKEY) {
++        s = env_get("menucmd");
++        if (s)
++            run_command_list(s, -1, 0);
++    }
+ 
+-		lock = autoboot_keyed() &&
+-			!IS_ENABLED(CONFIG_AUTOBOOT_KEYED_CTRLC);
+-		if (lock)
+-			prev = disable_ctrlc(1); /* disable Ctrl-C checking */
+-
+-		run_command_list(s, -1, 0);
+-
+-		if (lock)
+-			disable_ctrlc(prev);	/* restore Ctrl-C checking */
+-	}
+-
+-	if (IS_ENABLED(CONFIG_AUTOBOOT_USE_MENUKEY) &&
+-	    menukey == AUTOBOOT_MENUKEY) {
+-		s = env_get("menucmd");
+-		if (s)
+-			run_command_list(s, -1, 0);
+-	}
+ }
+diff --git a/include/configs/evb_ast2700.h b/include/configs/evb_ast2700.h
+index 202ff58cf7..5715f302fc 100644
+--- a/include/configs/evb_ast2700.h
++++ b/include/configs/evb_ast2700.h
+@@ -2,33 +2,38 @@
+ /*
+  * Copyright (C) ASPEED Technology Inc.
+  */
+-
+ #ifndef __CONFIG_H
+ #define __CONFIG_H
+-
+ #include <configs/aspeed-common.h>
+ 
+ /* Extra ENV for Boot Command */
+-#define STR_HELPER(n)	#n
+-#define STR(n)		STR_HELPER(n)
++#define STR_HELPER(n)   #n
++#define STR(n)          STR_HELPER(n)
+ 
+-#define CFG_SYS_UBOOT_BASE		CONFIG_TEXT_BASE
++#define CFG_SYS_UBOOT_BASE              CONFIG_TEXT_BASE
+ 
+ #define CFG_EXTRA_ENV_SETTINGS \
+-	"bootspi=fdt addr ${fdtspiaddr} && fdt header get fitsize totalsize && " \
+-	"cp.b ${fdtspiaddr} ${loadaddr} ${fitsize} && bootm ${loadaddr}; " \
+-	"echo Error loading kernel FIT image\0" \
+-	"loadaddr=" STR(CONFIG_SYS_LOAD_ADDR) "\0"	\
+-	"bootside=a\0"	\
+-	"rootfs=rofs-a\0"	\
+-	"setmmcargs=setenv bootargs ${bootargs} rootwait root=PARTLABEL=${rootfs}\0"	\
+-	"boota=setenv bootpart 2; setenv rootfs rofs-a; run setmmcargs; ext4load mmc 0:${bootpart} ${loadaddr} fitImage && bootm ${loadaddr}; echo Error loading kernel FIT image\0"	\
+-	"bootb=setenv bootpart 3; setenv rootfs rofs-b; run setmmcargs; ext4load mmc 0:${bootpart} ${loadaddr} fitImage && bootm ${loadaddr}; echo Error loading kernel FIT image\0"	\
+-	"bootmmc=if test \"${bootside}\" = \"b\"; then run bootb; run boota; else run boota; run bootb; fi\0"	\
+-	"setufsargs=setenv bootargs ${bootargs} rootwait root=PARTLABEL=${rootfs}\0"	\
+-	"ufsboota=setenv bootpart 2; setenv rootfs rofs-a; run setufsargs; ext4load scsi 0:${bootpart} ${loadaddr} fitImage && bootm ${loadaddr}; echo Error loading kernel FIT image\0"	\
+-	"ufsbootb=setenv bootpart 3; setenv rootfs rofs-b; run setufsargs; ext4load scsi 0:${bootpart} ${loadaddr} fitImage && bootm ${loadaddr}; echo Error loading kernel FIT image\0"	\
+-	"bootufs=if test \"${bootside}\" = \"b\"; then run ufsbootb; run ufsboota; else run ufsboota; run ufsbootb; fi\0"	\
+-	"verify=yes\0"	\
+-	""
+-#endif	/* __CONFIG_H */
++        "bootspi=if test \"${bootfrom}\" = \"alternate\"; then " \
++        "sf probe 1; " \
++        "else " \
++        "sf probe 0; " \
++        "fi; " \
++        "fdt addr ${fdtspiaddr} && fdt header get fitsize totalsize && " \
++        "cp.b ${fdtspiaddr} ${loadaddr} ${fitsize} && bootm ${loadaddr}; " \
++        "echo Error loading kernel FIT image\0" \
++        "loadaddr=" STR(CONFIG_SYS_LOAD_ADDR) "\0"      \
++        "bootfrom=primary\0"    \
++        "bootside=a\0"  \
++        "rootfs=rofs-a\0"       \
++        "setmmcargs=setenv bootargs ${bootargs} rootwait root=PARTLABEL=${rootfs}\0"    \
++        "boota=setenv bootpart 2; setenv rootfs rofs-a; run setmmcargs; ext4load mmc 0:${bootpart} ${loadaddr} fitImage && bootm ${loadaddr}; echo Error loading kernel FIT image\0"    \
++        "bootb=setenv bootpart 3; setenv rootfs rofs-b; run setmmcargs; ext4load mmc 0:${bootpart} ${loadaddr} fitImage && bootm ${loadaddr}; echo Error loading kernel FIT image\0"    \
++        "bootmmc=if test \"${bootside}\" = \"b\"; then run bootb; run boota; else run boota; run bootb; fi\0"   \
++        "setufsargs=setenv bootargs ${bootargs} rootwait root=PARTLABEL=${rootfs}\0"    \
++        "ufsboota=setenv bootpart 2; setenv rootfs rofs-a; run setufsargs; ext4load scsi 0:${bootpart} ${loadaddr} fitImage && bootm ${loadaddr}; echo Error loading kernel FIT image\0"        \
++        "ufsbootb=setenv bootpart 3; setenv rootfs rofs-b; run setufsargs; ext4load scsi 0:${bootpart} ${loadaddr} fitImage && bootm ${loadaddr}; echo Error loading kernel FIT image\0"        \
++        "bootufs=if test \"${bootside}\" = \"b\"; then run ufsbootb; run ufsboota; else run ufsboota; run ufsbootb; fi\0"       \
++        "verify=yes\0"  \
++
++#endif
++
+-- 
+2.47.1
+

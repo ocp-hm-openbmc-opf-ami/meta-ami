@@ -9,7 +9,7 @@ inherit obmc-phosphor-systemd
 DEPENDS = "systemd"
 RDEPENDS:${PN} = "bash"
 
-FILESEXTRAPATHS:append := "${THISDIR}/${PN}:"
+FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SYSTEMD_SERVICE:${PN} = " set-post-code-led.service"
 

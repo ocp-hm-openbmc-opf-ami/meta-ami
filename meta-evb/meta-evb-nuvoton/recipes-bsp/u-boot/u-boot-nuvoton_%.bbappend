@@ -1,4 +1,4 @@
-FILESEXTRAPATHS:append:= "${THISDIR}/files:"
+FILESEXTRAPATHS:prepend:= "${THISDIR}/files:"
 
 SRC_URI:append = " \
 	file://0001-Adding_new_file_i2c-npcm_u-boot.patch \

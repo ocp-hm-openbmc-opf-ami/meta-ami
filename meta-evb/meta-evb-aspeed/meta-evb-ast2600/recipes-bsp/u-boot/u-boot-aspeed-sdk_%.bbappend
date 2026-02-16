@@ -1,4 +1,4 @@
-FILESEXTRAPATHS:append := "${THISDIR}/files:"
+FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
 COMPATIBLE_MACHINE = "evb-ast2600"
 
@@ -20,5 +20,8 @@ SRC_URI:append:evb-ast2600 = " \
 do_install:prepend:evb-ast2600 () {
 	cp ${WORKDIR}/fw_env_evb.config ${WORKDIR}/fw_env.config
 }
+
+SRC_URI:append = " file://0002-ast2600-dp-fw-Fix-abnormal-link-training-cmd.patch "
+SRC_URI:append = " file://0003-Updated-U-Boot-Patches-for-DP-and-VGA-Support.patch "
 
 

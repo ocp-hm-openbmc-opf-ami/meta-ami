@@ -5,9 +5,13 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 SRC_URI_EXT:append= " \
 	file://collection_ext.hpp;subdir=git/ext/include \
 	file://storage_ext.hpp;subdir=git/ext/include \
+"
+SRC_URI:append = "${@bb.utils.contains_any('IMAGE_FEATURES', 'onetree-msccraid onetree-nvme onetree-nvmebasic onetree-brcmraid onetree-brcmraid8 onetree-rtp', SRC_URI_EXT, '', d)}"
+
+SRC_URI_LOG:append= " \
         file://log_services_ext.hpp;subdir=git/ext/include \
 "
-SRC_URI:append = "${@bb.utils.contains_any('IMAGE_FEATURES', 'onetree-msccraid onetree-nvme onetree-nvmebasic onetree-brcmraid', SRC_URI_EXT, '', d)}"
+SRC_URI:append = "${@bb.utils.contains_any('IMAGE_FEATURES', 'onetree-msccraid onetree-brcmraid onetree-brcmraid8', SRC_URI_LOG, '', d)}"
 
 EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'pciesw-service', ' -Dami-pciesw=enabled','', d)}"
 EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb-ast2600', ' -Dast2600-evb=enabled','', d)}"

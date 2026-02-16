@@ -22,8 +22,8 @@ FIRST_ADD=0
 
 if [ "$STATE" == "UP" ]; then
 
-    count=`ifconfig $IFACE | grep "inet6 addr" | grep -v "Link" | awk '{print $3}' | cut -d"/" -f1 | wc -l`
-    if [ $count -eq 0 ]; then
+    count=`ip -6 addr show dev $IFACE scope global | awk '/inet6/ {split($2,a,"/"); count++} END {print count}'`
+    if [ "${count:-0}" -eq 0 ]; then
         exit 0
     fi
 
@@ -54,54 +54,32 @@ if [ "$STATE" == "UP" ]; then
     ip -6 route flush table $IFACE 2>/dev/null
 
     if [[ "$MODE" == "false" ]] || [[ "$MODE" == "ipv4" ]]; then
-        GATEWAY6=`cat /etc/systemd/network/00-bmc-$IFACE.network 2> /dev/null | grep -i "Gateway=" | grep ":" | cut -d"=" -f2`
-        ip -6 route add default via $GATEWAY6 dev $IFACE table $IFACE > /dev/null 2>&1
+        GATEWAY6=`awk -F"=" '/Gateway=/ && /:/ {print $2}' /etc/systemd/network/00-bmc-$IFACE.network`
+        [ -n "$GATEWAY6" ] && ip -6 route add default via $GATEWAY6 dev $IFACE table $IFACE > /dev/null 2>&1
     else
-        GATEWAY6=`cat $ROUTE_RULE.$IFACE"_tmp" | grep "default" | awk '{print $3}' | cut -d"/" -f 1`
+        GATEWAY6=`awk '/default/ {split($3, a, "/"); print a[1]}' $ROUTE_RULE.$IFACE"_tmp"`
         if [ -z "$GATEWAY6" ]; then
-            GATEWAY6=`cat $ROUTE_RULE.$IFACE"_tmp" | grep "nexthop" | awk '{print $3}' | cut -d"/" -f 1`
-            if [ -n "$GATEWAY6" ]; then
-                ip -6 route add default via $GATEWAY6 dev $IFACE table $IFACE > /dev/null 2>&1
-            fi
+            GATEWAY6=`awk '/nexthop/ {split($3, a, "/"); print a[1]}' $ROUTE_RULE.$IFACE"_tmp"`
+            [ -n "$GATEWAY6" ] && ip -6 route add default via $GATEWAY6 dev $IFACE table $IFACE > /dev/null 2>&1
         fi
         ip -6 route add default via $GATEWAY6 dev $IFACE table $IFACE > /dev/null 2>&1
     fi
 
-    count=`cat $ROUTE_RULE.$IFACE"_tmp" | grep -v "default" | grep -v "nexthop" | wc -l`
-    i=0
-    while ( [ $count -gt 0 ] )
+    awk '{print $1}' $ROUTE_RULE.$IFACE"_tmp" | while read ROUTE
     do
-        i=$((i + 1))
-
-        ROUTE=`cat $ROUTE_RULE.$IFACE"_tmp" | awk '{print $1}' |  awk 'NR=='$i''`
-        # echo "ROUTE = $ROUTE"
-        if [ -n "$ROUTE" ]; then
-            ip -6 route add "$ROUTE" dev $IFACE table $IFACE > /dev/null 2>&1
-        fi
-
-        count=$((count - 1))
+        [ -n "$ROUTE" ] && ip -6 route add "$ROUTE" dev $IFACE table $IFACE > /dev/null 2>&1
     done
 
     ip -6 route show table $IFACE | grep "dev $IFACE" > $ROUTE_RULE.$IFACE
-
-    count=`ifconfig $IFACE | grep "inet6 addr" | grep -v "Link" | awk '{print $3}' | cut -d"/" -f1 | wc -l`
     ip -6 rule flush table $IFACE 2>/dev/null
-    i=1
-    while ( [ $count -gt 0 ] )
-    do
-        IPV6_ADDR=`ifconfig $IFACE | grep "inet6 addr" | grep -v "Link" | awk '{print $3}' | cut -d"/" -f1 | awk 'NR=='$i''`
-        ip -6 rule add from $IPV6_ADDR table $IFACE > /dev/null 2>&1
-	IFINDEX=$(cat /sys/class/net/"$IFACE"/ifindex)
-	FILE="/run/systemd/netif/links/"$IFINDEX""
-        while IFS= read -r line; do
-            DHCPv6_ADDR=$(echo "$line" | grep "DHCP6_ADDRESS" | cut -d"=" -f2)
-            ip -6 route add "$DHCPv6_ADDR" dev $IFACE table $IFACE > /dev/null 2>&1
-            ip -6 route add "$DHCPv6_ADDR" dev $IFACE table main > /dev/null 2>&1
-        done < "$FILE"
-        i=$((i + 1))
-        count=$((count - 1))
+    IPV6_ADDRS=$(ip -6 addr show dev "$IFACE" scope global | grep inet6 | awk '{split($2,a,"/"); print a[1]}')
+    for IPV6_ADDR in $IPV6_ADDRS; do
+        if [ -n "$IPV6_ADDR" ]; then
+            ip -6 route add "$IPV6_ADDR" dev "$IFACE" table "$IFACE" > /dev/null 2>&1
+            ip -6 route add "$IPV6_ADDR" dev "$IFACE" table main > /dev/null 2>&1
+            ip -6 rule add from "$IPV6_ADDR" table "$IFACE" > /dev/null 2>&1
+        fi
     done
-
     rm $ROUTE_RULE.$IFACE"_tmp"
 
 else

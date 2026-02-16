@@ -35,14 +35,28 @@ char* base64_encode(const unsigned char* input, int length) {
 unsigned char* base64_decode(const char* input, int* out_length) {
     BIO *bio, *b64;
     int decodeLen = strlen(input);
-    unsigned char* buffer = (unsigned char*)malloc(decodeLen);
-    
+    if (decodeLen <= 0) {
+        *out_length = 0;
+        return NULL;
+    }
+    unsigned char* buffer = (unsigned char*)malloc(decodeLen + 1);
+    if (!buffer) {
+        *out_length = 0;
+        return NULL;
+    }
+
     bio = BIO_new_mem_buf(input, -1);
     b64 = BIO_new(BIO_f_base64());
     bio = BIO_push(b64, bio);
     BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL);
     
     *out_length = BIO_read(bio, buffer, decodeLen);
+    if (*out_length < 0 || *out_length > decodeLen) {
+        free(buffer);
+        BIO_free_all(bio);
+        *out_length = 0;
+        return NULL;
+    }
     BIO_free_all(bio);
     
     return buffer;
@@ -182,6 +196,14 @@ std::string encryptString(const std::string& plaintext) {
     ciphertext_len += len;
 
     EVP_CIPHER_CTX_free(ctx);
-
-    return std::string(reinterpret_cast<char*>(ciphertext.data()), ciphertext_len);
+    char* b64 = base64_encode(ciphertext.data(), ciphertext_len);
+    if (!b64)
+    {
+	    std::cerr << "Base64 encoding failed" << std::endl;
+	    return "";
+    }
+    std::string encoded(b64);
+    free(b64);
+    
+    return encoded;
 }

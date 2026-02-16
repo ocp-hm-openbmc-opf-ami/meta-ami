@@ -5,10 +5,15 @@
 
 IFACE="$1"
 STATE="$2"
+HOSTINTF=0
 RT_TABLE="/etc/iproute2/rt_tables"
 case "$IFACE" in
     bond*|bond*.*|lo)
         exit 0
+        ;;
+    hostusb*)
+        HOSTINTF=1
+        MODE="ipv4"
         ;;
     *)
         if ! [ -f "/etc/systemd/network/00-bmc-$IFACE.network" ]; then
@@ -82,23 +87,16 @@ if [ "$STATE" == "UP" ]; then
 
     if [[ "$MODE" == "false" ]] || [[ "$MODE" == "ipv6" ]]; then
         GATEWAY=`cat /etc/systemd/network/00-bmc-$IFACE.network 2> /dev/null | grep -i "Gateway=" | grep -v ":" | cut -d"=" -f2`
-    else
-        GATEWAY=`route -A inet | grep "$IFACE" | grep "UG" | awk '{print $2}'`
+    elif [ $HOSTINTF -ne 1 ]; then
+        GATEWAY=`route -A inet -n | grep "$IFACE" | grep "UG" | awk '{print $2}'`
     fi
 
-    if [[ -z "$IP" ]] || [[ -z "$NETMASK" ]] || [[ -z "$GATEWAY" ]]; then
+    if [[ -z "$IP" ]] || [[ -z "$NETMASK" ]] ; then
         exit 0
     fi
 
     CIDR=$(MaskToCidr $NETMASK)
     NETADDR=$(NetworkAddress $IP $NETMASK $CIDR)
-
-    METRIC=0
-
-    ROUTE=`route -n | grep UG | grep $IFACE | awk '{print $2}' | uniq`
-    if [ -z "$ROUTE" ]; then
-        route add default gw $GATEWAY dev $IFACE metric $METRIC 2> /dev/null
-    fi
 
     grep -q "$IFACE" "$RT_TABLE"
     if [ $? -ne 0 ]; then
@@ -106,8 +104,28 @@ if [ "$STATE" == "UP" ]; then
         echo "$(($NUM + 255)) $IFACE" >> "$RT_TABLE"
     fi
 
-    ip route add default via $GATEWAY dev $IFACE table $IFACE metric $((METRIC++)) 2> /dev/null
-    ip route add "$NETADDR/$CIDR" dev $IFACE table $IFACE 2> /dev/null
+    if [ $HOSTINTF -eq 1 ]; then
+        if [ "$IFACE" == "hostusb0" ]; then
+            ip route add 169.254.0.18 dev $IFACE table $IFACE 2> /dev/null
+            ip route add 169.254.0.18 via 169.254.0.17 dev $IFACE metric 1 2> /dev/null
+        elif [ "$IFACE" == "hostusb1" ]; then
+            ip route add 169.254.10.18 dev $IFACE table $IFACE 2> /dev/null
+            ip route add 169.254.10.18 via 169.254.10.17 dev $IFACE metric 1 2> /dev/null
+        fi
+    else
+        if [[ -z "$GATEWAY" ]]; then
+            exit 0
+        fi
+
+        METRIC=0
+        ROUTE=`route -n | grep UG | grep $IFACE | awk '{print $2}' | uniq`
+        if [ -z "$ROUTE" ]; then
+            route add default gw $GATEWAY dev $IFACE metric $METRIC 2> /dev/null
+        fi
+        ip route add default via $GATEWAY dev $IFACE table $IFACE metric $((METRIC++)) 2> /dev/null
+        ip route add "$NETADDR/$CIDR" dev $IFACE table $IFACE 2> /dev/null
+    fi
+
     ip rule del table $IFACE 2>/dev/null
     ip rule add from $IP table $IFACE 2> /dev/null
 

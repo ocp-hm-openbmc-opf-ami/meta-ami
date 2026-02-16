@@ -1,0 +1,99 @@
+From 5b7aefc12fee3d94a21110a64d42163266d8fbe1 Mon Sep 17 00:00:00 2001
+From: Billy Tsai <billy_tsai@aspeedtech.com>
+Date: Thu, 20 Nov 2025 17:24:43 +0800
+Subject: [PATCH] gpio: aspeed: add pinctrl-based GPIO request support
+
+Integrates pinctrl support into the GPIO driver by wiring up
+the pinctrl gpio_request callback and implementing the GPIO request
+enable logic for AST2700 SoC. Ensures proper configuration of
+GPIO pins through pinctrl.
+
+Signed-off-by: Billy Tsai <billy_tsai@aspeedtech.com>
+Change-Id: I12142fcb817cbb2b77d30faf854d858df001544e
+(cherry picked from commit fdb2e20becc7ec3be0ca39d0a2d0d165dcbd4e42)
+Signed-off-by: Vasanthakumar K <vasanthakumark@ami.com>
+---
+ drivers/gpio/gpio-aspeed-g7.c                 |  2 ++
+ drivers/pinctrl/aspeed/pinctrl_ast2700_soc1.c | 25 +++++++++++++++++++
+ 2 files changed, 27 insertions(+)
+
+diff --git a/drivers/gpio/gpio-aspeed-g7.c b/drivers/gpio/gpio-aspeed-g7.c
+index 4e6f1f0514a6..82ba7fd111f0 100644
+--- a/drivers/gpio/gpio-aspeed-g7.c
++++ b/drivers/gpio/gpio-aspeed-g7.c
+@@ -11,6 +11,7 @@
+ #include <common.h>
+ #include <clk.h>
+ #include <dm.h>
++#include <dm/pinctrl.h>
+ #include <asm/io.h>
+ #include <linux/bug.h>
+ #include <linux/sizes.h>
+@@ -119,6 +120,7 @@ static int aspeed_gpio_get_function(struct udevice *dev, unsigned int offset)
+ }
+ 
+ static const struct dm_gpio_ops aspeed_gpio_ops = {
++	.request = pinctrl_gpio_request,
+ 	.direction_input	= aspeed_gpio_direction_input,
+ 	.direction_output	= aspeed_gpio_direction_output,
+ 	.get_value		= aspeed_gpio_get_value,
+diff --git a/drivers/pinctrl/aspeed/pinctrl_ast2700_soc1.c b/drivers/pinctrl/aspeed/pinctrl_ast2700_soc1.c
+index 4301e6858007..1a2d84b8c0f8 100644
+--- a/drivers/pinctrl/aspeed/pinctrl_ast2700_soc1.c
++++ b/drivers/pinctrl/aspeed/pinctrl_ast2700_soc1.c
+@@ -3,6 +3,7 @@
+  * Copyright (C) ASPEED Technology Inc.
+  */
+ 
++#include "dt-bindings/gpio/aspeed-gpio.h"
+ #include <common.h>
+ #include <errno.h>
+ #include <asm/arch/pinctrl.h>
+@@ -11,6 +12,9 @@
+ #include <dm/pinctrl.h>
+ #include <linux/bitops.h>
+ #include <linux/err.h>
++#include <linux/bitfield.h>
++
++#define SCU_MULTI_FUNC_SEL_BASE 0x400
+ 
+ /*
+  * This driver works with very simple configuration that has the same name
+@@ -448,6 +452,26 @@ static int ast2700_soc1_pinctrl_group_set(struct udevice *dev,
+ 	return 0;
+ }
+ 
++static int ast2700_soc1_pinctrl_gpio_request_enable(struct udevice *dev, unsigned int selector)
++{
++	struct aspeed_pinctrl_priv *priv = dev_get_priv(dev);
++	u32 offset = SCU_MULTI_FUNC_SEL_BASE;
++	u32 reg = offset + (selector / 8) * 4;
++	u32 shift = (selector % 8) * 4;
++	u32 mask = 0x7 << shift;
++	u32 val;
++
++	/* GPIO function is 0, Expect GPIOY and GPIOZ */
++	if (selector >= ASPEED_GPIO(Y, 0) && selector <= ASPEED_GPIO(Z, 7))
++		val = 1 << shift;
++	else
++		val = 0 << shift;
++
++	clrsetbits_le32(priv->base + reg, mask, val);
++
++	return 0;
++}
++
+ static struct pinctrl_ops ast2700_soc1_pinctrl_ops = {
+ 	.set_state = pinctrl_generic_set_state,
+ 	.get_groups_count = ast2700_soc1_pinctrl_get_groups_count,
+@@ -455,6 +479,7 @@ static struct pinctrl_ops ast2700_soc1_pinctrl_ops = {
+ 	.get_functions_count = ast2700_soc1_pinctrl_get_groups_count,
+ 	.get_function_name = ast2700_soc1_pinctrl_get_group_name,
+ 	.pinmux_group_set = ast2700_soc1_pinctrl_group_set,
++	.gpio_request_enable = ast2700_soc1_pinctrl_gpio_request_enable,
+ };
+ 
+ static const struct udevice_id ast2700_soc1_pinctrl_ids[] = {
+-- 
+2.34.1
+

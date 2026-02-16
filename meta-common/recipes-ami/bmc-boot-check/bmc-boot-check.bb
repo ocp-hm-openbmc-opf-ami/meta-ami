@@ -8,6 +8,7 @@ SRC_URI = "file://bmc-boot-check.sh \
            "
 
 SRC_URI_NON_PFR_HW_FAILSAFE_BOOT:append = " file://bmc-alternateboot-check.sh \
+					    file://bmc-alternateboot-check_ast2700.sh \
                                             "
 
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-hw-failsafe-boot', SRC_URI_NON_PFR_HW_FAILSAFE_BOOT,'', d)}"
@@ -26,7 +27,13 @@ do_install() {
 
 do_install:append() {
     if ${@bb.utils.contains('IMAGE_FEATURES', 'onetree-hw-failsafe-boot', 'true', 'false', d)}; then
-        install -m 0755 ${WORKDIR}/bmc-alternateboot-check.sh ${D}/${bindir}/
+#Dual Image for At2700
+	   if [ "${MACHINE}" = "ast2700-default" ]; then
+        	install -m 0755 ${WORKDIR}/bmc-alternateboot-check_ast2700.sh ${D}/${bindir}/bmc-alternateboot-check.sh
+    	else
+        	install -m 0755 ${WORKDIR}/bmc-alternateboot-check.sh ${D}/${bindir}/
+    	fi
+
     fi
 }
 

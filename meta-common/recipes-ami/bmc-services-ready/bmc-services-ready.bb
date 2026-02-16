@@ -3,7 +3,7 @@ DESCRIPTION = "Installs a script to monitor service status with configurable int
 LICENSE = "Proprietary"
 LIC_FILES_CHKSUM = "file://${AMIBASE}/COPYING.AMI;md5=65a69a674f34a9f30737c9f0abd4fc5c"
 
-FILESEXTRAPATHS:append := "${THISDIR}/files:"
+FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
 SRC_URI = "file://bmc-services-ready.sh \
            file://bmc-services-ready.conf \

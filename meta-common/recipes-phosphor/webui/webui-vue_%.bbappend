@@ -9,13 +9,13 @@ SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/webui-vue;protocol=https;
 
 # Use AUTOREV to get the latest revision from the repository
 # SRCREV = "${AUTOREV}"
-SRCREV = "71ca7573230427d2a4c94e380ca7e93f61c23404"
+SRCREV = "bd662ae7302ad90ff2d0606d180486ddfb7d6cf7"
 
 SRC_URI += " \
     file://login-company-logo.svg \
     file://logo-header.svg \
     "
-FILESEXTRAPATHS:append := "${THISDIR}/${PN}:"
+FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 do_compile:prepend() {
     bbplain "****************************** Features Enabled in This Firmware Image ***********************************************"
     i=1
@@ -50,10 +50,24 @@ do_compile:prepend() {
         i=$(expr "$i" + 1)
     done
 
+    ALL_VUE_APP_VARS=$(env | awk -F= '/^VUE_APP/ {print $1}')
+
+    for var in $ALL_VUE_APP_VARS; do
+        value="$(env | grep "^${var}=" | cut -d= -f2-)"
+
+        if grep -q "^${var}=" ${S}/.env.intel; then
+            # Replace existing line with new value (quoted)
+            sed -i "s|^${var}=.*|${var}=\"${value}\"|" ${S}/.env.intel
+        else
+            # Append new variable
+            echo "${var}=\"${value}\"" >> ${S}/.env.intel
+        fi
+    done
+
     bbwarn "Generated environment variables in .env file"
 
     cp -vf ${S}/.env.intel ${S}/.env
     while IFS= read -r line; do
-    bbplain "$line"
+        bbplain "$line"
     done < ${S}/.env.intel
 }

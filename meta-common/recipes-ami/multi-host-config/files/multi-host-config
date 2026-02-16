@@ -1,0 +1,132 @@
+#!/bin/bash
+
+# Multi Host Service, object, and interface to monitor
+readonly SERVICE="xyz.openbmc_project.Settings"
+readonly OBJECT="/xyz/openbmc_project/control/HostMode"
+readonly INTERFACE="xyz.openbmc_project.Control.HostMode"
+readonly CURRENT_MODE="CurrentMode"
+readonly USER_MODE="Mode"
+
+# Directory for multi host configuration files
+readonly CONFIG_DIR="/etc/multi-host-config"
+
+# Directory for host-specific configurations
+readonly HOST_CONFIG_DIR="$CONFIG_DIR/hosts.d"
+
+# Directory for runtime data
+readonly MULTI_HOST_CONFIG_DIR="/var/lib/multi-host-config"
+readonly MULTI_HOST_CURRENT_MODE_FILE="current-mode"
+
+# Host names
+readonly CONF_SINGLE_HOST="host0.conf"
+readonly CONF_HOST1="host1.conf"
+readonly CONF_HOST2="host2.conf"
+
+# d-bus Constants
+readonly BASE_CHASSIS_PATH="/xyz/openbmc_project/state/chassis"
+readonly CHASSIS_PATH_0="${BASE_CHASSIS_PATH}0"
+readonly CHASSIS_PATH_1="${BASE_CHASSIS_PATH}1"
+readonly CHASSIS_PATH_2="${BASE_CHASSIS_PATH}2"
+readonly TRANSITION_OFF="xyz.openbmc_project.State.Chassis.Transition.Off"
+readonly CHASSIS_INTERFACE="xyz.openbmc_project.State.Chassis"
+
+readonly CHASSIS_SERVICE_0="${CHASSIS_INTERFACE}0"
+readonly CHASSIS_SERVICE_1="${CHASSIS_INTERFACE}1"
+readonly CHASSIS_SERVICE_2="${CHASSIS_INTERFACE}2"
+
+
+# Function to monitor multi-host state changes via D-Bus property
+monitor_multi_host_state_change() {
+    dbus-monitor --system "type='signal',\
+        interface='org.freedesktop.DBus.Properties',\
+        member='PropertiesChanged',\
+        path='$OBJECT',\
+        arg0namespace='$INTERFACE'" | while read -r line; do
+        if echo "$line" | grep -q "string \"Mode\""; then
+            user_config_mode=$(busctl get-property $SERVICE $OBJECT $INTERFACE $USER_MODE | awk '{print $2}')
+            current_mode=$(cat "$MULTI_HOST_CONFIG_DIR/$MULTI_HOST_CURRENT_MODE_FILE")
+            # Check if the mode configured by user is same as the current mode
+            if [[ $user_config_mode != $current_mode ]]; then
+                echo "Host mode changed"
+
+                setMode $user_config_mode
+                if [ $? == 1 ]; then
+                    echo "Host mode configured: $user_config_mode"
+                    reboot
+                fi
+            else
+                echo "No Mode change detected..continue monitoring!!"
+            fi
+        fi
+        done
+}
+
+# Function to configure the boot mode
+setMode() {
+    local mode="$1"
+
+    if [[ "$mode" == 0 ]]; then
+        # Create host0 file
+        touch "$HOST_CONFIG_DIR/$CONF_SINGLE_HOST"
+
+        # Remove host1 and host2 file
+        rm -rf $HOST_CONFIG_DIR/$CONF_HOST1
+        rm -rf $HOST_CONFIG_DIR/$CONF_HOST2
+
+        # Set the new current mode
+        busctl set-property $SERVICE $OBJECT $INTERFACE $CURRENT_MODE q $mode
+        echo $mode > $MULTI_HOST_CONFIG_DIR/$MULTI_HOST_CURRENT_MODE_FILE
+        return 1
+    elif [[ "$mode" == 1 ]]; then
+        # Create host1 and host2 files
+        touch $HOST_CONFIG_DIR/$CONF_HOST1
+        touch $HOST_CONFIG_DIR/$CONF_HOST2
+
+        # Remove host0 config if present
+        rm -rf $HOST_CONFIG_DIR/$CONF_SINGLE_HOST
+
+        # Set the new current mode
+        busctl set-property $SERVICE $OBJECT $INTERFACE $CURRENT_MODE q $mode
+        echo $mode > $MULTI_HOST_CONFIG_DIR/$MULTI_HOST_CURRENT_MODE_FILE
+        return 1
+    else
+        echo "Invalid mode: $mode"
+        return 0
+    fi
+}
+
+# Main function
+main() {
+    # Create the directory if it doesn't exist
+    mkdir -p "$CONFIG_DIR"
+    mkdir -p "$MULTI_HOST_CONFIG_DIR"
+    mkdir -p "$HOST_CONFIG_DIR"
+
+    if [ ! -e $MULTI_HOST_CONFIG_DIR/$MULTI_HOST_CURRENT_MODE_FILE ]; then
+        echo "First time boot or factory reset"
+
+        current_mode=0
+        touch $MULTI_HOST_CONFIG_DIR/$MULTI_HOST_CURRENT_MODE_FILE
+        echo 0 > $MULTI_HOST_CONFIG_DIR/$MULTI_HOST_CURRENT_MODE_FILE
+
+    else
+        current_mode=$(cat "$MULTI_HOST_CONFIG_DIR/$MULTI_HOST_CURRENT_MODE_FILE")
+    fi
+
+    # Configure the curent mode
+    echo "DEBUG: Setting current mode $current_mode"
+    setMode $current_mode
+
+    # Monitor the D-Bus property change
+    echo "DEBUG: Monitoring D-Bus"
+    monitor_multi_host_state_change
+
+    if [ $? == 1 ]; then
+        reboot;
+    fi
+
+    echo "Multi-host configuration failed"
+}
+
+# Call the main function
+main

@@ -47,3 +47,4 @@ PACKAGECONFIG[pfr-5-0-secure-test-case] = "-Dsecure_test_case=enabled, -Dsecure_
 
 # Workaround
 do_collect_spdx_deps[nostamp] = "1"
+PACKAGECONFIG:remove:oks-features = "attestation pfr-5-0-secure-conn pfr-5-0-secure-test-case"

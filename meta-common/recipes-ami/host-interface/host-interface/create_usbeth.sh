@@ -1,5 +1,6 @@
 #! /bin/bash
 
+set -euo pipefail
 #set -x # Debug mode
 
 eth_conf_directory="/sys/kernel/config/usb_gadget/eth"
@@ -13,22 +14,25 @@ detect_platform() {
         prefix="1e6a0000.usb-vhub:p"
         port_count=7
         port_start=1
+
+        return 0
     fi
 
-    # AST27xx
-    #TODO: To support dual node, the detection case for 2700/2750 needs to be refined.
+    # AST27xx node 0
     if [ -e "/sys/bus/platform/devices/12011000.usb-vhub" ] || [ -e "/sys/bus/platform/devices/12060000.usb-vhub" ]; then
 
         if [ -e "/sys/bus/platform/devices/12011000.usb-vhub" ]; then
-            prefix="12011000.usb-vhub:p"  # For AST2700 A0 (USB over PCIE)
+            prefix="12011000.usb-vhub:p"  # For PCIE-XHCI-USB
         fi
 
         if [ -e "/sys/bus/platform/devices/12060000.usb-vhub" ]; then
-            prefix="12060000.usb-vhub:p"  # For AST2700 A1 (Physical-USB)
+            prefix="12060000.usb-vhub:p"  # For Physical-USB or PCIE-EHCI-USB
         fi
 
         port_count=7
         port_start=1
+
+        return 0
     fi
 
     # NPCM845
@@ -36,7 +40,11 @@ detect_platform() {
         prefix="ci_hdrc."
         port_count=9
         port_start=0
+
+        return 0
     fi
+ 
+    exit 1
 }
 
 generate_random_mac() {
@@ -112,31 +120,31 @@ create_eth() {
     echo "1234567890" > strings/0x409/serialnumber
 
     # Create interface for ECM and configure it.
-    mkdir functions/ecm.usb0
-    echo "$dev_mac" > functions/ecm.usb0/dev_addr
-    echo "$host_mac" > functions/ecm.usb0/host_addr
+    mkdir functions/ecm.ami
+    echo "$dev_mac" > functions/ecm.ami/dev_addr
+    echo "$host_mac" > functions/ecm.ami/host_addr
     mkdir configs/c.2
     echo 0 > configs/c.2/MaxPower
     echo 0xC0 > configs/c.2/bmAttributes
     mkdir configs/c.2/strings/0x409
 
     # Rename
-    echo hostusb%d > functions/ecm.usb0/ifname
+    echo hostusb0 > functions/ecm.ami/ifname
 
     # Create configuration for rndis
-    mkdir functions/rndis.usb0
-    echo "$dev_mac" > functions/rndis.usb0/dev_addr
-    echo "$host_mac" > functions/rndis.usb0/host_addr
-    echo RNDIS > functions/rndis.usb0/os_desc/interface.rndis/compatible_id
-    echo 5162001 > functions/rndis.usb0/os_desc/interface.rndis/sub_compatible_id
+    mkdir functions/rndis.ami
+    echo "$dev_mac" > functions/rndis.ami/dev_addr
+    echo "$host_mac" > functions/rndis.ami/host_addr
+    echo RNDIS > functions/rndis.ami/os_desc/interface.rndis/compatible_id
+    echo 5162001 > functions/rndis.ami/os_desc/interface.rndis/sub_compatible_id
     mkdir configs/c.1
     echo 0 > configs/c.1/MaxPower
     echo 0xC0 > configs/c.1/bmAttributes
     mkdir configs/c.1/strings/0x409
     
     # Link ECM and RNDIS functions to their respective configurations
-    ln -s functions/ecm.usb0 configs/c.2/
-    ln -s functions/rndis.usb0 configs/c.1/
+    ln -s functions/ecm.ami configs/c.2/
+    ln -s functions/rndis.ami configs/c.1/
     ln -s configs/c.1 os_desc/c.1
 }
 
@@ -145,7 +153,7 @@ connect_eth() {
 
     while (( port_index < port_start + port_count )); do
         local device="/sys/class/udc/${prefix}${port_index}/device"
-        local gadget
+        local gadget=""
         
         gadget=$(echo "$device"/gadget* 2>/dev/null | awk -F'/' '{print $NF}' || true)
         if [[ -n "$gadget" ]]; then
@@ -159,6 +167,8 @@ connect_eth() {
         
         port_index=$((port_index + 1))
     done
+
+    exit 1
 }
 
 disconnect_eth() {

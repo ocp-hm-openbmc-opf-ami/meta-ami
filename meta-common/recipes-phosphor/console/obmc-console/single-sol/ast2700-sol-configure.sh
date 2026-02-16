@@ -16,8 +16,6 @@ setup_routing() {
     echo "Enabling UART routing"
 
     route uart2 uart0
-    route uart0 uart2
-    route io0 uart3
     route uart3 io0
 }
 
@@ -46,7 +44,10 @@ setup() {
 
 teardown() {
     echo "Disabling UART routing"
-    route io1 uart1
+    
+    route io0 uart0
+    route io2 uart2
+    route io3 uart3
 }
 
 $1

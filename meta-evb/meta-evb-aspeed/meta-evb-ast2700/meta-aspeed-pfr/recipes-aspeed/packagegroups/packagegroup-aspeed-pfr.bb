@@ -20,4 +20,4 @@ RDEPENDS:${PN}-apps = " \
     pfr-mctp-i3c \
     pfr-i3ctool \
     "
-
+RDEPENDS:${PN}-apps:remove:oks-ast2700 = " spdm-emu"

@@ -3,7 +3,6 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI_NON_PFR:append = "file://0001-Add-Purpose-for-other-components-and-add-image-mtd-s.patch \
                    file://0004-Add-write-public-key-in-image-support.patch \
-                   file://fwupdinband@.service \
 		             file://0005-Add-support-to-applytime-property.patch \
                    file://0005-Patch-to-remove-the-image-when-verification-fails-nonpfr.patch \
                    file://0006-Delete-Update-image-dbus-path-on-success-or-failure.patch \
@@ -12,10 +11,16 @@ SRC_URI_NON_PFR:append = "file://0001-Add-Purpose-for-other-components-and-add-i
 		   file://0009-fixed-Firmware-update-security-issue-Unsafe-Unpackin.patch \
          file://0010-add-condition-to-skip-the-removal-of-BMC-obj-path-du.patch \
 		   file://0010-update-whitelist-file-based-on-user-selection-and-tr.patch \
-         file://0011-Add-supoort-for-image-runtime-signing-for-intel-plat.patch \
          file://0011-Add-HttpPushUriTarget-and-busy-property-under-softwa.patch \
          file://0012-after-update-whitelist-Clear-files-if-user-not-selec.patch \
 		"
+
+SRC_URI_NON_PFR:append:intel-ast2600 = " file://0011-Add-supoort-for-image-runtime-signing-for-intel-plat.patch \
+                                             "
+
+SRC_URI:append = " file://fwupdinband@.service \
+         file://inband-fwupd.sh \
+"
 
 EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', bb.utils.contains('BBFILE_COLLECTIONS', 'intel-features', ' -Dfwupd-intel-features=enabled','', d), d)}"
 SRC_URI:append = " ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
@@ -49,19 +54,26 @@ SRC_URI_NON_PFR_DUAL:append = " file://obmc-flash-bmc-prepare-for-sync.service.i
 SRC_URI:append = " ${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', SRC_URI_NON_PFR_DUAL , '', d)}"
 FILES:${PN}-updater:append:intel-ast2600 = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/intel-flash-bmc ', '', d)}" 
 FILES:${PN}-updater:append:evb-ast2600 = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/ami-flash-bmc ', '', d)}" 
+FILES:${PN}-updater:append:ast2700-default = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/ami-flash-bmc ', '', d)}"
 FILES:${PN}-updater:append:intel-ast2600 = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${systemd_unitdir}/system/obmc-flash-bmc-static-mount-alt.service ', '', d)}" 
 FILES:${PN}-updater:append = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/detect-slot-aspeed ', '', d)}" 
 FILES:${PN}-updater:append = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/reset-cs0-aspeed ', '', d)}" 
-FILES:${PN}-updater:append = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/sync-once.sh ', '', d)}" 
+FILES:${PN}-updater:append = "${@bb.utils.contains('PACKAGECONFIG', 'sync_bmc_files', ' ${bindir}/sync-once.sh ', '', d)}" 
+FILES:${PN}-updater:append = "${bindir}/inband-fwupd.sh"
 
 do_install:append () {
+      install -m 0755 ${WORKDIR}/inband-fwupd.sh ${D}${bindir}/inband-fwupd.sh
+      install -m 0644 ${WORKDIR}/fwupdinband@.service ${D}${systemd_unitdir}/system/fwupd@.service
       if ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', 'false', 'true', d)}; then
-         install -m 0644 ${WORKDIR}/fwupdinband@.service ${D}${systemd_unitdir}/system/fwupd@.service
          if ${@bb.utils.contains('PACKAGECONFIG','static-dual-image','true','false',d)}; then
             install -m 0755 ${WORKDIR}/detect-slot-aspeed ${D}${bindir}/detect-slot-aspeed
-            install -m 0755 ${WORKDIR}/synclist ${D}/etc/synclist
-	    install -m 0644 ${WORKDIR}/obmc-flash-bmc-prepare-for-sync.service.in  ${D}${systemd_unitdir}/system/obmc-flash-bmc-prepare-for-sync.service
-            install -m 0644 ${WORKDIR}/xyz.openbmc_project.Software.Sync.service.in  ${D}${systemd_unitdir}/system/xyz.openbmc_project.Software.Sync.service	
+            if ${@bb.utils.contains('PACKAGECONFIG','sync_bmc_files','true','false',d)}; then
+               install -m 0755 ${WORKDIR}/synclist ${D}/etc/synclist
+               install -m 0644 ${WORKDIR}/obmc-flash-bmc-prepare-for-sync.service.in  ${D}${systemd_unitdir}/system/obmc-flash-bmc-prepare-for-sync.service
+               install -m 0644 ${WORKDIR}/xyz.openbmc_project.Software.Sync.service.in  ${D}${systemd_unitdir}/system/xyz.openbmc_project.Software.Sync.service	
+               touch ${D}/etc/sync-enable
+            fi
+	
          fi  
       fi
 }
@@ -70,16 +82,21 @@ do_install:append:intel-ast2600 () {
    if ${@bb.utils.contains('PACKAGECONFIG','static-dual-image','true','false',d)}; then
         install -m 0644 ${WORKDIR}/intel-flash-bmc-static-mount-alt.service.in  ${D}${systemd_unitdir}/system/obmc-flash-bmc-static-mount-alt.service
         install -m 0755 ${WORKDIR}/intel-flash-bmc ${D}${bindir}/intel-flash-bmc
-        install -m 0755 ${WORKDIR}/sync-once.sh ${D}${bindir}/sync-once.sh
+        if ${@bb.utils.contains('PACKAGECONFIG','sync_bmc_files','true','false',d)}; then
+           install -m 0755 ${WORKDIR}/sync-once.sh ${D}${bindir}/sync-once.sh
+        fi
    fi
 }
 
-do_install:append:evb-ast2600() {
-   if ${@bb.utils.contains('PACKAGECONFIG','static-dual-image','true','false',d)}; then
-        install -m 0644 ${WORKDIR}/obmc-flash-bmc-static-mount-alt.service.in  ${D}${systemd_unitdir}/system/obmc-flash-bmc-static-mount-alt.service
-        install -m 0755 ${WORKDIR}/ami-flash-bmc ${D}${bindir}/ami-flash-bmc
-        install -m 0755 ${WORKDIR}/detect-slot-aspeed ${D}${bindir}/reset-cs0-aspeed
-   fi
+do_install:append() {
+   case "${MACHINE}" in evb-ast2600|ast2700-default)
+      if ${@bb.utils.contains('PACKAGECONFIG','static-dual-image','true','false',d)}; then
+         install -m 0644 ${WORKDIR}/obmc-flash-bmc-static-mount-alt.service.in  ${D}${systemd_unitdir}/system/obmc-flash-bmc-static-mount-alt.service
+         install -m 0755 ${WORKDIR}/ami-flash-bmc ${D}${bindir}/ami-flash-bmc
+         install -m 0755 ${WORKDIR}/detect-slot-aspeed ${D}${bindir}/reset-cs0-aspeed
+      fi
+   ;;
+   esac
 }
 
 PACKAGECONFIG[software-update-dbus-interface] = ""

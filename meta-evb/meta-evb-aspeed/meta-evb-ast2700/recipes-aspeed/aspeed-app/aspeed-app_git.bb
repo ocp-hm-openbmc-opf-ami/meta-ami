@@ -7,13 +7,17 @@ SRC_URI = "git://github.com/AspeedTech-BMC/aspeed_app.git;protocol=https;branch=
 
 PV = "1.0+git"
 
-# Tag for v00.01.16
-SRCREV = "e74fc6e1fa56c16feb2fe32ccd6ca57c055684ef"
+# Tag for v00.01.18
+SRCREV = "ce86862d890940cb4c53ec785f58e2e30d894b7f"
 BRANCH = "master"
 
 S = "${WORKDIR}/git"
 
 DEPENDS += "openssl"
 RDEPENDS:${PN} += "openssl"
+
+EXTRA_OEMESON:append:aspeed-g7 = " \
+    -Dotp-platform='ast2700' \
+"
 
 FILES:${PN}:append = " /usr/share/* "

@@ -11,20 +11,6 @@ if [ "$1" = "start" ]; then
     exit 0
 fi
 
-# clear boot source
-ADDRESS=0x1E620064
-
-VAL=$(devmem $ADDRESS)
-valBootSource=$((($VAL >> 4) & 1))
-if [[ $valBootSource == 1 ]]
-then
-    VAL=$(cat /proc/mtd | awk '{print $4}' | awk -F'"' '$2=="alt-u-boot" {print $2}')
-    if [[ -n $VAL ]]
-    then
-        devmem $ADDRESS 32 0xEA0000
-        echo "0" > /run/media/slot
-    fi
-fi
 
 # Get the current time
 current_time=$(date +"%s")
@@ -104,4 +90,19 @@ if [ -d "$directory" ]; then
     done
 else
     echo "Directory $directory does not exist."
+fi
+
+# clear boot source
+ADDRESS=0x1E620064
+
+VAL=$(devmem $ADDRESS)
+valBootSource=$((($VAL >> 4) & 1))
+if [[ $valBootSource == 1 ]]
+then
+    VAL=$(cat /proc/mtd | awk '{print $4}' | awk -F'"' '$2=="alt-u-boot" {print $2}')
+    if [[ -n $VAL ]]
+    then
+        devmem $ADDRESS 32 0xEA0000
+        echo "0" > /run/media/slot
+    fi
 fi

@@ -17,7 +17,15 @@ static const char* aesIVFile = "/etc/radiusclient-ng/AESIV";
 static inline unsigned char* base64_decode(const char* input, int* out_length) {
     BIO *bio, *b64;
     int decodeLen = strlen(input);
-    unsigned char* buffer = (unsigned char*)malloc(decodeLen);
+    if (decodeLen <= 0) {
+        *out_length = 0;
+        return NULL;
+    }
+    unsigned char* buffer = (unsigned char*)malloc(decodeLen + 1);
+    if (!buffer) {
+        *out_length = 0;
+        return NULL;
+    }
 
     bio = BIO_new_mem_buf(input, -1);
     b64 = BIO_new(BIO_f_base64());
@@ -25,6 +33,12 @@ static inline unsigned char* base64_decode(const char* input, int* out_length) {
     BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL);
 
     *out_length = BIO_read(bio, buffer, decodeLen);
+    if (*out_length < 0 || *out_length > decodeLen) {
+        free(buffer);
+        BIO_free_all(bio);
+        *out_length = 0;
+        return NULL;
+    }
     BIO_free_all(bio);
 
     return buffer;

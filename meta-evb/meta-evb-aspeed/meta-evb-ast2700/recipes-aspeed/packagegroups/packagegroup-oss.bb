@@ -2,7 +2,7 @@ SUMMARY = "Packagegroup for Open Source"
 
 PR = "r1"
 
-PACKAGE_ARCH="${TUNE_PKGARCH}"
+PACKAGE_ARCH = "${TUNE_PKGARCH}"
 
 inherit packagegroup
 
@@ -50,6 +50,10 @@ RDEPENDS:${PN}-apps = " \
     mctp \
     memtester \
     coremark \
+    picocom \
+    usbutils \
+    usbutils-python \
+    dbus-tools \
     "
 
 # The size of opkg package manager is 6XX KB.
@@ -70,6 +74,7 @@ RDEPENDS:${PN}-intel-pmci = " \
     "
 
 # Only install in AST26xx and AST27xx series rofs as the free space of AST25xx rofs is not enough.
+# AST2500 remove usbutils and uses busybox lsusb.
 RDEPENDS:${PN}-apps:remove:aspeed-g5 = " \
     mdio-tools \
     i3c-tools \
@@ -82,6 +87,9 @@ RDEPENDS:${PN}-apps:remove:aspeed-g5 = " \
     pciutils \
     dhrystone \
     nvme-cli \
+    picocom \
+    usbutils \
+    usbutils-python \
     "
 
 SUMMARY:${PN}-libs = "Open Source Library"

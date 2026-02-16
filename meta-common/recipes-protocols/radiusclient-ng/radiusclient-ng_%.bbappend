@@ -15,6 +15,7 @@ SRC_URI += " \
     file://0006-RADIUS-Auth-Init-Info.patch  \
     file://0007-Coverity-Fix.patch  \
     file://0008-Encrypt-and-Decrypt-the-password.patch \
+    file://0009-Fix-For-Radius-Decryption-Failed.patch \
     "
 
 LDFLAGS += "-lpam -lssl -lcrypto"

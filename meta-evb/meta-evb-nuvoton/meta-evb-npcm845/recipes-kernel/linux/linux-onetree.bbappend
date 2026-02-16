@@ -50,7 +50,7 @@ SRC_URI += "file://dts-arbel-npcm845/ \
             "
 SRC_URI:remove = "file://Enable_I3C.cfg"
 
-do_configure:append:evb-npcm845 (){
+do_configure:append (){
 
     cp ${WORKDIR}/dts-arbel-npcm845/nuvoton-npcm845-evb.dts ${S}/arch/arm64/boot/dts/nuvoton/
     cp -rf ${WORKDIR}/i3c-arbel-npcm845/drivers/i3c/* ${S}/drivers/i3c/

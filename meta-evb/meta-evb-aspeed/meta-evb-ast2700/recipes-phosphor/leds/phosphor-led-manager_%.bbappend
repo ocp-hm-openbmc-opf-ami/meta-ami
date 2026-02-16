@@ -1,11 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI += "file://ast2600-led-group-config.json"
+PACKAGECONFIG:remove = " use-json use-lamp-test"
 
-PACKAGECONFIG:append = " use-json use-lamp-test"
-
-do_install:append() {
-        install -m 0644 ${WORKDIR}/ast2600-led-group-config.json \
-            ${D}${datadir}/phosphor-led-manager/led-group-config.json
-}
+PACKAGECONFIG:append = " use-yaml"
 

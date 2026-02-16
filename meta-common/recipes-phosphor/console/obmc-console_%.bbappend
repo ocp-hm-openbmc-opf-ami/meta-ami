@@ -3,7 +3,7 @@ SOL_PATH = "${@'${THISDIR}/${PN}/multi-sol' if d.getVar('MULTI_SOL_ENABLED') == 
 FILESEXTRAPATHS:prepend := "${SOL_PATH}:"
 RDEPENDS:${PN} += "bash"
 
-SRCREV = "b965c2201a52ed66efe06ee4ec6c2c51a16b453e"
+SRCREV = "d972ab558efb5d23790c4638a3012de6c06a7fad"
 
 Single_SOL_SRC_URI = "file://single_sol_conf.ttyS2.conf \
 		     "
@@ -21,11 +21,10 @@ Multi_SOL_SRC_URI = " \
 	"
 SRC_URI += "${@bb.utils.contains('MULTI_SOL_ENABLED', '1', '${Multi_SOL_SRC_URI}', '${Single_SOL_SRC_URI}' , d)}"
 
-SRC_URI += " file://0001-fix-for-solssh-issue.patch \
-             file://0002-Fix-for-lauching-sol-session-with-SOL-loop-test.patch \
-             file://0003-Added-support-to-enable-disable-obmc-console-log.patch \
-	         file://0004-Fix-for-coverity-issue-in-obmc_console.patch \
-             file://0005-Added-changes-to-save-baudrate-in-config-file.patch \
+SRC_URI += " file://0002-Fix-for-lauching-sol-session-with-SOL-loop-test.patch   \
+             file://0003-Added-support-to-enable-disable-obmc-console-log.patch  \
+             file://0004-Fix-for-coverity-issue-in-obmc_console.patch            \
+             file://0005-Added-changes-to-save-baudrate-in-config-file.patch     \
            "
 
 PACKAGECONFIG[obmc-console-log] = "-Dobmc-console-log=true,-Dobmc-console-log=false"

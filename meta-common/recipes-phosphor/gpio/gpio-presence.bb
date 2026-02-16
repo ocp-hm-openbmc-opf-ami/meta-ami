@@ -1,6 +1,6 @@
 SUMMARY = "Application for updating GPIO values to D-Bus"
 LICENSE = "CLOSED"
-FILESEXTRAPATHS:append := "${THISDIR}/${PN}:"
+FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI += " \
     file://src/gpio_presence.hpp \

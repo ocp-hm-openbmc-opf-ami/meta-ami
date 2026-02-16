@@ -1,0 +1,427 @@
+From c5a10954914faa8b905347530f4071ed11cc7dbb Mon Sep 17 00:00:00 2001
+From: sanjays <sanjays@ami.com>
+Date: Tue, 3 Jun 2025 19:50:13 +0530
+Subject: [PATCH 3/3] Added semaphore support
+
+Upstream-Status: Pending
+
+---
+ include/Module.mk       |   2 +-
+ include/i2c/semaphore.h |  20 +++
+ lib/Module.mk           |  10 +-
+ lib/libi2c.map          |   6 +
+ lib/semaphore.c         | 308 ++++++++++++++++++++++++++++++++++++++++
+ 5 files changed, 343 insertions(+), 3 deletions(-)
+ create mode 100644 include/i2c/semaphore.h
+ create mode 100644 lib/semaphore.c
+
+diff --git a/include/Module.mk b/include/Module.mk
+index 92f9005..160d05c 100644
+--- a/include/Module.mk
++++ b/include/Module.mk
+@@ -9,7 +9,7 @@
+ 
+ INCLUDE_DIR	:= include
+ 
+-INCLUDE_TARGETS	:= i2c/smbus.h
++INCLUDE_TARGETS	:= i2c/smbus.h i2c/semaphore.h
+ 
+ #
+ # Commands
+diff --git a/include/i2c/semaphore.h b/include/i2c/semaphore.h
+new file mode 100644
+index 0000000..987e8bb
+--- /dev/null
++++ b/include/i2c/semaphore.h
+@@ -0,0 +1,20 @@
++#ifndef LIBI2CSEMAPHORE_H
++#define LIBI2CSEMAPHORE_H
++
++#define BILLION_NSEC_PER_SEC    1000000000
++#include <semaphore.h>
++#include <unistd.h>
++#define SYSTEM_I2C_BUS_DEV_PATH "/sys/bus/i2c/devices/i2c"
++
++typedef unsigned char  INT8U;
++typedef unsigned int   INT32U;
++extern int InitAllI2cBusSemInfo(void);
++extern int InitSingleI2cBusSemInfo(INT8U I2cBusNum);
++extern int DestroyAllI2cBusSemInfo(void);
++extern int DestroySingleI2cBusSemInfo(INT8U I2cBusNum);
++extern int GetRootI2cBusNum(INT8U I2cBusNum);
++extern int I2cBusSemWait(INT8U I2cBusNum, INT32U TimeoutMsec);
++extern int I2cBusSemPost(INT8U I2cBusNum);
++extern sem_t* CreateSemaphore(char *semaphoreKey);
++
++#endif
+diff --git a/lib/Module.mk b/lib/Module.mk
+index 0907f1a..5ff63a1 100644
+--- a/lib/Module.mk
++++ b/lib/Module.mk
+@@ -47,7 +47,7 @@ endif
+ # Libraries
+ #
+ 
+-$(LIB_DIR)/$(LIB_SHLIBNAME): $(LIB_DIR)/smbus.o
++$(LIB_DIR)/$(LIB_SHLIBNAME): $(LIB_DIR)/smbus.o $(LIB_DIR)/semaphore.o
+ 	$(CC) -shared $(LDFLAGS) -Wl,--version-script=$(LIB_DIR)/libi2c.map -Wl,-soname,$(LIB_SHSONAME) -o $@ $^ -lc
+ 
+ $(LIB_DIR)/$(LIB_SHSONAME): $(LIB_DIR)/$(LIB_SHLIBNAME)
+@@ -58,10 +58,11 @@ $(LIB_DIR)/$(LIB_SHBASENAME): $(LIB_DIR)/$(LIB_SHLIBNAME)
+ 	$(RM) $@
+ 	$(LN) $(LIB_SHLIBNAME) $@
+ 
+-$(LIB_DIR)/$(LIB_STLIBNAME): $(LIB_DIR)/smbus.ao
++$(LIB_DIR)/$(LIB_STLIBNAME): $(LIB_DIR)/smbus.ao $(LIB_DIR)/semaphore.ao
+ 	$(RM) $@
+ 	$(AR) rcvs $@ $^
+ 
++
+ #
+ # Objects
+ # Each object must be built twice, once for the shared library and
+@@ -74,6 +75,11 @@ $(LIB_DIR)/smbus.o: $(LIB_DIR)/smbus.c $(INCLUDE_DIR)/i2c/smbus.h
+ $(LIB_DIR)/smbus.ao: $(LIB_DIR)/smbus.c $(INCLUDE_DIR)/i2c/smbus.h
+ 	$(CC) $(CFLAGS) $(LIB_CFLAGS) -c $< -o $@
+ 
++$(LIB_DIR)/semaphore.o: $(LIB_DIR)/semaphore.c $(INCLUDE_DIR)/i2c/semaphore.h
++	$(CC) $(SOCFLAGS) $(LIB_CFLAGS) -c $< -o $@
++
++$(LIB_DIR)/semaphore.ao: $(LIB_DIR)/semaphore.c $(INCLUDE_DIR)/i2c/semaphore.h
++	$(CC) $(CFLAGS) $(LIB_CFLAGS) -c $< -o $@
+ #
+ # Commands
+ #
+diff --git a/lib/libi2c.map b/lib/libi2c.map
+index 3aed540..6d0d0f8 100644
+--- a/lib/libi2c.map
++++ b/lib/libi2c.map
+@@ -14,5 +14,11 @@ global:
+   i2c_smbus_read_i2c_block_data;
+   i2c_smbus_write_i2c_block_data;
+   i2c_smbus_block_process_call;
++  I2cBusSemPost;
++  I2cBusSemWait;
++  DestroySingleI2cBusSemInfo;
++  DestroyAllI2cBusSemInfo;
++  InitSingleI2cBusSemInfo;
++  InitAllI2cBusSemInfo;
+ local: *;
+  };
+diff --git a/lib/semaphore.c b/lib/semaphore.c
+new file mode 100644
+index 0000000..fd60791
+--- /dev/null
++++ b/lib/semaphore.c
+@@ -0,0 +1,308 @@
++#include <stdlib.h>
++#include <stdio.h>
++#include <stdarg.h>
++#include <time.h>
++#include <dirent.h>
++#include <errno.h>
++#include <string.h>
++#include <fcntl.h>
++#include <semaphore.h>
++#include <sys/syscall.h>
++#include <i2c/semaphore.h>
++
++#define I2C_SEM_STRING_LEN  16
++#define I2C_BUS_MAX_SEM_CNT 16
++
++#define I2C_MUX_NAME_FILE_INFO_FORMAT "i2c-%d-mux (chan_id %d)"
++#define printf_SHOULD_LOG    1
++
++static struct I2cBusSemInfo_T
++{
++	char SemKeyStr[I2C_SEM_STRING_LEN];
++	sem_t *pSemDes;
++} gI2cBusSemInfoArray[I2C_BUS_MAX_SEM_CNT] = {
++	{"I2C0SemKey",  NULL},
++	{"I2C1SemKey",  NULL},
++	{"I2C2SemKey",  NULL},
++	{"I2C3SemKey",  NULL},
++	{"I2C4SemKey",  NULL},
++	{"I2C5SemKey",  NULL},
++	{"I2C6SemKey",  NULL},
++	{"I2C7SemKey",  NULL},
++	{"I2C8SemKey",  NULL},
++	{"I2C9SemKey",  NULL},
++	{"I2C10SemKey", NULL},
++	{"I2C11SemKey", NULL},
++	{"I2C12SemKey", NULL},
++	{"I2C13SemKey", NULL},
++	{"I2C14SemKey", NULL},
++	{"I2C15SemKey", NULL},
++};
++/****************************************************************************
++ * Creates a semaphore if doesn't exist.If the semaphore already exists
++ * then opens it and returns the semaphore.
++ */
++
++sem_t* CreateSemaphore(char *semaphoreKey)
++{
++	sem_t *semaphore = sem_open(semaphoreKey, O_CREAT | O_EXCL, 0666, 1);
++
++	if (semaphore == SEM_FAILED)
++	{
++		int errNumber = errno;
++
++		if (errNumber == EEXIST)
++			semaphore = sem_open(semaphoreKey, 0, 0666, 0);
++	}
++
++	return semaphore;
++}
++
++
++int GetRootI2cBusNum(INT8U I2cBusNum)
++{
++	int retval;
++	char I2cBusNameFilePath[64] = {0};
++
++	if(I2cBusNum < I2C_BUS_MAX_SEM_CNT)
++		return I2cBusNum;
++
++	retval = snprintf(I2cBusNameFilePath, sizeof(I2cBusNameFilePath),"%s-%i/name", SYSTEM_I2C_BUS_DEV_PATH, I2cBusNum);
++	if(retval < 0 || retval >= (int)sizeof(I2cBusNameFilePath))
++	{
++		printf("Buffer overflow in %s\n", __func__);
++		return -1;
++	}
++
++	/*Reason for False Positive - check only the file if it is existed*/
++	/*coverity[fs_check_call : FALSE]*/
++	if(access(I2cBusNameFilePath, F_OK) == 0) 
++	{
++		FILE *NameFd = NULL;
++		char NameStr[32] = {0};
++
++		if((NameFd = fopen(I2cBusNameFilePath, "r")) != NULL)
++		{
++			int VirBusNum, ChId;
++
++			if(NULL != fgets(NameStr, sizeof(NameStr), NameFd))
++			{
++				if(sscanf(NameStr, I2C_MUX_NAME_FILE_INFO_FORMAT, &VirBusNum, &ChId) == 2)
++				{
++					fclose(NameFd);
++					return GetRootI2cBusNum((INT8U)VirBusNum);
++				}
++				else
++					printf("Invalid virtual bus name file description bus %d\n", I2cBusNum);
++			}
++
++			fclose(NameFd);
++		}
++	}
++
++	return -1;
++}
++
++int InitAllI2cBusSemInfo(void)
++{
++	int i;
++	int InitFailCnt = 0;
++
++
++	for(i = 0; i < I2C_BUS_MAX_SEM_CNT; i++)
++	{
++		char *pCurrSemKeyStr = gI2cBusSemInfoArray[i].SemKeyStr;
++		sem_t **pCurrSemDes = &gI2cBusSemInfoArray[i].pSemDes;
++
++		if(*pCurrSemDes == NULL)
++		{
++			if((*pCurrSemDes = CreateSemaphore(pCurrSemKeyStr)) == NULL)
++			{
++				printf("PID:%d, Fail to create semaphore for I2C bus %d\n", (int)getpid(), i);
++				InitFailCnt++;
++			}
++		}
++	}
++
++	if(!InitFailCnt)
++		printf("Initialize all I2C bus semaphore done!!\n");
++
++	return (!InitFailCnt)?0:-1;
++}
++
++int InitSingleI2cBusSemInfo(INT8U I2cBusNum)
++{
++	int retval = 0;
++
++	if(I2cBusNum < I2C_BUS_MAX_SEM_CNT)
++	{
++		sem_t **pCurrSemDes = &gI2cBusSemInfoArray[I2cBusNum].pSemDes;
++
++		if(*pCurrSemDes == NULL)
++		{
++			if((*pCurrSemDes = CreateSemaphore(gI2cBusSemInfoArray[I2cBusNum].SemKeyStr)) == NULL)
++			{
++				printf("PID:%d, Fail to initialize semaphore for I2C bus %d\n", (int)getpid(), I2cBusNum);
++				retval = -1;
++			}
++		}
++	}
++	else
++		printf("PID:%d, Invalid I2C bus %d number!!\n", (int)getpid(), I2cBusNum);
++
++	if(!retval) {
++		printf("PID:%d, Initialize semaphore for I2C bus %d successfully!!\n", (int)getpid(), I2cBusNum);
++	}
++
++	return retval;
++}
++
++int DestroyAllI2cBusSemInfo(void)
++{
++	int i;
++	int DestroyFailCnt = 0;
++
++	for(i = 0; i < I2C_BUS_MAX_SEM_CNT; i++)
++	{
++		char *pCurrSemKeyStr = gI2cBusSemInfoArray[i].SemKeyStr;
++		sem_t **pCurrSemDes = &gI2cBusSemInfoArray[i].pSemDes;
++
++		if(*pCurrSemDes != NULL)
++		{
++			if(sem_close(*pCurrSemDes) < 0 || \
++					sem_unlink(pCurrSemKeyStr) < 0)
++			{
++				printf("PID:%d, Fail to destroy semaphore for I2C bus %d\n", (int)getpid(), i);
++				DestroyFailCnt++;
++			}
++			else
++			{
++				*pCurrSemDes = NULL;
++			}
++		}
++	}
++
++	if(!DestroyFailCnt) {
++		printf("PID:%d, Destroy all I2C bus semaphore done!!\n", (int)getpid());
++	}
++
++	return (!DestroyFailCnt)?0:-1;
++}
++
++int DestroySingleI2cBusSemInfo(INT8U I2cBusNum)
++{
++	int retval = 0;
++
++	if(I2cBusNum < I2C_BUS_MAX_SEM_CNT)
++	{
++		char *pCurrSemKeyStr = gI2cBusSemInfoArray[I2cBusNum].SemKeyStr;
++		sem_t **pCurrSemDes = &gI2cBusSemInfoArray[I2cBusNum].pSemDes;
++
++		if(*pCurrSemDes != NULL)
++		{
++			if(sem_close(*pCurrSemDes) < 0 || \
++					sem_unlink(pCurrSemKeyStr) < 0)
++			{
++				printf("PID:%d, Fail to destroy semaphore for I2C bus %d\n", (int)getpid(), I2cBusNum);
++				retval = -1;
++			}
++			else
++			{
++				*pCurrSemDes = NULL;
++			}
++		}
++	}
++	else
++	{
++		retval = -1;
++		printf("PID:%d, Invalid I2C bus %d number!!\n", (int)getpid(), I2cBusNum);
++	}
++
++	if(!retval) {
++		printf("PID:%d, Destroy semaphore for I2C bus %d successfully!!\n", (int)getpid(), I2cBusNum);
++	}
++
++	return retval;
++}
++
++int I2cBusSemWait(INT8U I2cBusNum, INT32U TimeoutMsec)
++{
++	int RootI2cBusNum = -1;
++
++	if(TimeoutMsec == 0)
++	{
++		printf("TimeoutMSEC value must not be zero\n");
++		return -1;
++	}
++
++	if((RootI2cBusNum = GetRootI2cBusNum(I2cBusNum)) != -1)
++	{
++		struct timespec ts;
++		struct timespec ts_timeout_value;
++		I2cBusNum = (INT8U)RootI2cBusNum;
++		sem_t *pCurrSemDes = gI2cBusSemInfoArray[I2cBusNum].pSemDes;
++
++		if(pCurrSemDes != NULL)
++		{
++			ts_timeout_value.tv_sec  = (long)(TimeoutMsec / 1000);
++			ts_timeout_value.tv_nsec = (long)(TimeoutMsec % 1000) * 1000000;
++
++			if (clock_gettime(CLOCK_REALTIME, &ts) == -1)
++			{
++				printf("PID:%d, Get clock time failed for I2C bus %d!!\n", (int)getpid(), I2cBusNum);
++			}
++			else
++			{
++				ts.tv_sec  += ts_timeout_value.tv_sec;
++				ts.tv_nsec += ts_timeout_value.tv_nsec;
++				if (ts.tv_nsec > BILLION_NSEC_PER_SEC)
++				{
++					ts.tv_sec  += 1;
++					ts.tv_nsec -= BILLION_NSEC_PER_SEC;
++				}	
++				if(sem_timedwait(pCurrSemDes, &ts) == -1 && errno == ETIMEDOUT)
++				{
++					printf("PID:%d, Semaphore time-out wait for I2C bus %d\n", (int)getpid(), I2cBusNum);
++					return -1;
++				}
++
++				return 0;
++			}
++		}
++		else
++			printf("PID:%d, Invalid semaphore description(wait) for I2c bus number %d !!\n", (int)getpid(), I2cBusNum);
++	}
++	else
++		printf ("PID:%d, Invalid I2c bus number %d for semaphore wait!!\n", (int)getpid(), I2cBusNum);
++
++	return -1;
++}
++
++int I2cBusSemPost(INT8U I2cBusNum)
++{
++	int RootI2cBusNum = -1;
++
++	if((RootI2cBusNum = GetRootI2cBusNum(I2cBusNum)) != -1)
++	{
++		I2cBusNum = (INT8U)RootI2cBusNum;
++		sem_t *pCurrSemDes = gI2cBusSemInfoArray[I2cBusNum].pSemDes;
++
++		if(pCurrSemDes != NULL)
++		{
++			if(-1 == sem_post(pCurrSemDes))
++			{
++				printf("PID:%d, Error in semaphore post for I2C bus %d\n", (int)getpid(), I2cBusNum);
++				return -1;
++			}
++
++			return 0;
++		}
++		else
++			printf("PID:%d, Invalid semaphore description(post) for I2c bus number %d !!\n", (int)getpid(), I2cBusNum);
++	}
++	else
++		printf ("PID:%d, Invalid I2c bus number %d for semaphore post!!\n", (int)getpid(), I2cBusNum);
++
++	return -1;
++}
++
+-- 
+2.34.1
+

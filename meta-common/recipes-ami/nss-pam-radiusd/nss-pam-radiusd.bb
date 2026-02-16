@@ -5,6 +5,7 @@ SECTION = "Network"
 LICENSE = "MIT"
 SRC_URI = "\
             file://CMakeLists.txt \
+            file://services \
             file://include/ \
 	    file://src/ \
 	    file://nss-pam-radiusd.service \

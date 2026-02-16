@@ -1,0 +1,112 @@
+From be02d0700842a616df618ee4090fcf184a64b019 Mon Sep 17 00:00:00 2001
+From: Billy Tsai <billy_tsai@aspeedtech.com>
+Date: Wed, 17 Sep 2025 16:38:40 +0800
+Subject: [PATCH 08/10] ltpi: add fine-grained control for pinctrl settings
+
+Introduce bitmask flags to `skip_pinctrl` for selective skipping of SCMx,
+HPMx, and SGPIOS pinctrl settings. Replace the boolean `skip_pinctrl`
+with a more flexible u8 type to support these flags.
+
+Change-Id: Iabbad1fccecfbd986a2c2e5f6b45a8b0599dbf98
+(cherry picked from commit fc79f3b3fb50f0501e8951f1e7e7ce552a853eba)
+Signed-off-by: Vasanthakumar K <vasanthakumark@ami.com>
+---
+ cmd/aspeed/ltpi/ltpi-v2.c | 37 +++++++++++++++++++++++--------------
+ 1 file changed, 23 insertions(+), 14 deletions(-)
+
+diff --git a/cmd/aspeed/ltpi/ltpi-v2.c b/cmd/aspeed/ltpi/ltpi-v2.c
+index d247d1d204..1bc5a6954f 100644
+--- a/cmd/aspeed/ltpi/ltpi-v2.c
++++ b/cmd/aspeed/ltpi/ltpi-v2.c
+@@ -87,6 +87,10 @@
+ 
+ #define ADVERTISE_TIMEOUT_US			105000 /* 105 ms */
+ 
++#define SKIP_SCMx_GPIO_SETTING	BIT(0)
++#define SKIP_HPMx_GPIO_SETTING	BIT(1)
++#define SKIP_SGPIOS_SETTING	BIT(2)
++
+ struct bootstage_t {
+ 	uint8_t errno;
+ 	uint8_t syndrome;
+@@ -986,7 +990,7 @@ static void ltpi1_hpm_set_pins(void)
+ 			FIELD_PREP(SCU1_PINMUX_PIN6, 0x5));
+ }
+ 
+-struct bootstage_t ltpi_init(struct rom_context *rom_ctx, uint32_t pin_strap, bool skip_pinctrl)
++struct bootstage_t ltpi_init(struct rom_context *rom_ctx, uint32_t pin_strap, u8 skip_pinctrl)
+ {
+ 	struct bootstage_t sts = { 0, 0 };
+ 
+@@ -1051,11 +1055,13 @@ struct bootstage_t ltpi_init(struct rom_context *rom_ctx, uint32_t pin_strap, bo
+ 	 *         0           1           1    SOC is AST2700, SCM mode + dual node
+ 	 */
+ 	if (pin_strap & SCU1_HWSTRAP1_LTPI0_EN) {
+-		if (!skip_pinctrl)
++		if (!(skip_pinctrl & SKIP_SCMx_GPIO_SETTING))
+ 			ltpi_scm_set_pins();
+-		/* Enable SGPIO slave */
+-		ltpi_scm_sgpios_init(ltpi0);
+-		ltpi0_hpm_set_pins();
++		if (!(skip_pinctrl & SKIP_SGPIOS_SETTING))
++			/* Enable SGPIO slave */
++			ltpi_scm_sgpios_init(ltpi0);
++		if (!(skip_pinctrl & SKIP_HPMx_GPIO_SETTING))
++			ltpi0_hpm_set_pins();
+ 		ltpi_scm_init(ltpi0);
+ 
+ 		if (pin_strap & SCU1_HWSTRAP1_LTPI1_EN) {
+@@ -1063,14 +1069,17 @@ struct bootstage_t ltpi_init(struct rom_context *rom_ctx, uint32_t pin_strap, bo
+ 			bootstage_prologue(BOOTSTAGE_LTPI_INIT);
+ 			ltpi1->bootstage->errno = LTPI_STATUS_IDX;
+ 			ltpi1->bootstage->syndrome = LTPI_SYND_OK;
+-			ltpi1_hpm_set_pins();
++			if (!(skip_pinctrl & SKIP_HPMx_GPIO_SETTING))
++				ltpi1_hpm_set_pins();
+ 			ltpi_scm_init(ltpi1);
+ 		}
+-		/* Avoid the SGPIOS output unstable value to SGPIOM */
+-		ltpi_scm_sgpios_serial_out_lock();
+-		ltpi_scm_sgpios_serial_out_source_sel(SELECT_FROM_PARALLEL_IN);
+-		/* Unlock serial out to pass the LTPI Parallel in to SGPIOM */
+-		ltpi_scm_sgpios_serial_out_unlock();
++		if (!(skip_pinctrl & SKIP_SGPIOS_SETTING)) {
++			/* Avoid the SGPIOS output unstable value to SGPIOM */
++			ltpi_scm_sgpios_serial_out_lock();
++			ltpi_scm_sgpios_serial_out_source_sel(SELECT_FROM_PARALLEL_IN);
++			/* Unlock serial out to pass the LTPI Parallel in to SGPIOM */
++			ltpi_scm_sgpios_serial_out_unlock();
++		}
+ 	}
+ 
+ 	return sts;
+@@ -1126,7 +1135,7 @@ static int do_ltpi(struct cmd_tbl *cmdtp, int flag, int argc,
+ 	struct bootstage_t sts;
+ 	uint32_t pin_strap;
+ 	int opt, speed = 0, mode = 0;
+-	bool skip_pinctrl = false;
++	u8 skip_pinctrl = 0;
+ 	char *endp;
+ 
+ 	ltpi_data[0].ad_timeout = ADVERTISE_TIMEOUT_US;
+@@ -1198,7 +1207,7 @@ static int do_ltpi(struct cmd_tbl *cmdtp, int flag, int argc,
+ 			ltpi_show_status(&ltpi_data[1]);
+ 			return CMD_RET_SUCCESS;
+ 		case 'p':
+-			skip_pinctrl = (simple_strtoul(gs.arg, &endp, 0) != 0);
++			skip_pinctrl = simple_strtoul(gs.arg, &endp, 0);
+ 			break;
+ 		case 'h':
+ 			fallthrough;
+@@ -1276,7 +1285,7 @@ static char ltpi_help_text[] = {
+ 	"-r <rx link-speed count in AD-align>, default 0\n"
+ 	"-s, Display current link status\n"
+ 	"-T <timeout to get to the operational state in us>, 0=wait forever, default 0\n"
+-	"-p <skip pinctrl>, 0=apply SCMx GPIO setting, 1=skip pinctrl, default 0\n"
++	"-p <skip pinctrl>, 0=apply SCMx/HPMx GPIO/SGPIOS pinmux setting, bit0=skip SCMx GPIO,\n bit1=skip HCMx GPIO, bit2= skip SGPIOS, default 0\n"
+ };
+ 
+ U_BOOT_CMD(ltpi, 11, 0, do_ltpi, "ASPEED LTPI commands", ltpi_help_text);
+-- 
+2.34.1
+

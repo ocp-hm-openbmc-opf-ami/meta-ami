@@ -1,0 +1,64 @@
+From 389174b5e077d3ef3cace3a1cb632706a7e4dc62 Mon Sep 17 00:00:00 2001
+From: Jacky Chou <jacky_chou@aspeedtech.com>
+Date: Wed, 10 Sep 2025 17:19:43 +0800
+Subject: [PATCH 20/32] clk: aspeed: Record delay result into scratch reg
+
+Reserved scratch registers, SCU1 0x190 to 0x19C, to record the
+TX/RX center and edge, and also store the average step of delay step.
+
+Signed-off-by: Jacky Chou <jacky_chou@aspeedtech.com>
+Change-Id: I7f032568b8e61f7d3e0ceb6e8e91f90b63ac8965
+(cherry picked from commit 93022686f9d6acd74058fe948fe08ce535fa68c7)
+Signed-off-by: Vasanthakumar K <vasanthakumark@ami.com>
+---
+ arch/arm/mach-aspeed/ast2700/mac.c | 27 +++++++++++++++++++++++++++
+ 1 file changed, 27 insertions(+)
+
+diff --git a/arch/arm/mach-aspeed/ast2700/mac.c b/arch/arm/mach-aspeed/ast2700/mac.c
+index 77050269ad..6d765bff4b 100644
+--- a/arch/arm/mach-aspeed/ast2700/mac.c
++++ b/arch/arm/mach-aspeed/ast2700/mac.c
+@@ -354,6 +354,30 @@ static void set_rgmii_delay(u32 tx, u32 rx, u32 index)
+ 	writel(reg, &scu->mac_delay);
+ }
+ 
++#define SCU1_SCRATCH_RGMII_CALIB	BIT(0)
++#define SCU1_SCRATCH_DELAY_STEP_MASK	GENMASK(31, 16)
++#define SCU1_SCRATCH_DELAY_STEP(x)	FIELD_PREP(SCU1_SCRATCH_DELAY_STEP_MASK, (x))
++
++static void record_rgmii_delay(u32 index, u8 tx_edge, u8 tx_center, u8 rx_edge, u8 rx_center,
++			       u32 average_delay)
++{
++	struct ast2700_scu1 *scu = (struct ast2700_scu1 *)ASPEED_IO_SCU_BASE;
++	u32 scu0, scu1;
++
++	scu0 = SCU1_SCRATCH_RGMII_CALIB | SCU1_SCRATCH_DELAY_STEP(average_delay);
++	scu1 = FIELD_PREP(GENMASK(7, 0), tx_edge) |
++	       FIELD_PREP(GENMASK(15, 8), tx_center) |
++	       FIELD_PREP(GENMASK(23, 16), rx_edge) |
++	       FIELD_PREP(GENMASK(31, 24), rx_center);
++	if (index) {
++		writel(scu0, &scu->scratch[6]);	/* SCU1_198 */
++		writel(scu1, &scu->scratch[7]);	/* SCU1_19c */
++	} else {
++		writel(scu0, &scu->scratch[4]);	/* SCU1_190 */
++		writel(scu1, &scu->scratch[5]);	/* SCU1_194 */
++	}
++}
++
+ static void mac_xmit(u32 index)
+ {
+ 	dma_addr_t des_start, des_end;
+@@ -531,6 +555,9 @@ static void find_rgmii_delay(u32 index)
+ 	mac_set_loopback(index, false);
+ 	mac_clk_disable(index);
+ 	mac_reset_assert(index);
++
++	/* Record in SCU1 */
++	record_rgmii_delay(index, tx_edge, tx_center, rx_edge, rx_center, average_delay);
+ }
+ 
+ void aspeed_rgmii_init(void)
+-- 
+2.34.1
+

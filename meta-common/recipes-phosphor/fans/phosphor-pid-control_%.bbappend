@@ -1,4 +1,4 @@
-FILESEXTRAPATHS:append := ":${THISDIR}/${PN}"
+FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 #SRCREV = "8dc277cc790efa2a25a4778693cba1bfa24ab741"
 
