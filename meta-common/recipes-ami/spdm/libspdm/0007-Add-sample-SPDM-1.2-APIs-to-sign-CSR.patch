@@ -1,0 +1,1041 @@
+From a9783bf374a4132470a6f478299a948fbe8642df Mon Sep 17 00:00:00 2001
+From: leon_lin <leonlin@ami.com>
+Date: Thu, 8 Aug 2024 22:57:36 +0800
+Subject: [PATCH 5/5] Add sample SPDM 1.2 APIs to sign CSR
+
+---
+ os_stub/cryptlib_mbedtls/pk/x509.c        | 518 +++++++++++++++++++++-
+ os_stub/cryptlib_null/pk/x509.c           |  78 ++++
+ os_stub/cryptlib_openssl/pk/x509.c        | 280 ++++++++++++
+ os_stub/spdm_crypt_ext_lib/cryptlib_ext.h |  67 +++
+ 4 files changed, 938 insertions(+), 5 deletions(-)
+
+diff --git a/os_stub/cryptlib_mbedtls/pk/x509.c b/os_stub/cryptlib_mbedtls/pk/x509.c
+index dbd7dc09..e14d9cb1 100644
+--- a/os_stub/cryptlib_mbedtls/pk/x509.c
++++ b/os_stub/cryptlib_mbedtls/pk/x509.c
+@@ -103,10 +103,10 @@ typedef struct {
+  * @retval     false           The operation failed.
+  *
+  **/
+-bool libspdm_x509_construct_pem_certificate(const uint8_t* der_cert,
++bool libspdm_x509_construct_pem_certificate(const uint8_t *der_cert,
+                                             size_t der_cert_size,
+-                                            char* pem_cert,
+-                                            size_t* pem_cert_size)
++                                            char *pem_cert,
++                                            size_t *pem_cert_size)
+ {
+     if (der_cert == NULL || pem_cert_size == NULL || der_cert_size == 0)
+     {
+@@ -118,11 +118,11 @@ bool libspdm_x509_construct_pem_certificate(const uint8_t* der_cert,
+     // Write DER certificate in PEM format to the buffer
+     ret = mbedtls_pem_write_buffer("-----BEGIN CERTIFICATE-----\n",
+                                    "-----END CERTIFICATE-----\n", der_cert,
+-                                   der_cert_size, (unsigned char*)pem_cert,
++                                   der_cert_size, (unsigned char *)pem_cert,
+                                    *pem_cert_size, pem_cert_size);
+     if (ret != 0)
+     {
+-        LIBSPDM_DEBUG((LIBSPDM_DEBUG_INFO,
++        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR,
+                        "Failed to write PEM buffer from DER data: %d", ret));
+         return false;
+     }
+@@ -131,6 +131,47 @@ bool libspdm_x509_construct_pem_certificate(const uint8_t* der_cert,
+     return true;
+ }
+ 
++/**
++ * Construct DER-encoded certificate data from a X509 object.
++ *
++ * If der_cert is NULL, then return false.
++ * If x509_cert is NULL, then return false.
++ * If der_cert_size is 0, then return false.
++ *
++ * @param[in]  x509_cert          Pointer to the X509 object .
++ * @param[in]  der_cert           Pointer to the buffer of DER-encoded
++ *                               certificate data.
++ * @param[in, out] der_cert_size  On input, the buffer size of certificate data
++ *                               in bytes.
++ *                                On output, the actual size of converted
++ *                               der-encoded certificate data in bytes.
++ *
++ * @retval     true            The DER-encoded certificate written succeeded.
++ * @retval     false           The operation failed.
++ *
++ **/
++bool libspdm_x509_construct_der_certificate(uint8_t *x509_cert,
++                                            uint8_t **der_cert,
++                                            size_t *der_cert_size)
++{
++    if (x509_cert == NULL || der_cert == NULL || *der_cert_size == 0)
++        return false;
++
++    mbedtls_x509_crt *crt = (mbedtls_x509_crt *)x509_cert;
++    if (*der_cert_size < crt->raw.len)
++    {
++        LIBSPDM_DEBUG((
++            LIBSPDM_DEBUG_ERROR,
++            "Failed to construct DER-encoded data from mbedtls_x509_crt. Expected size: %d",
++            crt->raw.len));
++        *der_cert_size = crt->raw.len;
++        return false;
++    }
++    libspdm_copy_mem(*der_cert, *der_cert_size, crt->raw.p, crt->raw.len);
++    *der_cert_size = crt->raw.len;
++    return true;
++}
++
+ /**
+  * Construct a X509 object from DER-encoded certificate data.
+  *
+@@ -562,6 +603,473 @@ bool libspdm_rsa_get_public_key_from_x509(const uint8_t *cert, size_t cert_size,
+ }
+ #endif /* (LIBSPDM_RSA_SSA_SUPPORT) || (LIBSPDM_RSA_PSS_SUPPORT) */
+ 
++/**
++ * Construct the X509 object of root CA from given EC DSA keypair.
++ *
++ * @param[in]   ec_context      Pointer to the EC DSA context which contain the
++ *                            EC DSA key components.
++ * @param[out]  x509_root_cert  Pointer to the generated X509 object. Use
++ *                     libspdm_x509_free() function to free the resource.
++ *
++ * If ec_context is NULL, then return false.
++ * If x509_root_cert is NULL, then return false.
++ *
++ * @retval     true            The X509 object generation succeeded.
++ * @retval     false           The operation failed.
++ *
++ **/
++bool libspdm_x509_construct_root_certificate_from_ec(void *ec_context,
++                                                     uint8_t **x509_root_cert)
++{
++    mbedtls_pk_context key;
++    mbedtls_x509write_cert *crt;
++    mbedtls_x509_crt *parsed_crt;
++
++    mbedtls_md_type_t md_alg = MBEDTLS_MD_SHA384;
++    uint8_t buf[4096];
++    uint8_t ski[20];
++    uint8_t hash[48];
++    uint8_t pub_key_buffer[4096];
++    int32_t ret;
++
++    if (x509_root_cert == NULL || ec_context == NULL)
++    {
++        return false;
++    }
++
++    crt = allocate_pool(sizeof(mbedtls_x509write_cert));
++    if (crt == NULL)
++    {
++        LIBSPDM_DEBUG(
++            (LIBSPDM_DEBUG_ERROR,
++             "Failed to allocate mbedtls x509 root certificate to write.\n"));
++        return false;
++    }
++
++    parsed_crt = allocate_pool(sizeof(mbedtls_x509_crt));
++    if (parsed_crt == NULL)
++    {
++        LIBSPDM_DEBUG(
++            (LIBSPDM_DEBUG_ERROR,
++             "Failed to allocate mbedtls x509 root certificate to read.\n"));
++        return false;
++    }
++
++    mbedtls_pk_init(&key);
++    mbedtls_x509write_crt_init(crt);
++    mbedtls_x509_crt_init(parsed_crt);
++
++    ret = mbedtls_pk_setup(&key, mbedtls_pk_info_from_type(MBEDTLS_PK_ECKEY));
++    if (ret != 0)
++    {
++        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR,
++                       "Failed to set up mbedTLS public key: %d\n", ret));
++        goto free_all;
++    }
++    /*mbedtls_ecdh_context include mbedtls_ecdsa_context,can be treated as
++     * mbedtls_ecdsa_context*/
++    ret = mbedtls_ecdsa_from_keypair(mbedtls_pk_ec(key),
++                                     (mbedtls_ecdsa_context *)ec_context);
++    if (ret != 0)
++    {
++        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR,
++                       "Failed to copy public key context from ECDSA: %d\n",
++                       ret));
++        goto free_all;
++    }
++    mbedtls_x509write_crt_set_version(crt, MBEDTLS_X509_CRT_VERSION_3);
++    mbedtls_x509write_crt_set_md_alg(crt, md_alg);
++    mbedtls_x509write_crt_set_subject_key(crt, &key);
++    mbedtls_x509write_crt_set_issuer_key(crt, &key);
++
++    // Set certificate fields
++    ret = mbedtls_x509write_crt_set_subject_name(
++        crt, "CN=AMI sample Root CA,O=AMI,C=TW");
++    if (ret != 0)
++    {
++        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR,
++                       "Failed to set subject name in root certificate: %d\n",
++                       ret));
++        goto free_all;
++    }
++
++    ret = mbedtls_x509write_crt_set_issuer_name(
++        crt, "CN=AMI sample Root CA,O=AMI,C=TW");
++    if (ret != 0)
++    {
++        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR,
++                       "Failed to set issuer name in root certificate: %d\n",
++                       ret));
++        goto free_all;
++    }
++
++    ret = mbedtls_x509write_crt_set_validity(crt, "20240101000000",
++                                             "20340101000000");
++    if (ret != 0)
++    {
++        LIBSPDM_DEBUG(
++            (LIBSPDM_DEBUG_ERROR,
++             "Failed to set validity period in root certificate: %d\n", ret));
++        goto free_all;
++    }
++
++    ret = mbedtls_x509write_crt_set_basic_constraints(crt, 1, -1);
++    if (ret != 0)
++    {
++        LIBSPDM_DEBUG(
++            (LIBSPDM_DEBUG_ERROR,
++             "Failed to set basic constraints in root certificate: %d\n", ret));
++        goto free_all;
++    }
++
++    ret = mbedtls_x509write_crt_set_key_usage(
++        crt, MBEDTLS_X509_KU_KEY_CERT_SIGN | MBEDTLS_X509_KU_CRL_SIGN);
++    if (ret != 0)
++    {
++        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR,
++                       "Failed to set key usage in root certificate: %d\n",
++                       ret));
++        goto free_all;
++    }
++
++    // Calculate and add Subject Key Identifier (SKI) extension
++    if ((ret = mbedtls_pk_write_pubkey_der(&key, pub_key_buffer,
++                                           sizeof(pub_key_buffer))) < 0)
++    {
++        LIBSPDM_DEBUG((
++            LIBSPDM_DEBUG_ERROR,
++            "Failed to write public key to calculate Subject Key Identifier in root certificate: %d\n",
++            ret));
++        goto free_all;
++    }
++
++    // Hash the public key using SHA-384
++    mbedtls_sha512(pub_key_buffer + sizeof(pub_key_buffer) - ret, ret, hash, 1);
++
++    libspdm_copy_mem(ski, sizeof(ski), hash, 20);
++
++    if ((ret = mbedtls_x509write_crt_set_extension(
++             crt, MBEDTLS_OID_SUBJECT_KEY_IDENTIFIER,
++             MBEDTLS_OID_SIZE(MBEDTLS_OID_SUBJECT_KEY_IDENTIFIER), 0, ski,
++             20)) != 0)
++    {
++        LIBSPDM_DEBUG(
++            (LIBSPDM_DEBUG_ERROR,
++             "Failed to write Subject Key Identifier in root certificate: %d\n",
++             ret));
++        goto free_all;
++    }
++
++    // Add Authority Key Identifier (AKI) extension (same as SKI for root
++    // certificate)
++    if ((ret = mbedtls_x509write_crt_set_extension(
++             crt, MBEDTLS_OID_AUTHORITY_KEY_IDENTIFIER,
++             MBEDTLS_OID_SIZE(MBEDTLS_OID_AUTHORITY_KEY_IDENTIFIER), 0, ski,
++             20)) != 0)
++    {
++        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR,
++                       "Failed to write Authority Key Identifier: %d\n", ret));
++        goto free_all;
++    }
++
++    // Sign the certificate
++    if ((ret = mbedtls_x509write_crt_pem(crt, buf, sizeof(buf), libspdm_myrand,
++                                         NULL)) < 0)
++    {
++        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR,
++                       "Failed to write root certificate PEM: %d\n", ret));
++        goto free_all;
++    }
++
++    size_t pem_size = 0;
++    for (size_t i = 0; i < sizeof(buf); i++)
++    {
++        pem_size++;
++        if (buf[i] == '\0')
++            break;
++    }
++    LIBSPDM_DEBUG((LIBSPDM_DEBUG_INFO,
++                   "Written PEM bytes of root certificate: %d\n", pem_size));
++
++    // convert read-only certificate
++    // ret is PEM written bytes from previous step
++    if ((ret = mbedtls_x509_crt_parse(parsed_crt, buf, pem_size)) != 0)
++    {
++        LIBSPDM_DEBUG(
++            (LIBSPDM_DEBUG_ERROR,
++             "Failed to parse root certificate from PEM-encoded data: %d\n",
++             ret));
++        goto free_all;
++    }
++
++    *x509_root_cert = (uint8_t *)(void *)parsed_crt;
++    parsed_crt = NULL; // Prevent free in cleanup
++    ret = 0;
++
++free_all:
++    mbedtls_x509write_crt_free(crt);
++    free_pool(crt);
++    if (parsed_crt)
++    {
++        mbedtls_x509_crt_free(parsed_crt);
++        free_pool(parsed_crt);
++    }
++    mbedtls_pk_free(&key);
++    return (ret == 0);
++}
++
++/**
++ * Sign the CSR with given root CA and EC DSA keypair.
++ *
++ * @param[in]   csr               Pointer to the DER-encoded X509 certificate
++ *                              signing request.
++ * @param[in]   csr_len           Size of the X509 CSR in bytes.
++ * @param[in]   ec_context        Pointer to the EC DSA context which contain
++ *                              the EC DSA key components.
++ * @param[in]   x509_root_cert    Pointer to the X509 object of root
++ *                              certificate.
++ * @param[out]  x509_signed_cert  Pointer to the generated X509 object. Use
++ *                      libspdm_x509_free() function to free the resource.
++ *
++ * If csr is NULL, then return false.
++ * If ec_context is NULL, then return false.
++ * If root_cert is NULL, then return false.
++ *
++ * @retval     true            The signed certificate generation succeeded.
++ * @retval     false           The operation failed.
++ *
++ **/
++bool libspdm_sign_csr_from_ec(uint8_t *csr, size_t csr_len, void *ec_context,
++                              uint8_t *x509_root_cert,
++                              uint8_t **x509_signed_cert)
++{
++    if (csr == NULL || ec_context == NULL || x509_root_cert == NULL ||
++        csr_len == 0)
++        return false;
++
++    mbedtls_x509_csr csr_obj;
++    mbedtls_pk_context key;
++    mbedtls_x509_crt *root_crt = (mbedtls_x509_crt *)x509_root_cert;
++    mbedtls_x509write_cert *leaf_crt;
++    mbedtls_x509_crt *parsed_leaf_crt;
++
++    mbedtls_md_type_t md_alg = MBEDTLS_MD_SHA384;
++    uint8_t buf[4096];
++    uint8_t ski[20];
++    uint8_t hash[48];
++    uint8_t pub_key_buffer[4096];
++    uint8_t issuer_name[256];
++    size_t issuer_length = sizeof(issuer_name) - 1;
++    uint8_t subject_name[256];
++    size_t subject_length = sizeof(subject_name) - 1;
++    int32_t ret;
++
++    leaf_crt = allocate_pool(sizeof(mbedtls_x509write_cert));
++    if (leaf_crt == NULL)
++    {
++        LIBSPDM_DEBUG(
++            (LIBSPDM_DEBUG_ERROR,
++             "Failed to allocate mbedtls x509 leaf certificate to write.\n"));
++        return false;
++    }
++
++    parsed_leaf_crt = allocate_pool(sizeof(mbedtls_x509_crt));
++    if (parsed_leaf_crt == NULL)
++    {
++        LIBSPDM_DEBUG(
++            (LIBSPDM_DEBUG_ERROR,
++             "Failed to allocate mbedtls x509 leaf certificate to read.\n"));
++        return false;
++    }
++
++    mbedtls_x509write_crt_init(leaf_crt);
++    mbedtls_x509_crt_init(parsed_leaf_crt);
++    mbedtls_x509_csr_init(&csr_obj);
++    mbedtls_pk_init(&key);
++
++    if ((ret = mbedtls_x509_csr_parse(&csr_obj, csr, csr_len)) != 0)
++    {
++        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR,
++                       "Failed to parse CSR from DER-encoded data: %d\n", ret));
++        goto free_all;
++    }
++
++    if (subject_length < csr_obj.subject_raw.len)
++    {
++        ret = -1;
++        LIBSPDM_DEBUG(
++            (LIBSPDM_DEBUG_ERROR,
++             "Failed to get subject name from CSR. subject size: %d\n",
++             csr_obj.subject_raw.len));
++        goto free_all;
++    }
++    libspdm_copy_mem(subject_name, subject_length, csr_obj.subject_raw.p,
++                     csr_obj.subject_raw.len);
++    subject_name[subject_length] = '\0';
++
++    if (issuer_length < root_crt->issuer_raw.len)
++    {
++        ret = -1;
++        LIBSPDM_DEBUG((
++            LIBSPDM_DEBUG_ERROR,
++            "Failed to get issuer name from root certificate. issuer size: %d\n",
++            root_crt->issuer_raw.len));
++        goto free_all;
++    }
++    libspdm_copy_mem(issuer_name, issuer_length, root_crt->issuer_raw.p,
++                     root_crt->issuer_raw.len);
++    issuer_length = root_crt->issuer_raw.len;
++    issuer_name[issuer_length] = '\0';
++
++    ret = mbedtls_pk_setup(&key, mbedtls_pk_info_from_type(MBEDTLS_PK_ECKEY));
++    if (ret != 0)
++    {
++        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR,
++                       "Failed to set up mbedTLS public key: %d\n", ret));
++        goto free_all;
++    }
++    /*mbedtls_ecdh_context include mbedtls_ecdsa_context,can be treated as
++     * mbedtls_ecdsa_context*/
++    ret = mbedtls_ecdsa_from_keypair(mbedtls_pk_ec(key),
++                                     (mbedtls_ecdsa_context *)ec_context);
++    if (ret != 0)
++    {
++        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR,
++                       "Failed to copy public key context from ECDSA: %d\n",
++                       ret));
++        goto free_all;
++    }
++
++    mbedtls_x509write_crt_set_version(leaf_crt, MBEDTLS_X509_CRT_VERSION_3);
++    mbedtls_x509write_crt_set_md_alg(leaf_crt, md_alg);
++    mbedtls_x509write_crt_set_subject_key(leaf_crt, &csr_obj.pk);
++    mbedtls_x509write_crt_set_issuer_key(leaf_crt, &key);
++    ret = mbedtls_x509write_crt_set_subject_name(
++        leaf_crt, "CN=AMI sample leaf certificate,O=AMI,C=TW");
++    if (ret != 0)
++    {
++        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR,
++                       "Failed to set subject name in leaf certificate: %d\n",
++                       ret));
++        goto free_all;
++    }
++
++    ret = mbedtls_x509write_crt_set_issuer_name(
++        leaf_crt, "CN=AMI sample Root CA,O=AMI,C=TW");
++    if (ret != 0)
++    {
++        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR,
++                       "Failed to set issuer name in leaf certificate: %d\n",
++                       ret));
++        goto free_all;
++    }
++
++    ret = mbedtls_x509write_crt_set_validity(leaf_crt, "20240101000000",
++                                             "20340101000000");
++    if (ret != 0)
++    {
++        LIBSPDM_DEBUG(
++            (LIBSPDM_DEBUG_ERROR,
++             "Failed to set validity period in leaf certificate: %d\n", ret));
++        goto free_all;
++    }
++
++    ret = mbedtls_x509write_crt_set_basic_constraints(leaf_crt, 0, 0);
++    if (ret != 0)
++    {
++        LIBSPDM_DEBUG(
++            (LIBSPDM_DEBUG_ERROR,
++             "Failed to set basic constraints in leaf certificate: %d\n", ret));
++        goto free_all;
++    }
++
++    ret = mbedtls_x509write_crt_set_key_usage(
++        leaf_crt, MBEDTLS_X509_KU_DIGITAL_SIGNATURE |
++                      MBEDTLS_X509_KU_NON_REPUDIATION |
++                      MBEDTLS_X509_KU_KEY_ENCIPHERMENT);
++    if (ret != 0)
++    {
++        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR,
++                       "Failed to set key usage in leaf certificate: %d\n",
++                       ret));
++        goto free_all;
++    }
++
++    // Calculate and add Subject Key Identifier (SKI) extension
++    if ((ret = mbedtls_pk_write_pubkey_der(&csr_obj.pk, pub_key_buffer,
++                                           sizeof(pub_key_buffer))) < 0)
++    {
++        LIBSPDM_DEBUG((
++            LIBSPDM_DEBUG_ERROR,
++            "Failed to write public key to calculate Subject Key Identifier in leaf certificate: %d\n",
++            ret));
++        goto free_all;
++    }
++
++    // Hash the public key using SHA-384
++    mbedtls_sha512(pub_key_buffer + sizeof(pub_key_buffer) - ret, ret, hash, 1);
++
++    libspdm_copy_mem(ski, sizeof(ski), hash, 20);
++
++    if ((ret = mbedtls_x509write_crt_set_extension(
++             leaf_crt, MBEDTLS_OID_SUBJECT_KEY_IDENTIFIER,
++             MBEDTLS_OID_SIZE(MBEDTLS_OID_SUBJECT_KEY_IDENTIFIER), 0, ski,
++             20)) != 0)
++    {
++        LIBSPDM_DEBUG(
++            (LIBSPDM_DEBUG_ERROR,
++             "Failed to write Subject Key Identifier in leaf certificate: %d\n",
++             ret));
++        goto free_all;
++    }
++
++    // Sign the certificate
++    if ((ret = mbedtls_x509write_crt_pem(leaf_crt, buf, sizeof(buf),
++                                         libspdm_myrand, NULL)) < 0)
++    {
++        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR,
++                       "Failed to write leaf certificate PEM: %d\n", ret));
++        goto free_all;
++    }
++
++    size_t pem_size = 0;
++    for (size_t i = 0; i < sizeof(buf); i++)
++    {
++        pem_size++;
++        if (buf[i] == '\0')
++            break;
++    }
++    LIBSPDM_DEBUG((LIBSPDM_DEBUG_INFO,
++                   "Written PEM bytes of leaf certificate: %d\n", pem_size));
++
++    // convert read-only certificate
++    // ret is PEM written bytes from previous step
++    if ((ret = mbedtls_x509_crt_parse(parsed_leaf_crt, buf, pem_size)) != 0)
++    {
++        LIBSPDM_DEBUG(
++            (LIBSPDM_DEBUG_ERROR,
++             "Failed to parse leaf certificate from PEM-encoded data: %d\n",
++             ret));
++        goto free_all;
++    }
++
++    *x509_signed_cert = (uint8_t *)(void *)parsed_leaf_crt;
++    parsed_leaf_crt = NULL; // Prevent free in cleanup
++    ret = 0;
++
++free_all:
++    mbedtls_pk_free(&key);
++    mbedtls_x509_csr_free(&csr_obj);
++    mbedtls_x509write_crt_free(leaf_crt);
++    free_pool(leaf_crt);
++    if (parsed_leaf_crt)
++    {
++        mbedtls_x509_crt_free(parsed_leaf_crt);
++        free_pool(parsed_leaf_crt);
++    }
++    return (ret == 0);
++}
++
+ /**
+  * Retrieve the EC public key from one DER-encoded X509 certificate.
+  *
+diff --git a/os_stub/cryptlib_null/pk/x509.c b/os_stub/cryptlib_null/pk/x509.c
+index ba7c2687..80d42ba2 100644
+--- a/os_stub/cryptlib_null/pk/x509.c
++++ b/os_stub/cryptlib_null/pk/x509.c
+@@ -36,6 +36,33 @@ bool libspdm_x509_construct_pem_certificate(const uint8_t *der_cert,
+     return false;
+ }
+ 
++/**
++ * Construct DER-encoded certificate data from a X509 object.
++ *
++ * If der_cert is NULL, then return false.
++ * If x509_cert is NULL, then return false.
++ * If der_cert_size is 0, then return false.
++ *
++ * @param[in]  x509_cert          Pointer to the X509 object .
++ * @param[in]  der_cert           Pointer to the buffer of DER-encoded
++ *                               certificate data.
++ * @param[in, out] der_cert_size  On input, the buffer size of certificate data
++ *                               in bytes.
++ *                                On output, the actual size of converted
++ *                               der-encoded certificate data in bytes.
++ *
++ * @retval     true            The DER-encoded certificate written succeeded.
++ * @retval     false           The operation failed.
++ *
++ **/
++bool libspdm_x509_construct_der_certificate(uint8_t *x509_cert,
++                                            uint8_t **der_cert,
++                                            size_t *der_cert_size)
++{
++    LIBSPDM_ASSERT(false);
++    return false;
++}
++
+ /**
+  * Construct a X509 object from DER-encoded certificate data.
+  *
+@@ -242,6 +269,57 @@ bool libspdm_rsa_get_public_key_from_x509(const uint8_t *cert, size_t cert_size,
+ }
+ #endif /* (LIBSPDM_RSA_SSA_SUPPORT) || (LIBSPDM_RSA_PSS_SUPPORT) */
+ 
++/**
++ * Construct the X509 object of root CA from given EC DSA keypair.
++ *
++ * @param[in]   ec_context      Pointer to the EC DSA context which contain the
++ *                            EC DSA key components.
++ * @param[out]  x509_root_cert  Pointer to the generated X509 object. Use
++ *                     libspdm_x509_free() function to free the resource.
++ *
++ * If ec_context is NULL, then return false.
++ * If x509_root_cert is NULL, then return false.
++ *
++ * @retval     true            The X509 object generation succeeded.
++ * @retval     false           The operation failed.
++ *
++ **/
++bool libspdm_x509_construct_root_certificate_from_ec(void *ec_context,
++                                                     uint8_t **x509_root_cert)
++{
++    LIBSPDM_ASSERT(false);
++    return false;
++}
++
++/**
++ * Sign the CSR with given root CA and EC DSA keypair.
++ *
++ * @param[in]   csr               Pointer to the DER-encoded X509 certificate
++ *                              signing request.
++ * @param[in]   csr_len           Size of the X509 CSR in bytes.
++ * @param[in]   ec_context        Pointer to the EC DSA context which contain
++ *                              the EC DSA key components.
++ * @param[in]   x509_root_cert    Pointer to the X509 object of root
++ *                              certificate.
++ * @param[out]  x509_signed_cert  Pointer to the generated X509 object. Use
++ *                      libspdm_x509_free() function to free the resource.
++ *
++ * If csr is NULL, then return false.
++ * If ec_context is NULL, then return false.
++ * If root_cert is NULL, then return false.
++ *
++ * @retval     true            The signed certificate generation succeeded.
++ * @retval     false           The operation failed.
++ *
++ **/
++bool libspdm_sign_csr_from_ec(uint8_t *csr, size_t csr_len, void *ec_context,
++                              uint8_t *x509_root_cert,
++                              uint8_t **x509_signed_cert)
++{
++    LIBSPDM_ASSERT(false);
++    return false;
++}
++
+ /**
+  * Retrieve the EC public key from one DER-encoded X509 certificate.
+  *
+diff --git a/os_stub/cryptlib_openssl/pk/x509.c b/os_stub/cryptlib_openssl/pk/x509.c
+index f6e0da6e..e55c84e9 100644
+--- a/os_stub/cryptlib_openssl/pk/x509.c
++++ b/os_stub/cryptlib_openssl/pk/x509.c
+@@ -99,6 +99,48 @@ done:
+     return status;
+ }
+ 
++/**
++ * Construct DER-encoded certificate data from a X509 object.
++ *
++ * If der_cert is NULL, then return false.
++ * If x509_cert is NULL, then return false.
++ * If der_cert_size is 0, then return false.
++ *
++ * @param[in]  x509_cert          Pointer to the X509 object .
++ * @param[in]  der_cert           Pointer to the buffer of DER-encoded
++ *                               certificate data.
++ * @param[in, out] der_cert_size  On input, the buffer size of certificate data
++ *                               in bytes.
++ *                                On output, the actual size of converted
++ *                               der-encoded certificate data in bytes.
++ *
++ * @retval     true            The DER-encoded certificate written succeeded.
++ * @retval     false           The operation failed.
++ *
++ **/
++bool libspdm_x509_construct_der_certificate(uint8_t *x509_cert,
++                                            uint8_t **der_cert,
++                                            size_t *der_cert_size)
++{
++    int len = 0;
++    X509 *cert = NULL;
++    uint8_t *originalPtr;
++    if (x509_cert == NULL || der_cert == NULL || *der_cert_size == 0)
++        return false;
++    originalPtr = *der_cert;
++    cert = (X509 *)x509_cert;
++    len = i2d_X509(cert, der_cert);
++    if (len < 0)
++    {
++        LIBSPDM_DEBUG((LIBSPDM_DEBUG_ERROR,
++                       "Failed to convert certificate to DER data.\n"));
++        return false;
++    }
++    *der_cert_size = len;
++    *der_cert = originalPtr;
++    return true;
++}
++
+ /**
+  * Construct a X509 object from DER-encoded certificate data.
+  *
+@@ -1648,6 +1690,244 @@ done:
+ }
+ #endif /* (LIBSPDM_RSA_SSA_SUPPORT) || (LIBSPDM_RSA_PSS_SUPPORT) */
+ 
++/**
++ * Construct the X509 object of root CA from given EC DSA keypair.
++ *
++ * @param[in]   ec_context      Pointer to the EC DSA context which contain the
++ *                            EC DSA key components.
++ * @param[out]  x509_root_cert  Pointer to the generated X509 object. Use
++ *                     libspdm_x509_free() function to free the resource.
++ *
++ * If ec_context is NULL, then return false.
++ * If x509_root_cert is NULL, then return false.
++ *
++ * @retval     true            The X509 object generation succeeded.
++ * @retval     false           The operation failed.
++ *
++ **/
++bool libspdm_x509_construct_root_certificate_from_ec(void *ec_context,
++                                                     uint8_t **x509_root_cert)
++{
++    bool res = false;
++    EVP_PKEY *key = NULL;
++    X509 *x509 = NULL;
++    X509_NAME *name = NULL;
++
++    if (x509_root_cert == NULL || ec_context == NULL)
++    {
++        return false;
++    }
++
++    key = NULL;
++
++    key = EVP_PKEY_new();
++    if (key == NULL)
++    {
++        return false;
++    }
++    if (!EVP_PKEY_set1_EC_KEY(key, (EC_KEY *)ec_context))
++    {
++        goto teardown;
++    }
++
++    // 1. Create a new X509 certificate
++    x509 = X509_new();
++    if (!x509)
++        goto teardown;
++
++    // 2. Set version to 3 (index 2)
++    if (!X509_set_version(x509, 2))
++        goto teardown;
++
++    // 3. Set serial number
++    ASN1_INTEGER_set(X509_get_serialNumber(x509), 1234);
++
++    // 4. Set validity period
++    X509_gmtime_adj(X509_getm_notBefore(x509), 0);
++    X509_gmtime_adj(X509_getm_notAfter(x509), 31536000L);
++
++    if (!X509_set_pubkey(x509, key))
++        goto teardown;
++
++    // 6. Set issuer and subject name
++    name = X509_get_subject_name(x509);
++    X509_NAME_add_entry_by_txt(name, "C", MBSTRING_ASC, (unsigned char *)"TW",
++                               -1, -1, 0);
++    X509_NAME_add_entry_by_txt(name, "O", MBSTRING_ASC, (unsigned char *)"AMI",
++                               -1, -1, 0);
++    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
++                               (unsigned char *)"AMI sample Root CA", -1, -1, 0);
++    X509_set_issuer_name(x509,
++                         name); // Self-signed, so issuer is the same as subject
++
++    // 7. Add extensions
++    X509V3_CTX ctx;
++    X509V3_set_ctx_nodb(&ctx);
++    X509V3_set_ctx(&ctx, x509, x509, NULL, NULL, 0);
++    X509_EXTENSION *ext;
++    ext = X509V3_EXT_conf_nid(NULL, &ctx, NID_basic_constraints,
++                              "critical,CA:TRUE");
++    X509_add_ext(x509, ext, -1);
++    X509_EXTENSION_free(ext);
++    ext = X509V3_EXT_conf_nid(NULL, &ctx, NID_subject_key_identifier, "hash");
++    X509_add_ext(x509, ext, -1);
++    X509_EXTENSION_free(ext);
++    ext = X509V3_EXT_conf_nid(NULL, &ctx, NID_authority_key_identifier,
++                              "keyid:always,issuer");
++    X509_add_ext(x509, ext, -1);
++    X509_EXTENSION_free(ext);
++
++    // 8. Sign the certificate with the private key
++    if (!X509_sign(x509, key, EVP_sha384()))
++        goto teardown;
++
++    *x509_root_cert = (uint8_t *)x509;
++    x509 = NULL; // Prevent free in cleanup
++    res = true;
++
++teardown:
++    if (key)
++        EVP_PKEY_free(key);
++    if (x509)
++        X509_free(x509);
++    return res;
++}
++
++/**
++ * Sign the CSR with given root CA and EC DSA keypair.
++ *
++ * @param[in]   csr               Pointer to the DER-encoded X509 certificate
++ *                              signing request.
++ * @param[in]   csr_len           Size of the X509 CSR in bytes.
++ * @param[in]   ec_context        Pointer to the EC DSA context which contain
++ *                              the EC DSA key components.
++ * @param[in]   x509_root_cert    Pointer to the X509 object of root
++ *                              certificate.
++ * @param[out]  x509_signed_cert  Pointer to the generated X509 object. Use
++ *                      libspdm_x509_free() function to free the resource.
++ *
++ * If csr is NULL, then return false.
++ * If ec_context is NULL, then return false.
++ * If root_cert is NULL, then return false.
++ *
++ * @retval     true            The signed certificate generation succeeded.
++ * @retval     false           The operation failed.
++ *
++ **/
++bool libspdm_sign_csr_from_ec(uint8_t *csr, size_t csr_len, void *ec_context,
++                              uint8_t *x509_root_cert,
++                              uint8_t **x509_signed_cert)
++{
++    bool res = false;
++    X509 *cert = NULL;
++    EVP_PKEY *req_pubkey = NULL;
++    X509 *root_ca_cert = NULL;
++    X509_REQ *csr_req = NULL;
++    EVP_PKEY *ca_pkey = NULL;
++
++    if (csr == NULL || ec_context == NULL || x509_root_cert == NULL ||
++        csr_len == 0)
++        return false;
++
++    const unsigned char *p = (const unsigned char *)csr;
++    csr_req = d2i_X509_REQ(NULL, &p, csr_len);
++    if (!csr_req)
++        goto teardown;
++
++    ca_pkey = EVP_PKEY_new();
++    if (!ca_pkey)
++        goto teardown;
++    if (!EVP_PKEY_set1_EC_KEY(ca_pkey, (EC_KEY *)ec_context))
++        goto teardown;
++
++    root_ca_cert = (X509 *)x509_root_cert;
++
++    // Create a new certificate
++    cert = X509_new();
++    if (!cert)
++        goto teardown;
++
++    // Set version of the certificate (X509v3)
++    if (!X509_set_version(cert, 2))
++        goto teardown; // 0 indexed, so 2 means v3
++
++    // Generate serial number
++    // todo: error handling
++    ASN1_INTEGER *serial = ASN1_INTEGER_new();
++    ASN1_INTEGER_set(serial, 1235); // Just an example, should be unique
++    X509_set_serialNumber(cert, serial);
++    ASN1_INTEGER_free(serial);
++
++    // Set issuer name from the CA certificate
++    // todo: error handling
++    X509_set_issuer_name(cert, X509_get_subject_name(root_ca_cert));
++
++    // Set validity period
++    // todo: error handling
++    X509_gmtime_adj(X509_getm_notBefore(cert), 0);
++    X509_gmtime_adj(X509_getm_notAfter(cert),
++                    (long)60 * 60 * 24 * 365); // Valid for 'days'
++
++    // Set subject from CSR
++    // todo: error handling
++    X509_set_subject_name(cert, X509_REQ_get_subject_name(csr_req));
++
++    // Extract public key from CSR
++    // todo: error handling
++    req_pubkey = X509_REQ_get_pubkey(csr_req);
++    X509_set_pubkey(cert, req_pubkey);
++    EVP_PKEY_free(req_pubkey);
++
++    // Add extensions
++    X509V3_CTX ctx;
++    X509V3_set_ctx_nodb(&ctx);
++    X509V3_set_ctx(&ctx, NULL, cert, NULL, NULL, 0);
++
++    X509_EXTENSION *ext;
++    ext = X509V3_EXT_conf_nid(NULL, &ctx, NID_basic_constraints,
++                              "critical,CA:FALSE");
++    X509_add_ext(cert, ext, -1);
++    X509_EXTENSION_free(ext);
++
++    ext =
++        X509V3_EXT_conf_nid(NULL, &ctx, NID_key_usage,
++                            "digitalSignature,nonRepudiation,keyEncipherment");
++    X509_add_ext(cert, ext, -1);
++    X509_EXTENSION_free(ext);
++
++    ext = X509V3_EXT_conf_nid(NULL, &ctx, NID_subject_key_identifier, "hash");
++    X509_add_ext(cert, ext, -1);
++    X509_EXTENSION_free(ext);
++
++    ext = X509V3_EXT_conf_nid(
++        NULL, &ctx, NID_subject_alt_name,
++        "otherName:1.3.6.1.4.1.412.274.1;UTF8:ACME:WIDGET:1234567890");
++    X509_add_ext(cert, ext, -1);
++    X509_EXTENSION_free(ext);
++
++    ext = X509V3_EXT_conf_nid(NULL, &ctx, NID_ext_key_usage,
++                              "critical,serverAuth,clientAuth,ocspSigning");
++    X509_add_ext(cert, ext, -1);
++    X509_EXTENSION_free(ext);
++
++    // Sign the certificate with CA's private key
++    if (!X509_sign(cert, ca_pkey, EVP_sha384()))
++        goto teardown;
++
++    *x509_signed_cert = (uint8_t *)cert;
++    cert = NULL;
++    res = true;
++
++teardown:
++    if (csr_req)
++        X509_REQ_free(csr_req);
++    if (ca_pkey)
++        EVP_PKEY_free(ca_pkey);
++    if (cert)
++        X509_free(cert);
++    return res;
++}
++
+ /**
+  * Retrieve the EC public key from one DER-encoded X509 certificate.
+  *
+diff --git a/os_stub/spdm_crypt_ext_lib/cryptlib_ext.h b/os_stub/spdm_crypt_ext_lib/cryptlib_ext.h
+index 5194b5c7..ad724804 100644
+--- a/os_stub/spdm_crypt_ext_lib/cryptlib_ext.h
++++ b/os_stub/spdm_crypt_ext_lib/cryptlib_ext.h
+@@ -131,6 +131,73 @@ extern bool libspdm_x509_construct_pem_certificate(const uint8_t *der_cert,
+                                                    char *pem_cert,
+                                                    size_t *pem_cert_size);
+ 
++/**
++ * Construct DER-encoded certificate data from a X509 object.
++ *
++ * If der_cert is NULL, then return false.
++ * If x509_cert is NULL, then return false.
++ * If der_cert_size is 0, then return false.
++ *
++ * @param[in]  x509_cert          Pointer to the X509 object .
++ * @param[in]  der_cert           Pointer to the buffer of DER-encoded
++ *                               certificate data.
++ * @param[in, out] der_cert_size  On input, the buffer size of certificate data
++ *                               in bytes.
++ *                                On output, the actual size of converted
++ *                               der-encoded certificate data in bytes.
++ *
++ * @retval     true            The DER-encoded certificate written succeeded.
++ * @retval     false           The operation failed.
++ *
++ **/
++extern bool libspdm_x509_construct_der_certificate(uint8_t *x509_cert,
++                                                   uint8_t **der_cert,
++                                                   size_t *der_cert_size);
++
++/**
++ * Construct the X509 object of root CA from given EC DSA keypair.
++ *
++ * @param[in]   ec_context      Pointer to the EC DSA context which contain the
++ *                            EC DSA key components.
++ * @param[out]  x509_root_cert  Pointer to the generated X509 object. Use
++ *                     libspdm_x509_free() function to free the resource.
++ *
++ * If ec_context is NULL, then return false.
++ * If x509_root_cert is NULL, then return false.
++ *
++ * @retval     true            The X509 object generation succeeded.
++ * @retval     false           The operation failed.
++ *
++ **/
++extern bool
++libspdm_x509_construct_root_certificate_from_ec(void *ec_context,
++                                                uint8_t **x509_root_cert);
++
++/**
++ * Sign the CSR with given root CA and EC DSA keypair.
++ *
++ * @param[in]   csr               Pointer to the DER-encoded X509 certificate
++ *                              signing request.
++ * @param[in]   csr_len           Size of the X509 CSR in bytes.
++ * @param[in]   ec_context        Pointer to the EC DSA context which contain
++ *                              the EC DSA key components.
++ * @param[in]   x509_root_cert    Pointer to the X509 object of root
++ *                              certificate.
++ * @param[out]  x509_signed_cert  Pointer to the generated X509 object. Use
++ *                      libspdm_x509_free() function to free the resource.
++ *
++ * If csr is NULL, then return false.
++ * If ec_context is NULL, then return false.
++ * If root_cert is NULL, then return false.
++ *
++ * @retval     true            The signed certificate generation succeeded.
++ * @retval     false           The operation failed.
++ *
++ **/
++extern bool libspdm_sign_csr_from_ec(uint8_t *csr, size_t csr_len,
++                                     void *ec_context, uint8_t *x509_root_cert,
++                                     uint8_t **x509_signed_cert);
++
+ /**
+  * Construct a X509 object from DER-encoded certificate data.
+  *
+-- 
+2.25.1
+

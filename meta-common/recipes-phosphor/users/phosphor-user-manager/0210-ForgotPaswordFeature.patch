@@ -1,0 +1,681 @@
+From 89f7518ba6ab7001e23d83771287f0c40db8b11f Mon Sep 17 00:00:00 2001
+From: Vijaysankar R <vijaysankarr@ami.com>
+Date: Thu, 6 Nov 2025 12:58:14 +0530
+Subject: [PATCH 210/210] ForgotPaswordFeature
+
+---
+ mainapp.cpp  |   6 +-
+ user_mgr.cpp | 357 ++++++++++++++++++++++++++++++++++++++++++++++++++-
+ user_mgr.hpp | 115 +++++++++++++++++
+ users.cpp    |  23 ++++
+ users.hpp    |  11 ++
+ 5 files changed, 508 insertions(+), 4 deletions(-)
+
+diff --git a/mainapp.cpp b/mainapp.cpp
+index b03e9e3..8e7ab60 100644
+--- a/mainapp.cpp
++++ b/mainapp.cpp
+@@ -4,9 +4,6 @@
+ 
+ #include <phosphor-logging/elog-errors.hpp>
+ #include <phosphor-logging/log.hpp>
+-#include <sdbusplus/bus.hpp>
+-#include <sdbusplus/server/manager.hpp>
+-#include <xyz/openbmc_project/Common/error.hpp>
+ 
+ using namespace phosphor::logging;
+ using InternalFailure =
+@@ -36,6 +33,9 @@ int main(int /*argc*/, char** /*argv*/)
+         // Claim the bus now
+         bus.request_name(USER_MANAGER_BUSNAME);
+ 
++        // Setup the timer
++        phosphor::user::setupTimer(io);
++
+         /* Run the Boost.Asio I/O event loop */
+         io.run();
+     }
+diff --git a/user_mgr.cpp b/user_mgr.cpp
+index 73e0d87..41b6518 100644
+--- a/user_mgr.cpp
++++ b/user_mgr.cpp
+@@ -61,7 +61,7 @@
+ #include <unordered_set>
+ #include <vector>
+ #define MAX_USER_NAME_LEN 255
+-
++std::unordered_map<std::string, VerifyOTP_T> userOTPs;
+ namespace phosphor
+ {
+ namespace user
+@@ -74,6 +74,11 @@ static constexpr const char* grpSsh = "ssh";
+ static constexpr int success = 0;
+ static constexpr int failure = -1;
+ 
++const char* mailService = "xyz.openbmc_project.mail";
++const char* mailObjpath = "/xyz/openbmc_project/mail/alert";
++const char* mailIfc = "xyz.openbmc_project.mail.alert";
++const char* mailMethod = "ForgotPassSendMail";
++
+ // pam modules related
+ static constexpr const char* minPasswdLenProp = "minlen";
+ static constexpr const char* remOldPasswdCount = "remember";
+@@ -263,6 +268,117 @@ bool removeStringFromCSV(std::string& csvStr, const std::string& delStr)
+     return false;
+ }
+ 
++void generateRandomNumber(unsigned char* randomNumber, int len)
++{
++    const size_t BUF_SIZE = 10240;
++    unsigned char buf[BUF_SIZE] = {0};
++    std::ifstream rand_file("/dev/random", std::ios::in | std::ios::binary);
++    if (!rand_file)
++    {
++        log<level::ERR>("Failed to open /dev/random");
++        return;
++    }
++
++    // Read BUF_SIZE bytes from /dev/random
++    rand_file.read(reinterpret_cast<char*>(buf), BUF_SIZE);
++    if (!rand_file)
++    {
++        log<level::ERR>("Failed to read enough bytes from /dev/random");
++        return;
++    }
++
++    rand_file.close();
++    RAND_seed(buf, BUF_SIZE);
++    if (RAND_bytes(randomNumber, len) < 1)
++    {
++        return;
++    }
++    return;
++}
++
++void onTimerTick([[maybe_unused]] uint64_t expirations)
++{
++    for (auto& [username, otpEntry] : userOTPs)
++    {
++        if (otpEntry.timervalue > 0)
++        {
++            otpEntry.timervalue--;
++            if (otpEntry.timervalue == 0)
++                memset(otpEntry.OTP, 0, sizeof(otpEntry.OTP));
++        }
++    }
++}
++
++void setupTimer(boost::asio::io_context& io)
++{
++    int tfd = timerfd_create(CLOCK_MONOTONIC, 0);
++    if (tfd == -1)
++    {
++        std::cerr << "Failed to create timerfd: " << strerror(errno)
++                  << std::endl;
++        return;
++    }
++
++    itimerspec timerSpec{};
++    timerSpec.it_value.tv_sec = 1;
++    timerSpec.it_interval.tv_sec = 1;
++
++    if (timerfd_settime(tfd, 0, &timerSpec, nullptr) == -1)
++    {
++        std::cerr << "Failed to set timer: " << strerror(errno) << std::endl;
++        close(tfd);
++        return;
++    }
++
++    auto timerStream =
++        std::make_shared<boost::asio::posix::stream_descriptor>(io, tfd);
++    auto buffer = std::make_shared<uint64_t>(0);
++
++    // Create a shared_ptr to the handler function to avoid circular reference
++    // issues
++    auto handler = std::make_shared<std::function<void()>>();
++
++    *handler = [timerStream, buffer, handler]() {
++        timerStream->async_read_some(
++            boost::asio::buffer(buffer.get(), sizeof(uint64_t)),
++            [timerStream, buffer, handler](const boost::system::error_code& ec,
++                                           std::size_t /*bytes_transferred*/) {
++                if (!ec)
++                {
++                    onTimerTick(*buffer);
++                    (*handler)(); // Re-arm the handler
++                }
++                else
++                {
++                    std::cerr
++                        << "Timer read error: " << ec.message() << std::endl;
++                }
++            });
++    };
++
++    (*handler)(); // Start the first async read
++}
++
++bool compareStringWithBytes(const std::string& str,
++                            const unsigned char val[otpFixedLen])
++{
++    // Ensure the string has at least 8 characters
++    if (str.size() < otpFixedLen)
++    {
++        return false;
++    }
++
++    for (size_t i = 0; i < otpFixedLen; ++i)
++    {
++        if (static_cast<unsigned char>(str[i]) != val[i])
++        {
++            return false;
++        }
++    }
++
++    return true;
++}
++
+ bool UserMgr::isUserExist(const std::string& userName)
+ {
+     if (userName.empty())
+@@ -469,6 +585,66 @@ void UserMgr::throwForInvalidGroups(const std::vector<std::string>& groupNames)
+         }
+     }
+ }
++void UserMgr::throwForInvalidMailID(const std::string& smtpMailID)
++{
++    const char* primaryMailIfc = "xyz.openbmc_project.mail.alert.primary";
++    const char* secondaryMailIfc = "xyz.openbmc_project.mail.alert.secondary";
++
++    bool primaryEnable = false;
++    bool secondaryEnable = false;
++
++    // Check primary mail service
++    try
++    {
++        auto primaryProxy = bus.new_method_call(
++            mailService, mailObjpath, "org.freedesktop.DBus.Properties", "Get");
++        primaryProxy.append(primaryMailIfc, "Enable");
++        auto reply = bus.call(primaryProxy);
++        std::variant<bool> value;
++        reply.read(value);
++        primaryEnable = std::get<bool>(value);
++    }
++    catch (const sdbusplus::exception::exception& e)
++    {
++        lg2::error("Failed to get primary mail enable status: {ERR}", "ERR",
++                   e.what());
++    }
++
++    // Check secondary mail service
++    try
++    {
++        auto secondaryProxy = bus.new_method_call(
++            mailService, mailObjpath, "org.freedesktop.DBus.Properties", "Get");
++        secondaryProxy.append(secondaryMailIfc, "Enable");
++        auto reply = bus.call(secondaryProxy);
++        std::variant<bool> value;
++        reply.read(value);
++        secondaryEnable = std::get<bool>(value);
++    }
++    catch (const sdbusplus::exception::exception& e)
++    {
++        lg2::error("Failed to get secondary mail enable status: {ERR}", "ERR",
++                   e.what());
++    }
++
++    // If neither is enabled, throw NotEnabled
++    if (!(primaryEnable || secondaryEnable))
++    {
++        lg2::error("Cannot set SMTP Mail ID, mail service is not enabled");
++        elog<NotAllowed>(
++            Reason("Cannot set SMTP Mail ID, mail service is not enabled"));
++    }
++
++    const std::regex pattern(
++        R"(^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$)");
++    if ((!std::regex_match(smtpMailID, pattern)) || (smtpMailID.empty()))
++    {
++        lg2::error("Invalid Mail ID '{INVALIDMAILID}'", "INVALIDMAILID",
++                   smtpMailID);
++        elog<InvalidArgument>(Argument::ARGUMENT_NAME("SMTPMailID"),
++                              Argument::ARGUMENT_VALUE(smtpMailID.c_str()));
++    }
++}
+ 
+ std::vector<std::string> UserMgr::readAllGroupsOnSystem()
+ {
+@@ -832,6 +1008,7 @@ void UserMgr::renameUser(std::string userName, std::string newUserName)
+     std::vector<uint8_t> userChannelAccess = user.get()->userChannelAccess();
+     bool enabled = user.get()->userEnabled();
+     bool snmpAccessEnableStatus = user.get()->snmpAccessEnableStatus();
++    std::string mailid = user.get()->smtpMailID();
+     sdbusplus::message::object_path tempObjPath(usersObjPath);
+     tempObjPath /= newUserName;
+     std::string newUserObj(tempObjPath);
+@@ -846,6 +1023,7 @@ void UserMgr::renameUser(std::string userName, std::string newUserName)
+                           userChannelAccess, enabled, *this));
+     auto& newUserRef = usersList.at(newUserName);
+     newUserRef->snmpAccessEnableStatus(snmpAccessEnableStatus);
++    newUserRef->smtpMailID(mailid);
+ 
+     /* If the user is named and identified as an SNMP user, it also needs to be
+      * renamed */
+@@ -1050,6 +1228,170 @@ uint32_t UserMgr::accountUnlockTimeout(uint32_t value)
+     return AccountPolicyIface::accountUnlockTimeout(value);
+ }
+ 
++bool UserMgr::otpGeneration(std::string userName)
++{
++    unsigned char randomNumber = 0;
++    constexpr char numbers[numberCount] = "0123456789";
++    std::string Subject = "The OTP for " + userName;
++    std::string Message;
++    uint16_t sendMailRetVal = 0;
++    const std::regex pattern(
++        R"(^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$)");
++    auto& otpEntry = userOTPs[userName];
++    if (userName.empty())
++    {
++        log<level::ERR>("User name is empty");
++        return false;
++    }
++    const auto& user = usersList[userName];
++    std::string mailid = user.get()->smtpMailID();
++
++    if (!std::regex_match(mailid, pattern))
++    {
++        log<level::ERR>("Invalid Mail ID");
++        return false;
++    }
++
++    for (int iter = 0; iter < otpFixedLen; iter++)
++    {
++        generateRandomNumber(&randomNumber, 1);
++        otpEntry.OTP[iter] = numbers[(randomNumber % (sizeof(numbers) - 1))];
++    }
++
++    Message = "The OTP has been sent for UserName : " + userName + " " +
++              std::string(reinterpret_cast<const char*>(otpEntry.OTP),
++                          sizeof(otpEntry.OTP));
++    otpEntry.timervalue = otpTimeOutInSec;
++
++    try
++    {
++        auto otpGeneration =
++            bus.new_method_call(mailService, mailObjpath, mailIfc, mailMethod);
++        otpGeneration.append(mailid, Subject, Message);
++        /*mailMethod returns 0 on success*/
++        auto mailStatus = bus.call(otpGeneration);
++        mailStatus.read(sendMailRetVal);
++        if (!sendMailRetVal)
++        {
++            lg2::info("OTP mail sent, sendMailRetVal={RETVAL}", "RETVAL",
++                      sendMailRetVal);
++            return true;
++        }
++        else
++        {
++            lg2::info(" unable to send OTP mail , sendMailRetVal={RETVAL}",
++                      "RETVAL", sendMailRetVal);
++            return false;
++        }
++    }
++
++    catch (const sdbusplus::exception::SdBusError& e)
++    {
++        lg2::error("D-Bus call failed:,{ERROR}", "ERROR", e.what());
++        return false;
++    }
++}
++
++int pamFunctionConversation(int numMsg, const struct pam_message** msgs,
++                            struct pam_response** resp, void* appdataPtr)
++{
++    if ((appdataPtr == nullptr) || (msgs == nullptr) || (resp == nullptr))
++    {
++        return PAM_CONV_ERR;
++    }
++
++    if (numMsg <= 0 || numMsg >= PAM_MAX_NUM_MSG)
++    {
++        return PAM_CONV_ERR;
++    }
++    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
++    PasswordData* appPass = reinterpret_cast<PasswordData*>(appdataPtr);
++    auto msgCount = static_cast<size_t>(numMsg);
++    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays)
++    auto responseArrPtr = std::make_unique<pam_response[]>(msgCount);
++    auto responses = std::span(responseArrPtr.get(), msgCount);
++    auto messagePtrs = std::span(msgs, msgCount);
++    for (size_t i = 0; i < msgCount; ++i)
++    {
++        const pam_message& msg = *(messagePtrs[i]);
++
++        pam_response& response = responses[i];
++        response.resp_retcode = 0;
++        response.resp = nullptr;
++
++        int r = appPass->makeResponse(msg, response);
++        if (r != PAM_SUCCESS)
++        {
++            return r;
++        }
++    }
++
++    *resp = responseArrPtr.release();
++    return PAM_SUCCESS;
++}
++
++int pamUpdatePassword(const std::string& username, const std::string& password)
++{
++    PasswordData data;
++    if (int ret = data.addPrompt("New password: ", password);
++        ret != PAM_SUCCESS)
++    {
++        return ret;
++    }
++    if (int ret = data.addPrompt("Retype new password: ", password);
++        ret != PAM_SUCCESS)
++    {
++        return ret;
++    }
++    const struct pam_conv localConversation = {pamFunctionConversation, &data};
++    pam_handle_t* localAuthHandle = nullptr; // this gets set by pam_start
++
++    int retval = pam_start("webserver", username.c_str(), &localConversation,
++                           &localAuthHandle);
++    if (retval != PAM_SUCCESS)
++    {
++        return retval;
++    }
++
++    retval = pam_chauthtok(localAuthHandle, PAM_SILENT);
++    if (retval != PAM_SUCCESS)
++    {
++        pam_end(localAuthHandle, PAM_SUCCESS);
++        return retval;
++    }
++    return pam_end(localAuthHandle, PAM_SUCCESS);
++}
++bool UserMgr::otpValidationPasswordUpdate(std::string userName, std::string otp,
++                                          std::string newPassword)
++{
++    if (userName.empty())
++    {
++        log<level::ERR>("User name is empty");
++    }
++    if (otp.empty())
++    {
++        log<level::ERR>("OTP data is empty");
++    }
++    if (newPassword.empty())
++    {
++        log<level::ERR>("Password empty");
++    }
++    auto it = userOTPs.find(userName);
++    if (it != userOTPs.end() &&
++        compareStringWithBytes(
++            otp, reinterpret_cast<const unsigned char*>(it->second.OTP)))
++    {
++        if (pamUpdatePassword(userName, newPassword) != 0)
++        {
++            log<level::ERR>("Password update failed");
++            return false;
++        }
++        memset(it->second.OTP, 0, sizeof(it->second.OTP));
++        return true;
++    }
++    return false;
++}
++
+ int UserMgr::getPamModuleConfValue(const std::string& confFile,
+                                    const std::string& argName,
+                                    std::string& argValue)
+@@ -2164,6 +2506,7 @@ void UserMgr::initUserObjects(void)
+             std::vector<uint8_t> userChannelAccess;
+             std::vector<uint8_t> availableChannels = getAvailableChannelIds();
+             bool snmpAccessEnableStatus = false;
++            std::string mailId;
+             if (!userJsonOpt)
+             {
+                 lg2::warning(
+@@ -2182,6 +2525,14 @@ void UserMgr::initUserObjects(void)
+                         "Restoring SNMP access for user: {USER} = {STATE}",
+                         "USER", user, "STATE", snmpAccessEnableStatus);
+                 }
++                if (entry.contains("fixed_smtp_mail_id") &&
++                    entry["fixed_smtp_mail_id"].is_string())
++                {
++                    mailId = entry["fixed_smtp_mail_id"].get<std::string>();
++                    lg2::info(
++                        "Restoring fixed SMTP Mail ID for user: {USER} = {MAILID}",
++                        "USER", user, "MAILID", mailId);
++                }
+                 if (entry.contains("ipmi_enabled") &&
+                     entry["ipmi_enabled"].is_array())
+                 {
+@@ -2256,6 +2607,10 @@ void UserMgr::initUserObjects(void)
+                           userChannelAccess, isUserEnabled(user), *this));
+             auto& userObj = usersList.at(user);
+             userObj->snmpAccessEnableStatus(snmpAccessEnableStatus);
++            if (!mailId.empty())
++            {
++                userObj->smtpMailID(mailId);
++            }
+         }
+     }
+ }
+diff --git a/user_mgr.hpp b/user_mgr.hpp
+index 345544a..6283f29 100644
+--- a/user_mgr.hpp
++++ b/user_mgr.hpp
+@@ -16,6 +16,9 @@
+ #pragma once
+ #include "users.hpp"
+ 
++#include <openssl/rand.h>
++#include <security/pam_appl.h>
++
+ #include <boost/process/child.hpp>
+ #include <boost/process/io.hpp>
+ #include <phosphor-logging/elog-errors.hpp>
+@@ -34,6 +37,79 @@
+ #include <variant>
+ #include <vector>
+ 
++// forgot password feature related strctures
++typedef struct
++{
++    int8_t OTP[8];
++    bool IsPasswdResetAllwd;
++    int timervalue;
++} VerifyOTP_T;
++
++constexpr int otpFixedLen = 8;
++constexpr int numberCount = 11;
++constexpr int otpTimeOutInSec = 300;
++constexpr int maxUser = 15;
++struct PasswordData
++{
++    struct Response
++    {
++        std::string_view prompt;
++        std::string value;
++    };
++
++    std::vector<Response> responseData;
++
++    int addPrompt(std::string_view prompt, std::string_view value)
++    {
++        if (value.size() + 1 > PAM_MAX_MSG_SIZE)
++        {
++            // BMCWEB_LOG_ERROR("value length error", prompt);
++            return PAM_CONV_ERR;
++        }
++        responseData.emplace_back(prompt, std::string(value));
++        return PAM_SUCCESS;
++    }
++
++    int makeResponse(const pam_message& msg, pam_response& response)
++    {
++        switch (msg.msg_style)
++        {
++            case PAM_PROMPT_ECHO_ON:
++                break;
++            case PAM_PROMPT_ECHO_OFF:
++            {
++                std::string prompt(msg.msg);
++                auto iter = std::ranges::find_if(
++                    responseData, [&prompt](const Response& data) {
++                        return prompt.starts_with(data.prompt);
++                    });
++                if (iter == responseData.end())
++                {
++                    return PAM_CONV_ERR;
++                }
++                response.resp = strdup(iter->value.c_str());
++                return PAM_SUCCESS;
++            }
++            break;
++            case PAM_ERROR_MSG:
++            {
++                //  BMCWEB_LOG_ERROR("Pam error {}", msg.msg);
++            }
++            break;
++            case PAM_TEXT_INFO:
++            {
++                // BMCWEB_LOG_ERROR("Pam info {}", msg.msg);
++            }
++            break;
++            default:
++            {
++                return PAM_CONV_ERR;
++            }
++        }
++        return PAM_SUCCESS;
++    }
++};
++
+ namespace phosphor
+ {
+ namespace user
+@@ -78,6 +154,14 @@ using DbusUserObj = std::map<DbusUserObjPath, DbusUserObjValue>;
+ std::string getCSVFromVector(std::span<const std::string> vec);
+ 
+ bool removeStringFromCSV(std::string& csvStr, const std::string& delStr);
++void onTimerTick(uint64_t expirations);
++void generateRandomNumber(unsigned char* randomNumber, int len);
++void setupTimer(boost::asio::io_context& io);
++uid_t getUserIdByName(const std::string& userName);
++bool compareStringWithBytes(const std::string& str, const unsigned char val[8]);
++int pamUpdatePassword(const std::string& username, const std::string& password);
++int pamFunctionConversation(int numMsg, const struct pam_message** msgs,
++                            struct pam_response** resp, void* appdataPtr);
+ 
+ template <typename... ArgTypes>
+ std::vector<std::string> executeCmd(const char* path, ArgTypes&&... tArgs)
+@@ -230,6 +314,13 @@ class UserMgr : public Ifaces
+ 
+     void userEnable(const std::string& userName, bool enabled);
+ 
++    /** @brief Validate SMTP mail ID format.
++     *  Throws an exception if the mail ID is invalid.
++     *
++     *  @param[in] smtpMailID - the mail ID to validate
++     */
++    void throwForInvalidMailID(const std::string& smtpMailID);
++
+     /** @brief get user enabled state
+      *  method to get user enabled state.
+      *
+@@ -275,6 +366,30 @@ class UserMgr : public Ifaces
+      */
+     uint32_t accountUnlockTimeout(uint32_t val) override;
+ 
++    /** @brief Generate OTP for a specified user.
++     *
++     *  Sends the OTP to the user’s registered SMTP mail ID.
++     *
++     *  @param[in] userName - The user for whom to generate the OTP
++     *
++     *  @return true if OTP was successfully generated and sent, false otherwise
++     */
++    bool otpGeneration(std::string userName) override;
++
++    /** @brief Validate OTP and update the user password.
++     *
++     *  Checks the provided OTP for the user. If valid, updates the password.
++     *
++     *  @param[in] userName    - The user whose password is to be updated
++     *  @param[in] otp         - OTP received on mail
++     *  @param[in] newPassword - The new password to set
++     *
++     *  @return true if OTP was valid and password successfully updated, false
++     * otherwise
++     */
++    bool otpValidationPasswordUpdate(std::string userName, std::string otp,
++                                     std::string newPassword) override;
++
+     /** @brief parses the faillock output for locked user status
+      *
+      * @param[in] - output from faillock for the user
+diff --git a/users.cpp b/users.cpp
+index 2b35a33..0262db9 100644
+--- a/users.cpp
++++ b/users.cpp
+@@ -233,6 +233,29 @@ bool Users::userLockedForFailedAttempt(bool value)
+     }
+ }
+ 
++/** @brief Get the SMTP mail ID associated with the user
++ *
++ *  @return Current SMTP mail ID
++ */
++std::string Users::smtpMailID(void) const
++{
++    return UsersIface::smtpMailID();
++}
++
++/** @brief Set the SMTP mail ID associated with the user
++ *
++ *  @param[in] value - new SMTP mail ID
++ */
++std::string Users::smtpMailID(std::string value)
++{
++    manager.throwForInvalidMailID(value);
++    if (value == UsersIface::smtpMailID())
++    {
++        return value;
++    }
++    return UsersIface::smtpMailID(value);
++}
++
+ /** @brief indicates if the user's password is expired
+  *
+  **/
+diff --git a/users.hpp b/users.hpp
+index 26ffb3a..9bd14aa 100644
+--- a/users.hpp
++++ b/users.hpp
+@@ -123,6 +123,17 @@ class Users : public Interfaces
+      **/
+     bool userLockedForFailedAttempt(bool value) override;
+ 
++    /** @brief Get the SMTP mail ID associated with the user
++     *
++     **/
++    std::string smtpMailID(void) const override;
++
++    /** @brief Set the SMTP mail ID associated with the user
++     *
++     * @param[in] value - new SMTP mail ID
++     **/
++    std::string smtpMailID(std::string value) override;
++
+     /** @brief indicates if the user's password is expired
+      *
+      **/
+-- 
+2.34.1
+

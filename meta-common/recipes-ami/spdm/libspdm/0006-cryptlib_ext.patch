@@ -1,0 +1,225 @@
+From 9559927760793a8e881a04852c47bd1d5e487fec Mon Sep 17 00:00:00 2001
+From: leon_lin <leonlin@ami.com>
+Date: Tue, 23 Sep 2025 15:50:38 +0800
+Subject: [PATCH] Add Redfish component integrity support
+
+---
+ os_stub/cryptlib_mbedtls/pk/x509.c        | 45 ++++++++++++++++
+ os_stub/cryptlib_null/pk/x509.c           | 26 +++++++++
+ os_stub/cryptlib_openssl/pk/x509.c        | 66 +++++++++++++++++++++++
+ os_stub/spdm_crypt_ext_lib/cryptlib_ext.h | 22 ++++++++
+ 4 files changed, 159 insertions(+)
+
+diff --git a/os_stub/cryptlib_mbedtls/pk/x509.c b/os_stub/cryptlib_mbedtls/pk/x509.c
+index 3a463666..7dde1393 100644
+--- a/os_stub/cryptlib_mbedtls/pk/x509.c
++++ b/os_stub/cryptlib_mbedtls/pk/x509.c
+@@ -22,6 +22,7 @@
+ #include <mbedtls/oid.h>
+ #include <mbedtls/bignum.h>
+ #include <string.h>
++#include <mbedtls/pem.h>
+ 
+ #if LIBSPDM_CERT_PARSE_SUPPORT
+ 
+@@ -85,6 +86,50 @@ typedef struct {
+ 
+ #define LIBSPDM_MAX_SUBJECT_BUFFER_SIZE MBEDTLS_X509_MAX_DN_NAME_SIZE
+ 
++/**
++ * Construct a X509 PEM string from DER-encoded certificate data.
++ *
++ * If der_cert is NULL, then return false.
++ * If der_cert_size is 0, then return false.
++ * If pem_cert_size is NULL, then return false.
++ *
++ * @param[in]      der_cert        Pointer to the DER-encoded certificate data.
++ * @param[in]      der_cert_size   The size of certificate data in bytes.
++ * @param[out]     pem_cert        Pointer to the converted PEM-encoded bytes
++ * @param[in, out] pem_cert_size   The size in bytes of the PEM buffer on input,
++ *                             and the size of returned PEM buffer on output.
++ *
++ * @retval     true            The X509 PEM string generation succeeded.
++ * @retval     false           The operation failed.
++ *
++ **/
++bool libspdm_x509_construct_pem_certificate(const uint8_t* der_cert,
++                                            size_t der_cert_size,
++                                            char* pem_cert,
++                                            size_t* pem_cert_size)
++{
++    if (der_cert == NULL || pem_cert_size == NULL || der_cert_size == 0)
++    {
++        return false;
++    }
++
++    int ret = -1;
++
++    // Write DER certificate in PEM format to the buffer
++    ret = mbedtls_pem_write_buffer("-----BEGIN CERTIFICATE-----\n",
++                                   "-----END CERTIFICATE-----\n", der_cert,
++                                   der_cert_size, (unsigned char*)pem_cert,
++                                   *pem_cert_size, pem_cert_size);
++    if (ret != 0)
++    {
++        LIBSPDM_DEBUG((LIBSPDM_DEBUG_INFO,
++                       "Failed to write PEM buffer from DER data: %d", ret));
++        return false;
++    }
++    pem_cert[*pem_cert_size - 1] = '\0';
++    return true;
++}
++
+ /**
+  * Construct a X509 object from DER-encoded certificate data.
+  *
+diff --git a/os_stub/cryptlib_null/pk/x509.c b/os_stub/cryptlib_null/pk/x509.c
+index 5b13b369..ba7c2687 100644
+--- a/os_stub/cryptlib_null/pk/x509.c
++++ b/os_stub/cryptlib_null/pk/x509.c
+@@ -10,6 +10,32 @@
+ 
+ #include "internal_crypt_lib.h"
+ 
++/**
++ * Construct a X509 PEM string from DER-encoded certificate data.
++ *
++ * If der_cert is NULL, then return false.
++ * If der_cert_size is 0, then return false.
++ * If pem_cert_size is NULL, then return false.
++ *
++ * @param[in]      der_cert        Pointer to the DER-encoded certificate data.
++ * @param[in]      der_cert_size   The size of certificate data in bytes.
++ * @param[out]     pem_cert        Pointer to the converted PEM-encoded bytes
++ * @param[in, out] pem_cert_size   The size in bytes of the PEM buffer on input,
++ *                             and the size of returned PEM buffer on output.
++ *
++ * @retval     true            The X509 PEM string generation succeeded.
++ * @retval     false           The operation failed.
++ *
++ **/
++bool libspdm_x509_construct_pem_certificate(const uint8_t *der_cert,
++                                            size_t der_cert_size,
++                                            char *pem_cert,
++                                            size_t *pem_cert_size)
++{
++    LIBSPDM_ASSERT(false);
++    return false;
++}
++
+ /**
+  * Construct a X509 object from DER-encoded certificate data.
+  *
+diff --git a/os_stub/cryptlib_openssl/pk/x509.c b/os_stub/cryptlib_openssl/pk/x509.c
+index 06ec1a2f..f6e0da6e 100644
+--- a/os_stub/cryptlib_openssl/pk/x509.c
++++ b/os_stub/cryptlib_openssl/pk/x509.c
+@@ -33,6 +33,72 @@
+ static const uint8_t m_libspdm_oid_ext_key_usage[] = OID_EXT_KEY_USAGE;
+ static const uint8_t m_libspdm_oid_basic_constraints[] = OID_BASIC_CONSTRAINTS;
+ 
++/**
++ * Construct a X509 PEM string from DER-encoded certificate data.
++ *
++ * If der_cert is NULL, then return false.
++ * If der_cert_size is 0, then return false.
++ * If pem_cert_size is NULL, then return false.
++ *
++ * @param[in]      der_cert        Pointer to the DER-encoded certificate data.
++ * @param[in]      der_cert_size   The size of certificate data in bytes.
++ * @param[out]     pem_cert        Pointer to the converted PEM-encoded bytes
++ * @param[in, out] pem_cert_size   The size in bytes of the PEM buffer on input,
++ *                             and the size of returned PEM buffer on output.
++ *
++ * @retval     true            The X509 PEM string generation succeeded.
++ * @retval     false           The operation failed.
++ *
++ **/
++bool libspdm_x509_construct_pem_certificate(const uint8_t *der_cert,
++                                            size_t der_cert_size,
++                                            char *pem_cert,
++                                            size_t *pem_cert_size)
++{
++    if (der_cert == NULL || pem_cert_size == NULL || der_cert_size == 0)
++    {
++        return false;
++    }
++
++    BIO *mem = BIO_new(BIO_s_mem());
++    if (!mem)
++    {
++        return false;
++    }
++
++    // Convert DER to PEM
++    X509 *cert = d2i_X509(NULL, &der_cert, der_cert_size);
++    if (!cert)
++    {
++        BIO_free(mem);
++        return false;
++    }
++
++    bool status = false;
++
++    if (!PEM_write_bio_X509(mem, cert))
++    {
++        goto done;
++    }
++
++    char *pemData;
++    size_t pemDataLen = BIO_get_mem_data(mem, &pemData);
++    if (pemDataLen > *pem_cert_size)
++    {
++        goto done;
++    }
++
++    libspdm_copy_mem(pem_cert, *pem_cert_size, pemData, pemDataLen);
++    *pem_cert_size = pemDataLen;
++    status = true;
++
++done:
++    // Clean up resources
++    X509_free(cert);
++    BIO_free(mem);
++    return status;
++}
++
+ /**
+  * Construct a X509 object from DER-encoded certificate data.
+  *
+diff --git a/os_stub/spdm_crypt_ext_lib/cryptlib_ext.h b/os_stub/spdm_crypt_ext_lib/cryptlib_ext.h
+index 1036e8d6..5194b5c7 100644
+--- a/os_stub/spdm_crypt_ext_lib/cryptlib_ext.h
++++ b/os_stub/spdm_crypt_ext_lib/cryptlib_ext.h
+@@ -109,6 +109,28 @@ extern bool libspdm_x509_get_signature_algorithm(const uint8_t *cert,
+                                                  size_t cert_size, uint8_t *oid,
+                                                  size_t *oid_size);
+ 
++/**
++ * Construct a X509 PEM string from DER-encoded certificate data.
++ *
++ * If der_cert is NULL, then return false.
++ * If der_cert_size is 0, then return false.
++ * If pem_cert_size is NULL, then return false.
++ *
++ * @param[in]      der_cert        Pointer to the DER-encoded certificate data.
++ * @param[in]      der_cert_size   The size of certificate data in bytes.
++ * @param[out]     pem_cert        Pointer to the converted PEM-encoded bytes
++ * @param[in, out] pem_cert_size   The size in bytes of the PEM buffer on input,
++ *                             and the size of returned PEM buffer on output.
++ *
++ * @retval     true            The X509 PEM string generation succeeded.
++ * @retval     false           The operation failed.
++ *
++ **/
++extern bool libspdm_x509_construct_pem_certificate(const uint8_t *der_cert,
++                                                   size_t der_cert_size,
++                                                   char *pem_cert,
++                                                   size_t *pem_cert_size);
++
+ /**
+  * Construct a X509 object from DER-encoded certificate data.
+  *
+-- 
+2.34.1
+

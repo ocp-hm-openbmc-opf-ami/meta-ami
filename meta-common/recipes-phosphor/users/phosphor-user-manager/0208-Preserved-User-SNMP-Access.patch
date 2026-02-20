@@ -1,0 +1,187 @@
+From c1322191158f3a0dc177d75061d2081ad63d144e Mon Sep 17 00:00:00 2001
+From: Vijaysankar R <vijaysankarr@ami.com>
+Date: Wed, 15 Oct 2025 15:09:11 +0530
+Subject: [PATCH 208/208] Preserved User SNMP Access
+
+---
+ user_mgr.cpp | 54 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ users.cpp    | 21 ++++++++++++++++++++
+ users.hpp    |  2 ++
+ 3 files changed, 77 insertions(+)
+
+diff --git a/user_mgr.cpp b/user_mgr.cpp
+index b9a6ce8..f766126 100644
+--- a/user_mgr.cpp
++++ b/user_mgr.cpp
+@@ -35,6 +35,7 @@
+ #include <boost/algorithm/string/split.hpp>
+ #include <boost/filesystem.hpp>
+ #include <boost/interprocess/sync/file_lock.hpp>
++#include <nlohmann/json.hpp>
+ #include <phosphor-logging/elog-errors.hpp>
+ #include <phosphor-logging/elog.hpp>
+ #include <phosphor-logging/lg2.hpp>
+@@ -84,6 +85,7 @@ static constexpr const char* defaultPWQualityConfigFile =
+     "/etc/security/pwquality.conf";
+ constexpr const char* pamCommonAuthConf = "/etc/pam.d/common-auth";
+ constexpr const char* pamCommonAccountConf = "/etc/pam.d/common-account";
++constexpr const char* ipmiUserDataBackupFile = "/var/lib/ipmi/ipmi_user_backup.json";
+ 
+ typedef struct
+ {
+@@ -731,6 +733,7 @@ void UserMgr::renameUser(std::string userName, std::string newUserName)
+     std::string priv = user.get()->userPrivilege();
+     std::vector<std::string> groupNames = user.get()->userGroups();
+     bool enabled = user.get()->userEnabled();
++    bool snmpAccessEnableStatus = user.get()->snmpAccessEnableStatus();
+     sdbusplus::message::object_path tempObjPath(usersObjPath);
+     tempObjPath /= newUserName;
+     std::string newUserObj(tempObjPath);
+@@ -742,6 +745,8 @@ void UserMgr::renameUser(std::string userName, std::string newUserName)
+     usersList.emplace(newUserName, std::make_unique<phosphor::user::Users>(
+                                        bus, newUserObj.c_str(), groupNames,
+                                        priv, enabled, *this));
++    auto& newUserRef = usersList.at(newUserName);
++    newUserRef->snmpAccessEnableStatus(snmpAccessEnableStatus);
+ 
+     /* If the user is named and identified as an SNMP user, it also needs to be
+      * renamed */
+@@ -1558,6 +1563,32 @@ void UserMgr::executeGroupDeletion(const char* groupName)
+     executeCmd("/usr/sbin/groupdel", groupName);
+ }
+ 
++/**
++ * @brief Helper to read and parse JSON file.
++ *
++ * @return Parsed JSON object or nullopt on failure.
++ */
++std::optional<nlohmann::json> readJsonFile(const std::string& path)
++{
++    std::ifstream jsonFile(path);
++    if (!jsonFile.good())
++    {
++        lg2::error("JSON file not found: {PATH}", "PATH", path);
++        return std::nullopt;
++    }
++
++    try
++    {
++	return nlohmann::json::parse(jsonFile, nullptr, false);
++    }
++    catch (const nlohmann::json::parse_error& e)
++    {
++        lg2::error("Failed to parse JSON file: {PATH} - {ERROR}", "PATH", path,
++                   "ERROR", e.what());
++        return std::nullopt;
++    }
++}
++
+ UserInfoMap UserMgr::getUserInfo(std::string userName)
+ {
+     struct privilageStruct privBuf[3] = {
+@@ -1912,6 +1943,7 @@ void UserMgr::initUserObjects(void)
+     UserSSHLists userSSHLists = getUserAndSshGrpList();
+     userNameList = std::move(userSSHLists.first);
+     sshGrpUsersList = std::move(userSSHLists.second);
++    auto userJsonOpt = readJsonFile(ipmiUserDataBackupFile);
+ 
+     if (!userNameList.empty())
+     {
+@@ -1940,6 +1972,26 @@ void UserMgr::initUserObjects(void)
+         {
+             std::vector<std::string> userGroups;
+             std::string userPriv;
++	    bool snmpAccessEnableStatus = false;
++	if (!userJsonOpt)
++	{
++		lg2::warning("User JSON backup file missing or invalid, SNMP access state will default to false");
++	}
++	nlohmann::json userJson = *userJsonOpt;
++	for (const auto& entry : userJson)
++	{
++		if (entry.contains("user_name") && entry["user_name"] == user)
++		{
++			if (entry.contains("snmp_access") &&
++					entry["snmp_access"].is_boolean())
++			{
++				snmpAccessEnableStatus =
++					entry["snmp_access"].get<bool>();
++			}
++			break;
++		}
++	}
++	lg2::info("Restoring SNMP access for user: {USER} = {STATE}", "USER", user, "STATE", snmpAccessEnableStatus);
+             for (const auto& grp : groupLists)
+             {
+                 std::vector<std::string> tempGrp = grp.second;
+@@ -1970,6 +2022,8 @@ void UserMgr::initUserObjects(void)
+             usersList.emplace(user, std::make_unique<phosphor::user::Users>(
+                                         bus, objPath.c_str(), userGroups,
+                                         userPriv, isUserEnabled(user), *this));
++	   auto& userObj = usersList.at(user);
++	   userObj->snmpAccessEnableStatus(snmpAccessEnableStatus);
+         }
+     }
+ }
+diff --git a/users.cpp b/users.cpp
+index 3440b94..58148e8 100644
+--- a/users.cpp
++++ b/users.cpp
+@@ -143,6 +143,14 @@ bool Users::userEnabled(void) const
+     return manager.isUserEnabled(userName);
+ }
+ 
++/** @brief lists user SNMP enabled state
++ *
++ */
++bool Users::snmpAccessEnableStatus(void) const
++{
++    return UsersIface::snmpAccessEnableStatus();
++}
++
+ void Users::setUserEnabled(bool value)
+ {
+     UsersIface::userEnabled(value);
+@@ -162,6 +170,19 @@ bool Users::userEnabled(bool value)
+     return UsersIface::userEnabled(value);
+ }
+ 
++/** @brief update user SNMP enabled state
++ *
++ *  @param[in] value - bool value
++ */
++bool Users::snmpAccessEnableStatus(bool value)
++{
++    if (value == UsersIface::snmpAccessEnableStatus())
++    {
++        return value;
++    }
++    return UsersIface::snmpAccessEnableStatus(value);
++}
++
+ /** @brief lists user locked state for failed attempt
+  *
+  **/
+diff --git a/users.hpp b/users.hpp
+index 0f3065e..1cf30ba 100644
+--- a/users.hpp
++++ b/users.hpp
+@@ -96,6 +96,7 @@ class Users : public Interfaces
+      *
+      */
+     bool userEnabled(void) const override;
++    bool snmpAccessEnableStatus(void) const override;
+ 
+     void setUserEnabled(bool value);
+ 
+@@ -104,6 +105,7 @@ class Users : public Interfaces
+      *  @param[in] value - bool value
+      */
+     bool userEnabled(bool value) override;
++    bool snmpAccessEnableStatus(bool value) override;
+ 
+     /** @brief lists user locked state for failed attempt
+      *
+-- 
+2.34.1
+

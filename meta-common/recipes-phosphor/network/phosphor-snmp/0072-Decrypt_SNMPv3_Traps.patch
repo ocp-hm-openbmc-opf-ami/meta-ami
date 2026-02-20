@@ -1,0 +1,206 @@
+From d95815b69b1c857f5c102c286cb05c11c60f78d5 Mon Sep 17 00:00:00 2001
+From: Vijaysankar R <vijaysankarr@ami.com>
+Date: Mon, 22 Sep 2025 21:35:44 +0530
+Subject: [PATCH 72/72] Decrypt_SNMPv3_Traps
+
+---
+ snmp_notification.cpp | 166 ++++++++++++++++++++++++++++++++++++------
+ 1 file changed, 143 insertions(+), 23 deletions(-)
+
+diff --git a/snmp_notification.cpp b/snmp_notification.cpp
+index 639bae4..0948e27 100644
+--- a/snmp_notification.cpp
++++ b/snmp_notification.cpp
+@@ -17,6 +17,7 @@ namespace phosphor
+             constexpr std::string_view snmpConfFilePath = "/etc/snmp/snmp.conf";
+             constexpr std::string_view snmpTrapCommStrFilePath = "/etc/snmp/snmpTrapCommStr";
+             constexpr std::string_view snmpTrapStatusFilePath = "/etc/snmp/SnmpTrapStatus";
++            std::string snmpUserFileBasePath = "/var/lib/snmp-agent/userManagers/";
+             using namespace phosphor::logging;
+             using namespace sdbusplus::xyz::openbmc_project::Common::Error;
+ 
+@@ -102,6 +103,27 @@ namespace phosphor
+                 return disableStatus;
+             }
+ 
++	    std::string readLengthPrefixedString(std::ifstream& file)
++	    {
++	         uint32_t length;
++		 file.read(reinterpret_cast<char*>(&length), 4);
++		 file.seekg(4,std::ios::cur); // Skip remaining 4 bytes of 8-byte length
++		 std::string str(length, '\0');
++		 file.read(&str[0], length);
++		 return str;
++	    }
++
++	    std::tuple<std::string, std::string, std::string, std::filesystem::file_time_type> getSnmpUserInfo(std::ifstream& snmpUserFile , const std::string& snmpUserFilePath)
++	    {
++	        snmpUserFile.seekg(4);                  // Skip initial header
++	        readLengthPrefixedString(snmpUserFile); // Skip username
++		std::string password = readLengthPrefixedString(snmpUserFile);
++		std::string encryption = readLengthPrefixedString(snmpUserFile);
++		std::string algorithm = readLengthPrefixedString(snmpUserFile);
++		auto timeAfterRead = std::filesystem::last_write_time(snmpUserFilePath);
++		return {password, encryption, algorithm, timeAfterRead};
++	    }
++
+             void Notification::sendTrap()
+             {
+                 bool trapsent = false;
+@@ -197,32 +219,130 @@ namespace phosphor
+                                 engineIdLen = snmpv3_get_engineID(engineId,SNMP_MAXBUF);
+                                 session.securityEngineID = engineId;
+                                 session.securityEngineIDLen = engineIdLen;
++				constexpr std::string_view SHA_224 = "SHA-224";
++				constexpr std::string_view SHA_256 = "SHA-256";
++				constexpr std::string_view SHA_384 = "SHA-384";
++				constexpr std::string_view SHA_512 = "SHA-512";
++				constexpr std::string_view AES_ENCRYPTION = "AES";
++				constexpr std::string_view DES_ENCRYPTION = "DES";
++				std::string snmpUserFilePath = snmpUserFileBasePath + mgr.user;
++				std::string passwd;
++				std::string algorithm;
++				std::string encryption;
++				bool isRead = false;
++				const int maxRetries = 3;
++				for (int retry = 0; retry < maxRetries; ++retry)
++				{
++				    std::filesystem::file_time_type timeBeforeRead = std::filesystem::last_write_time(snmpUserFilePath);
++				    std::filesystem::file_time_type timeAfterRead;
++				    std::ifstream snmpUserFile(snmpUserFilePath, std::ios::binary);
++
++				    if (!snmpUserFile.is_open())
++					{
++					    lg2::warning("snmpUserFilePath unable to open: {PATH}", "PATH", snmpUserFilePath);
++					    break;
++					}
++				    std::tie(passwd, encryption, algorithm, timeAfterRead) = getSnmpUserInfo(snmpUserFile, snmpUserFilePath);
++
++				    if (timeBeforeRead == timeAfterRead)
++					{
++					    isRead = true;
++					    break;
++					}
++				    else
++					{
++					    lg2::info("snmpUserFilePath was modified during read, retry {RETRY}/{MAX_RETRIES}: {PATH}", "RETRY", retry + 1, "MAX_RETRIES", maxRetries, "PATH", snmpUserFilePath);
++					}
++				}
++
++				if(!isRead)
++				{
++				    continue;
++				}
+ 
+-                                /* set the security level to authenticated, encrypted */
+-                                //session.securityLevel = SNMP_SEC_LEVEL_NOAUTH;
+-                                //session.securityLevel = SNMP_SEC_LEVEL_AUTHNOPRIV;
+                                 session.securityLevel = SNMP_SEC_LEVEL_AUTHPRIV;
+ 
+-                                /* set the authentication method to MD5 
+-                                   session.securityAuthProto = usmHMACMD5AuthProtocol;
+-                                   session.securityAuthProtoLen = sizeof(usmHMACMD5AuthProtocol)/sizeof(oid);
+-                                   session.securityAuthKeyLen = USM_AUTH_KU_LEN;
+-                                   */
+-                                /* set the authentication method to SHA1
+-                                   session.securityAuthProto = usmHMACSHA1AuthProtocol;
+-                                   session.securityAuthProtoLen = sizeof(usmHMACSHA1AuthProtocol)/sizeof(oid);
+-                                   session.securityAuthKeyLen = USM_AUTH_KU_LEN;
+-                                   */
+-
+-                                /* Default authentication  */
+-                                session.securityAuthProto = SNMP_DEFAULT_AUTH_PROTO;
+-                                session.securityAuthProtoLen = SNMP_DEFAULT_AUTH_PROTOLEN;
+-                                session.securityAuthKeyLen = USM_AUTH_KU_LEN;
+-
+-                                /* Defualt Encryption */
+-                                session.securityPrivProto = SNMP_DEFAULT_PRIV_PROTO;
+-                                session.securityPrivProtoLen = SNMP_DEFAULT_PRIV_PROTOLEN;
+-                                session.securityPrivKeyLen = USM_PRIV_KU_LEN;
++				if (algorithm == SHA_224)
++				{
++				    session.securityAuthProto = usmHMAC128SHA224AuthProtocol;
++                                    session.securityAuthProtoLen = USM_AUTH_PROTO_SHA_LEN;
++                                    session.securityAuthKeyLen = USM_AUTH_KU_LEN;
++				}
++				else if (algorithm == SHA_256)
++				{
++				    session.securityAuthProto = usmHMAC192SHA256AuthProtocol;
++				    session.securityAuthProtoLen = USM_AUTH_PROTO_SHA_LEN;
++				    session.securityAuthKeyLen = USM_AUTH_KU_LEN;
++				}
++				else if (algorithm == SHA_384)
++				{
++				    session.securityAuthProto = usmHMAC256SHA384AuthProtocol;
++				    session.securityAuthProtoLen = USM_AUTH_PROTO_SHA_LEN;
++				    session.securityAuthKeyLen = USM_AUTH_KU_LEN;
++				}
++				else if (algorithm == SHA_512)
++				{
++				    session.securityAuthProto = usmHMAC384SHA512AuthProtocol;
++				    session.securityAuthProtoLen = USM_AUTH_PROTO_SHA_LEN;
++				    session.securityAuthKeyLen = USM_AUTH_KU_LEN;
++				}
++				else
++				{
++                                    /* Default authentication  */
++                                    session.securityAuthProto = SNMP_DEFAULT_AUTH_PROTO;
++                                    session.securityAuthProtoLen = SNMP_DEFAULT_AUTH_PROTOLEN;
++                                    session.securityAuthKeyLen = USM_AUTH_KU_LEN;
++				}
++
++				u_char authKey[USM_AUTH_KU_LEN];
++				memset(authKey, 0, sizeof(authKey));
++				size_t authKeyLen = USM_AUTH_KU_LEN;
++				int rc = generate_Ku(session.securityAuthProto,session.securityAuthProtoLen,(u_char*)passwd.c_str(),passwd.length(),authKey,&authKeyLen);
++
++				if (rc != SNMPERR_SUCCESS)
++				{
++				    snmp_log(LOG_ERR,"Failed to generate authentication key! rc = %d (%s)\n",rc,snmp_api_errstring(rc));
++				}
++				else
++				{
++				    session.securityAuthKeyLen = authKeyLen;
++				    memcpy(session.securityAuthKey, authKey, authKeyLen);
++				}
++
++				if (encryption == AES_ENCRYPTION)
++				{
++				    session.securityPrivProto = usmAES128PrivProtocol;
++				    session.securityPrivProtoLen = USM_PRIV_PROTO_AES128_LEN;
++				    session.securityPrivKeyLen = USM_PRIV_KU_LEN;
++				}
++				else if (encryption == DES_ENCRYPTION)
++				{
++				    session.securityPrivProto = usmDESPrivProtocol;
++				    session.securityPrivProtoLen = USM_PRIV_PROTO_DES_LEN;
++				    session.securityPrivKeyLen = USM_PRIV_KU_LEN;
++				}
++				else
++				{
++                                    /* Defualt Encryption */
++                                    session.securityPrivProto = SNMP_DEFAULT_PRIV_PROTO;
++                                    session.securityPrivProtoLen = SNMP_DEFAULT_PRIV_PROTOLEN;
++                                    session.securityPrivKeyLen = USM_PRIV_KU_LEN;
++				}
++
++				u_char privKey[USM_PRIV_KU_LEN];
++				memset(privKey, 0, sizeof(privKey));
++				size_t privKeyLen = USM_PRIV_KU_LEN;
++				rc = generate_Ku(session.securityAuthProto,session.securityAuthProtoLen,(u_char*)passwd.c_str(),passwd.length(), privKey,&privKeyLen);
++
++				if(rc != SNMPERR_SUCCESS)
++				{
++				    snmp_log(LOG_ERR,"Failed to generate privacy key! rc = %d (%s) \n",rc,snmp_api_errstring(rc));
++				}
++				else
++				{
++				    session.securityPrivKeyLen = privKeyLen;
++				    memcpy(session.securityPrivKey, privKey,privKeyLen);
++				}
+                     }
+                     else
+                     {	
+-- 
+2.34.1
+

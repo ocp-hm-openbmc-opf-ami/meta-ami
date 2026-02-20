@@ -9,6 +9,7 @@ LIC_FILES_CHKSUM = "file://${AMIBASE}/COPYING.AMI;md5=65a69a674f34a9f30737c9f0ab
 PROVIDES = "${PACKAGES}"
 PACKAGES = "\
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-brcmraid', '${PN}-brcmraid', '', d)} \
+		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-brcmraid8', '${PN}-brcmraid8', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-nic', '${PN}-nic', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-nvme', '${PN}-nvme', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-nvmebasic', '${PN}-nvmebasic', '', d)} \
@@ -68,6 +69,7 @@ PACKAGES = "\
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-network-disable-ping-support', '${PN}-network-disable-ping-support', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-network-iperf3-support', '${PN}-network-iperf3-support', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-network-ncsi-support', '${PN}-network-ncsi-support', '', d)} \
+		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-network-ncsi-manual-detect-support', '${PN}-network-ncsi-manual-detect-support', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-fwupdate-cpld-update', '${PN}-fwupdate-cpld-update', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-image-sign', '${PN}-image-sign', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-dual-image', '${PN}-dual-image', '', d)} \
@@ -88,12 +90,21 @@ PACKAGES = "\
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-mctp-i3c-sock', '${PN}-mctp-i3c-sock', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-pldm', '${PN}-pldm', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-bmc-services-ready', '${PN}-bmc-services-ready', '', d)} \
+		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-pdk', '${PN}-pdk', '', d)} \
+		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-network-ncsi-non-aen-support', '${PN}-network-ncsi-non-aen-support', '', d)} \
+		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-network-ncsi-channel-timer', '${PN}-network-ncsi-channel-timer', '', d)} \
+		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-network-ncsi-async-reset-support', '${PN}-network-ncsi-async-reset-support', '', d)} \
+        ${@bb.utils.contains('IMAGE_FEATURES', 'onetree-rm', '${PN}-rm', '', d)} \
+        ${@bb.utils.contains('IMAGE_FEATURES', 'onetree-psm', '${PN}-psm', '', d)} \
+		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-multi-host-support', '${PN}-multi-host-support', '', d)} \
+		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-telemetry', '${PN}-telemetry', '', d)} \
+                ${@bb.utils.contains('IMAGE_FEATURES', 'onetree-ipmb', '${PN}-ipmb', '', d)} \
 		"
 
 
-SUMMARY:${PN}-mctp-i3c-sock = "MCTP I3C Socket Application Daemon"
+SUMMARY:${PN}-mctp-i3c-sock = "MCTP I3C Socket based Daemon"
 DESCRIPTION:${PN}-mctp-i3c-sock = "Implemented a socket-based MCTP over I3C application independent of libmctp, using the Linux MCTP socket (AF_MCTP) and MCTP I3C transport drivers. The application establishes connections based on Endpoint ID (EID) and message type, following the MCTP over I3C (DSP0233) specification."
-RDEPENDS:${PN}-mctp-i3c-sock = " mctp-i3c-app"
+RDEPENDS:${PN}-mctp-i3c-sock = " mctp-i3c-daemon "
 SUPPORTED_VENDOR:${PN}-mctp-i3c-sock = "INTEL"
 #-----------------------------------#
 
@@ -108,6 +119,13 @@ RDEPENDS:${PN}-brcmraid = " raid-mgmt \
 SUPPORTED_VENDOR:${PN}-brcmraid = "ALL"
 #-----------------------------------#
 
+SUMMARY:${PN}-brcmraid8 = "EP : Broadcom sl8 RAID"
+DESCRIPTION:${PN}-brcmraid8 = "Service that manage Broadcom Storelib8 RAID/HBA controllers"
+RDEPENDS:${PN}-brcmraid8 = " raid-brcm8 \
+			    storage-mgmt \
+			"
+SUPPORTED_VENDOR:${PN}-brcmraid8 = "ALL"
+#-----------------------------------#
 SUMMARY:${PN}-nic = "EP : NIC"
 DESCRIPTION:${PN}-nic = "Manage the Network Interface Controller by way of MCTP over SMBus and MCTP over PCIe "
 RDEPENDS:${PN}-nic = "	nic \
@@ -197,6 +215,14 @@ RDEPENDS:${PN}-acd = "  crashdump \
 			bafi-dev \
 		        "
 SUPPORTED_VENDOR:${PN}-acd = "INTEL"
+#-----------------------------------#
+
+SUMMARY:${PN}-asd = "EP : ASD package contains the JTAG Transport"
+DESCRIPTION:${PN}-asd = "The Intel At-Scale Debug tool allows to use any host system to run the Debug tool stack while connecting to the target system across the network "
+RDEPENDS:${PN}-asd = " at-scale-debug \
+		       ami-asd-dbus \
+		   "
+SUPPORTED_VENDOR:${PN}-asd = "INTEL"
 #-----------------------------------#
 
 SUMMARY:${PN}-mrt = "EP : Intel Memory Resilience Technology"
@@ -387,7 +413,8 @@ DESCRIPTION:${PN}-radius-client = " Firmware to initiate client connection  to s
 					validating user name and password which was stored \
 					in RADIUS server"
 RDEPENDS:${PN}-radius-client = " radiusclient-ng \
-				nss-pam-radiusd "
+				nss-pam-radiusd \
+				netbase "
 SUPPORTED_VENDOR:${PN}-radius-client = "ALL"
 #-----------------------------------#
 
@@ -423,7 +450,9 @@ SUMMARY:${PN}-ntp = "AMI Core Features: Network Time Manager"
 DESCRIPTION:${PN}-ntp = " Synchronizes the system time with remote time \
 				servers to ensure accurate timekeeping"
 RDEPENDS:${PN}-ntp = " phosphor-time-manager \
-		       tzdata "
+		       tzdata \
+               ntpsec \
+               "
 SUPPORTED_VENDOR:${PN}-ntp = "ALL"
 #-----------------------------------#
 
@@ -596,7 +625,7 @@ ARCH_TYPE:${PN}-ipmi-ssif = "ARM"
 SUMMARY:${PN}-spdm = "AMI Core Features: SPDM Application Library"
 DESCRIPTION:${PN}-spdm = "SPDM Application Library provide abstraction of \
 				Secure Protocol Data Modelling (SPDM) API commands."
-RDEPENDS:${PN}-spdm = " spdmd"
+RDEPENDS:${PN}-spdm = " ot-spdmd"
 SUPPORTED_VENDOR:${PN}-spdm = "ALL"
 #-----------------------------------#
 
@@ -608,6 +637,8 @@ RDEPENDS:${PN}-network = " phosphor-network \
                            systemd"
 SUPPORTED_VENDOR:${PN}-network = "ALL"
 RDEPENDS:${PN}-network:append:evb-ast2600 = " mac-hostname"
+RDEPENDS:${PN}-network:append:ast2700-default = " mac-hostname"
+RDEPENDS:${PN}-network:append:amd-venice = " mac-hostname"
 RDEPENDS:${PN}-network:append:evb-npcm845 = " phytool \
                                             "
 #-----------------------------------#
@@ -634,7 +665,7 @@ SUPPORTED_VENDOR:${PN}-network-bonding-support = "ALL"
 
 SUMMARY:${PN}-network-openssl-support = "AMI Core Features: Openssl FIPS Support"
 DESCRIPTION:${PN}-network-openssl-support = "OpenSSL FIPS (Federal Information Processing Standard) is a mode of OpenSSL that ensures cryptographic operations meet FIPS 140-2 security standards, providing a validated and secure environment for encryption and cryptographic modules used in sensitive applications."
-RDEPENDS:${PN}-network-openssl-support = " openssl-manager openssl-ossl-module-legacy openssl-ossl-module-fips "
+RDEPENDS:${PN}-network-openssl-support = " openssl-manager openssl-ossl-module-legacy fips-openssl "
 SUPPORTED_VENDOR:${PN}-network-openssl-support = "ALL"
 #-----------------------------------#
 
@@ -657,6 +688,15 @@ RDEPENDS:${PN}-network-ncsi-support = " phosphor-network \
                                         systemd \
                                         "
 SUPPORTED_VENDOR:${PN}-network-ncsi-support = "ALL"
+#-----------------------------------#
+
+SUMMARY:${PN}-network-ncsi-manual-detect-support = "AMI Core Features: NCSI Manual Detect Support"
+DESCRIPTION:${PN}-network-ncsi-manual-detect-support = "Allow user to detect the packages and channels manually"
+RDEPENDS:${PN}-network-ncsi-manual-detect-support = " phosphor-network \
+                                                      systemd \
+                                                      ${PN}-network-ncsi-support \
+                                                    "
+SUPPORTED_VENDOR:${PN}-network-ncsi-manual-detect-support = "ALL"
 #-----------------------------------#
 
 SUMMARY:${PN}-network-phy-configuration-support = "AMI Core Features: PHY configuration support"
@@ -687,6 +727,29 @@ SUMMARY:${PN}-network-avahi-support = "AMI Core Features: AVAHI support"
 DESCRIPTION:${PN}-network-avahi-support = "This Feature enables automatic discovery and advertisement of network services and hosts using multicast DNS (mDNS) and DNS Service Discovery (DNS-SD)"
 RDEPENDS:${PN}-network-avahi-support = " phosphor-network avahi-daemon "
 SUPPORTED_VENDOR:${PN}-network-avahi-support = "ALL"
+
+#-----------------------------------#
+SUMMARY:${PN}-network-ncsi-non-aen-support = "AMI Core Features: NCSI Non AEN Support"
+DESCRIPTION:${PN}-network-ncsi-non-aen-support = "If the Network Controller does not support AEN, a Kernel Timer will be invoked to periodically issue Get Link Status command to the Network Controller."
+RDEPENDS:${PN}-network-ncsi-non-aen-support = " phosphor-network \
+                                                systemd \
+                                              "
+SUPPORTED_VENDOR:${PN}-network-ncsi-non-aen-support = "ALL"
+#-----------------------------------#
+
+SUMMARY:${PN}-network-ncsi-channel-timer = "AMI Core Features: NCSI Channel Monitor Timer"
+DESCRIPTION:${PN}-network-ncsi-channel-timer = "Periodic time interval(in seconds) for issuing the Get Link Status command to the network controller."
+RDEPENDS:${PN}-network-ncsi-channel-timer = " phosphor-network \
+                                              systemd \
+                                            "
+SUPPORTED_VENDOR:${PN}-network-ncsi-channel-timer = "ALL"
+#-----------------------------------#
+SUMMARY:${PN}-network-ncsi-async-reset-support = "AMI Core Features: NCSI Async Reset Support"
+DESCRIPTION:${PN}-network-ncsi-async-reset-support = "This feature detects asynchronous reset on the network controller and reconfigures the link"
+RDEPENDS:${PN}-network-ncsi-async-reset-support = " phosphor-network \
+                                                    systemd \
+                                                  "
+SUPPORTED_VENDOR:${PN}-network-ncsi-async-reset-support = "ALL"
 #-----------------------------------#
 
 #Below are the Summary and description for LF features which are required for
@@ -783,3 +846,40 @@ DESCRIPTION:${PN}-bmc-services-ready = "Ensure BMC readiness for the customized 
 RDEPENDS:${PN}-bmc-services-ready = "bmc-services-ready"
 SUPPORTED_VENDOR:${PN}-bmc-services-ready = "ALL"
 #-----------------------------------#
+
+SUMMARY:${PN}-pdk = "AMI Core Features: OneTree PDK"
+DESCRIPTION:${PN}-pdk = " Provides packages required for OneTree PDK Hook integration "
+RDEPENDS:${PN}-pdk = " platforminit"
+SUPPORTED_VENDOR:${PN}-pdk = "ALL"
+#-----------------------------------#
+
+SUMMARY:${PN}-rm = "EP : Rack Manager"
+DESCRIPTION:${PN}-rm = "AMI Rack Manageability"
+RDEPENDS:${PN}-rm = " enable-rm-support"
+SUPPORTED_VENDOR:${PN}-rm = "EVB"
+#-----------------------------------#
+
+SUMMARY:${PN}-psm = "EP : Powershelf Manager"
+DESCRIPTION:${PN}-psm = "AMI PowerShelf Manageability"
+RDEPENDS:${PN}-psm = " enable-psm-support"
+SUPPORTED_VENDOR:${PN}-psm = "EVB"
+#-----------------------------------#
+
+SUMMARY:${PN}-multi-host-support = "AMI Core Features: OneTree Multi Host Support"
+DESCRIPTION:${PN}-multi-host-support = "Multi Host Support"
+RDEPENDS:${PN}-multi-host-support = " multi-host-config "
+SUPPORTED_VENDOR:${PN}-multi-host-support = "ALL"
+#-----------------------------------#
+SUMMARY:${PN}-telemetry = "AMI Core Features: OneTree Telemetry"
+DESCRIPTION:${PN}-telemetry = "Enabled Telemetry Support"
+RDEPENDS:${PN}-telemetry = " telemetry "
+SUPPORTED_VENDOR:${PN}-telemetry = "ALL"
+#-----------------------------------#
+
+SUMMARY:${PN}-ipmb = "AMI Core Features: IPMB"
+DESCRIPTION:${PN}-ipmb = " IPMB management library contains dbus methods \
+                             and properties for handling IPMB communication"
+RDEPENDS:${PN}-ipmb = " phosphor-ipmi-ipmb"
+SUPPORTED_VENDOR:${PN}-ipmb = "ALL"
+#-----------------------------------#
+

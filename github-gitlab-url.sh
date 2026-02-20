@@ -36,7 +36,7 @@ sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.host-misc
 
 sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.psu-manager.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/psu-manager.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-intel/psu-manager/psu-manager.bb
 
-sed -i 's/git.ami.com\/core\/ami-bmc\/base-tech\/linux-lf.git;protocol=https;branch=${KBRANCH}/git@github.com\/ocp-hm-openbmc-opf-ami\/linux.git;protocol=https;branch=${KBRANCH}/g' meta-ami/meta-common/recipes-kernel/linux/linux-onetree.bb
+sed -i 's|git\.ami\.com/core/ami-bmc/base-tech/linux-lf\.git|git@github.com/ocp-hm-openbmc-opf-ami/linux.git|g' meta-ami/meta-common/recipes-kernel/linux/linux-onetree.bb
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.node-manager-proxy.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/node-manager-proxy.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-phosphor/ipmi/phosphor-node-manager-proxy_git.bb
 
@@ -74,10 +74,3 @@ sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/bmcweb;branch=master;proto
 
 sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-networkd;branch=main;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-networkd;protocol=https;branch=main;name=override/g' meta-ami/meta-common/recipes-network/network/phosphor-network_%.bbappend
 
-sed -i 's/git.ami.com/git@github.com\/ocp-hm-openbmc-opf-ami/g' ./meta-core/meta-common/recipes-core/at-scale-debug/at-scale-debug_git.bb
-sed -i 's/git.ami.com/git@github.com\/ocp-hm-openbmc-opf-ami/g' ./meta-core/meta-common/recipes-core/libpeci/libpeci_%.bbappend
-sed -i 's/git.ami.com/git@github.com\/ocp-hm-openbmc-opf-ami/g' ./meta-core/meta-common/recipes-intel/spdm/spdmapplib.bb
-sed -i 's/git.ami.com/git@github.com\/ocp-hm-openbmc-opf-ami/g' ./meta-core/meta-common/recipes-intel/fw-security/spdmd.bb
-sed -i 's/git.ami.com/git@github.com\/ocp-hm-openbmc-opf-ami/g' ./meta-ami/meta-common/recipes-phosphor/pmci/mctpd.bbappend
-sed -i 's/git.ami.com/git@github.com\/ocp-hm-openbmc-opf-ami/g' ./meta-ami/meta-common/recipes-phosphor/libmctp/libmctp_%.bbappend
-sed -i 's/git.ami.com/git@github.com\/ocp-hm-openbmc-opf-ami/g' ./meta-ami/meta-common/recipes-kernel/linux/linux-onetree.bb

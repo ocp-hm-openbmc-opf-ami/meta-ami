@@ -1,0 +1,863 @@
+From df4205b5f764390e690531fb9e4330019868af19 Mon Sep 17 00:00:00 2001
+From: Vijaysankar R <vijaysankarr@ami.com>
+Date: Tue, 12 Aug 2025 13:17:28 +0530
+Subject: [PATCH 208/208] channel-support
+
+---
+ user_mgr.cpp | 392 +++++++++++++++++++++++++++++++++++++++++++++------
+ user_mgr.hpp |  96 ++++++++++++-
+ users.cpp    |  36 ++++-
+ users.hpp    |  13 +-
+ 4 files changed, 484 insertions(+), 53 deletions(-)
+
+diff --git a/user_mgr.cpp b/user_mgr.cpp
+index b9a6ce8..32c296a 100644
+--- a/user_mgr.cpp
++++ b/user_mgr.cpp
+@@ -22,19 +22,24 @@
+ #include "shadowlock.hpp"
+ #include "users.hpp"
+ 
++#include <arpa/inet.h>
+ #include <dlfcn.h>
+ #include <grp.h>
++#include <ifaddrs.h>
++#include <netinet/in.h>
++#include <nss.h>
+ #include <pwd.h>
+ #include <shadow.h>
++#include <sys/socket.h>
+ #include <sys/types.h>
+ #include <sys/wait.h>
+ #include <time.h>
+ #include <unistd.h>
+-#include <nss.h>
+ 
+ #include <boost/algorithm/string/split.hpp>
+ #include <boost/filesystem.hpp>
+ #include <boost/interprocess/sync/file_lock.hpp>
++#include <nlohmann/json.hpp>
+ #include <phosphor-logging/elog-errors.hpp>
+ #include <phosphor-logging/elog.hpp>
+ #include <phosphor-logging/lg2.hpp>
+@@ -46,7 +51,9 @@
+ #include <ctime>
+ #include <fstream>
+ #include <iostream>
++#include <map>
+ #include <numeric>
++#include <optional>
+ #include <regex>
+ #include <span>
+ #include <string>
+@@ -84,6 +91,8 @@ static constexpr const char* defaultPWQualityConfigFile =
+     "/etc/security/pwquality.conf";
+ constexpr const char* pamCommonAuthConf = "/etc/pam.d/common-auth";
+ constexpr const char* pamCommonAccountConf = "/etc/pam.d/common-account";
++constexpr const char* ipmiUserDataBackupFile =
++    "/var/lib/ipmi/ipmi_user_backup.json";
+ 
+ typedef struct
+ {
+@@ -104,6 +113,13 @@ struct privilageStruct
+     char privStr[16];
+ };
+ 
++struct InterfaceInfo
++{
++    uint8_t channelNumber;
++    std::vector<std::string> ipv4List;
++    std::vector<std::string> ipv6List;
++};
++
+ const pamReorder pamReorderStruct[maxPamReorderModule] = {
+     {1, "pam_unix.so"}, {2, "pam_ldap.so"}, {3, "pam_radius.so"}};
+ 
+@@ -155,6 +171,8 @@ using GroupNameExists =
+     sdbusplus::xyz::openbmc_project::User::Common::Error::GroupNameExists;
+ using GroupNameDoesNotExists =
+     sdbusplus::xyz::openbmc_project::User::Common::Error::GroupNameDoesNotExist;
++using NotAllowed = sdbusplus::xyz::openbmc_project::Common::Error::NotAllowed;
++using Reason = xyz::openbmc_project::Common::NotAllowed::REASON;
+ 
+ namespace
+ {
+@@ -260,6 +278,18 @@ bool UserMgr::isUserExist(const std::string& userName)
+     return true;
+ }
+ 
++bool UserMgr::isDefaultUser(const std::string& userName)
++{
++    struct group* grpIpmi = getgrnam("ipmi");
++    std::string defaultUser =
++        (grpIpmi && grpIpmi->gr_mem) ? grpIpmi->gr_mem[0] : "";
++    if (userName == defaultUser)
++    {
++        return true;
++    }
++    return false;
++}
++
+ void UserMgr::throwForUserDoesNotExist(const std::string& userName)
+ {
+     if (!isUserExist(userName))
+@@ -355,14 +385,74 @@ void UserMgr::throwForMaxGrpUserCount(
+     return;
+ }
+ 
+-void UserMgr::throwForInvalidPrivilege(const std::string& priv)
++void UserMgr::throwForInvalidPrivilege(const std::vector<std::string>& priv,
++                                       std::string userName)
+ {
+-    if (!priv.empty() &&
+-        (std::find(privMgr.begin(), privMgr.end(), priv) == privMgr.end()))
++    std::vector<uint8_t> availableChannels = getAvailableChannelIds();
++    if (priv.size() != availableChannels.size())
++    {
++        lg2::error(
++            "Set user privilege size mismatch: expected {EXPECTED}, got {ACTUAL}",
++            "EXPECTED", availableChannels.size(), "ACTUAL", priv.size());
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("Set user privilege size mismatch"),
++            Argument::ARGUMENT_VALUE(std::to_string(priv.size()).c_str()));
++    }
++    for (const auto& iterator : priv)
++    {
++        if (!iterator.empty() && (std::find(privMgr.begin(), privMgr.end(),
++                                            iterator) == privMgr.end()))
++        {
++            lg2::error("Invalid privilege '{PRIVILEGE}'", "PRIVILEGE",
++                       iterator);
++            elog<InvalidArgument>(Argument::ARGUMENT_NAME("Privilege"),
++                                  Argument::ARGUMENT_VALUE(iterator.c_str()));
++        }
++    }
++    if (isDefaultUser(userName))
+     {
+-        lg2::error("Invalid privilege '{PRIVILEGE}'", "PRIVILEGE", priv);
+-        elog<InvalidArgument>(Argument::ARGUMENT_NAME("Privilege"),
+-                              Argument::ARGUMENT_VALUE(priv.c_str()));
++        lg2::error("Access denied to modify user '{USER_NAME}'", "USER_NAME",
++                   userName);
++        elog<NotAllowed>(
++            Reason("Property update is not allowed for default user"));
++    }
++}
++
++void UserMgr::throwForInvalidUserChannelAccess(
++    const std::vector<uint8_t>& channelAccess, std::string userName)
++{
++    std::vector<uint8_t> availableChannels = getAvailableChannelIds();
++    if (channelAccess.size() != availableChannels.size())
++    {
++        lg2::error(
++            "Channel count mismatch: expected '{EXPECTED}', got '{ACTUAL}'",
++            "EXPECTED", availableChannels.size(), "ACTUAL",
++            channelAccess.size());
++
++        elog<InvalidArgument>(
++            Argument::ARGUMENT_NAME("ChannelCountMismatch"),
++            Argument::ARGUMENT_VALUE(
++                std::to_string(channelAccess.size()).c_str()));
++    }
++    for (auto access : channelAccess)
++    {
++        if (access != 0 && access != 1)
++        {
++            lg2::error("Invalid channel access bit '{ACCESS}'", "ACCESS",
++                       access);
++
++            elog<InvalidArgument>(
++                Argument::ARGUMENT_NAME("ChannelAccess"),
++                Argument::ARGUMENT_VALUE(std::to_string(access).c_str()));
++        }
++    }
++
++    if (isDefaultUser(userName))
++    {
++        lg2::error("Access denied to modify user '{USER_NAME}'", "USER_NAME",
++                   userName);
++        elog<NotAllowed>(
++            Reason("Property update is not allowed for default user"));
+     }
+ }
+ 
+@@ -405,11 +495,13 @@ std::vector<std::string> UserMgr::readAllGroupsOnSystem()
+ }
+ 
+ void UserMgr::createUser(std::string userName,
+-                         std::vector<std::string> groupNames, std::string priv,
+-                         bool enabled)
++                         std::vector<std::string> groupNames,
++                         std::vector<std::string> priv,
++                         std::vector<uint8_t> userChannelAccess, bool enabled)
+ {
+-    throwForInvalidPrivilege(priv);
++    throwForInvalidPrivilege(priv, userName);
+     throwForInvalidGroups(groupNames);
++    throwForInvalidUserChannelAccess(userChannelAccess, userName);
+     // All user management lock has to be based on /etc/shadow
+     // TODO  phosphor-user-manager#10 phosphor::user::shadow::Lock lock{};
+     throwForUserExists(userName);
+@@ -427,7 +519,7 @@ void UserMgr::createUser(std::string userName,
+         {
+             groups += ",";
+         }
+-        groups += priv;
++        groups += priv[0];
+     }
+     try
+     {
+@@ -445,9 +537,9 @@ void UserMgr::createUser(std::string userName,
+     tempObjPath /= userName;
+     std::string userObj(tempObjPath);
+     std::sort(groupNames.begin(), groupNames.end());
+-    usersList.emplace(
+-        userName, std::make_unique<phosphor::user::Users>(
+-                      bus, userObj.c_str(), groupNames, priv, enabled, *this));
++    usersList.emplace(userName, std::make_unique<phosphor::user::Users>(
++                                    bus, userObj.c_str(), groupNames, priv,
++                                    userChannelAccess, enabled, *this));
+ 
+     lg2::info("User '{USERNAME}' created successfully", "USERNAME", userName);
+     return;
+@@ -458,6 +550,13 @@ void UserMgr::deleteUser(std::string userName)
+     // All user management lock has to be based on /etc/shadow
+     // TODO  phosphor-user-manager#10 phosphor::user::shadow::Lock lock{};
+     throwForUserDoesNotExist(userName);
++    if (isDefaultUser(userName))
++    {
++        lg2::error("Access denied to delete user '{USER_NAME}'", "USER_NAME",
++                   userName);
++        elog<NotAllowed>(
++            Reason("Delete option is not allowed for default user"));
++    }
+     try
+     {
+         // Clear user fail records
+@@ -728,8 +827,9 @@ void UserMgr::renameUser(std::string userName, std::string newUserName)
+         elog<InternalFailure>();
+     }
+     const auto& user = usersList[userName];
+-    std::string priv = user.get()->userPrivilege();
++    std::vector<std::string> priv = user.get()->userPrivilege();
+     std::vector<std::string> groupNames = user.get()->userGroups();
++    std::vector<uint8_t> userChannelAccess = user.get()->userChannelAccess();
+     bool enabled = user.get()->userEnabled();
+     sdbusplus::message::object_path tempObjPath(usersObjPath);
+     tempObjPath /= newUserName;
+@@ -739,10 +839,10 @@ void UserMgr::renameUser(std::string userName, std::string newUserName)
+     // InterfacesAdded. So first send out userRenamed signal.
+     this->userRenamed(userName, newUserName);
+     usersList.erase(userName);
+-    usersList.emplace(newUserName, std::make_unique<phosphor::user::Users>(
+-                                       bus, newUserObj.c_str(), groupNames,
+-                                       priv, enabled, *this));
+-
++    usersList.emplace(newUserName,
++                      std::make_unique<phosphor::user::Users>(
++                          bus, newUserObj.c_str(), groupNames, priv,
++                          userChannelAccess, enabled, *this));
+     /* If the user is named and identified as an SNMP user, it also needs to be
+      * renamed */
+     renameSnmpUser(userName, newUserName);
+@@ -805,9 +905,9 @@ int UserMgr::updatePasswordPolicy(const std::string value)
+ 
+ void UserMgr::updateGroupsAndPriv(const std::string& userName,
+                                   std::vector<std::string> groupNames,
+-                                  const std::string& priv)
++                                  const std::vector<std::string>& priv)
+ {
+-    throwForInvalidPrivilege(priv);
++    throwForInvalidPrivilege(priv, userName);
+     throwForInvalidGroups(groupNames);
+     // All user management lock has to be based on /etc/shadow
+     // TODO  phosphor-user-manager#10 phosphor::user::shadow::Lock lock{};
+@@ -837,7 +937,7 @@ void UserMgr::updateGroupsAndPriv(const std::string& userName,
+         {
+             groups += ",";
+         }
+-        groups += priv;
++        groups += priv[0];
+     }
+     try
+     {
+@@ -1558,28 +1658,143 @@ void UserMgr::executeGroupDeletion(const char* groupName)
+     executeCmd("/usr/sbin/groupdel", groupName);
+ }
+ 
+-UserInfoMap UserMgr::getUserInfo(std::string userName)
++/**
++ * @brief Helper to read and parse JSON file.
++ *
++ * @return Parsed JSON object or nullopt on failure.
++ */
++std::optional<nlohmann::json> readJsonFile(const std::string& path)
++{
++    std::ifstream jsonFile(path);
++    if (!jsonFile.good())
++    {
++        lg2::error("JSON file not found: {PATH}", "PATH", path);
++        return std::nullopt;
++    }
++
++    try
++    {
++        return nlohmann::json::parse(jsonFile, nullptr, false);
++    }
++    catch (const nlohmann::json::parse_error& e)
++    {
++        lg2::error("Failed to parse JSON file: {PATH} - {ERROR}", "PATH", path,
++                   "ERROR", e.what());
++        return std::nullopt;
++    }
++}
++
++std::vector<uint8_t> UserMgr::getAvailableChannelIds()
++{
++    std::vector<uint8_t> channelIds;
++    auto channelMap = getChannelInterfaceMap();
++    for (const auto& [id, name] : channelMap)
++    {
++        channelIds.push_back(id);
++    }
++    return channelIds;
++}
++
++uint8_t UserMgr::getChannelFromIP(const std::string& targetIp)
++{
++    std::map<uint8_t, std::string> channelMap = getChannelInterfaceMap();
++    std::map<std::string, InterfaceInfo> interfaceMap;
++
++    struct ifaddrs* ifaddr;
++    if (getifaddrs(&ifaddr) == -1)
++    {
++        lg2::error(
++            "Failed to retrieve interface list using getifaddrs: {ERROR}",
++            "ERROR", strerror(errno));
++        return std::numeric_limits<uint8_t>::max();
++    }
++
++    for (struct ifaddrs* ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next)
++    {
++        if (!ifa->ifa_addr)
++            continue;
++
++        std::string ifaceName(ifa->ifa_name);
++
++        bool found = false;
++        std::optional<uint8_t> channel;
++        for (const auto& [ch, name] : channelMap)
++        {
++            if (name == ifaceName)
++            {
++                channel = ch;
++                found = true;
++                break;
++            }
++        }
++
++        if (!found)
++            continue;
++
++        char ipStr[INET6_ADDRSTRLEN] = {};
++        void* addr = nullptr;
++
++        if (ifa->ifa_addr->sa_family == AF_INET)
++        {
++            addr = &((struct sockaddr_in*)ifa->ifa_addr)->sin_addr;
++            inet_ntop(AF_INET, addr, ipStr, sizeof(ipStr));
++            if (targetIp == ipStr)
++            {
++                freeifaddrs(ifaddr);
++                return static_cast<int>(channel.value());
++            }
++        }
++        else if (ifa->ifa_addr->sa_family == AF_INET6)
++        {
++            addr = &((struct sockaddr_in6*)ifa->ifa_addr)->sin6_addr;
++            inet_ntop(AF_INET6, addr, ipStr, sizeof(ipStr));
++            if (targetIp == ipStr)
++            {
++                freeifaddrs(ifaddr);
++                return static_cast<int>(channel.value());
++            }
++        }
++    }
++
++    freeifaddrs(ifaddr);
++    return std::numeric_limits<uint8_t>::max();
++}
++
++UserInfoMap UserMgr::getUserInfo(std::string userName, std::string ipAddress)
+ {
+     struct privilageStruct privBuf[3] = {
+         {1, "priv-admin"}, {2, "priv-operator"}, {3, "priv-user"}};
+     UserInfoMap userInfo;
+     int userID = 0, retval = 0;
++    std::vector<uint8_t> userChannelAccess;
++    uint8_t channelNo = getChannelFromIP(ipAddress);
+     std::vector<uint8_t> currentPamOrder;
+     currentPamOrder = getPamOrder();
+     for (uint8_t value : currentPamOrder){
+     if(value == 1){
+-    if (isUserExist(userName)){
+-        const auto& user = usersList[userName];
+-        userInfo.emplace("UserPrivilege", user.get()->userPrivilege());
+-        userInfo.emplace("UserGroups", user.get()->userGroups());
+-        userInfo.emplace("UserEnabled", user.get()->userEnabled());
+-        userInfo.emplace("UserLockedForFailedAttempt",
+-                         user.get()->userLockedForFailedAttempt());
+-        userInfo.emplace("UserPasswordExpired",
+-                         user.get()->userPasswordExpired());
+-        userInfo.emplace("RemoteUser", false);
+-	return userInfo;
+-    }
++        if (isUserExist(userName) &&
++            channelNo != std::numeric_limits<uint8_t>::max() && channelNo > 0)
++        {
++            const auto& user = usersList[userName];
++            userChannelAccess.resize(std::max(userChannelAccess.size(),
++                                              static_cast<size_t>(channelNo)));
++            userChannelAccess = user.get()->userChannelAccess();
++            if (userChannelAccess[channelNo - 1])
++            {
++                std::vector<std::string> priv = user.get()->userPrivilege();
++                priv.resize(
++                    std::max(priv.size(), static_cast<size_t>(channelNo)));
++                userInfo.emplace("UserPrivilege", priv[channelNo - 1]);
++                userInfo.emplace("UserGroups", user.get()->userGroups());
++                userInfo.emplace("UserEnabled", user.get()->userEnabled());
++                userInfo.emplace("UserLockedForFailedAttempt",
++                                 user.get()->userLockedForFailedAttempt());
++                userInfo.emplace("UserPasswordExpired",
++                                 user.get()->userPasswordExpired());
++                userInfo.emplace("RemoteUser", false);
++                return userInfo;
++            }
++        }
+     else
+     continue;
+     }
+@@ -1912,6 +2127,9 @@ void UserMgr::initUserObjects(void)
+     UserSSHLists userSSHLists = getUserAndSshGrpList();
+     userNameList = std::move(userSSHLists.first);
+     sshGrpUsersList = std::move(userSSHLists.second);
++    auto userJsonOpt = readJsonFile(ipmiUserDataBackupFile);
++    nlohmann::json userJson = *userJsonOpt;
++    bool defaultUser = true;
+ 
+     if (!userNameList.empty())
+     {
+@@ -1939,7 +2157,44 @@ void UserMgr::initUserObjects(void)
+         for (auto& user : userNameList)
+         {
+             std::vector<std::string> userGroups;
+-            std::string userPriv;
++            std::vector<std::string> userPriv;
++            std::vector<uint8_t> userChannelAccess;
++            std::vector<uint8_t> availableChannels = getAvailableChannelIds();
++
++            for (const auto& entry : userJson)
++            {
++                if (!entry.contains("user_name") || entry["user_name"] != user)
++                    continue;
++                if (entry.contains("ipmi_enabled") &&
++                    entry["ipmi_enabled"].is_array())
++                {
++                    const auto& ipmiEnabled = entry["ipmi_enabled"];
++                    for (auto ch : availableChannels)
++                    {
++                        if (ch < ipmiEnabled.size() &&
++                            ipmiEnabled[ch].is_boolean())
++                        {
++                            userChannelAccess.push_back(
++                                ipmiEnabled[ch].get<bool>() ? 1 : 0);
++                        }
++                    }
++                }
++
++                if (entry.contains("privilege") &&
++                    entry["privilege"].is_array())
++                {
++                    const auto& privArr = entry["privilege"];
++                    for (auto ch : availableChannels)
++                    {
++                        if (ch < privArr.size() && privArr[ch].is_string())
++                        {
++                            userPriv.emplace_back(
++                                privArr[ch].get<std::string>());
++                        }
++                    }
++                }
++            }
++
+             for (const auto& grp : groupLists)
+             {
+                 std::vector<std::string> tempGrp = grp.second;
+@@ -1949,7 +2204,18 @@ void UserMgr::initUserObjects(void)
+                     if (std::find(privMgr.begin(), privMgr.end(), grp.first) !=
+                         privMgr.end())
+                     {
+-                        userPriv = grp.first;
++                        if (std::find(userPriv.begin(), userPriv.end(),
++                                      grp.first) == userPriv.end())
++                        {
++                            if (defaultUser)
++                            {
++                                userChannelAccess.assign(
++                                    availableChannels.size(), 1);
++                                userPriv.assign(availableChannels.size(),
++                                                grp.first);
++                                defaultUser = false;
++                            }
++                        }
+                     }
+                     else
+                     {
+@@ -1967,9 +2233,10 @@ void UserMgr::initUserObjects(void)
+             tempObjPath /= user;
+             std::string objPath(tempObjPath);
+             std::sort(userGroups.begin(), userGroups.end());
+-            usersList.emplace(user, std::make_unique<phosphor::user::Users>(
+-                                        bus, objPath.c_str(), userGroups,
+-                                        userPriv, isUserEnabled(user), *this));
++            usersList.emplace(
++                user, std::make_unique<phosphor::user::Users>(
++                          bus, objPath.c_str(), userGroups, userPriv,
++                          userChannelAccess, isUserEnabled(user), *this));
+         }
+     }
+ }
+@@ -2093,6 +2360,51 @@ std::vector<uint8_t> UserMgr::getPamOrder()
+     return currentPamOrder;
+ }
+ 
++std::map<uint8_t, std::string> UserMgr::getChannelInterfaceMap()
++{
++    constexpr auto ChannelConfigPath =
++        "/usr/share/ipmi-providers/channel_config.json";
++    std::map<uint8_t, std::string> availableChannelsMap;
++    auto dataOpt = readJsonFile(ChannelConfigPath);
++
++    if (!dataOpt)
++    {
++        return availableChannelsMap;
++    }
++
++    const auto& data = *dataOpt;
++    if (data.empty())
++    {
++        lg2::error("Channel config is empty");
++        return availableChannelsMap;
++    }
++
++    for (const auto& [key, value] : data.items())
++    {
++        if (!value.contains("channel_info"))
++        {
++            continue;
++        }
++
++        const auto& chInfo = value["channel_info"];
++        if (chInfo.contains("medium_type") &&
++            chInfo["medium_type"] == "lan-802.3")
++        {
++            try
++            {
++                availableChannelsMap[static_cast<uint8_t>(std::stoi(key))] =
++                    value.value("name", "Unknown");
++            }
++            catch (const std::exception& e)
++            {
++                lg2::error("Invalid channel key: {KEY} - {ERROR}", "KEY", key,
++                           "ERROR", e.what());
++            }
++        }
++    }
++    return availableChannelsMap;
++}
++
+ std::string modifyPamOrderLineBuf(std::string pamOrderLineBuf, uint8_t value)
+ {
+     size_t successPos = pamOrderLineBuf.find("success=");
+diff --git a/user_mgr.hpp b/user_mgr.hpp
+index 4b2e5c2..345544a 100644
+--- a/user_mgr.hpp
++++ b/user_mgr.hpp
+@@ -141,7 +141,9 @@ class UserMgr : public Ifaces
+      *  @param[in] enabled - State of the user enabled / disabled.
+      */
+     void createUser(std::string userName, std::vector<std::string> groupNames,
+-                    std::string priv, bool enabled) override;
++                    std::vector<std::string> priv,
++                    std::vector<uint8_t> userChannelAccess,
++                    bool enabled) override;
+ 
+     /** @brief password user method.
+      *  This method renames the user as requested
+@@ -200,14 +202,32 @@ class UserMgr : public Ifaces
+      */
+     void updateGroupsAndPriv(const std::string& userName,
+                              std::vector<std::string> groups,
+-                             const std::string& priv);
++                             const std::vector<std::string>& priv);
+ 
++    /** @brief check for valid privielge
++     *  method to check valid privilege, and throw if invalid
++     *
++     *  @param[in] priv - privilege of the user
++     *  @param[in]  - Name of the user
++     */
++    void throwForInvalidPrivilege(const std::vector<std::string>& priv,
++                                  std::string userName);
++
++    /** @brief check for valid user channel access
++     *  method to check valid user channel access, and throw if invalid
++     *
++     *  @param[in]  - User channel access of the user
++     *  @param[in]  - Name of the user
++     */
++    void throwForInvalidUserChannelAccess(
++        const std::vector<uint8_t>& userchannelaccess, std::string userName);
+     /** @brief Update user enabled state.
+      *  This method enables / disables user
+      *
+      *  @param[in] userName - user name, for which update is requested
+      *  @param[in] enabled - enable / disable the user
+      */
++
+     void userEnable(const std::string& userName, bool enabled);
+ 
+     /** @brief get user enabled state
+@@ -285,6 +305,43 @@ class UserMgr : public Ifaces
+      **/
+     virtual bool userPasswordExpired(const std::string& userName);
+ 
++    /**@brief Get a list of available IPMI channel IDs.
++     *
++     * This is a convenience wrapper around getChannelInterfaceMap(),
++     * which returns a map of channel ID to channel name.
++     * This function extracts and returns only the list of channel IDs
++     * from that map.
++     *
++     * @return std::vector<uint8_t> List of available channel IDs.
++     */
++    std::vector<uint8_t> getAvailableChannelIds();
++
++    /**@brief Determines the IPMI channel number corresponding to a given IP
++     * address.
++     *
++     * This function iterates over all local network interfaces using
++     * `getifaddrs()`, and compares each interface's IP address with the
++     * provided `targetIp`. If a match is found and the interface exists in the
++     * LAN channel mapping (parsed from the local JSON configuration file at
++     * `ChannelConfigPath`), the corresponding channel number is returned.
++     *
++     * The mapping of interfaces to channel numbers is obtained from the
++     * `getChannelInterfaceMap()` function, which reads the channel
++     * configuration JSON file and filters for entries with `"medium_type":
++     * "lan-802.3"`.
++     *
++     * @param[in] targetIp The target IP address (IPv4 or IPv6) to match against
++     * local interfaces.
++     *
++     * @return uint8_t The matching channel number if found;
++     *         otherwise, returns `std::numeric_limits<uint8_t>::max()`.
++     *
++     * @note Both IPv4 and IPv6 addresses are supported.
++     * @note If no match is found or if `getifaddrs()` fails, the function logs
++     * an error and returns the max value.
++     */
++    uint8_t getChannelFromIP(const std::string& targetIp);
++
+     /** @brief returns user info
+      * Checks if user is local user, then returns map of properties of user.
+      * like user privilege, list of user groups, user enabled state and user
+@@ -292,9 +349,11 @@ class UserMgr : public Ifaces
+      * then it gets the privilege mapping of the LDAP group.
+      *
+      * @param[in] - user name
++     * @param[in] - ip adderss
+      * @return -  map of user properties
+      **/
+-    UserInfoMap getUserInfo(std::string userName) override;
++    UserInfoMap getUserInfo(std::string userName,
++                            std::string ipAddress) override;
+ 
+     /** @brief returns groups info
+      * Checks for the available user groups, by which new user can be created.
+@@ -321,6 +380,23 @@ class UserMgr : public Ifaces
+ 
+     std::vector<uint8_t> getPamOrder() override;
+ 
++    /**
++     * @brief Retrieves a list of available IPMI channels and their
++     * corresponding interface names.
++     *
++     * Reads a JSON configuration file
++     * (`/usr/share/ipmi-providers/channel_config.json`) to identify valid IPMI
++     * channels configured for LAN (802.3) communication and their associated
++     * interface names. Invalid entries or parse errors are logged and skipped.
++     *
++     * @return std::map<uint8_t, std::string> A map where keys are valid channel
++     * IDs and values are their corresponding interface names Returns an empty
++     * map if no valid channels are found or on errors.
++     * @throws std::runtime_error If the JSON file is corrupted or cannot be
++     * parsed.
++     */
++    std::map<uint8_t, std::string> getChannelInterfaceMap() override;
++
+   protected:
+     /** @brief get pam argument value
+      *  method to get argument value from pam configuration
+@@ -384,6 +460,17 @@ class UserMgr : public Ifaces
+      */
+     bool isUserExist(const std::string& userName);
+ 
++    /** @brief Check if the given user is the default IPMI user.
++     *
++     * This function determines whether the specified user is the default
++     * IPMI user by checking the first member of the "ipmi" group.
++     *
++     * @param[in] userName The name of the user to check.
++     * @return true if the user is the first member of the "ipmi" group.
++     * @return false otherwise.
++     */
++    bool isDefaultUser(const std::string& userName);
++
+     size_t getNonIpmiUsersCount();
+ 
+     /** @brief check user exists
+@@ -449,7 +536,8 @@ class UserMgr : public Ifaces
+      *
+      *  @param[in] priv - privilege of the user
+      */
+-    void throwForInvalidPrivilege(const std::string& priv);
++    void throwForInvalidPrivilege(const std::string& priv,
++                                  std::string userName);
+ 
+     /** @brief check for valid groups
+      *  method to check valid groups, and throw if invalid
+diff --git a/users.cpp b/users.cpp
+index 3440b94..c386752 100644
+--- a/users.cpp
++++ b/users.cpp
+@@ -59,7 +59,8 @@ using Argument = xyz::openbmc_project::Common::InvalidArgument;
+  *  @param[in] parent - user manager - parent object
+  */
+ Users::Users(sdbusplus::bus_t& bus, const char* path,
+-             std::vector<std::string> groups, std::string priv, bool enabled,
++             std::vector<std::string> groups, std::vector<std::string> priv,
++             std::vector<uint8_t> channelAccess, bool enabled,
+              UserMgr& parent) :
+     Interfaces(bus, path, Interfaces::action::defer_emit),
+     userName(sdbusplus::message::object_path(path).filename()), manager(parent)
+@@ -67,7 +68,7 @@ Users::Users(sdbusplus::bus_t& bus, const char* path,
+     UsersIface::userPrivilege(priv, true);
+     UsersIface::userGroups(groups, true);
+     UsersIface::userEnabled(enabled, true);
+-
++    UsersIface::userChannelAccess(channelAccess, true);
+     this->emit_object_added();
+ }
+ 
+@@ -80,12 +81,32 @@ void Users::delete_(void)
+     manager.deleteUser(userName);
+ }
+ 
++std::vector<uint8_t> Users::userChannelAccess(void) const
++{
++    return UsersIface::userChannelAccess();
++}
++
++/** @brief update user channel access
++ *
++ *  @param[in] value - User channel access
++ */
++std::vector<uint8_t> Users::userChannelAccess(std::vector<uint8_t> value)
++{
++    manager.throwForInvalidUserChannelAccess(value, userName);
++    if (value == UsersIface::userChannelAccess())
++    {
++        return value;
++    }
++    return UsersIface::userChannelAccess(value);
++}
++
+ /** @brief update user privilege
+  *
+  *  @param[in] value - User privilege
+  */
+-std::string Users::userPrivilege(std::string value)
++std::vector<std::string> Users::userPrivilege(std::vector<std::string> value)
+ {
++    manager.throwForInvalidPrivilege(value, userName);
+     if (value == UsersIface::userPrivilege())
+     {
+         return value;
+@@ -94,8 +115,13 @@ std::string Users::userPrivilege(std::string value)
+     return UsersIface::userPrivilege(value);
+ }
+ 
+-void Users::setUserPrivilege(const std::string& value)
++/** @brief set user privilege
++ *
++ *  @param[in] value - User privilege
++ */
++void Users::setUserPrivilege(const std::vector<std::string>& value)
+ {
++    manager.throwForInvalidPrivilege(value, userName);
+     UsersIface::userPrivilege(value);
+ }
+ 
+@@ -107,7 +133,7 @@ void Users::setUserGroups(const std::vector<std::string>& groups)
+ /** @brief list user privilege
+  *
+  */
+-std::string Users::userPrivilege(void) const
++std::vector<std::string> Users::userPrivilege(void) const
+ {
+     return UsersIface::userPrivilege();
+ }
+diff --git a/users.hpp b/users.hpp
+index 0f3065e..8db35ce 100644
+--- a/users.hpp
++++ b/users.hpp
+@@ -56,7 +56,8 @@ class Users : public Interfaces
+      *  @param[in] parent - user manager - parent object
+      */
+     Users(sdbusplus::bus_t& bus, const char* path,
+-          std::vector<std::string> groups, std::string priv, bool enabled,
++          std::vector<std::string> groups, std::vector<std::string> priv,
++          std::vector<uint8_t> userChannelAccess, bool enabled,
+           UserMgr& parent);
+ 
+     /** @brief delete user method.
+@@ -69,16 +70,20 @@ class Users : public Interfaces
+      *
+      *  @param[in] value - User privilege
+      */
+-    std::string userPrivilege(std::string value) override;
++    std::vector<std::string>
++        userPrivilege(std::vector<std::string> value) override;
++
++    std::vector<uint8_t> userChannelAccess(void) const override;
++    std::vector<uint8_t> userChannelAccess(std::vector<uint8_t> value) override;
+ 
+-    void setUserPrivilege(const std::string& value);
++    void setUserPrivilege(const std::vector<std::string>& value);
+ 
+     void setUserGroups(const std::vector<std::string>& groups);
+ 
+     /** @brief lists user privilege
+      *
+      */
+-    std::string userPrivilege(void) const override;
++    std::vector<std::string> userPrivilege(void) const override;
+ 
+     /** @brief update user groups
+      *
+-- 
+2.43.0
+

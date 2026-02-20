@@ -1,0 +1,1818 @@
+From 93d2757f32c9c6506ead93ec9265425af502bd06 Mon Sep 17 00:00:00 2001
+From: owenkuo <owenkuo@ami.com>
+Date: Fri, 7 Nov 2025 11:21:03 +0800
+Subject: [PATCH] Add SSIF and SBMR support
+
+---
+ .../devicetree/bindings/i2c/aspeed,i2c.yaml   |  27 +
+ Documentation/devicetree/bindings/i2c/i2c.txt |   6 +
+ drivers/char/ipmi/Kconfig                     |   4 +
+ drivers/char/ipmi/ipmb_dev_int.c              |   4 +
+ drivers/char/ipmi/ssif_bmc.c                  | 205 +++-
+ drivers/i2c/busses/i2c-aspeed.c               | 906 ++++++++++++++++--
+ drivers/i2c/i2c-core-base.c                   |  12 +-
+ 7 files changed, 1057 insertions(+), 107 deletions(-)
+
+diff --git a/Documentation/devicetree/bindings/i2c/aspeed,i2c.yaml b/Documentation/devicetree/bindings/i2c/aspeed,i2c.yaml
+index 6df27b47b922..f958748d49aa 100644
+--- a/Documentation/devicetree/bindings/i2c/aspeed,i2c.yaml
++++ b/Documentation/devicetree/bindings/i2c/aspeed,i2c.yaml
+@@ -49,6 +49,33 @@ properties:
+     description:
+       states that there is another master active on this bus
+ 
++  bus-timeout-ms:
++    default: 1000
++    description:
++      bus timeout in milliseconds defaults to 1 second when not specified
++
++  #retries:
++    description:
++      Number of retries for master transfer
++
++  aspeed,dma-buf-size:
++    $ref: /schemas/types.yaml#/definitions/uint32
++    description:
++      size of DMA buffer (from 2 to 4095 in case of AST2500)
++        Only AST2500/2600 support DMA mode.
++        Limitations on AST2500 - I2C is sharing the DMA H/W with UHCI host
++        controller and MCTP controller. Since those controllers operate with DMA
++        mode only, I2C has to use buffer mode or byte mode instead if one of
++        those controllers is enabled. Also make sure that if SD/eMMC or Port80
++        snoop uses DMA mode instead of PIO or FIFO respectively, I2C can't use
++        DMA mode. IF both DMA and buffer modes are enabled, DMA mode will be
++        selected.
++
++  general-call:
++    type: boolean
++    description:
++      enables general call receiving
++
+ required:
+   - reg
+   - compatible
+diff --git a/Documentation/devicetree/bindings/i2c/i2c.txt b/Documentation/devicetree/bindings/i2c/i2c.txt
+index fc3dd7ec0445..1f9c8d0e3d62 100644
+--- a/Documentation/devicetree/bindings/i2c/i2c.txt
++++ b/Documentation/devicetree/bindings/i2c/i2c.txt
+@@ -137,6 +137,12 @@ wants to support one of the below features, it should adapt these bindings.
+ - wakeup-source
+ 	device can be used as a wakeup source.
+ 
++- bus-timeout-ms
++	Bus timeout in milliseconds.
++
++- #retries
++	Number of retries for master transfer.
++
+ Binding may contain optional "interrupts" property, describing interrupts
+ used by the device. I2C core will assign "irq" interrupt (or the very first
+ interrupt if not using interrupt names) as primary interrupt for the slave.
+diff --git a/drivers/char/ipmi/Kconfig b/drivers/char/ipmi/Kconfig
+index d82323f8393b..c24eff526726 100644
+--- a/drivers/char/ipmi/Kconfig
++++ b/drivers/char/ipmi/Kconfig
+@@ -197,6 +197,10 @@ config SSIF_IPMI_BMC
+ 	  The driver implements the BMC side of the SMBus system
+ 	  interface (SSIF).
+ 
++config SEPARATE_SSIF_POSTCODES
++	bool "Separate ipmi post codes writes to another channel"
++	depends on SSIF_IPMI_BMC
++
+ config IPMB_DEVICE_INTERFACE
+ 	tristate 'IPMB Interface handler'
+ 	depends on I2C
+diff --git a/drivers/char/ipmi/ipmb_dev_int.c b/drivers/char/ipmi/ipmb_dev_int.c
+index 937189191512..0ee1fd304675 100644
+--- a/drivers/char/ipmi/ipmb_dev_int.c
++++ b/drivers/char/ipmi/ipmb_dev_int.c
+@@ -330,8 +330,12 @@ static int ipmb_probe(struct i2c_client *client)
+ 	if (ret)
+ 		return ret;
+ 
++#if 1 /* FIXME: Quick fix. Need to add parsing code for ipmb_id instead */
++	ipmb_dev->is_i2c_protocol = true;
++#else
+ 	ipmb_dev->is_i2c_protocol
+ 		= device_property_read_bool(&client->dev, "i2c-protocol");
++#endif
+ 
+ 	ipmb_dev->client = client;
+ 	i2c_set_clientdata(client, ipmb_dev);
+diff --git a/drivers/char/ipmi/ssif_bmc.c b/drivers/char/ipmi/ssif_bmc.c
+index 2f4b1731042b..c228762fb3f4 100644
+--- a/drivers/char/ipmi/ssif_bmc.c
++++ b/drivers/char/ipmi/ssif_bmc.c
+@@ -6,6 +6,7 @@
+  *
+  */
+ 
++#include <linux/delay.h>
+ #include <linux/i2c.h>
+ #include <linux/miscdevice.h>
+ #include <linux/module.h>
+@@ -18,8 +19,15 @@
+ #include <linux/timer.h>
+ #include <linux/jiffies.h>
+ #include <linux/ipmi_ssif_bmc.h>
++#include <linux/i2c-aspeed.h>
++#include <linux/kfifo.h>
+ 
+ #define DEVICE_NAME                             "ipmi-ssif-host"
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++#define DEVICE_NAME_POST                       "ipmi-ssif-postcodes"
++#define POST_CODE_SIZE                         9
++#define POST_CODE_OFFSET                       3
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
+ 
+ #define GET_8BIT_ADDR(addr_7bit)                (((addr_7bit) << 1) & 0xff)
+ 
+@@ -44,7 +52,9 @@
+  * Request-to-Response Time is T6max(250ms) - T1max(20ms) - 3ms = 227ms
+  * Recover ssif_bmc from busy state if it takes up to 500ms
+  */
+-#define RESPONSE_TIMEOUT                        500 /* ms */
++/* Note: For time being increased the timer, to fix i2c-timeout issue */
++#define RESPONSE_TIMEOUT                        10000 /*10sec*/
++#define BUFFER_SIZE 1024
+ 
+ struct ssif_part_buffer {
+ 	u8 address;
+@@ -102,8 +112,18 @@ struct ssif_bmc_ctx {
+ 	struct ssif_part_buffer part_buf;
+ 	struct ipmi_ssif_msg    response;
+ 	struct ipmi_ssif_msg    request;
++	int                     nackstatus;
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++	struct miscdevice       miscdev_post;
++	spinlock_t              lock_post_rd;
++	wait_queue_head_t       wait_queue_post_rd;
++	u8                      running_post;
++	struct kfifo            fifo_post;
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
+ };
+ 
++static void on_stop_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val);
++
+ static inline struct ssif_bmc_ctx *to_ssif_bmc(struct file *file)
+ {
+ 	return container_of(file->private_data, struct ssif_bmc_ctx, miscdev);
+@@ -168,6 +188,97 @@ static ssize_t ssif_bmc_read(struct file *file, char __user *buf, size_t count,
+ 	return (ret < 0) ? ret : count;
+ }
+ 
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++static inline struct ssif_bmc_ctx *to_ssif_bmc_post(struct file *file)
++{
++       return container_of(file->private_data, struct ssif_bmc_ctx, miscdev_post);
++}
++
++
++static ssize_t ssif_bmc_read_post(struct file *file, char __user *buf, size_t count_in, loff_t *ppos)
++{
++	struct ssif_bmc_ctx *ssif_bmc = to_ssif_bmc_post(file);
++	unsigned long flags;
++	unsigned int count_out;
++	ssize_t ret = 0;
++
++	if (kfifo_is_empty(&ssif_bmc->fifo_post)) {
++		if (file->f_flags & O_NONBLOCK)
++			return -EAGAIN;
++		ret = wait_event_interruptible(ssif_bmc->wait_queue_post_rd, !kfifo_is_empty(&ssif_bmc->fifo_post));
++		if (ret == -ERESTARTSYS)
++			return ret;
++	}
++	spin_lock_irqsave(&ssif_bmc->lock_post_rd, flags);
++	ret = kfifo_to_user(&ssif_bmc->fifo_post, buf, count_in, &count_out);
++	spin_unlock_irqrestore(&ssif_bmc->lock_post_rd, flags);
++	return (ret < 0) ? ret : count_out;
++}
++
++static int ssif_bmc_open_post(struct inode *inode, struct file *file)
++{
++	struct ssif_bmc_ctx *ssif_bmc = to_ssif_bmc_post(file);
++	int ret = 0;
++
++	if (!ssif_bmc->running_post)
++		ssif_bmc->running_post = 1;
++	else
++		ret = -EBUSY;
++
++	return ret;
++}
++
++static __poll_t ssif_bmc_poll_post(struct file *file, poll_table *wait)
++{
++	struct ssif_bmc_ctx *ssif_bmc = to_ssif_bmc_post(file);
++
++	poll_wait(file, &ssif_bmc->wait_queue_post_rd, wait);
++	if (!kfifo_is_empty(&ssif_bmc->fifo_post)) {
++		return POLLIN | POLLRDNORM;
++	}
++	return 0;
++}
++
++static int ssif_bmc_release_post(struct inode *inode, struct file *file)
++{
++	struct ssif_bmc_ctx *ssif_bmc = to_ssif_bmc_post(file);
++
++	ssif_bmc->running_post = 0;
++
++	return 0;
++}
++
++static const struct file_operations ssif_bmc_post_fops = {
++	.owner          = THIS_MODULE,
++	.open           = ssif_bmc_open_post,
++	.read           = ssif_bmc_read_post,
++	.release        = ssif_bmc_release_post,
++	.poll           = ssif_bmc_poll_post,
++};
++
++void send_post_code(struct ssif_bmc_ctx *ssif_bmc)
++{
++	unsigned long flags = 0;
++	int rc = 0;
++
++	if (kfifo_initialized(&ssif_bmc->fifo_post) && ssif_bmc->request.len >= (POST_CODE_SIZE + POST_CODE_OFFSET)) {
++		ssize_t to_send = POST_CODE_SIZE;
++		spin_lock_irqsave(&ssif_bmc->lock_post_rd, flags);
++		if ((BUFFER_SIZE - kfifo_len(&ssif_bmc->fifo_post)) < to_send)
++			kfifo_reset(&ssif_bmc->fifo_post);
++		rc = kfifo_in(&ssif_bmc->fifo_post, &ssif_bmc->request.payload[POST_CODE_OFFSET], to_send);
++		if (rc != to_send) {
++			kfifo_reset(&ssif_bmc->fifo_post);
++			spin_unlock_irqrestore(&ssif_bmc->lock_post_rd, flags);
++			return;
++		}
++		spin_unlock_irqrestore(&ssif_bmc->lock_post_rd, flags);
++
++		wake_up_all(&ssif_bmc->wait_queue_post_rd);
++	}
++}
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
++
+ /* Handle SSIF message that is written by user */
+ static ssize_t ssif_bmc_write(struct file *file, const char __user *buf, size_t count,
+ 			      loff_t *ppos)
+@@ -222,6 +333,10 @@ static ssize_t ssif_bmc_write(struct file *file, const char __user *buf, size_t
+ 
+ 	/* Clean old request buffer */
+ 	memset(&ssif_bmc->request, 0, sizeof(struct ipmi_ssif_msg));
++
++	/* Response ready. Disable NAK */
++	ssif_bmc->nackstatus = 0;
++	dev_dbg(&ssif_bmc->client->dev, "respok, disable nak\n");
+ exit:
+ 	spin_unlock_irqrestore(&ssif_bmc->lock, flags);
+ 
+@@ -317,12 +432,27 @@ static void response_timeout(struct timer_list *t)
+ /* Called with ssif_bmc->lock held. */
+ static void handle_request(struct ssif_bmc_ctx *ssif_bmc)
+ {
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++	int netfn = ssif_bmc->request.payload[0] >> 2;
++	int cmd   = ssif_bmc->request.payload[1];
++	int group = ssif_bmc->request.payload[2];
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
++
+ 	/* set ssif_bmc to busy waiting for response */
+ 	ssif_bmc->busy = true;
+ 	/* Request message is available to process */
+ 	ssif_bmc->request_available = true;
++	/* Enable NAK */
++	ssif_bmc->nackstatus = 1;
++	dev_dbg(&ssif_bmc->client->dev, "enable nack\n");
+ 	/* Clean old response buffer */
+ 	memset(&ssif_bmc->response, 0, sizeof(struct ipmi_ssif_msg));
++
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++	if(netfn == 0x2c && cmd == 0x02 && group == 0xAE) {
++		send_post_code(ssif_bmc);
++	}
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
+ 	/* This is the new READ request.*/
+ 	wake_up_all(&ssif_bmc->wait_queue);
+ 
+@@ -589,7 +719,13 @@ static void process_smbus_cmd(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
+ 		 * pending response and clear it
+ 		 */
+ 		if (ssif_bmc->response_in_progress)
++		{
++			memset(&ssif_bmc->part_buf, 0, sizeof(struct ssif_part_buffer));
+ 			complete_response(ssif_bmc);
++		}
++
++		ssif_bmc->nackstatus = 0;
++		dev_dbg(&ssif_bmc->client->dev, "new req disable nak\n");
+ 
+ 		/* This is new request, flip aborting flag if set */
+ 		if (ssif_bmc->aborting)
+@@ -666,9 +802,20 @@ static void on_read_processed_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
+ 
+ static void on_write_requested_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
+ {
++	struct aspeed_i2c_bus *bus = i2c_get_adapdata(ssif_bmc->client->adapter);
++
+ 	if (ssif_bmc->state == SSIF_READY || ssif_bmc->state == SSIF_SMBUS_CMD) {
+ 		ssif_bmc->state = SSIF_START;
+ 
++	} else if(ssif_bmc->state == SSIF_REQ_RECVING && !ssif_bmc->nackstatus) {
++		/* As per I2C spec,
++		 * If a controller still wishes to
++		 * communicate on the bus, it can generate a repeated START condition (Sr) and address
++		 * another target without first generating a STOP condition */
++		on_stop_event(ssif_bmc, val);
++		if (ssif_bmc->state == SSIF_READY)
++			ssif_bmc->state = SSIF_START;
++
+ 	} else if (ssif_bmc->state == SSIF_START ||
+ 		   ssif_bmc->state == SSIF_REQ_RECVING ||
+ 		   ssif_bmc->state == SSIF_RES_SENDING) {
+@@ -681,6 +828,21 @@ static void on_write_requested_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
+ 
+ 	ssif_bmc->msg_idx = 0;
+ 	ssif_bmc->part_buf.address = *val;
++
++	if(ssif_bmc->nackstatus)
++	{
++		dev_dbg(&ssif_bmc->client->dev, "send nack\n");
++		writel((readl(bus->base + ASPEED_I2C_CMD_REG)|ASPEED_I2CD_M_S_RX_CMD_LAST),
++				bus->base + ASPEED_I2C_CMD_REG);
++		readl(bus->base + ASPEED_I2C_CMD_REG);
++		ssif_bmc->nackstatus++;
++
++		/* We don't NACK exceed the maximum SSIF retry count */
++		if(ssif_bmc->nackstatus >= SSIF_RETRIES) {
++			ssif_bmc->nackstatus = 0;
++			dev_dbg(&ssif_bmc->client->dev, "disable nack retry exceed\n");
++		}
++	}
+ }
+ 
+ static void on_write_received_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
+@@ -719,12 +881,14 @@ static void on_stop_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
+ {
+ 	if (ssif_bmc->state == SSIF_READY ||
+ 	    ssif_bmc->state == SSIF_START ||
+-	    ssif_bmc->state == SSIF_SMBUS_CMD ||
+-	    ssif_bmc->state == SSIF_ABORTING) {
++	    /* To aviod multiple warning prints in BMC console */
++	    ssif_bmc->state == SSIF_SMBUS_CMD) {
+ 		dev_warn(&ssif_bmc->client->dev,
+ 			 "Warn: %s unexpected SLAVE STOP in state=%s\n",
+ 			 __func__, state_to_string(ssif_bmc->state));
+ 		ssif_bmc->state = SSIF_READY;
++	    } else if (ssif_bmc->state == SSIF_ABORTING) {
++		    ssif_bmc->state = SSIF_READY;
+ 
+ 	} else if (ssif_bmc->state == SSIF_REQ_RECVING) {
+ 		if (validate_request_part(ssif_bmc)) {
+@@ -773,6 +937,8 @@ static int ssif_bmc_cb(struct i2c_client *client, enum i2c_slave_event event, u8
+ 
+ 	case I2C_SLAVE_WRITE_REQUESTED:
+ 		on_write_requested_event(ssif_bmc, val);
++		if (ssif_bmc->busy)
++			mdelay(30); /* 30 ms */
+ 		break;
+ 
+ 	case I2C_SLAVE_READ_PROCESSED:
+@@ -816,6 +982,7 @@ static int ssif_bmc_probe(struct i2c_client *client)
+ 	ssif_bmc->response_in_progress = false;
+ 	ssif_bmc->busy = false;
+ 	ssif_bmc->response_timer_inited = false;
++	ssif_bmc->nackstatus = 0;
+ 
+ 	/* Register misc device interface */
+ 	ssif_bmc->miscdev.minor = MISC_DYNAMIC_MINOR;
+@@ -825,6 +992,25 @@ static int ssif_bmc_probe(struct i2c_client *client)
+ 	ret = misc_register(&ssif_bmc->miscdev);
+ 	if (ret)
+ 		return ret;
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++	ssif_bmc->running_post = 0;
++	spin_lock_init(&ssif_bmc->lock_post_rd);
++	init_waitqueue_head(&ssif_bmc->wait_queue_post_rd);
++	ret = kfifo_alloc(&ssif_bmc->fifo_post, BUFFER_SIZE, GFP_KERNEL);
++	if (ret) {
++		misc_deregister(&ssif_bmc->miscdev);
++		return ret;
++	}
++	ssif_bmc->miscdev_post.minor = MISC_DYNAMIC_MINOR;
++	ssif_bmc->miscdev_post.name = DEVICE_NAME_POST;
++	ssif_bmc->miscdev_post.fops = &ssif_bmc_post_fops;
++	ssif_bmc->miscdev_post.parent = &client->dev;
++	ret = misc_register(&ssif_bmc->miscdev_post);
++	if (ret) {
++		misc_deregister(&ssif_bmc->miscdev);
++		return ret;
++ }
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
+ 
+ 	ssif_bmc->client = client;
+ 	ssif_bmc->client->flags |= I2C_CLIENT_SLAVE;
+@@ -832,8 +1018,12 @@ static int ssif_bmc_probe(struct i2c_client *client)
+ 	/* Register I2C slave */
+ 	i2c_set_clientdata(client, ssif_bmc);
+ 	ret = i2c_slave_register(client, ssif_bmc_cb);
+-	if (ret)
++	if (ret) {
+ 		misc_deregister(&ssif_bmc->miscdev);
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++		misc_deregister(&ssif_bmc->miscdev_post);
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
++	}
+ 
+ 	return ret;
+ }
+@@ -844,6 +1034,11 @@ static void ssif_bmc_remove(struct i2c_client *client)
+ 
+ 	i2c_slave_unregister(client);
+ 	misc_deregister(&ssif_bmc->miscdev);
++#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
++	kfifo_free(&ssif_bmc->fifo_post);
++	misc_deregister(&ssif_bmc->miscdev_post);
++#endif //CONFIG_SEPARATE_SSIF_POSTCODES
++
+ }
+ 
+ static const struct of_device_id ssif_bmc_match[] = {
+@@ -873,4 +1068,4 @@ module_i2c_driver(ssif_bmc_driver);
+ MODULE_AUTHOR("Quan Nguyen <quan@os.amperecomputing.com>");
+ MODULE_AUTHOR("Chuong Tran <chuong@os.amperecomputing.com>");
+ MODULE_DESCRIPTION("Linux device driver of the BMC IPMI SSIF interface.");
+-MODULE_LICENSE("GPL");
+\ No newline at end of file
++MODULE_LICENSE("GPL");
+diff --git a/drivers/i2c/busses/i2c-aspeed.c b/drivers/i2c/busses/i2c-aspeed.c
+index 2a03a221e2dd..c81ca6da5c83 100644
+--- a/drivers/i2c/busses/i2c-aspeed.c
++++ b/drivers/i2c/busses/i2c-aspeed.c
+@@ -7,8 +7,11 @@
+  *  Copyright 2017 Google, Inc.
+  */
+ 
++#include <linux/bitfield.h>
+ #include <linux/clk.h>
+ #include <linux/completion.h>
++#include <linux/dma-mapping.h>
++#include <linux/dmapool.h>
+ #include <linux/err.h>
+ #include <linux/errno.h>
+ #include <linux/i2c.h>
+@@ -17,15 +20,24 @@
+ #include <linux/io.h>
+ #include <linux/irq.h>
+ #include <linux/kernel.h>
++#include <linux/mfd/syscon.h>
+ #include <linux/module.h>
+ #include <linux/of_address.h>
+ #include <linux/of_irq.h>
+ #include <linux/of_platform.h>
+ #include <linux/platform_device.h>
++#include <linux/regmap.h>
+ #include <linux/reset.h>
+ #include <linux/slab.h>
+ 
+-/* I2C Register */
++/* I2C Global Registers */
++/* 0x00 : I2CG Interrupt Status Register  */
++/* 0x08 : I2CG Interrupt Target Assignment  */
++/* 0x0c : I2CG Global Control Register (AST2500)  */
++#define ASPEED_I2CG_GLOBAL_CTRL_REG			0x0c
++#define  ASPEED_I2CG_SRAM_BUFFER_EN			BIT(0)
++
++/* I2C Bus Registers */
+ #define ASPEED_I2C_FUN_CTRL_REG				0x00
+ #define ASPEED_I2C_AC_TIMING_REG1			0x04
+ #define ASPEED_I2C_AC_TIMING_REG2			0x08
+@@ -33,18 +45,20 @@
+ #define ASPEED_I2C_INTR_STS_REG				0x10
+ #define ASPEED_I2C_CMD_REG				0x14
+ #define ASPEED_I2C_DEV_ADDR_REG				0x18
++#define ASPEED_I2C_BUF_CTRL_REG				0x1c
+ #define ASPEED_I2C_BYTE_BUF_REG				0x20
+-
+-/* Global Register Definition */
+-/* 0x00 : I2C Interrupt Status Register  */
+-/* 0x08 : I2C Interrupt Target Assignment  */
++#define ASPEED_I2C_DMA_ADDR_REG				0x24
++#define ASPEED_I2C_DMA_LEN_REG				0x28
+ 
+ /* Device Register Definition */
+ /* 0x00 : I2CD Function Control Register  */
++#define ASPEED_I2CD_BUFFER_PAGE_SEL_MASK		GENMASK(22, 20)
++#define ASPEED_I2CD_BUS_AUTO_RECOVERY_EN		BIT(17)
+ #define ASPEED_I2CD_MULTI_MASTER_DIS			BIT(15)
+ #define ASPEED_I2CD_SDA_DRIVE_1T_EN			BIT(8)
+ #define ASPEED_I2CD_M_SDA_DRIVE_1T_EN			BIT(7)
+ #define ASPEED_I2CD_M_HIGH_SPEED_EN			BIT(6)
++#define ASPEED_I2CD_GCALL_EN				BIT(2)
+ #define ASPEED_I2CD_SLAVE_EN				BIT(1)
+ #define ASPEED_I2CD_MASTER_EN				BIT(0)
+ 
+@@ -56,10 +70,14 @@
+ #define ASPEED_I2CD_TIME_SCL_HIGH_MASK			GENMASK(19, 16)
+ #define ASPEED_I2CD_TIME_SCL_LOW_SHIFT			12
+ #define ASPEED_I2CD_TIME_SCL_LOW_MASK			GENMASK(15, 12)
++#define ASPEED_I2CD_TIME_TIMEOUT_BASE_DIVISOR_SHIFT	8
++#define ASPEED_I2CD_TIME_TIMEOUT_BASE_DIVISOR_MASK	GENMASK(9, 8)
+ #define ASPEED_I2CD_TIME_BASE_DIVISOR_MASK		GENMASK(3, 0)
+ #define ASPEED_I2CD_TIME_SCL_REG_MAX			GENMASK(3, 0)
++
+ /* 0x08 : I2CD Clock and AC Timing Control Register #2 */
+-#define ASPEED_NO_TIMEOUT_CTRL				0
++#define ASPEED_I2CD_TIMEOUT_CYCLES_SHIFT		0
++#define ASPEED_I2CD_TIMEOUT_CYCLES_MASK			GENMASK(4, 0)
+ 
+ /* 0x0c : I2CD Interrupt Control Register &
+  * 0x10 : I2CD Interrupt Status Register
+@@ -67,9 +85,16 @@
+  * These share bit definitions, so use the same values for the enable &
+  * status bits.
+  */
+-#define ASPEED_I2CD_INTR_RECV_MASK			0xf000ffff
++#define ASPEED_I2CD_INTR_RECV_MASK			0x0000ffff
++#if defined(CONFIG_MACH_ASPEED_G6)
++#define ASPEED_I2CD_INTR_SLAVE_ADDR_RECEIVED_PENDING	BIT(29)
++#else
++#define ASPEED_I2CD_INTR_SLAVE_ADDR_RECEIVED_PENDING	BIT(30)
++#endif
++#define ASPEED_I2CD_INTR_SLAVE_INACTIVE_TIMEOUT		BIT(15)
+ #define ASPEED_I2CD_INTR_SDA_DL_TIMEOUT			BIT(14)
+ #define ASPEED_I2CD_INTR_BUS_RECOVER_DONE		BIT(13)
++#define ASPEED_I2CD_INTR_GCALL_ADDR			BIT(8)
+ #define ASPEED_I2CD_INTR_SLAVE_MATCH			BIT(7)
+ #define ASPEED_I2CD_INTR_SCL_TIMEOUT			BIT(6)
+ #define ASPEED_I2CD_INTR_ABNORMAL			BIT(5)
+@@ -83,8 +108,11 @@
+ 		 ASPEED_I2CD_INTR_SCL_TIMEOUT |				       \
+ 		 ASPEED_I2CD_INTR_ABNORMAL |				       \
+ 		 ASPEED_I2CD_INTR_ARBIT_LOSS)
++#define ASPEED_I2CD_INTR_SLAVE_ERRORS					       \
++		ASPEED_I2CD_INTR_SLAVE_INACTIVE_TIMEOUT
+ #define ASPEED_I2CD_INTR_ALL						       \
+-		(ASPEED_I2CD_INTR_SDA_DL_TIMEOUT |			       \
++		(ASPEED_I2CD_INTR_SLAVE_INACTIVE_TIMEOUT |		       \
++		 ASPEED_I2CD_INTR_SDA_DL_TIMEOUT |			       \
+ 		 ASPEED_I2CD_INTR_BUS_RECOVER_DONE |			       \
+ 		 ASPEED_I2CD_INTR_SCL_TIMEOUT |				       \
+ 		 ASPEED_I2CD_INTR_ABNORMAL |				       \
+@@ -93,6 +121,15 @@
+ 		 ASPEED_I2CD_INTR_RX_DONE |				       \
+ 		 ASPEED_I2CD_INTR_TX_NAK |				       \
+ 		 ASPEED_I2CD_INTR_TX_ACK)
++#define ASPEED_I2CD_INTR_ACK_RX_TX					       \
++		(ASPEED_I2CD_INTR_RX_DONE |				       \
++		 ASPEED_I2CD_INTR_TX_ACK |				       \
++		 ASPEED_I2CD_INTR_TX_NAK)
++#define ASPEED_I2CD_INTR_STATUS_MASK					       \
++		(ASPEED_I2CD_INTR_SLAVE_ADDR_RECEIVED_PENDING |		       \
++		 ASPEED_I2CD_INTR_GCALL_ADDR |				       \
++		 ASPEED_I2CD_INTR_SLAVE_MATCH |				       \
++		 ASPEED_I2CD_INTR_ALL)
+ 
+ /* 0x14 : I2CD Command/Status Register   */
+ #define ASPEED_I2CD_SCL_LINE_STS			BIT(18)
+@@ -101,6 +138,10 @@
+ #define ASPEED_I2CD_BUS_RECOVER_CMD			BIT(11)
+ 
+ /* Command Bit */
++#define ASPEED_I2CD_RX_DMA_ENABLE			BIT(9)
++#define ASPEED_I2CD_TX_DMA_ENABLE			BIT(8)
++#define ASPEED_I2CD_RX_BUFF_ENABLE			BIT(7)
++#define ASPEED_I2CD_TX_BUFF_ENABLE			BIT(6)
+ #define ASPEED_I2CD_M_STOP_CMD				BIT(5)
+ #define ASPEED_I2CD_M_S_RX_CMD_LAST			BIT(4)
+ #define ASPEED_I2CD_M_RX_CMD				BIT(3)
+@@ -117,6 +158,21 @@
+ /* 0x18 : I2CD Slave Device Address Register   */
+ #define ASPEED_I2CD_DEV_ADDR_MASK			GENMASK(6, 0)
+ 
++/* 0x1c : I2CD Buffer Control Register */
++/* Use 8-bits or 6-bits wide bit fileds to support both AST2400 and AST2500 */
++#define ASPEED_I2CD_BUF_RX_COUNT_MASK			GENMASK(31, 24)
++#define ASPEED_I2CD_BUF_RX_SIZE_MASK			GENMASK(23, 16)
++#define ASPEED_I2CD_BUF_TX_COUNT_MASK			GENMASK(15, 8)
++#define ASPEED_I2CD_BUF_OFFSET_MASK			GENMASK(5, 0)
++
++/* 0x24 : I2CD DMA Mode Buffer Address Register */
++#define ASPEED_I2CD_DMA_ADDR_MASK			GENMASK(31, 2)
++#define ASPEED_I2CD_DMA_ALIGN				4
++
++/* 0x28 : I2CD DMA Transfer Length Register */
++#define ASPEED_I2CD_DMA_LEN_SHIFT			0
++#define ASPEED_I2CD_DMA_LEN_MASK			GENMASK(11, 0)
++
+ enum aspeed_i2c_master_state {
+ 	ASPEED_I2C_MASTER_INACTIVE,
+ 	ASPEED_I2C_MASTER_PENDING,
+@@ -135,6 +191,8 @@ enum aspeed_i2c_slave_state {
+ 	ASPEED_I2C_SLAVE_READ_PROCESSED,
+ 	ASPEED_I2C_SLAVE_WRITE_REQUESTED,
+ 	ASPEED_I2C_SLAVE_WRITE_RECEIVED,
++	ASPEED_I2C_SLAVE_GCALL_START,
++	ASPEED_I2C_SLAVE_GCALL_REQUESTED,
+ 	ASPEED_I2C_SLAVE_STOP,
+ };
+ 
+@@ -150,6 +208,7 @@ struct aspeed_i2c_bus {
+ 							   u32 divisor);
+ 	unsigned long			parent_clk_frequency;
+ 	u32				bus_frequency;
++	u32				hw_timeout_ms;
+ 	/* Transaction state. */
+ 	enum aspeed_i2c_master_state	master_state;
+ 	struct i2c_msg			*msgs;
+@@ -162,20 +221,45 @@ struct aspeed_i2c_bus {
+ 	int				master_xfer_result;
+ 	/* Multi-master */
+ 	bool				multi_master;
++	/* Buffer mode */
++	void __iomem			*buf_base;
++	u8				buf_offset;
++	u8				buf_page;
++	/* DMA mode */
++	struct dma_pool			*dma_pool;
++	dma_addr_t			dma_handle;
++	u8				*dma_buf;
++	size_t				dma_len;
++	/* Buffer/DMA mode */
++	size_t				buf_size;
+ #if IS_ENABLED(CONFIG_I2C_SLAVE)
+ 	struct i2c_client		*slave;
+ 	enum aspeed_i2c_slave_state	slave_state;
++	/* General call */
++	bool				general_call;
++	bool				disable_master;
+ #endif /* CONFIG_I2C_SLAVE */
+ };
+ 
+-static int aspeed_i2c_reset(struct aspeed_i2c_bus *bus);
++static bool dump_debug __read_mostly;
++static int dump_debug_bus_id __read_mostly;
++
++#define I2C_HEX_DUMP(bus, addr, flags, buf, len) \
++	do { \
++		if (dump_debug && (bus)->adap.nr == dump_debug_bus_id) { \
++			char dump_info[100] = {0,}; \
++			char task_info[TASK_COMM_LEN]; \
++			get_task_comm(task_info, current); \
++			snprintf(dump_info, sizeof(dump_info), \
++				 "bus_id:%d, addr:0x%02x, flags:0x%02x, task:%s(%d): ", \
++				 (bus)->adap.nr, addr, flags, task_info, \
++				 task_pid_nr(current)); \
++			print_hex_dump(KERN_ERR, dump_info, DUMP_PREFIX_NONE, \
++				       16, 1, buf, len, true); \
++		} \
++	} while (0)
+ 
+-/* precondition: bus.lock has been acquired. */
+-static void aspeed_i2c_do_stop(struct aspeed_i2c_bus *bus)
+-{
+-	bus->master_state = ASPEED_I2C_MASTER_STOP;
+-	writel(ASPEED_I2CD_M_STOP_CMD, bus->base + ASPEED_I2C_CMD_REG);
+-}
++static int aspeed_i2c_reset(struct aspeed_i2c_bus *bus);
+ 
+ static int aspeed_i2c_recover_bus(struct aspeed_i2c_bus *bus)
+ {
+@@ -194,7 +278,7 @@ static int aspeed_i2c_recover_bus(struct aspeed_i2c_bus *bus)
+ 			command);
+ 
+ 		reinit_completion(&bus->cmd_complete);
+-		aspeed_i2c_do_stop(bus);
++		writel(ASPEED_I2CD_M_STOP_CMD, bus->base + ASPEED_I2C_CMD_REG);
+ 		spin_unlock_irqrestore(&bus->lock, flags);
+ 
+ 		time_left = wait_for_completion_timeout(
+@@ -246,6 +330,123 @@ static int aspeed_i2c_recover_bus(struct aspeed_i2c_bus *bus)
+ }
+ 
+ #if IS_ENABLED(CONFIG_I2C_SLAVE)
++static int aspeed_i2c_check_slave_error(u32 irq_status)
++{
++	if (irq_status & ASPEED_I2CD_INTR_SLAVE_INACTIVE_TIMEOUT)
++		return -EIO;
++
++	return 0;
++}
++
++static inline void
++aspeed_i2c_slave_handle_rx_done(struct aspeed_i2c_bus *bus, u32 irq_status,
++				u8 *value)
++{
++	if (bus->dma_buf &&
++	    bus->slave_state == ASPEED_I2C_SLAVE_WRITE_RECEIVED &&
++	    !(irq_status & ASPEED_I2CD_INTR_NORMAL_STOP))
++		*value = bus->dma_buf[0];
++	else if (bus->buf_base &&
++		 bus->slave_state == ASPEED_I2C_SLAVE_WRITE_RECEIVED &&
++		 !(irq_status & ASPEED_I2CD_INTR_NORMAL_STOP))
++		*value = readb(bus->buf_base);
++	else
++		*value = readl(bus->base + ASPEED_I2C_BYTE_BUF_REG) >> 8;
++}
++
++static inline void
++aspeed_i2c_slave_handle_normal_stop(struct aspeed_i2c_bus *bus, u32 irq_status,
++				    u8 *value)
++{
++	int i, len;
++
++	if (bus->slave_state == ASPEED_I2C_SLAVE_WRITE_RECEIVED &&
++	    irq_status & ASPEED_I2CD_INTR_RX_DONE) {
++		if (bus->dma_buf) {
++			len = bus->buf_size -
++			      FIELD_GET(ASPEED_I2CD_DMA_LEN_MASK,
++					readl(bus->base +
++					      ASPEED_I2C_DMA_LEN_REG));
++			for (i = 0; i < len; i++) {
++				*value = bus->dma_buf[i];
++				i2c_slave_event(bus->slave,
++						I2C_SLAVE_WRITE_RECEIVED,
++						value);
++			}
++		} else if (bus->buf_base) {
++			len = FIELD_GET(ASPEED_I2CD_BUF_RX_COUNT_MASK,
++					readl(bus->base +
++					      ASPEED_I2C_BUF_CTRL_REG));
++			for (i = 0; i < len; i++) {
++				*value = readb(bus->buf_base + i);
++				i2c_slave_event(bus->slave,
++						I2C_SLAVE_WRITE_RECEIVED,
++						value);
++			}
++		}
++	}
++}
++
++static inline void
++aspeed_i2c_slave_handle_write_requested(struct aspeed_i2c_bus *bus, u8 *value)
++{
++	if (bus->dma_buf) {
++		writel(bus->dma_handle & ASPEED_I2CD_DMA_ADDR_MASK,
++		       bus->base + ASPEED_I2C_DMA_ADDR_REG);
++		writel(FIELD_PREP(ASPEED_I2CD_DMA_LEN_MASK, bus->buf_size),
++		       bus->base + ASPEED_I2C_DMA_LEN_REG);
++		writel(ASPEED_I2CD_RX_DMA_ENABLE,
++		       bus->base + ASPEED_I2C_CMD_REG);
++	} else if (bus->buf_base) {
++		writel(FIELD_PREP(ASPEED_I2CD_BUF_RX_SIZE_MASK,
++				  bus->buf_size - 1) |
++		       FIELD_PREP(ASPEED_I2CD_BUF_OFFSET_MASK,
++				  bus->buf_offset),
++		       bus->base + ASPEED_I2C_BUF_CTRL_REG);
++		writel(ASPEED_I2CD_RX_BUFF_ENABLE,
++		       bus->base + ASPEED_I2C_CMD_REG);
++	}
++}
++
++static inline void
++aspeed_i2c_slave_handle_write_received(struct aspeed_i2c_bus *bus, u8 *value)
++{
++	int i, len;
++
++	if (bus->dma_buf) {
++		len = bus->buf_size -
++		      FIELD_GET(ASPEED_I2CD_DMA_LEN_MASK,
++				readl(bus->base +
++				      ASPEED_I2C_DMA_LEN_REG));
++		for (i = 1; i < len; i++) {
++			*value = bus->dma_buf[i];
++			i2c_slave_event(bus->slave, I2C_SLAVE_WRITE_RECEIVED,
++					value);
++		}
++		writel(bus->dma_handle & ASPEED_I2CD_DMA_ADDR_MASK,
++		       bus->base + ASPEED_I2C_DMA_ADDR_REG);
++		writel(FIELD_PREP(ASPEED_I2CD_DMA_LEN_MASK, bus->buf_size),
++		       bus->base + ASPEED_I2C_DMA_LEN_REG);
++		writel(ASPEED_I2CD_RX_DMA_ENABLE,
++		       bus->base + ASPEED_I2C_CMD_REG);
++	} else if (bus->buf_base) {
++		len = FIELD_GET(ASPEED_I2CD_BUF_RX_COUNT_MASK,
++				readl(bus->base +
++				      ASPEED_I2C_BUF_CTRL_REG));
++		for (i = 1; i < len; i++) {
++			*value = readb(bus->buf_base + i);
++			i2c_slave_event(bus->slave, I2C_SLAVE_WRITE_RECEIVED,
++					value);
++		}
++		writel(FIELD_PREP(ASPEED_I2CD_BUF_RX_SIZE_MASK,
++				  bus->buf_size - 1) |
++		       FIELD_PREP(ASPEED_I2CD_BUF_OFFSET_MASK, bus->buf_offset),
++		       bus->base + ASPEED_I2C_BUF_CTRL_REG);
++		writel(ASPEED_I2CD_RX_BUFF_ENABLE,
++		       bus->base + ASPEED_I2C_CMD_REG);
++	}
++}
++
+ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+ {
+ 	u32 command, irq_handled = 0;
+@@ -256,52 +457,68 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+ 	if (!slave)
+ 		return 0;
+ 
+-	/*
+-	 * Handle stop conditions early, prior to SLAVE_MATCH. Some masters may drive
+-	 * transfers with low enough latency between the nak/stop phase of the current
+-	 * command and the start/address phase of the following command that the
+-	 * interrupts are coalesced by the time we process them.
+-	 */
+-	if (irq_status & ASPEED_I2CD_INTR_NORMAL_STOP) {
+-		irq_handled |= ASPEED_I2CD_INTR_NORMAL_STOP;
+-		bus->slave_state = ASPEED_I2C_SLAVE_STOP;
+-	}
+-
+-	if (irq_status & ASPEED_I2CD_INTR_TX_NAK &&
+-	    bus->slave_state == ASPEED_I2C_SLAVE_READ_PROCESSED) {
+-		irq_handled |= ASPEED_I2CD_INTR_TX_NAK;
+-		bus->slave_state = ASPEED_I2C_SLAVE_STOP;
+-	}
+-
+-	/* Propagate any stop conditions to the slave implementation. */
+-	if (bus->slave_state == ASPEED_I2C_SLAVE_STOP) {
+-		i2c_slave_event(slave, I2C_SLAVE_STOP, &value);
++	if (aspeed_i2c_check_slave_error(irq_status)) {
++		dev_dbg(bus->dev, "received slave error interrupt: 0x%08x\n",
++			irq_status);
++		irq_handled |= (irq_status & ASPEED_I2CD_INTR_SLAVE_ERRORS);
+ 		bus->slave_state = ASPEED_I2C_SLAVE_INACTIVE;
++		return irq_handled;
+ 	}
+ 
+-	/*
+-	 * Now that we've dealt with any potentially coalesced stop conditions,
+-	 * address any start conditions.
+-	 */
++	command = readl(bus->base + ASPEED_I2C_CMD_REG);
++
++	/* Slave was requested, restart state machine. */
+ 	if (irq_status & ASPEED_I2CD_INTR_SLAVE_MATCH) {
++		if (irq_status & ASPEED_I2CD_INTR_TX_NAK &&
++		    bus->slave_state == ASPEED_I2C_SLAVE_READ_PROCESSED) {
++			irq_handled |= ASPEED_I2CD_INTR_TX_NAK;
++			i2c_slave_event(slave, I2C_SLAVE_STOP, &value);
++		}
+ 		irq_handled |= ASPEED_I2CD_INTR_SLAVE_MATCH;
+ 		bus->slave_state = ASPEED_I2C_SLAVE_START;
+ 	}
+ 
+-	/*
+-	 * If the slave has been stopped and not started then slave interrupt
+-	 * handling is complete.
+-	 */
+-	if (bus->slave_state == ASPEED_I2C_SLAVE_INACTIVE)
+-		return irq_handled;
++	/* General call was requested, restart state machine. */
++	if (irq_status & ASPEED_I2CD_INTR_GCALL_ADDR) {
++		irq_handled |= ASPEED_I2CD_INTR_GCALL_ADDR;
++		bus->slave_state = ASPEED_I2C_SLAVE_GCALL_START;
++	}
++
++	/* Slave is not currently active, irq was for someone else. */
++	if (bus->slave_state == ASPEED_I2C_SLAVE_INACTIVE) {
++		/*
++		 * Observed that sometimes Slave Match is missing and make Rx
++		 * done unhandled. Handle case where RX Done come without
++		 * SLAVE MATCH in slave only setup
++		 */
++		if ((unlikely(irq_status == ASPEED_I2CD_INTR_RX_DONE)) &&
++		    (bus->master_state == ASPEED_I2C_MASTER_INACTIVE ||
++		    bus->master_state == ASPEED_I2C_MASTER_PENDING))
++			bus->slave_state = ASPEED_I2C_SLAVE_START;
++		else {
++			irq_handled |= ASPEED_I2CD_INTR_RX_DONE;
++			goto out;
++		}
++	}
+ 
+-	command = readl(bus->base + ASPEED_I2C_CMD_REG);
+ 	dev_dbg(bus->dev, "slave irq status 0x%08x, cmd 0x%08x\n",
+ 		irq_status, command);
+ 
++	/*
++	 * If a peer master sends messages too quickly before it processes
++	 * previous slave DMA data handling, this indicator will be set. It's
++	 * just a indicator and driver can't recover this case so just ignore
++	 * it.
++	 */
++	if (unlikely(irq_status &
++		     ASPEED_I2CD_INTR_SLAVE_ADDR_RECEIVED_PENDING)) {
++		dev_dbg(bus->dev, "A slave addr match interrupt is pending.\n");
++		irq_handled |= ASPEED_I2CD_INTR_SLAVE_ADDR_RECEIVED_PENDING;
++	}
++
+ 	/* Slave was sent something. */
+ 	if (irq_status & ASPEED_I2CD_INTR_RX_DONE) {
+-		value = readl(bus->base + ASPEED_I2C_BYTE_BUF_REG) >> 8;
++		aspeed_i2c_slave_handle_rx_done(bus, irq_status, &value);
+ 		/* Handle address frame. */
+ 		if (bus->slave_state == ASPEED_I2C_SLAVE_START) {
+ 			if (value & 0x1)
+@@ -310,10 +527,38 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+ 			else
+ 				bus->slave_state =
+ 						ASPEED_I2C_SLAVE_WRITE_REQUESTED;
++		} else if (bus->slave_state == ASPEED_I2C_SLAVE_GCALL_START) {
++			/*
++			 * I2C spec defines the second byte meaning like below.
++			 * 0x06 : Reset and write programmable part of slave
++			 *        address by hardware.
++			 * 0x04 : Write programmable part of slave address by
++			 *        hardware.
++			 * 0x00 : No allowed.
++			 *
++			 * But in OpenBMC, we are going to use this
++			 * 'General call' feature for IPMB message broadcasting
++			 * so it delivers all data as is without any specific
++			 * handling of the second byte.
++			 */
++			bus->slave_state = ASPEED_I2C_SLAVE_GCALL_REQUESTED;
+ 		}
+ 		irq_handled |= ASPEED_I2CD_INTR_RX_DONE;
+ 	}
+ 
++	/* Slave was asked to stop. */
++	if (irq_status & ASPEED_I2CD_INTR_NORMAL_STOP) {
++		aspeed_i2c_slave_handle_normal_stop(bus, irq_status, &value);
++		irq_handled |= ASPEED_I2CD_INTR_NORMAL_STOP;
++		bus->slave_state = ASPEED_I2C_SLAVE_STOP;
++	}
++
++	if (irq_status & ASPEED_I2CD_INTR_TX_NAK &&
++	    bus->slave_state == ASPEED_I2C_SLAVE_READ_PROCESSED) {
++		irq_handled |= ASPEED_I2CD_INTR_TX_NAK;
++		bus->slave_state = ASPEED_I2C_SLAVE_STOP;
++	}
++
+ 	switch (bus->slave_state) {
+ 	case ASPEED_I2C_SLAVE_READ_REQUESTED:
+ 		if (unlikely(irq_status & ASPEED_I2CD_INTR_TX_ACK))
+@@ -322,6 +567,7 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+ 		i2c_slave_event(slave, I2C_SLAVE_READ_REQUESTED, &value);
+ 		writel(value, bus->base + ASPEED_I2C_BYTE_BUF_REG);
+ 		writel(ASPEED_I2CD_S_TX_CMD, bus->base + ASPEED_I2C_CMD_REG);
++		dev_dbg(bus->dev, "RRq: %x\n", value);
+ 		break;
+ 	case ASPEED_I2C_SLAVE_READ_PROCESSED:
+ 		if (unlikely(!(irq_status & ASPEED_I2CD_INTR_TX_ACK))) {
+@@ -333,6 +579,7 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+ 		i2c_slave_event(slave, I2C_SLAVE_READ_PROCESSED, &value);
+ 		writel(value, bus->base + ASPEED_I2C_BYTE_BUF_REG);
+ 		writel(ASPEED_I2CD_S_TX_CMD, bus->base + ASPEED_I2C_CMD_REG);
++		dev_dbg(bus->dev, "RPro: %x\n", value);
+ 		break;
+ 	case ASPEED_I2C_SLAVE_WRITE_REQUESTED:
+ 		bus->slave_state = ASPEED_I2C_SLAVE_WRITE_RECEIVED;
+@@ -341,16 +588,28 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+ 		 * Slave ACK's on this address phase already but as the backend driver
+ 		 * returns an errno, the bus driver should nack the next incoming byte.
+ 		 */
+-		if (ret < 0)
+-			writel(ASPEED_I2CD_M_S_RX_CMD_LAST, bus->base + ASPEED_I2C_CMD_REG);
++		if (ret < 0) {
++			writel(ASPEED_I2CD_M_S_RX_CMD_LAST, bus->base + ASPEED_I2C_CMD_REG);	
++		}
++		aspeed_i2c_slave_handle_write_requested(bus, &value);
++		dev_dbg(bus->dev, "WRq: %x\n", value);
+ 		break;
+ 	case ASPEED_I2C_SLAVE_WRITE_RECEIVED:
+ 		i2c_slave_event(slave, I2C_SLAVE_WRITE_RECEIVED, &value);
++		aspeed_i2c_slave_handle_write_received(bus, &value);
++		dev_dbg(bus->dev, "WREC: %x\n", value);
++		break;
++	case ASPEED_I2C_SLAVE_GCALL_REQUESTED:
++		bus->slave_state = ASPEED_I2C_SLAVE_WRITE_RECEIVED;
++		i2c_slave_event(slave, I2C_SLAVE_GCALL_REQUESTED, &value);
+ 		break;
+ 	case ASPEED_I2C_SLAVE_STOP:
+-		/* Stop event handling is done early. Unreachable. */
++		i2c_slave_event(slave, I2C_SLAVE_STOP, &value);
++		bus->slave_state = ASPEED_I2C_SLAVE_INACTIVE;
++		dev_dbg(bus->dev, "STOP\n");
+ 		break;
+ 	case ASPEED_I2C_SLAVE_START:
++	case ASPEED_I2C_SLAVE_GCALL_START:
+ 		/* Slave was just started. Waiting for the next event. */;
+ 		break;
+ 	default:
+@@ -359,17 +618,104 @@ static u32 aspeed_i2c_slave_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+ 		bus->slave_state = ASPEED_I2C_SLAVE_INACTIVE;
+ 		break;
+ 	}
+-
++	
++	/* Ack all handled interrupts */
++	writel(irq_handled, bus->base + ASPEED_I2C_INTR_STS_REG);
++	readl(bus->base + ASPEED_I2C_INTR_STS_REG);
++out:
+ 	return irq_handled;
+ }
+ #endif /* CONFIG_I2C_SLAVE */
+ 
++static inline u32
++aspeed_i2c_prepare_rx_buf(struct aspeed_i2c_bus *bus, struct i2c_msg *msg)
++{
++	u32 command = 0;
++	int len;
++
++	if (msg->len > bus->buf_size) {
++		len = bus->buf_size;
++	} else {
++		len = msg->len;
++		command |= ASPEED_I2CD_M_S_RX_CMD_LAST;
++	}
++
++	if (bus->dma_buf) {
++		command |= ASPEED_I2CD_RX_DMA_ENABLE;
++
++		writel(bus->dma_handle & ASPEED_I2CD_DMA_ADDR_MASK,
++		       bus->base + ASPEED_I2C_DMA_ADDR_REG);
++		writel(FIELD_PREP(ASPEED_I2CD_DMA_LEN_MASK, len),
++		       bus->base + ASPEED_I2C_DMA_LEN_REG);
++		bus->dma_len = len;
++	} else {
++		command |= ASPEED_I2CD_RX_BUFF_ENABLE;
++
++		writel(FIELD_PREP(ASPEED_I2CD_BUF_RX_SIZE_MASK, len - 1) |
++		       FIELD_PREP(ASPEED_I2CD_BUF_OFFSET_MASK, bus->buf_offset),
++		       bus->base + ASPEED_I2C_BUF_CTRL_REG);
++	}
++
++	return command;
++}
++
++static inline u32
++aspeed_i2c_prepare_tx_buf(struct aspeed_i2c_bus *bus, struct i2c_msg *msg)
++{
++	u8 slave_addr = i2c_8bit_addr_from_msg(msg);
++	u32 command = 0;
++	int len;
++
++	if (msg->len + 1 > bus->buf_size)
++		len = bus->buf_size;
++	else
++		len = msg->len + 1;
++
++	if (bus->dma_buf) {
++		command |= ASPEED_I2CD_TX_DMA_ENABLE;
++
++		bus->dma_buf[0] = slave_addr;
++		memcpy(bus->dma_buf + 1, msg->buf, len);
++
++		writel(bus->dma_handle & ASPEED_I2CD_DMA_ADDR_MASK,
++		       bus->base + ASPEED_I2C_DMA_ADDR_REG);
++		writel(FIELD_PREP(ASPEED_I2CD_DMA_LEN_MASK, len),
++		       bus->base + ASPEED_I2C_DMA_LEN_REG);
++		bus->dma_len = len;
++	} else {
++		u8 wbuf[4];
++		int i;
++
++		command |= ASPEED_I2CD_TX_BUFF_ENABLE;
++
++		/*
++		 * Yeah, it looks bad but byte writing on remapped I2C SRAM
++		 * causes corruption so use this way to make dword writings.
++		 */
++		wbuf[0] = slave_addr;
++		for (i = 1; i < len; i++) {
++			wbuf[i % 4] = msg->buf[i - 1];
++			if (i % 4 == 3)
++				writel(*(u32 *)wbuf, bus->buf_base + i - 3);
++		}
++		if (--i % 4 != 3)
++			writel(*(u32 *)wbuf, bus->buf_base + i - (i % 4));
++
++		writel(FIELD_PREP(ASPEED_I2CD_BUF_TX_COUNT_MASK, len - 1) |
++		       FIELD_PREP(ASPEED_I2CD_BUF_OFFSET_MASK, bus->buf_offset),
++		       bus->base + ASPEED_I2C_BUF_CTRL_REG);
++	}
++
++	bus->buf_index = len - 1;
++
++	return command;
++}
++
+ /* precondition: bus.lock has been acquired. */
+ static void aspeed_i2c_do_start(struct aspeed_i2c_bus *bus)
+ {
+ 	u32 command = ASPEED_I2CD_M_START_CMD | ASPEED_I2CD_M_TX_CMD;
+ 	struct i2c_msg *msg = &bus->msgs[bus->msgs_index];
+-	u8 slave_addr = i2c_8bit_addr_from_msg(msg);
+ 
+ #if IS_ENABLED(CONFIG_I2C_SLAVE)
+ 	/*
+@@ -388,15 +734,32 @@ static void aspeed_i2c_do_start(struct aspeed_i2c_bus *bus)
+ 
+ 	if (msg->flags & I2C_M_RD) {
+ 		command |= ASPEED_I2CD_M_RX_CMD;
+-		/* Need to let the hardware know to NACK after RX. */
+-		if (msg->len == 1 && !(msg->flags & I2C_M_RECV_LEN))
+-			command |= ASPEED_I2CD_M_S_RX_CMD_LAST;
++		if (!(msg->flags & I2C_M_RECV_LEN)) {
++			if (msg->len && (bus->dma_buf || bus->buf_base))
++				command |= aspeed_i2c_prepare_rx_buf(bus, msg);
++
++			/* Need to let the hardware know to NACK after RX. */
++			if (msg->len <= 1)
++				command |= ASPEED_I2CD_M_S_RX_CMD_LAST;
++		}
++	} else if (msg->len && (bus->dma_buf || bus->buf_base)) {
++		command |= aspeed_i2c_prepare_tx_buf(bus, msg);
+ 	}
+ 
+-	writel(slave_addr, bus->base + ASPEED_I2C_BYTE_BUF_REG);
++	if (!(command & (ASPEED_I2CD_TX_BUFF_ENABLE |
++			 ASPEED_I2CD_TX_DMA_ENABLE)))
++		writel(i2c_8bit_addr_from_msg(msg),
++		       bus->base + ASPEED_I2C_BYTE_BUF_REG);
+ 	writel(command, bus->base + ASPEED_I2C_CMD_REG);
+ }
+ 
++/* precondition: bus.lock has been acquired. */
++static void aspeed_i2c_do_stop(struct aspeed_i2c_bus *bus)
++{
++	bus->master_state = ASPEED_I2C_MASTER_STOP;
++	writel(ASPEED_I2CD_M_STOP_CMD, bus->base + ASPEED_I2C_CMD_REG);
++}
++
+ /* precondition: bus.lock has been acquired. */
+ static void aspeed_i2c_next_msg_or_stop(struct aspeed_i2c_bus *bus)
+ {
+@@ -408,7 +771,7 @@ static void aspeed_i2c_next_msg_or_stop(struct aspeed_i2c_bus *bus)
+ 	}
+ }
+ 
+-static int aspeed_i2c_is_irq_error(u32 irq_status)
++static int aspeed_i2c_check_master_error(u32 irq_status)
+ {
+ 	if (irq_status & ASPEED_I2CD_INTR_ARBIT_LOSS)
+ 		return -EAGAIN;
+@@ -421,6 +784,134 @@ static int aspeed_i2c_is_irq_error(u32 irq_status)
+ 	return 0;
+ }
+ 
++static inline u32
++aspeed_i2c_master_handle_tx_first(struct aspeed_i2c_bus *bus,
++				  struct i2c_msg *msg)
++{
++	u32 command = 0;
++
++	if (bus->dma_buf || bus->buf_base) {
++		int len;
++
++		if (msg->len - bus->buf_index > bus->buf_size)
++			len = bus->buf_size;
++		else
++			len = msg->len - bus->buf_index;
++
++		if (bus->dma_buf) {
++			command |= ASPEED_I2CD_TX_DMA_ENABLE;
++
++			memcpy(bus->dma_buf, msg->buf + bus->buf_index, len);
++
++
++			writel(bus->dma_handle & ASPEED_I2CD_DMA_ADDR_MASK,
++			       bus->base + ASPEED_I2C_DMA_ADDR_REG);
++			writel(FIELD_PREP(ASPEED_I2CD_DMA_LEN_MASK, len),
++			       bus->base + ASPEED_I2C_DMA_LEN_REG);
++			bus->dma_len = len;
++		} else {
++			u8 wbuf[4];
++			int i;
++
++			command |= ASPEED_I2CD_TX_BUFF_ENABLE;
++
++			if (msg->len - bus->buf_index > bus->buf_size)
++				len = bus->buf_size;
++			else
++				len = msg->len - bus->buf_index;
++
++			for (i = 0; i < len; i++) {
++				wbuf[i % 4] = msg->buf[bus->buf_index + i];
++				if (i % 4 == 3)
++					writel(*(u32 *)wbuf,
++					       bus->buf_base + i - 3);
++			}
++			if (--i % 4 != 3)
++				writel(*(u32 *)wbuf,
++				       bus->buf_base + i - (i % 4));
++
++			writel(FIELD_PREP(ASPEED_I2CD_BUF_TX_COUNT_MASK,
++					  len - 1) |
++			       FIELD_PREP(ASPEED_I2CD_BUF_OFFSET_MASK,
++					  bus->buf_offset),
++			       bus->base + ASPEED_I2C_BUF_CTRL_REG);
++		}
++
++		bus->buf_index += len;
++	} else {
++		writel(msg->buf[bus->buf_index++],
++		       bus->base + ASPEED_I2C_BYTE_BUF_REG);
++	}
++
++	return command;
++}
++
++static inline void
++aspeed_i2c_master_handle_rx(struct aspeed_i2c_bus *bus, struct i2c_msg *msg)
++{
++	u8 recv_byte;
++	int len;
++
++	if (bus->dma_buf) {
++		len = bus->dma_len -
++		      FIELD_GET(ASPEED_I2CD_DMA_LEN_MASK,
++				readl(bus->base + ASPEED_I2C_DMA_LEN_REG));
++
++		memcpy(msg->buf + bus->buf_index, bus->dma_buf, len);
++		bus->buf_index += len;
++	} else if (bus->buf_base) {
++		len = FIELD_GET(ASPEED_I2CD_BUF_RX_COUNT_MASK,
++				readl(bus->base + ASPEED_I2C_BUF_CTRL_REG));
++		memcpy_fromio(msg->buf + bus->buf_index, bus->buf_base, len);
++		bus->buf_index += len;
++	} else {
++		recv_byte = readl(bus->base + ASPEED_I2C_BYTE_BUF_REG) >> 8;
++		msg->buf[bus->buf_index++] = recv_byte;
++	}
++}
++
++static inline u32
++aspeed_i2c_master_handle_rx_next(struct aspeed_i2c_bus *bus,
++				 struct i2c_msg *msg)
++{
++	u32 command = 0;
++
++	if (bus->dma_buf || bus->buf_base) {
++		int len;
++
++		if (msg->len - bus->buf_index > bus->buf_size) {
++			len = bus->buf_size;
++		} else {
++			len = msg->len - bus->buf_index;
++			command |= ASPEED_I2CD_M_S_RX_CMD_LAST;
++		}
++
++		if (bus->dma_buf) {
++			command |= ASPEED_I2CD_RX_DMA_ENABLE;
++
++			writel(bus->dma_handle & ASPEED_I2CD_DMA_ADDR_MASK,
++			       bus->base + ASPEED_I2C_DMA_ADDR_REG);
++			writel(FIELD_PREP(ASPEED_I2CD_DMA_LEN_MASK, len),
++			       bus->base + ASPEED_I2C_DMA_LEN_REG);
++			bus->dma_len = len;
++		} else {
++			command |= ASPEED_I2CD_RX_BUFF_ENABLE;
++
++			writel(FIELD_PREP(ASPEED_I2CD_BUF_RX_SIZE_MASK,
++					  len - 1) |
++			       FIELD_PREP(ASPEED_I2CD_BUF_TX_COUNT_MASK, 0) |
++			       FIELD_PREP(ASPEED_I2CD_BUF_OFFSET_MASK,
++					  bus->buf_offset),
++			       bus->base + ASPEED_I2C_BUF_CTRL_REG);
++		}
++	} else {
++		if (bus->buf_index + 1 == msg->len)
++			command |= ASPEED_I2CD_M_S_RX_CMD_LAST;
++	}
++
++	return command;
++}
++
+ static u32 aspeed_i2c_master_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+ {
+ 	u32 irq_handled = 0, command = 0;
+@@ -428,6 +919,11 @@ static u32 aspeed_i2c_master_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+ 	u8 recv_byte;
+ 	int ret;
+ 
++	/* Ack all interrupts except for Rx done */
++	writel(irq_status & ~ASPEED_I2CD_INTR_RX_DONE,
++	       bus->base + ASPEED_I2C_INTR_STS_REG);
++	readl(bus->base + ASPEED_I2C_INTR_STS_REG);
++
+ 	if (irq_status & ASPEED_I2CD_INTR_BUS_RECOVER_DONE) {
+ 		bus->master_state = ASPEED_I2C_MASTER_INACTIVE;
+ 		irq_handled |= ASPEED_I2CD_INTR_BUS_RECOVER_DONE;
+@@ -439,14 +935,19 @@ static u32 aspeed_i2c_master_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+ 	 * should clear the command queue effectively taking us back to the
+ 	 * INACTIVE state.
+ 	 */
+-	ret = aspeed_i2c_is_irq_error(irq_status);
++	ret = aspeed_i2c_check_master_error(irq_status);
+ 	if (ret) {
+-		dev_dbg(bus->dev, "received error interrupt: 0x%08x\n",
++		dev_dbg(bus->dev, "received master error interrupt: 0x%08x\n",
+ 			irq_status);
+ 		irq_handled |= (irq_status & ASPEED_I2CD_INTR_MASTER_ERRORS);
+ 		if (bus->master_state != ASPEED_I2C_MASTER_INACTIVE) {
+-			irq_handled = irq_status;
+ 			bus->cmd_err = ret;
++			if (bus->master_state == ASPEED_I2C_MASTER_STOP)
++				irq_handled |= (irq_status &
++				                ASPEED_I2CD_INTR_NORMAL_STOP);
++			if (ret == -EAGAIN)
++				irq_handled |= (irq_status &
++						ASPEED_I2CD_INTR_TX_ACK);
+ 			bus->master_state = ASPEED_I2C_MASTER_INACTIVE;
+ 			goto out_complete;
+ 		}
+@@ -530,11 +1031,10 @@ static u32 aspeed_i2c_master_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+ 		fallthrough;
+ 	case ASPEED_I2C_MASTER_TX_FIRST:
+ 		if (bus->buf_index < msg->len) {
++			command = ASPEED_I2CD_M_TX_CMD;
++			command |= aspeed_i2c_master_handle_tx_first(bus, msg);
++			writel(command, bus->base + ASPEED_I2C_CMD_REG);
+ 			bus->master_state = ASPEED_I2C_MASTER_TX;
+-			writel(msg->buf[bus->buf_index++],
+-			       bus->base + ASPEED_I2C_BYTE_BUF_REG);
+-			writel(ASPEED_I2CD_M_TX_CMD,
+-			       bus->base + ASPEED_I2C_CMD_REG);
+ 		} else {
+ 			aspeed_i2c_next_msg_or_stop(bus);
+ 		}
+@@ -551,26 +1051,34 @@ static u32 aspeed_i2c_master_irq(struct aspeed_i2c_bus *bus, u32 irq_status)
+ 		}
+ 		irq_handled |= ASPEED_I2CD_INTR_RX_DONE;
+ 
+-		recv_byte = readl(bus->base + ASPEED_I2C_BYTE_BUF_REG) >> 8;
+-		msg->buf[bus->buf_index++] = recv_byte;
+-
+ 		if (msg->flags & I2C_M_RECV_LEN) {
+-			if (unlikely(recv_byte > I2C_SMBUS_BLOCK_MAX)) {
++			if (unlikely(bus->buf_index != 0)) {
++				dev_err(bus->dev, "I2C_M_RECV_LEN buf_index is not zero\n");
+ 				bus->cmd_err = -EPROTO;
+ 				aspeed_i2c_do_stop(bus);
+ 				goto out_no_complete;
+ 			}
+-			msg->len = recv_byte +
+-					((msg->flags & I2C_CLIENT_PEC) ? 2 : 1);
++			recv_byte = readl(bus->base + ASPEED_I2C_BYTE_BUF_REG) >> 8;
++			if (unlikely(recv_byte > I2C_SMBUS_BLOCK_MAX)) {
++				dev_err(bus->dev,
++					"I2C_M_RECV_LEN too big %d, truncate to %d\n",
++					recv_byte, I2C_SMBUS_BLOCK_MAX);
++				recv_byte = I2C_SMBUS_BLOCK_MAX;
++			}
++			msg->len = recv_byte + ((msg->flags & I2C_CLIENT_PEC) ?
++						2 : 1);
+ 			msg->flags &= ~I2C_M_RECV_LEN;
++			msg->buf[0] = recv_byte;
++			bus->buf_index = 1;
++		} else if (msg->len) {
++			aspeed_i2c_master_handle_rx(bus, msg);
+ 		}
+ 
+ 		if (bus->buf_index < msg->len) {
+-			bus->master_state = ASPEED_I2C_MASTER_RX;
+ 			command = ASPEED_I2CD_M_RX_CMD;
+-			if (bus->buf_index + 1 == msg->len)
+-				command |= ASPEED_I2CD_M_S_RX_CMD_LAST;
++			command |= aspeed_i2c_master_handle_rx_next(bus, msg);
+ 			writel(command, bus->base + ASPEED_I2C_CMD_REG);
++			bus->master_state = ASPEED_I2C_MASTER_RX;
+ 		} else {
+ 			aspeed_i2c_next_msg_or_stop(bus);
+ 		}
+@@ -624,9 +1132,22 @@ static irqreturn_t aspeed_i2c_bus_irq(int irq, void *dev_id)
+ 	spin_lock(&bus->lock);
+ 	irq_received = readl(bus->base + ASPEED_I2C_INTR_STS_REG);
+ 	/* Ack all interrupts except for Rx done */
+-	writel(irq_received & ~ASPEED_I2CD_INTR_RX_DONE,
+-	       bus->base + ASPEED_I2C_INTR_STS_REG);
+-	readl(bus->base + ASPEED_I2C_INTR_STS_REG);
++	//writel(irq_received & ~ASPEED_I2CD_INTR_RX_DONE,
++	//       bus->base + ASPEED_I2C_INTR_STS_REG);
++	//readl(bus->base + ASPEED_I2C_INTR_STS_REG);
++
++	/*
++	 * Early acking of INTR_RX_DONE and INTR_TX_[ACK|NAK] would indicate HW to
++	 * start receiving or sending new data, and this may cause a race condition
++	 * as the irq handler has not yet handled these irqs but is being acked.
++	 * Let's ack them late at the end of the irq handler when those are truly processed.
++	 */
++	if (irq_received & ~ASPEED_I2CD_INTR_ACK_RX_TX) {
++		writel(irq_received & ~ASPEED_I2CD_INTR_ACK_RX_TX,
++		       bus->base + ASPEED_I2C_INTR_STS_REG);
++		readl(bus->base + ASPEED_I2C_INTR_STS_REG);
++	}
++
+ 	irq_received &= ASPEED_I2CD_INTR_RECV_MASK;
+ 	irq_remaining = irq_received;
+ 
+@@ -647,9 +1168,14 @@ static irqreturn_t aspeed_i2c_bus_irq(int irq, void *dev_id)
+ 	} else {
+ 		irq_handled = aspeed_i2c_slave_irq(bus, irq_remaining);
+ 		irq_remaining &= ~irq_handled;
+-		if (irq_remaining)
++		if (irq_remaining) {
+ 			irq_handled |= aspeed_i2c_master_irq(bus,
+ 							     irq_remaining);
++			if (bus->master_state == ASPEED_I2C_MASTER_INACTIVE &&
++			    bus->slave_state == ASPEED_I2C_SLAVE_INACTIVE)
++				irq_handled |= (irq_remaining &
++						ASPEED_I2CD_INTR_NORMAL_STOP);
++		}
+ 	}
+ 
+ 	/*
+@@ -657,8 +1183,9 @@ static irqreturn_t aspeed_i2c_bus_irq(int irq, void *dev_id)
+ 	 * completed.
+ 	 */
+ 	if (bus->master_state == ASPEED_I2C_MASTER_PENDING &&
+-	    bus->slave_state == ASPEED_I2C_SLAVE_INACTIVE)
++	    bus->slave_state == ASPEED_I2C_SLAVE_INACTIVE && bus->disable_master != true)
+ 		aspeed_i2c_do_start(bus);
++
+ #else
+ 	irq_handled = aspeed_i2c_master_irq(bus, irq_remaining);
+ #endif /* CONFIG_I2C_SLAVE */
+@@ -670,8 +1197,8 @@ static irqreturn_t aspeed_i2c_bus_irq(int irq, void *dev_id)
+ 			irq_received, irq_handled);
+ 
+ 	/* Ack Rx done */
+-	if (irq_received & ASPEED_I2CD_INTR_RX_DONE) {
+-		writel(ASPEED_I2CD_INTR_RX_DONE,
++	if (irq_received & ASPEED_I2CD_INTR_ACK_RX_TX) {
++		writel(irq_received & ASPEED_I2CD_INTR_ACK_RX_TX,
+ 		       bus->base + ASPEED_I2C_INTR_STS_REG);
+ 		readl(bus->base + ASPEED_I2C_INTR_STS_REG);
+ 	}
+@@ -684,6 +1211,7 @@ static int aspeed_i2c_master_xfer(struct i2c_adapter *adap,
+ {
+ 	struct aspeed_i2c_bus *bus = i2c_get_adapdata(adap);
+ 	unsigned long time_left, flags;
++	int i;
+ 
+ 	spin_lock_irqsave(&bus->lock, flags);
+ 	bus->cmd_err = 0;
+@@ -738,6 +1266,11 @@ static int aspeed_i2c_master_xfer(struct i2c_adapter *adap,
+ 		return -ETIMEDOUT;
+ 	}
+ 
++	for (i = 0; i < num; i++) {
++		I2C_HEX_DUMP(bus, msgs[i].addr, msgs[i].flags,
++			     msgs[i].buf, msgs[i].len);
++	}
++
+ 	return bus->master_xfer_result;
+ }
+ 
+@@ -765,6 +1298,8 @@ static void __aspeed_i2c_reg_slave(struct aspeed_i2c_bus *bus, u16 slave_addr)
+ 	/* Turn on slave mode. */
+ 	func_ctrl_reg_val = readl(bus->base + ASPEED_I2C_FUN_CTRL_REG);
+ 	func_ctrl_reg_val |= ASPEED_I2CD_SLAVE_EN;
++	if (bus->general_call)
++		func_ctrl_reg_val |= ASPEED_I2CD_GCALL_EN;
+ 	writel(func_ctrl_reg_val, bus->base + ASPEED_I2C_FUN_CTRL_REG);
+ 
+ 	bus->slave_state = ASPEED_I2C_SLAVE_INACTIVE;
+@@ -804,6 +1339,8 @@ static int aspeed_i2c_unreg_slave(struct i2c_client *client)
+ 	/* Turn off slave mode. */
+ 	func_ctrl_reg_val = readl(bus->base + ASPEED_I2C_FUN_CTRL_REG);
+ 	func_ctrl_reg_val &= ~ASPEED_I2CD_SLAVE_EN;
++	if (bus->general_call)
++		func_ctrl_reg_val &= ~ASPEED_I2CD_GCALL_EN;
+ 	writel(func_ctrl_reg_val, bus->base + ASPEED_I2C_FUN_CTRL_REG);
+ 
+ 	bus->slave = NULL;
+@@ -910,6 +1447,7 @@ static u32 aspeed_i2c_25xx_get_clk_reg_val(struct device *dev, u32 divisor)
+ /* precondition: bus.lock has been acquired. */
+ static int aspeed_i2c_init_clk(struct aspeed_i2c_bus *bus)
+ {
++	u32 timeout_base_divisor, timeout_tick_us, timeout_cycles;
+ 	u32 divisor, clk_reg_val;
+ 
+ 	divisor = DIV_ROUND_UP(bus->parent_clk_frequency, bus->bus_frequency);
+@@ -918,8 +1456,46 @@ static int aspeed_i2c_init_clk(struct aspeed_i2c_bus *bus)
+ 			ASPEED_I2CD_TIME_THDSTA_MASK |
+ 			ASPEED_I2CD_TIME_TACST_MASK);
+ 	clk_reg_val |= bus->get_clk_reg_val(bus->dev, divisor);
++
++	if (bus->hw_timeout_ms) {
++		u8 div_max = ASPEED_I2CD_TIME_TIMEOUT_BASE_DIVISOR_MASK >>
++			     ASPEED_I2CD_TIME_TIMEOUT_BASE_DIVISOR_SHIFT;
++		u8 cycles_max = ASPEED_I2CD_TIMEOUT_CYCLES_MASK >>
++				ASPEED_I2CD_TIMEOUT_CYCLES_SHIFT;
++
++		timeout_base_divisor = 0;
++
++		do {
++			timeout_tick_us = 1000 * (16384 <<
++						  (timeout_base_divisor << 1)) /
++					  (bus->parent_clk_frequency / 1000);
++
++			if (timeout_base_divisor == div_max ||
++			    timeout_tick_us * ASPEED_I2CD_TIMEOUT_CYCLES_MASK >=
++			    bus->hw_timeout_ms * 1000)
++				break;
++		} while (timeout_base_divisor++ < div_max);
++
++		if (timeout_tick_us) {
++			timeout_cycles = DIV_ROUND_UP(bus->hw_timeout_ms * 1000,
++						      timeout_tick_us);
++			if (timeout_cycles == 0)
++				timeout_cycles = 1;
++			else if (timeout_cycles > cycles_max)
++				 timeout_cycles = cycles_max;
++		} else {
++			timeout_cycles = 0;
++		}
++	} else {
++		timeout_base_divisor = 0;
++		timeout_cycles = 0;
++	}
++
++	clk_reg_val |= FIELD_PREP(ASPEED_I2CD_TIME_TIMEOUT_BASE_DIVISOR_MASK,
++				  timeout_base_divisor);
++
+ 	writel(clk_reg_val, bus->base + ASPEED_I2C_AC_TIMING_REG1);
+-	writel(ASPEED_NO_TIMEOUT_CTRL, bus->base + ASPEED_I2C_AC_TIMING_REG2);
++	writel(timeout_cycles, bus->base + ASPEED_I2C_AC_TIMING_REG2);
+ 
+ 	return 0;
+ }
+@@ -934,10 +1510,18 @@ static int aspeed_i2c_init(struct aspeed_i2c_bus *bus,
+ 	/* Disable everything. */
+ 	writel(0, bus->base + ASPEED_I2C_FUN_CTRL_REG);
+ 
++	device_property_read_u32(&pdev->dev, "aspeed,hw-timeout-ms",
++				 &bus->hw_timeout_ms);
++	if (bus->hw_timeout_ms)
++		fun_ctrl_reg |= ASPEED_I2CD_BUS_AUTO_RECOVERY_EN;
++
+ 	ret = aspeed_i2c_init_clk(bus);
+ 	if (ret < 0)
+ 		return ret;
+ 
++	fun_ctrl_reg |= FIELD_PREP(ASPEED_I2CD_BUFFER_PAGE_SEL_MASK,
++				   bus->buf_page);
++
+ 	if (of_property_read_bool(pdev->dev.of_node, "multi-master"))
+ 		bus->multi_master = true;
+ 	else
+@@ -948,9 +1532,21 @@ static int aspeed_i2c_init(struct aspeed_i2c_bus *bus,
+ 	       bus->base + ASPEED_I2C_FUN_CTRL_REG);
+ 
+ #if IS_ENABLED(CONFIG_I2C_SLAVE)
++	if (of_property_read_bool(pdev->dev.of_node, "general-call"))
++		bus->general_call = true;
++
+ 	/* If slave has already been registered, re-enable it. */
+ 	if (bus->slave)
+ 		__aspeed_i2c_reg_slave(bus, bus->slave->addr);
++
++	if(of_property_read_bool(pdev->dev.of_node, "disable-master")) {
++		/* Disable Master Mode */
++		writel((readl(bus->base + ASPEED_I2C_FUN_CTRL_REG) & ~(ASPEED_I2CD_MASTER_EN)),
++				bus->base + ASPEED_I2C_FUN_CTRL_REG);
++		bus->disable_master = true;
++	} else {
++		bus->disable_master = false;
++	}
+ #endif /* CONFIG_I2C_SLAVE */
+ 
+ 	/* Set interrupt generation of I2C controller */
+@@ -978,6 +1574,96 @@ static int aspeed_i2c_reset(struct aspeed_i2c_bus *bus)
+ 	return ret;
+ }
+ 
++static void aspeed_i2c_set_xfer_mode(struct aspeed_i2c_bus *bus)
++{
++	struct platform_device *pdev = to_platform_device(bus->dev);
++	bool sram_enabled = true;
++	int ret;
++
++	/*
++	 * Enable I2C SRAM in case of AST2500.
++	 * SRAM is enabled by default in AST2400 and AST2600.
++	 */
++	if (of_device_is_compatible(pdev->dev.of_node,
++				    "aspeed,ast2500-i2c-bus")) {
++		struct regmap *gr_regmap = syscon_regmap_lookup_by_compatible("aspeed,ast2500-i2c-gr");
++
++		if (IS_ERR(gr_regmap))
++			ret = PTR_ERR(gr_regmap);
++		else
++			ret = regmap_update_bits(gr_regmap,
++						 ASPEED_I2CG_GLOBAL_CTRL_REG,
++						 ASPEED_I2CG_SRAM_BUFFER_EN,
++						 ASPEED_I2CG_SRAM_BUFFER_EN);
++
++		if (ret)
++			sram_enabled = false;
++	}
++
++	/*
++	 * Only AST2500 and AST2600 support DMA mode under some limitations:
++	 * I2C is sharing the DMA H/W with UHCI host controller and MCTP
++	 * controller. Since those controllers operate with DMA mode only, I2C
++	 * has to use buffer mode or byte mode instead if one of those
++	 * controllers is enabled. Also make sure that if SD/eMMC or Port80
++	 * snoop uses DMA mode instead of PIO or FIFO respectively, I2C can't
++	 * use DMA mode.
++	 */
++	if (sram_enabled && !IS_ENABLED(CONFIG_USB_UHCI_ASPEED) &&
++	    !of_device_is_compatible(pdev->dev.of_node,
++				     "aspeed,ast2400-i2c-bus")) {
++		u32 dma_len_max = ASPEED_I2CD_DMA_LEN_MASK >>
++				  ASPEED_I2CD_DMA_LEN_SHIFT;
++
++		ret = device_property_read_u32(&pdev->dev,
++					       "aspeed,dma-buf-size",
++					       &bus->buf_size);
++		if (!ret && bus->buf_size > dma_len_max)
++			bus->buf_size = dma_len_max;
++	}
++
++	if (bus->buf_size) {
++		if (dma_set_mask(&pdev->dev, DMA_BIT_MASK(32))) {
++			dev_warn(&pdev->dev, "No suitable DMA available\n");
++		} else {
++			bus->dma_pool = dma_pool_create("i2c-aspeed",
++							&pdev->dev,
++							bus->buf_size,
++							ASPEED_I2CD_DMA_ALIGN,
++							0);
++			if (bus->dma_pool)
++				bus->dma_buf = dma_pool_alloc(bus->dma_pool,
++							      GFP_KERNEL,
++							      &bus->dma_handle);
++
++			if (!bus->dma_buf) {
++				dev_warn(&pdev->dev,
++					 "Cannot allocate DMA buffer\n");
++				dma_pool_destroy(bus->dma_pool);
++			}
++		}
++	}
++
++	if (!bus->dma_buf && sram_enabled) {
++		struct resource *res = platform_get_resource(pdev,
++							     IORESOURCE_MEM, 1);
++
++		if (res && resource_size(res) >= 2)
++			bus->buf_base = devm_ioremap_resource(&pdev->dev, res);
++
++		if (!IS_ERR_OR_NULL(bus->buf_base)) {
++			bus->buf_size = resource_size(res);
++			if (of_device_is_compatible(pdev->dev.of_node,
++						    "aspeed,ast2400-i2c-bus")) {
++				bus->buf_page = ((res->start >> 8) &
++						 GENMASK(3, 0)) - 8;
++				bus->buf_offset = (res->start >> 2) &
++						  ASPEED_I2CD_BUF_OFFSET_MASK;
++			}
++		}
++	}
++}
++
+ static const struct of_device_id aspeed_i2c_bus_of_table[] = {
+ 	{
+ 		.compatible = "aspeed,ast2400-i2c-bus",
+@@ -1010,6 +1696,16 @@ static int aspeed_i2c_probe_bus(struct platform_device *pdev)
+ 	if (IS_ERR(bus->base))
+ 		return PTR_ERR(bus->base);
+ 
++	bus->dev = &pdev->dev;
++
++	/* Disable bus and clean up any left over interrupt state. */
++	writel(0, bus->base + ASPEED_I2C_FUN_CTRL_REG);
++	writel(0, bus->base + ASPEED_I2C_INTR_CTRL_REG);
++	writel(0xffffffff, bus->base + ASPEED_I2C_INTR_STS_REG);
++
++	/* Clear slave addresses. */
++	writel(0, bus->base + ASPEED_I2C_DEV_ADDR_REG);
++
+ 	parent_clk = devm_clk_get(&pdev->dev, NULL);
+ 	if (IS_ERR(parent_clk))
+ 		return PTR_ERR(parent_clk);
+@@ -1040,46 +1736,47 @@ static int aspeed_i2c_probe_bus(struct platform_device *pdev)
+ 		bus->get_clk_reg_val = (u32 (*)(struct device *, u32))
+ 				match->data;
+ 
++	aspeed_i2c_set_xfer_mode(bus);
++
+ 	/* Initialize the I2C adapter */
+ 	spin_lock_init(&bus->lock);
+ 	init_completion(&bus->cmd_complete);
+ 	bus->adap.owner = THIS_MODULE;
+-	bus->adap.retries = 0;
+ 	bus->adap.algo = &aspeed_i2c_algo;
+ 	bus->adap.dev.parent = &pdev->dev;
+ 	bus->adap.dev.of_node = pdev->dev.of_node;
+ 	strscpy(bus->adap.name, pdev->name, sizeof(bus->adap.name));
+ 	i2c_set_adapdata(&bus->adap, bus);
+ 
+-	bus->dev = &pdev->dev;
+-
+-	/* Clean up any left over interrupt state. */
+-	writel(0, bus->base + ASPEED_I2C_INTR_CTRL_REG);
+-	writel(0xffffffff, bus->base + ASPEED_I2C_INTR_STS_REG);
+-	/*
+-	 * bus.lock does not need to be held because the interrupt handler has
+-	 * not been enabled yet.
+-	 */
+-	ret = aspeed_i2c_init(bus, pdev);
+-	if (ret < 0)
+-		return ret;
+-
+ 	irq = irq_of_parse_and_map(pdev->dev.of_node, 0);
+ 	ret = devm_request_irq(&pdev->dev, irq, aspeed_i2c_bus_irq,
+ 			       0, dev_name(&pdev->dev), bus);
+ 	if (ret < 0)
+-		return ret;
++		goto out_free_dma_buf;
++
++	ret = aspeed_i2c_init(bus, pdev);
++	if (ret < 0)
++		goto out_free_dma_buf;
+ 
+ 	ret = i2c_add_adapter(&bus->adap);
+ 	if (ret < 0)
+-		return ret;
++		goto out_free_dma_buf;
+ 
+ 	platform_set_drvdata(pdev, bus);
+ 
+-	dev_info(bus->dev, "i2c bus %d registered, irq %d\n",
+-		 bus->adap.nr, irq);
++	dev_info(bus->dev, "i2c bus %d registered (%s mode), irq %d\n",
++		 bus->adap.nr, bus->dma_buf ? "dma" :
++					      bus->buf_base ? "buffer" : "byte",
++		 irq);
+ 
+ 	return 0;
++
++out_free_dma_buf:
++	if (bus->dma_buf)
++		dma_pool_free(bus->dma_pool, bus->dma_buf, bus->dma_handle);
++	dma_pool_destroy(bus->dma_pool);
++
++	return ret;
+ }
+ 
+ static void aspeed_i2c_remove_bus(struct platform_device *pdev)
+@@ -1097,6 +1794,10 @@ static void aspeed_i2c_remove_bus(struct platform_device *pdev)
+ 
+ 	reset_control_assert(bus->rst);
+ 
++	if (bus->dma_buf)
++		dma_pool_free(bus->dma_pool, bus->dma_buf, bus->dma_handle);
++	dma_pool_destroy(bus->dma_pool);
++
+ 	i2c_del_adapter(&bus->adap);
+ }
+ 
+@@ -1110,6 +1811,11 @@ static struct platform_driver aspeed_i2c_bus_driver = {
+ };
+ module_platform_driver(aspeed_i2c_bus_driver);
+ 
++module_param_named(dump_debug, dump_debug, bool, 0644);
++MODULE_PARM_DESC(dump_debug, "debug flag for dump printing");
++module_param_named(dump_debug_bus_id, dump_debug_bus_id, int, 0644);
++MODULE_PARM_DESC(dump_debug_bus_id, "bus id for dump debug printing");
++
+ MODULE_AUTHOR("Brendan Higgins <brendanhiggins@google.com>");
+ MODULE_DESCRIPTION("Aspeed I2C Bus Driver");
+ MODULE_LICENSE("GPL v2");
+diff --git a/drivers/i2c/i2c-core-base.c b/drivers/i2c/i2c-core-base.c
+index 5103cf2491dc..2a4767aed6f5 100644
+--- a/drivers/i2c/i2c-core-base.c
++++ b/drivers/i2c/i2c-core-base.c
+@@ -1563,6 +1563,7 @@ EXPORT_SYMBOL_GPL(i2c_handle_smbus_host_notify);
+ 
+ static int i2c_register_adapter(struct i2c_adapter *adap)
+ {
++	u32 bus_timeout_ms = 0;
+ 	int res = -EINVAL;
+ 
+ 	/* Can't register until after driver model init */
+@@ -1593,8 +1594,15 @@ static int i2c_register_adapter(struct i2c_adapter *adap)
+ 	INIT_LIST_HEAD(&adap->userspace_clients);
+ 
+ 	/* Set default timeout to 1 second if not already set */
+-	if (adap->timeout == 0)
+-		adap->timeout = HZ;
++	if (adap->timeout == 0) {
++		device_property_read_u32(&adap->dev, "bus-timeout-ms",
++					 &bus_timeout_ms);
++		adap->timeout = bus_timeout_ms ?
++					msecs_to_jiffies(bus_timeout_ms) : HZ;
++	}
++
++	/* Set retries count if it has the property setting */
++	device_property_read_u32(&adap->dev, "#retries", &adap->retries);
+ 
+ 	/* register soft irqs for Host Notify */
+ 	res = i2c_setup_host_notify_irq_domain(adap);
+-- 
+2.34.1
+

@@ -1,0 +1,449 @@
+From c8ba5356967cd6d52b79fd7c3e4c26f0958e4c9c Mon Sep 17 00:00:00 2001
+From: pandiarajt <pandiarajt@ami.com>
+Date: Tue, 21 Oct 2025 12:20:42 +0530
+Subject: [PATCH 75/75] Create D-Bus object path after managed jobs complete
+ instead of all systemd jobs
+
+---
+ src/main.cpp | 385 +++++++++++++++++++++++++++++++++++++++++----------
+ 1 file changed, 309 insertions(+), 76 deletions(-)
+
+diff --git a/src/main.cpp b/src/main.cpp
+index 6acaeca..1e72dae 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -24,6 +24,9 @@
+ #include <filesystem>
+ #include <fstream>
+ #include <unordered_map>
++#include <memory>
++#include <functional>
++#include <atomic>
+ 
+ std::unique_ptr<boost::asio::steady_timer> timer = nullptr;
+ std::unique_ptr<boost::asio::steady_timer> initTimer = nullptr;
+@@ -69,6 +72,16 @@ enum class monitorElement
+     socketObjPath
+ };
+ 
++struct UnitStatus
++{
++    bool serviceReady{false};
++    bool socketReady{false};
++    std::string servicePath;
++    std::string socketPath;
++    std::atomic<bool> serviceChecked{false};
++    std::atomic<bool> socketChecked{false};
++};
++
+ std::tuple<std::string, UnitType, std::string> getUnitNameTypeAndInstance(
+     const std::string& fullUnitName)
+ {
+@@ -105,6 +118,90 @@ std::tuple<std::string, UnitType, std::string> getUnitNameTypeAndInstance(
+     return std::make_tuple(unitName, type, instanceName);
+ }
+ 
++void checkUnitStatus(
++    const std::string& unitPath,
++    std::shared_ptr<sdbusplus::asio::connection>& conn,
++
++    std::function<void(bool)> callback)
++{
++    if (unitPath.empty())
++    {
++        callback(true);
++        return;
++    }
++
++    try
++    {
++        auto methodCallback =
++            [callback, unitPath](
++                boost::system::error_code ec,
++                const std::map<std::string, std::variant<std::string>>& properties) {
++         
++            try
++            {
++                if (ec)
++                {
++                    lg2::error(
++                        "Failed to get properties for unit {UNIT}: {ERROR}",
++                        "UNIT", unitPath,
++                        "ERROR", ec.message());
++                    callback(false);
++                    return;
++                }
++
++                std::string activeState = "inactive";
++                std::string subState = "dead";
++
++                auto activeIt = properties.find("ActiveState");
++                if (activeIt != properties.end())
++                {
++                    activeState = std::get<std::string>(activeIt->second);
++                }
++
++                auto subIt = properties.find("SubState");
++                if (subIt != properties.end())
++                {
++                    subState = std::get<std::string>(subIt->second);
++                }
++
++                // Consider service ready based on state
++                bool isReady = (activeState == "active" ||
++                              activeState == "inactive" ||
++                              activeState == "failed");
++
++                // For socket units, also consider "listening" state as ready
++                if (subState == "listening")
++                {
++                    isReady = true;
++                }
++                callback(isReady);
++            }
++            catch (const std::exception& e)
++            {
++                lg2::error("Exception in status callback for {UNIT}: {ERROR}",
++                          "UNIT", unitPath,
++                          "ERROR", e.what());
++                callback(false);
++            }
++        };
++
++        conn->async_method_call(
++            methodCallback,
++            "org.freedesktop.systemd1",
++            unitPath,
++            "org.freedesktop.DBus.Properties",
++            "GetAll",
++            "org.freedesktop.systemd1.Unit");
++    }
++    catch (const std::exception& e)
++    {
++        lg2::error("Failed to send status request for {UNIT}: {ERROR}",
++                   "UNIT", unitPath,
++                   "ERROR", e.what());
++        callback(false);
++    }
++}
++
+ static inline void handleListUnitsResponse(
+     sdbusplus::asio::object_server& server,
+     std::shared_ptr<sdbusplus::asio::connection>& conn,
+@@ -259,26 +356,216 @@ static inline void handleListUnitsResponse(
+             "/org/freedesktop/systemd1/unit/usb_2dcode_2dupdate_2eservice",
+             ""));
+ #endif
++    
++    // Use map with shared ownership
++    auto unitStatusMap = std::make_shared<std::map<std::string, std::shared_ptr<UnitStatus>>>();
++    auto pendingChecks = std::make_shared<std::atomic<int>>(0);
++
++    // Initialize status map and count pending checks
++    try
++    {
++        for (const auto& it : unitsToMonitor)
++        {
++            const auto& servicePath =
++                std::get<static_cast<int>(monitorElement::serviceObjPath)>(
++                    it.second);
++            const auto& socketPath =
++                std::get<static_cast<int>(monitorElement::socketObjPath)>(
++                    it.second);
++
++            auto status = std::make_shared<UnitStatus>();
++            status->servicePath = servicePath;
++            status->socketPath = socketPath;
++            
++            // Count how many async checks we need
++            if (!servicePath.empty())
++            {
++                (*pendingChecks)++;
++            }
++            if (!socketPath.empty())
++            {
++                (*pendingChecks)++;
++            }
++            
++            (*unitStatusMap)[it.first] = status;
++        }
++    }
++    catch (const std::exception& e)
++    {
++        lg2::error("Failed to initialize status map: {ERROR}",
++                   "ERROR", e.what());
++        return;
++    }
++
++    // Function to check if unit is ready
++    auto isUnitReady = [](const std::shared_ptr<UnitStatus>& status) {
++        bool serviceOk = status->servicePath.empty() || 
++                        (status->serviceChecked.load() && status->serviceReady);
++        bool socketOk = status->socketPath.empty() || 
++                       (status->socketChecked.load() && status->socketReady);
++        return serviceOk && socketOk;
++    };
++
++    // Function to check if all units are ready and create objects
++    auto tryCreateObjects = [&server, &conn, unitStatusMap, isUnitReady, listUnits]() {
++        try
++        {
++            // Check if all units are ready
++            bool allReady = true;
++            for (const auto& [unit, status] : *unitStatusMap)
++            {
++                if (!isUnitReady(status))
++                {
++                    allReady = false;
++                    lg2::info("Unit {UNIT} not ready yet - service checked: {SVCCHK}, ready: {SVCRDY}, socket checked: {SOCKCHK}, ready: {SOCKRDY}",
++                             "UNIT", unit,
++                             "SVCCHK", status->serviceChecked.load(),
++                             "SVCRDY", status->serviceReady,
++                             "SOCKCHK", status->socketChecked.load(),
++                             "SOCKRDY", status->socketReady);
++                    break;
++                }
++            }
++
++            if (!allReady)
++            {
++                lg2::info("Not all units ready yet, will retry...");
++                timer->expires_after(std::chrono::seconds(5));
++                timer->async_wait([&server, &conn, listUnits](
++                                    const boost::system::error_code& ec) {
++                    if (!ec)
++                    {
++                        lg2::info("Retry timer expired, re-checking units...");
++                        handleListUnitsResponse(server, conn, ec, listUnits);
++                    }
++                    else if (ec != boost::asio::error::operation_aborted)
++                    {
++                        lg2::error("Timer error: {ERROR}", "ERROR", ec.message());
++                    }
++                });
++                return;
++            }
++
++            lg2::info("All units ready, creating D-Bus objects...");
++            
++            // All units ready, create objects
++            for (auto& it : unitsToMonitor)
++            {
++                try
++                {
++                    sdbusplus::message::object_path basePath(
++                        phosphor::service::srcCfgMgrBasePath);
++                    std::string objPath(basePath / it.first);
++                    
++                    auto srvCfgObj =
++                        std::make_unique<phosphor::service::ServiceConfig>(
++                            server, conn, objPath,
++                            std::get<static_cast<int>(
++                                monitorElement::unitName)>(it.second),
++                            std::get<static_cast<int>(
++                                monitorElement::instanceName)>(it.second),
++                            std::get<static_cast<int>(
++                                monitorElement::serviceObjPath)>(it.second),
++                            std::get<static_cast<int>(
++                                monitorElement::socketObjPath)>(it.second));
++                    srvMgrObjects.emplace(
++                        std::make_pair(std::move(objPath),
++                                     std::move(srvCfgObj)));
++                }
++                catch (const std::exception& e)
++                {
++                    lg2::error(
++                        "Failed to create object for unit {UNIT}: {ERROR}",
++                        "UNIT", it.first,
++                        "ERROR", e.what());
++                }
++            }
++            
++            lg2::info("Created {COUNT} service objects", "COUNT", srvMgrObjects.size());
++        }
++        catch (const std::exception& e)
++        {
++            lg2::error("Exception in tryCreateObjects: {ERROR}",
++                       "ERROR", e.what());
++        }
++    };
+ 
+-    // create objects for needed services
+-    for (auto& it : unitsToMonitor)
++    // Callback function for status checks
++    auto statusCallback = [unitStatusMap, pendingChecks, tryCreateObjects](
++        const std::string& unit, bool isService, bool ready) {
++        try
++        {
++            auto it = unitStatusMap->find(unit);
++            if (it != unitStatusMap->end())
++            {
++                auto& status = it->second;
++                if (isService)
++                {
++                    status->serviceReady = ready;
++                    status->serviceChecked.store(true);
++                }
++                else
++                {
++                    status->socketReady = ready;
++                    status->socketChecked.store(true);
++                }
++            }
++            
++            int remaining = pendingChecks->fetch_sub(1) - 1;
++            
++            if (remaining == 0)
++            {
++                lg2::info("All status checks complete, attempting to create objects");
++                tryCreateObjects();
++            }
++        }
++        catch (const std::exception& e)
++        {
++            lg2::error("Exception in status callback: {ERROR}", "ERROR", e.what());
++        }
++    };
++
++    // Check status for all units
++    for (const auto& [unit, status] : *unitStatusMap)
+     {
+-        sdbusplus::message::object_path basePath(
+-            phosphor::service::srcCfgMgrBasePath);
+-        std::string objPath(basePath / it.first);
+-        auto srvCfgObj = std::make_unique<phosphor::service::ServiceConfig>(
+-            server, conn, objPath,
+-            std::get<static_cast<int>(monitorElement::unitName)>(it.second),
+-            std::get<static_cast<int>(monitorElement::instanceName)>(it.second),
+-            std::get<static_cast<int>(monitorElement::serviceObjPath)>(
+-                it.second),
+-            std::get<static_cast<int>(monitorElement::socketObjPath)>(
+-                it.second));
+-        srvMgrObjects.emplace(
+-            std::make_pair(std::move(objPath), std::move(srvCfgObj)));
++        if (!status->servicePath.empty())
++        {
++            checkUnitStatus(status->servicePath, conn,
++                [unit, statusCallback](bool ready) {
++                    statusCallback(unit, true, ready);
++                });
++        }
++        else
++        {
++            // No service path, mark as checked and ready
++            status->serviceChecked.store(true);
++            status->serviceReady = true;
++        }
++
++        if (!status->socketPath.empty())
++        {
++            checkUnitStatus(status->socketPath, conn,
++                [unit, statusCallback](bool ready) {
++                    statusCallback(unit, false, ready);
++                });
++        }
++        else
++        {
++            // No socket path, mark as checked and ready
++            status->socketChecked.store(true);
++            status->socketReady = true;
++        }
++    }
++
++    // If no async checks are needed, create objects immediately
++    if (pendingChecks->load() == 0)
++    {
++        lg2::info("No async checks needed, creating objects immediately");
++        tryCreateObjects();
+     }
+ }
+ 
++
+ void init(sdbusplus::asio::object_server& server,
+           std::shared_ptr<sdbusplus::asio::connection>& conn)
+ {
+@@ -301,52 +588,11 @@ void init(sdbusplus::asio::object_server& server,
+ void checkAndInit(sdbusplus::asio::object_server& server,
+                   std::shared_ptr<sdbusplus::asio::connection>& conn)
+ {
+-    // Check whether systemd completed all the loading before initializing
+-    conn->async_method_call(
+-        [&server, &conn](boost::system::error_code ec,
+-                         const std::variant<uint64_t>& value) {
+-            if (ec)
+-            {
+-                lg2::error("async_method_call error: ListUnits failed: {EC}",
+-                           "EC", ec.value());
+-                return;
+-            }
+-            if (std::get<uint64_t>(value))
+-            {
+-                if (!unitQueryStarted)
+-                {
+-                    unitQueryStarted = true;
+-                    init(server, conn);
+-                }
+-            }
+-            else
+-            {
+-                // FIX-ME: Latest up-stream sync caused issue in receiving
+-                // StartupFinished signal. Unable to get StartupFinished signal
+-                // from systemd1 hence using poll method too, to trigger it
+-                // properly.
+-                constexpr size_t pollTimeout = 10; // seconds
+-                initTimer->expires_after(std::chrono::seconds(pollTimeout));
+-                initTimer->async_wait([&server, &conn](
+-                                          const boost::system::error_code& ec) {
+-                    if (ec == boost::asio::error::operation_aborted)
+-                    {
+-                        // Timer reset.
+-                        return;
+-                    }
+-                    if (ec)
+-                    {
+-                        lg2::error(
+-                            "service config mgr - init - async wait error: {EC}",
+-                            "EC", ec.value());
+-                        return;
+-                    }
+-                    checkAndInit(server, conn);
+-                });
+-            }
+-        },
+-        sysdService, sysdObjPath, dBusPropIntf, dBusGetMethod, sysdMgrIntf,
+-        "FinishTimestamp");
++    if (!unitQueryStarted)
++    {
++        unitQueryStarted = true;
++        init(server, conn);
++    }
+ }
+ 
+ int main()
+@@ -359,21 +605,8 @@ int main()
+     conn->request_name(phosphor::service::serviceConfigSrvName);
+     auto server = sdbusplus::asio::object_server(conn, true);
+     server.add_manager(phosphor::service::srcCfgMgrBasePath);
+-    // Initialize the objects after systemd indicated startup finished.
+-    auto userUpdatedSignal = std::make_unique<sdbusplus::bus::match_t>(
+-        static_cast<sdbusplus::bus_t&>(*conn),
+-        "type='signal',"
+-        "member='StartupFinished',path='/org/freedesktop/systemd1',"
+-        "interface='org.freedesktop.systemd1.Manager'",
+-        [&server, &conn](sdbusplus::message_t& /*msg*/) {
+-            if (!unitQueryStarted)
+-            {
+-                unitQueryStarted = true;
+-                init(server, conn);
+-            }
+-        });
+-    // this will make sure to initialize the objects, when daemon is
+-    // restarted.
++
++    // Start initialization directly
+     checkAndInit(server, conn);
+ 
+     io.run();
+-- 
+2.34.1
+
