@@ -1,0 +1,189 @@
+From af1be24c926e5c9a1191f528f2790dd2987ea7a8 Mon Sep 17 00:00:00 2001
+From: santhoshs <santhoshs@ami.com>
+Date: Wed, 19 Nov 2025 06:32:38 +0000
+Subject: [PATCH] spi: aspeed: Add ABR mode detection support for AST2600
+
+Extend ABR (Alternate Boot Region) mode detection to support both
+AST2600 and AST2700 chips. Previously, ABR mode detection was only
+available for AST2700.
+
+Key changes:
+- Add chip-specific SCU base addresses and register offsets
+  * AST2600: SCU base 0x1E6E2000, register SCU510, bit 27
+  * AST2700: SCU base 0x14C02000, register SCU1_030, bit 29
+- Modify aspeed_spi_get_abr_mode() to accept aspi parameter for
+  version-aware register selection
+- Update probe function to map SCU for both AST2600 and AST2700
+- Enhance error logging with chip-specific register information
+
+ABR mode indicates whether the system is configured for:
+- Dual SPI ABR mode (mode = 0): Two flash chips
+- Single SPI ABR mode (mode = 1): Single flash chip
+
+The ABR boot mode is exposed via sysfs at:
+  /sys/bus/platform/drivers/spi-aspeed-smc/.../abr_bootmode
+
+Signed-off-by: santhoshs <santhoshs@ami.com>
+---
+ drivers/spi/spi-aspeed-smc.c | 121 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 121 insertions(+)
+
+diff --git a/drivers/spi/spi-aspeed-smc.c b/drivers/spi/spi-aspeed-smc.c
+index d6d8fc9032c8..3377a9fb8276 100644
+--- a/drivers/spi/spi-aspeed-smc.c
++++ b/drivers/spi/spi-aspeed-smc.c
+@@ -22,6 +22,22 @@
+ 
+ #define DEVICE_NAME "spi-aspeed-smc"
+ 
++
++/* WDT registers for boot indicator */
++#define WDT_BASE_ADDR   0x1E785000
++#define WDT_SCRATCH_ADDR 0x4C //Boot indicator
++
++/* SCU registers for ABR mode detection */
++#define SCU_BASE_ADDR_AST2600   0x1E6E2000  /* AST2600 SCU base */
++#define SCU_BASE_ADDR_AST2700   0x14C02000  /* AST2700 SCU base */
++#define SCU_510_OFFSET          0x510       /* AST2600: Hardware Strap 2 */
++#define SCU1_030_OFFSET         0x30        /* AST2700: OTP strap ext */
++#define ABR_MODE_BIT_AST2600    12          /* AST2600: bit 12 in SCU510 */
++#define ABR_MODE_BIT_AST2700    29          /* AST2700: bit 29 in SCU1_030 */
++
++static void __iomem *scu_base;
++static void __iomem *wdt_base;
++
+ /* Type setting Register */
+ #define CONFIG_REG			0x0
+ #define   CONFIG_TYPE_SPI		0x2
+@@ -312,9 +328,75 @@ static ssize_t current_boot_show(struct device *dev,
+ 	return _current_boot_show(aspi->regs, attr, buf);
+ }
+ 
++/**
++ * aspeed_spi_get_abr_mode - Read ABR boot mode from SCU register
++ * @aspi: aspeed_spi structure containing version info
++ *
++ * Returns:
++ *  0 = Dual SPI ABR mode (Two flashes)
++ *  1 = Single SPI ABR mode (Single flash)
++ * -1 = Error
++ */
++static int aspeed_spi_get_abr_mode(struct aspeed_spi *aspi)
++{
++	u32 reg_val;
++	int boot_mode;
++	u32 scu_offset;
++	u32 abr_bit;
++	const char *scu_reg_name;
++
++	if (!scu_base) {
++		pr_err("SCU base not mapped\n");
++		return -1;
++	}
++
++	/* Select register offset and bit position based on chip version */
++	if (aspi->data->ver == 2600) {
++		scu_offset = SCU_510_OFFSET;
++		abr_bit = ABR_MODE_BIT_AST2600;
++		scu_reg_name = "SCU510";
++	} else if (aspi->data->ver == 2700) {
++		scu_offset = SCU1_030_OFFSET;
++		abr_bit = ABR_MODE_BIT_AST2700;
++		scu_reg_name = "SCU1_030";
++	} else {
++		pr_err("ABR mode detection not supported for this chip version\n");
++		return -1;
++	}
++
++	/* Read the appropriate SCU register */
++	reg_val = readl(scu_base + scu_offset);
++
++	/* Extract the ABR mode bit */
++	boot_mode = (reg_val >> abr_bit) & 1;
++
++	pr_info("ABR Boot Mode: %d (%s SPI ABR) [%s=0x%08x, bit %d]\n",
++		boot_mode, boot_mode ? "Single" : "Dual",
++		scu_reg_name, reg_val, abr_bit);
++
++	return boot_mode;
++}
++
++static int aspeed_spi_create_abr_mode_file(int boot_mode)
++{
++	/* Implementation for creating sysfs file */
++	return 0;
++}
++
++static ssize_t abr_bootmode_show(struct device *dev,
++				struct device_attribute *attr, char *buf)
++{
++	struct aspeed_spi *aspi = dev_get_drvdata(dev);
++	int boot_mode = aspeed_spi_get_abr_mode(aspi);
++	return boot_mode >= 0 ? sysfs_emit(buf, "%d\n", boot_mode) :
++				sysfs_emit(buf, "error\n");
++}
++
++
+ static DEVICE_ATTR_RW(access_primary);
+ static DEVICE_ATTR_RW(access_backup);
+ static DEVICE_ATTR_RO(current_boot);
++static DEVICE_ATTR_RO(abr_bootmode);
+ 
+ static struct attribute *bswitch_primary_attrs[] = {
+ 	&dev_attr_access_primary.attr, NULL
+@@ -328,6 +410,12 @@ static struct attribute *bcurrent_boot_attrs[] = {
+ 	&dev_attr_current_boot.attr, NULL
+ };
+ 
++static struct attribute *abr_bootmode_attrs[] = {
++	&dev_attr_abr_bootmode.attr,
++	NULL
++};
++
++ATTRIBUTE_GROUPS(abr_bootmode);
+ ATTRIBUTE_GROUPS(bswitch_primary);
+ ATTRIBUTE_GROUPS(bswitch_backup);
+ ATTRIBUTE_GROUPS(bcurrent_boot);
+@@ -1793,6 +1881,39 @@ static int aspeed_spi_probe(struct platform_device *pdev)
+ 		aspi->flag |= ASPEED_SPI_LTPI_SUPPORT;
+ 	}
+ 
++/* Map WDT base for boot indicator */
++	wdt_base = ioremap(WDT_BASE_ADDR, SZ_4K);
++	if (!wdt_base) {
++		printk("Failed to map WDT base address\n");
++		return -ENOMEM;
++	}
++
++	/* Map SCU base for ABR mode detection (AST2600 and AST2700) */
++	if (data->ver == 2600 || data->ver == 2700) {
++		int abr_mode;
++		phys_addr_t scu_addr;
++
++		/* Select SCU base address based on chip version */
++		if (data->ver == 2600) {
++			scu_addr = SCU_BASE_ADDR_AST2600;
++		} else { /* 2700 */
++			scu_addr = SCU_BASE_ADDR_AST2700;
++		}
++
++		scu_base = ioremap(scu_addr, SZ_4K);
++		if (!scu_base) {
++			dev_warn(dev, "Failed to map SCU base address (0x%llx)\n", (u64)scu_addr);
++		} else {
++			abr_mode = aspeed_spi_get_abr_mode(aspi);
++			if (abr_mode >= 0) {
++				aspeed_spi_create_abr_mode_file(abr_mode);
++				if (devm_device_add_groups(dev, abr_bootmode_groups))
++					dev_warn(dev, "Could not add abr_bootmode sysfs group\n");
++			}
++		}
++	}
++
++
+ 	if ((aspi->flag & ASPEED_SPI_NORMAL_MODE) != 0 ||
+ 	    (aspi->flag & ASPEED_SPI_DMA_WRITE_MODE) != 0 ||
+ 	    (aspi->flag & ASPEED_SPI_DMA_MODE) != 0) {
+-- 
+2.34.1
+

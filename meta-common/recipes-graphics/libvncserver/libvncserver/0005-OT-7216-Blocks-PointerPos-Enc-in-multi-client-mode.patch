@@ -1,0 +1,61 @@
+From 2d90cb50c4d2ac40b730cc8e94eb5fb395651c59 Mon Sep 17 00:00:00 2001
+From: Amlana Bhuyan <amlanab@ami.com>
+Date: Thu, 20 Nov 2025 01:55:12 +0530
+Subject: [PATCH] OT-7216: Blocks PointerPos Enc in multi-client mode
+
+TightVNC fails to decode PointerPos updates when multiple clients
+are connected, causing frame corruption and disconnections. This
+Commit Blocks PointerPos encoding when more than one client is
+active to prevent this issue.
+
+Signed-off-by: Amlana Bhuyan <amlanab@ami.com>
+---
+ src/libvncserver/rfbserver.c | 25 ++++++++++++++++++++++++-
+ 1 file changed, 24 insertions(+), 1 deletion(-)
+
+diff --git a/src/libvncserver/rfbserver.c b/src/libvncserver/rfbserver.c
+index 97920a23..0d35f595 100644
+--- a/src/libvncserver/rfbserver.c
++++ b/src/libvncserver/rfbserver.c
+@@ -2307,6 +2307,20 @@ rfbProcessClientNormalMessage(rfbClientPtr cl)
+ 
+         rfbStatRecordMessageRcvd(cl, msg.type, sz_rfbSetEncodingsMsg+(msg.se.nEncodings*4),sz_rfbSetEncodingsMsg+(msg.se.nEncodings*4));
+ 
++        /*
++         * Count connected clients to determine multi-client mode.
++         * PointerPos encoding causes corruption when multiple clients share
++         * frame buffers.
++         */
++        int clientCount = 0;
++        rfbClientPtr clTemp;
++        LOCK(rfbClientListMutex);
++        for (clTemp = cl->screen->clientHead; clTemp != NULL;
++             clTemp = clTemp->next) {
++            clientCount++;
++        }
++        UNLOCK(rfbClientListMutex);
++
+         /*
+          * UltraVNC Client has the ability to adapt to changing network environments
+          * So, let's give it a change to tell us what it wants now!
+@@ -2402,7 +2416,16 @@ rfbProcessClientNormalMessage(rfbClientPtr cl)
+ 	        cl->cursorWasChanged = TRUE;
+ 	        break;
+ 	    case rfbEncodingPointerPos:
+-		if (!cl->enableCursorPosUpdates) {
++        /*
++         * Disable PointerPos in multi-client mode to prevent frame corruption.
++         * TightVNC read-only sessions enable this and cause JPEG stream corruption.
++         */
++        if (clientCount > 1) {
++            rfbLog("PointerPos encoding blocked (multi-client mode: %d clients)\n",
++                   clientCount);
++            break;
++        }
++		 if (!cl->enableCursorPosUpdates) {
+ 		    rfbLog("Enabling cursor position updates for client %s\n",
+ 			   cl->host);
+ 		    cl->enableCursorPosUpdates = TRUE;
+-- 
+2.25.1
+

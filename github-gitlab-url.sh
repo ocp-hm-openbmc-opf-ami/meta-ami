@@ -16,7 +16,6 @@ sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/dbus-sensors.git;branch=ma
 
 sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/snmp-agent.git;branch=main;protocol=https/git@github.com\/ocp-hm-openbmc-opf-ami\/snmp-agent;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/snmp/snmp-agent_%.bb
 
-
 sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/license-control.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/license-control.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/license-control/license-control.bb
 
 sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/platform-event-filter.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/platform-event-filter.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/pef/pef-alert-manager.bb
@@ -31,19 +30,13 @@ sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/libmctp.git;protocol=https
 
 sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.virtual-media;branch=main;protocol=https/git@github.com\/ocp-hm-openbmc-opf-ami\/virtual-media.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/virtual-media/virtual-media.bbappend
 
-sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.spdmd.git;protocol=https;branch=LFMCTP/git@github.com\/ocp-hm-openbmc-opf-ami\/spdmd.git;protocol=https;branch=LFMCTP/g' meta-ami/meta-common/recipes-ami/spdm/spdmd_lfmctp.inc
-
-sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.libraries.spdmapplib.git;protocol=https;branch=LFMCTP/git@github.com\/ocp-hm-openbmc-opf-ami\/spdmd.git;protocol=https;branch=LFMCTP/g' meta-ami/meta-common/recipes-ami/spdm/spdmapplib_lfmctp.inc
-
 sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/two-factor-authentication.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/two-factor-authentication.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/two-factor-authentication/web-two-factor-authentication.bb 
-
-sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.libraries.spdmapplib.git;protocol=https;branch=LFMCTP/git@github.com\/ocp-hm-openbmc-opf-ami\/spdmapplib.git;protocol=https;branch=LFMCTP/g' meta-ami/meta-common/recipes-ami/spdm/spdmd_lfmctp.inc
 
 sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.host-misc-comm-manager;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/host-misc-comm-manager.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-intel/host-misc-comm-manager/host-misc-comm-manager_git.bb
 
 sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.psu-manager.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/psu-manager.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-intel/psu-manager/psu-manager.bb
 
-sed -i 's/git.ami.com\/core\/ami-bmc\/base-tech\/linux-lf.git;protocol=https;branch=${KBRANCH}/git@github.com\/ocp-hm-openbmc-opf-ami\/linux.git;protocol=https;branch=${KBRANCH}/g' meta-ami/meta-common/recipes-kernel/linux/linux-onetree.bb
+sed -i 's|git\.ami\.com/core/ami-bmc/base-tech/linux-lf\.git|git@github.com/ocp-hm-openbmc-opf-ami/linux.git|g' meta-ami/meta-common/recipes-kernel/linux/linux-onetree.bb
 
 sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.node-manager-proxy.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/node-manager-proxy.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-phosphor/ipmi/phosphor-node-manager-proxy_git.bb
 
@@ -80,3 +73,4 @@ sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.libespi.git;
 sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/bmcweb;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/bmcweb;protocol=https;branch=master;name=override/g' meta-ami/meta-common/recipes-phosphor/bmcweb/bmcweb_%.bbappend
 
 sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-networkd;branch=main;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-networkd;protocol=https;branch=main;name=override/g' meta-ami/meta-common/recipes-network/network/phosphor-network_%.bbappend
+

@@ -1,0 +1,115 @@
+From 7411b3aec328bc49a3915eff7f45e051611a4e1f Mon Sep 17 00:00:00 2001
+From: pavithra <pavithrat@ami.com>
+Date: Tue, 4 Nov 2025 17:24:01 +0530
+Subject: [PATCH] Added Community String Validation
+
+---
+ snmp_client.cpp | 14 ++++++++++----
+ snmp_util.cpp   | 33 +++++++++++++++++++++++++++++++++
+ snmp_util.hpp   | 12 ++++++++++--
+ 3 files changed, 53 insertions(+), 6 deletions(-)
+
+diff --git a/snmp_client.cpp b/snmp_client.cpp
+index 13edf4d..c51bedf 100644
+--- a/snmp_client.cpp
++++ b/snmp_client.cpp
+@@ -144,12 +144,18 @@ std::string Client::user(std::string value)
+                   Argument::ARGUMENT_VALUE(value.c_str()));
+       }
+     }
+-  /*else if((version() == "v1" || version() == "v2c") && (userlen != 0))
++
++  else if((version() == "v1" || version() == "v2c") && (userlen != 0)) 
+   {
+-      lg2::error("User not allowed for version other than v3");
+-      elog<InvalidArgument>(Argument::ARGUMENT_NAME("user"),
++      auto managers = getCommStrManagers(value);
++    
++      if(managers.empty())
++      {     
++           lg2::error("Community string not found");
++           elog<InvalidArgument>(Argument::ARGUMENT_NAME("user"),
+               Argument::ARGUMENT_VALUE(value.c_str()));
+-  }*/
++      }
++  }
+ 
+   auto username = Ifaces::user(value);
+   serialize(id, *this, parent.dbusPersistentLocation);
+diff --git a/snmp_util.cpp b/snmp_util.cpp
+index 6f70410..14a03eb 100644
+--- a/snmp_util.cpp
++++ b/snmp_util.cpp
+@@ -192,6 +192,39 @@ std::vector<struct mgrProperty> getManagers()
+     }
+     return managers;
+ }
++
++std::vector<struct commStrMgrProperty> getCommStrManagers(const std::string& value)
++{
++    std::vector<struct commStrMgrProperty> matchedManagers;
++    auto& bus = getBus();
++    auto objTree = phosphor::getManagedObjects(bus, busCommunityStr, rootCommunityStr);
++
++    for (const auto& objIter : objTree)
++    {   
++        try
++        {
++           auto& intfMap = objIter.second;
++           auto& commStrProps = intfMap.at(clientCommunityStrIntf);
++
++           struct commStrMgrProperty mgrProps;
++           mgrProps.profile = std::get<std::string>(commStrProps.at("CommunityProfile"));
++           mgrProps.string = std::get<std::string>(commStrProps.at("CommunityString"));
++           mgrProps.permission = std::get<std::string>(commStrProps.at("ReadWritePermission"));
++
++           if (mgrProps.string == value)
++           {
++                matchedManagers.push_back(mgrProps);
++           }
++        }
++        catch (const std::exception& e)  
++        {
++            lg2::error("Failed to read community string properties: {ERROR}", "ERROR", e); 
++        }    
++    }   
++    return matchedManagers;
++}
++
++
+ } // namespace snmp
+ } // namespace network
+ } // namespace phosphor
+diff --git a/snmp_util.hpp b/snmp_util.hpp
+index ac299f2..2a189b1 100644
+--- a/snmp_util.hpp
++++ b/snmp_util.hpp
+@@ -68,8 +68,14 @@ struct mgrProperty
+   std::string version;
+   std::string user;
+ };
+-  
+-  
++
++struct commStrMgrProperty
++{
++    std::string profile;
++    std::string string;
++    std::string permission;
++};
++
+ /** @brief Gets all the snmp manager info.
+  *  @return the list of manager info in the format
+  *          of ipaddress:port
+@@ -77,6 +83,8 @@ struct mgrProperty
+ std::vector<mgrProperty> getManagers();
+ std::vector<std::string> getVersion();
+ 
++std::vector<commStrMgrProperty> getCommStrManagers(const std::string& value);
++
+ } // namespace snmp
+ } // namespace network
+ 
+-- 
+2.34.1
+

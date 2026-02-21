@@ -27,7 +27,7 @@ SRC_URI = " \
 inherit allarch
 inherit systemd
 inherit obmc-phosphor-systemd
-# Runtime dependencies. Adjust to your distro’s packaging for these tools.
+# Runtime dependencies. Adjust to your distro's packaging for these tools.
 RDEPENDS:${PN} += " \
     bash \
     systemd \

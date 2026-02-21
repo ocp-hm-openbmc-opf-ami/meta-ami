@@ -1,0 +1,88 @@
+From 3e593a9602aec9f36323c80d22bd6fdcdae11e0c Mon Sep 17 00:00:00 2001
+From: mvinod <mvinod@ami.com>
+Date: Fri, 21 Nov 2025 09:43:35 +0530
+Subject: [PATCH 61896/61896] Ensured timezone setting after firmware update
+
+Upstream-Status: Pending
+
+---
+ src/basic/time-util.c | 45 +++++++++++++++++++++++++++++++++++++++++++
+ src/basic/time-util.h |  2 ++
+ 2 files changed, 47 insertions(+)
+
+diff --git a/src/basic/time-util.c b/src/basic/time-util.c
+index f9014dc560..5ad6464a93 100644
+--- a/src/basic/time-util.c
++++ b/src/basic/time-util.c
+@@ -1636,10 +1636,55 @@ int get_timezone(char **ret) {
+         if (!z)
+                 return -ENOMEM;
+ 
++        /* Ensure that the timezone is valid and update /etc/localtime and /etc/timezone accordingly */
++        r = ensure_timezone(z);
++        if (r < 0)
++                return r;
++
+         *ret = z;
+         return 0;
+ }
+ 
++int ensure_timezone(const char *timezone) {
++        _cleanup_free_ char *zone_path = NULL;
++        _cleanup_free_ char *cur_timezone = NULL;
++         const char *zoneinfo_dir = "/usr/share/zoneinfo/";
++        int retval;
++
++        if (timezone == NULL && isempty(timezone))
++                return -EINVAL;
++
++        /* Read current /etc/timezone */
++        retval = read_one_line_file("/etc/timezone", &cur_timezone);
++        if (retval < 0)
++             return retval;
++
++        if (streq(timezone, cur_timezone)){
++                return 0;
++        } else{
++                timezone = cur_timezone;
++
++                /* Validate that the zoneinfo directory exists before constructing the path */
++                if (access(zoneinfo_dir, F_OK) < 0)
++                        return log_full_errno(LOG_DEBUG, errno, "Timezone directory '%s' not available: %m", zoneinfo_dir);
++
++                zone_path = strjoin(zoneinfo_dir, timezone, NULL);
++                if (!zone_path)
++                        return -ENOMEM;
++
++                /* Create or update /etc/localtime symlink */
++                retval = symlink_atomic(zone_path, "/etc/localtime");
++                if (retval < 0)
++                        return retval;
++
++                /* Also write /etc/timezone */
++                retval = write_string_file("/etc/timezone", timezone, WRITE_STRING_FILE_CREATE);
++                if (retval < 0)
++                        log_warning_errno(retval, "Failed to write /etc/timezone: %m");
++                return 0;
++        }
++}
++
+ time_t mktime_or_timegm(struct tm *tm, bool utc) {
+         assert(tm);
+ 
+diff --git a/src/basic/time-util.h b/src/basic/time-util.h
+index ed4c1aabd4..795cfdd287 100644
+--- a/src/basic/time-util.h
++++ b/src/basic/time-util.h
+@@ -173,6 +173,8 @@ usec_t usec_shift_clock(usec_t, clockid_t from, clockid_t to);
+ 
+ int get_timezone(char **ret);
+ 
++int ensure_timezone(const char *timezone);
++
+ time_t mktime_or_timegm(struct tm *tm, bool utc);
+ struct tm *localtime_or_gmtime_r(const time_t *t, struct tm *tm, bool utc);
+ 
+-- 
+2.51.1
+

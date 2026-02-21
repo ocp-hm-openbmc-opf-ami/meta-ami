@@ -1,0 +1,194 @@
+From c0a380716a9b4851e3c3961a74f7e0dcc493f8a2 Mon Sep 17 00:00:00 2001
+From: mvinod <mvinod@ami.com>
+Date: Fri, 21 Nov 2025 17:46:21 +0530
+Subject: [PATCH 144/144] Recreate Fix for EventLog Not Generated in Redfish
+
+---
+ src/trigger_actions.cpp | 100 +++++++++++++++++++++++++---------------
+ src/trigger_actions.hpp |  19 +++++++-
+ 2 files changed, 81 insertions(+), 38 deletions(-)
+
+diff --git a/src/trigger_actions.cpp b/src/trigger_actions.cpp
+index 5b57abb..c5fce7d 100644
+--- a/src/trigger_actions.cpp
++++ b/src/trigger_actions.cpp
+@@ -106,26 +106,25 @@ void LogToRedfishEventLog::commit(
+     const TriggerValue triggerValue)
+ {
+     double value = std::get<double>(triggerValue);
+-    auto messageId = getRedfishMessageId(value);
++    std::string thresholdName = ::numeric::typeToString(type);
++    auto direction = getDirection(value, threshold);
++    auto timestampStr = timestampToString(timestamp);
++    auto severity = getRedfishMessageId(value);
+ 
+-    if (messageId == redfish_message_ids::TriggerNumericReadingNormal)
+-    {
+-        phosphor::logging::log<phosphor::logging::level::INFO>(
+-            "Logging numeric trigger action to Redfish Event Log.",
+-            phosphor::logging::entry("REDFISH_MESSAGE_ID=%s", messageId),
+-            phosphor::logging::entry("REDFISH_MESSAGE_ARGS=%s,%f,%s",
+-                                     sensorName.c_str(), value,
+-                                     triggerId.c_str()));
+-    }
+-    else
+-    {
+-        phosphor::logging::log<phosphor::logging::level::INFO>(
+-            "Logging numeric trigger action to Redfish Event Log.",
+-            phosphor::logging::entry("REDFISH_MESSAGE_ID=%s", messageId),
+-            phosphor::logging::entry("REDFISH_MESSAGE_ARGS=%s,%f,%f,%s",
+-                                     sensorName.c_str(), value, threshold,
+-                                     triggerId.c_str()));
+-    }
++    auto connection = sdbusplus::bus::new_default_system();
++    sdbusplus::message_t AddToLog = connection.new_method_call(
++        "xyz.openbmc_project.Logging", "/xyz/openbmc_project/logging",
++        "xyz.openbmc_project.Logging.Create", "Create");
++
++    std::string journalMsg(
++        "Numeric threshold '" + thresholdName + "' of trigger '" + triggerId +
++        "' is crossed on sensor " + sensorName +
++        ", recorded value: " + std::to_string(value) +
++        ", crossing direction: " + std::string(utils::toShortEnum(direction)) +
++        ", timestamp: " + timestampToString(timestamp));
++
++    AddToLog.append(journalMsg, severity, std::map<std::string, std::string>());
++    connection.call(AddToLog);
+ }
+ 
+ void fillActions(
+@@ -183,21 +182,42 @@ void LogToJournal::commit(
+     phosphor::logging::log<phosphor::logging::level::INFO>(msg.c_str());
+ }
+ 
++const char* LogToRedfishEventLog::getRedfishMessageId() const
++{
++    switch (severity)
++    {
++        case ::discrete::Severity::ok:
++            return redfish_message_ids::TriggerDiscreteOK;
++        case ::discrete::Severity::warning:
++            return redfish_message_ids::TriggerDiscreteWarning;
++        case ::discrete::Severity::critical:
++            return redfish_message_ids::TriggerDiscreteCritical;
++    }
++    throw std::runtime_error("Invalid severity");
++}
++
+ void LogToRedfishEventLog::commit(
+     const std::string& triggerId, const ThresholdName thresholdNameIn,
+     const std::string& sensorName, const Milliseconds timestamp,
+     const TriggerValue triggerValue)
+ {
+     auto value = std::get<std::string>(triggerValue);
+-
+-    phosphor::logging::log<phosphor::logging::level::INFO>(
+-        "Logging discrete trigger action to Redfish Event Log.",
+-        phosphor::logging::entry(
+-            "REDFISH_MESSAGE_ID=%s",
+-            redfish_message_ids::TriggerDiscreteConditionMet),
+-        phosphor::logging::entry("REDFISH_MESSAGE_ARGS=%s,%s,%s",
+-                                 sensorName.c_str(), value.c_str(),
+-                                 triggerId.c_str()));
++    auto timestampStr = timestampToString(timestamp);
++    auto severity = getRedfishMessageId();
++
++    auto connection = sdbusplus::bus::new_default_system();
++    sdbusplus::message_t AddToLog = connection.new_method_call(
++        "xyz.openbmc_project.Logging", "/xyz/openbmc_project/logging",
++        "xyz.openbmc_project.Logging.Create", "Create");
++
++    std::string journalMsg("Discrete condition '" + thresholdNameIn->get() +
++                           "' of trigger '" + triggerId +
++                           "' is crossed on sensor " + sensorName +
++                           ", recorded value: " + value +
++                           ", timestamp: " + timestampToString(timestamp));
++
++    AddToLog.append(journalMsg, severity, std::map<std::string, std::string>());
++    connection.call(AddToLog);
+ }
+ 
+ void fillActions(
+@@ -220,7 +240,7 @@ void fillActions(
+             case TriggerAction::LogToRedfishEventLog:
+             {
+                 actionsIf.emplace_back(
+-                    std::make_unique<LogToRedfishEventLog>());
++                    std::make_unique<LogToRedfishEventLog>(severity));
+                 break;
+             }
+             case TriggerAction::UpdateReport:
+@@ -255,15 +275,21 @@ void LogToRedfishEventLog::commit(
+     const TriggerValue triggerValue)
+ {
+     auto value = triggerValueToString(triggerValue);
++    auto timestampStr = timestampToString(timestamp);
++    auto severity = redfish_message_ids::TriggerDiscreteOK;
++
++    auto connection = sdbusplus::bus::new_default_system();
++    sdbusplus::message_t AddToLog = connection.new_method_call(
++        "xyz.openbmc_project.Logging", "/xyz/openbmc_project/logging",
++        "xyz.openbmc_project.Logging.Create", "Create");
++
++    std::string journalMsg("Discrete condition OnChange of trigger '" +
++                           triggerId + "' is crossed on sensor " + sensorName +
++                           ", recorded value: " + value +
++                           ", timestamp: " + timestampToString(timestamp));
+ 
+-    phosphor::logging::log<phosphor::logging::level::INFO>(
+-        "Logging onChange discrete trigger action to Redfish Event Log.",
+-        phosphor::logging::entry(
+-            "REDFISH_MESSAGE_ID=%s",
+-            redfish_message_ids::TriggerDiscreteConditionMet),
+-        phosphor::logging::entry("REDFISH_MESSAGE_ARGS=%s,%s,%s",
+-                                 sensorName.c_str(), value.c_str(),
+-                                 triggerId.c_str()));
++    AddToLog.append(journalMsg, severity, std::map<std::string, std::string>());
++    connection.call(AddToLog);
+ }
+ 
+ void fillActions(
+diff --git a/src/trigger_actions.hpp b/src/trigger_actions.hpp
+index 83baca9..61cbef8 100644
+--- a/src/trigger_actions.hpp
++++ b/src/trigger_actions.hpp
+@@ -26,6 +26,16 @@ constexpr const char* TriggerNumericBelowUpperCritical =
+     "Telemetry.1.0.TriggerNumericBelowUpperCritical";
+ constexpr const char* TriggerNumericReadingNormal =
+     "Telemetry.1.0.TriggerNumericReadingNormal";
++constexpr const char* TriggerNumericWarning =
++    "xyz.openbmc_project.Logging.Entry.Level.Warning";
++constexpr const char* TriggerNumericCritical =
++    "xyz.openbmc_project.Logging.Entry.Level.Critical";
++constexpr const char* TriggerDiscreteOK =
++    "xyz.openbmc_project.Logging.Entry.Level.Informational";
++constexpr const char* TriggerDiscreteWarning =
++    "xyz.openbmc_project.Logging.Entry.Level.Warning";
++constexpr const char* TriggerDiscreteCritical =
++    "xyz.openbmc_project.Logging.Entry.Level.Critical";
+ } // namespace redfish_message_ids
+ 
+ namespace numeric
+@@ -88,11 +98,18 @@ class LogToJournal : public interfaces::TriggerAction
+ class LogToRedfishEventLog : public interfaces::TriggerAction
+ {
+   public:
+-    explicit LogToRedfishEventLog() {}
++    explicit LogToRedfishEventLog(::discrete::Severity severity) :
++        severity(severity)
++    {}
+ 
+     void commit(const std::string& triggerId, const ThresholdName thresholdName,
+                 const std::string& sensorName, const Milliseconds timestamp,
+                 const TriggerValue value) override;
++
++  private:
++    const ::discrete::Severity severity;
++
++    const char* getRedfishMessageId() const;
+ };
+ 
+ void fillActions(
+-- 
+2.51.1
+

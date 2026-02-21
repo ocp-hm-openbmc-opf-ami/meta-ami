@@ -1,0 +1,156 @@
+From d44b02a80f2467664c5025dd8a681da963944592 Mon Sep 17 00:00:00 2001
+From: krishna <krishnar@ami.com>
+Date: Mon, 8 Sep 2025 19:58:09 +0530
+Subject: [PATCH] PDKHOOK Support to gpio monitor
+
+---
+ gpioMon.cpp     | 12 ++++++++++++
+ gpioMon.hpp     | 13 ++++++++++---
+ gpioMonMain.cpp | 24 +++++++++++++++++++-----
+ meson.build     |  1 +
+ 4 files changed, 42 insertions(+), 8 deletions(-)
+
+diff --git a/gpioMon.cpp b/gpioMon.cpp
+index 3648556..09df0a2 100644
+--- a/gpioMon.cpp
++++ b/gpioMon.cpp
+@@ -87,6 +87,12 @@ void GpioMonitor::gpioEventHandler()
+         {
+             targetsToStart = risingFind->second;
+         }
++        auto it = callbackHook.find(hook);
++        if (it != callbackHook.end())
++        {
++            // Call the hook function with desired parameters
++            it->second(gpioName, rising);
++        }
+     }
+     else
+     {
+@@ -95,6 +101,12 @@ void GpioMonitor::gpioEventHandler()
+         {
+             targetsToStart = fallingFind->second;
+         }
++        auto it = callbackHook.find(hook);
++        if (it != callbackHook.end())
++        {
++            // Call the hook function with desired parameters
++            it->second(gpioName, falling);
++        }
+     }
+ 
+     /* Execute the multi targets if it is defined. */
+diff --git a/gpioMon.hpp b/gpioMon.hpp
+index 9f059f0..f27f341 100644
+--- a/gpioMon.hpp
++++ b/gpioMon.hpp
+@@ -4,10 +4,10 @@
+ 
+ #include <boost/asio/io_context.hpp>
+ #include <boost/asio/posix/stream_descriptor.hpp>
++#include <gpioCallbackHandler.hpp>
+ 
+ #include <map>
+ #include <vector>
+-
+ namespace phosphor
+ {
+ namespace gpio
+@@ -42,10 +42,11 @@ class GpioMonitor
+     GpioMonitor(gpiod_line* line, gpiod_line_request_config& config,
+                 boost::asio::io_context& io, const std::string& target,
+                 const std::map<std::string, std::vector<std::string>>& targets,
+-                const std::string& lineMsg, bool continueRun) :
++                const std::string& lineMsg, bool continueRun, std::string hook,
++                std::string gpioName) :
+         gpioLine(line), gpioConfig(config), gpioEventDescriptor(io),
+         target(target), targets(targets), gpioLineMsg(lineMsg),
+-        continueAfterEvent(continueRun)
++        continueAfterEvent(continueRun), hook(hook), gpioName(gpioName)
+     {
+         requestGPIOEvents();
+     };
+@@ -72,6 +73,12 @@ class GpioMonitor
+     /** @brief If the monitor should continue after event */
+     bool continueAfterEvent;
+ 
++    /** @brief callbacHook name*/
++    std::string hook;
++
++    /** @brief Name of gpio for reference */
++    std::string gpioName;
++
+     /** @brief register handler for gpio event
+      *
+      *  @return  - 0 on success and -1 otherwise
+diff --git a/gpioMonMain.cpp b/gpioMonMain.cpp
+index 09f92cb..62ccb32 100644
+--- a/gpioMonMain.cpp
++++ b/gpioMonMain.cpp
+@@ -89,10 +89,8 @@ int main(int argc, char** argv)
+         std::string errMsg;
+ 
+         /* GPIO line configuration, default to monitor both edge */
+-        struct gpiod_line_request_config config
+-        {
+-            "gpio_monitor", GPIOD_LINE_REQUEST_EVENT_BOTH_EDGES, 0
+-        };
++        struct gpiod_line_request_config config{
++            "gpio_monitor", GPIOD_LINE_REQUEST_EVENT_BOTH_EDGES, 0};
+ 
+         /* flag to monitor */
+         bool flag = false;
+@@ -100,6 +98,12 @@ int main(int argc, char** argv)
+         /* target to start */
+         std::string target;
+ 
++        /* CallbackHook name */
++        std::string hook;
++
++        /* Name of gpio for reference */
++        std::string gpioName;
++
+         /* multi targets to start */
+         std::map<std::string, std::vector<std::string>> targets;
+ 
+@@ -170,6 +174,16 @@ int main(int argc, char** argv)
+         {
+             target = obj["Target"];
+         }
++        /*Parse callbackHook name.*/
++        if (obj.find("CallbackFunction") != obj.end())
++        {
++            hook = obj["CallbackFunction"];
++        }
++        /*Get Name of gpio */
++        if (obj.find("Name") != obj.end())
++        {
++            gpioName = obj["Name"];
++        }
+ 
+         /* Parse out the targets argument if multi-targets are needed.*/
+         if (obj.find("Targets") != obj.end())
+@@ -179,7 +193,7 @@ int main(int argc, char** argv)
+ 
+         /* Create a monitor object and let it do all the rest */
+         gpios.push_back(std::make_unique<phosphor::gpio::GpioMonitor>(
+-            line, config, io, target, targets, lineMsg, flag));
++            line, config, io, target, targets, lineMsg, flag, hook, gpioName));
+     }
+     io.run();
+ 
+diff --git a/meson.build b/meson.build
+index 8c1183f..ba41dd7 100644
+--- a/meson.build
++++ b/meson.build
+@@ -130,6 +130,7 @@ executable(
+    'phosphor-multi-gpio-monitor',
+    'gpioMonMain.cpp',
+    'gpioMon.cpp',
++   'gpioCallbackHandler.cpp',
+    dependencies: [
+         cli11_dep,
+         libgpiod,
+-- 
+2.34.1
+
