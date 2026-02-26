@@ -92,4 +92,4 @@ sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.appli
 
 sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/libmctp.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/libmctp.git;protocol=https;branch=main/g' ./meta-ami/meta-common/recipes-phosphor/libmctp/libmctp_%.bbappend
 
-sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/x86-power-control.git;branch=master;protocol=https;name=override;/git@github.com\/ocp-hm-openbmc-opf-ami\/x86-power-control.git;protocol=https;branch=master;name=override;/g' ./meta-ami/meta-common/recipes-x86/chassis/x86-power-control_%.bbappend
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/x86-power-control.git;branch=master;protocol=https;name=override;/git:\/\/github.com\/ocp-hm-openbmc-opf-ami\/x86-power-control.git;protocol=https;branch=master;name=override;/g' ./meta-ami/meta-common/recipes-x86/chassis/x86-power-control_%.bbappend
