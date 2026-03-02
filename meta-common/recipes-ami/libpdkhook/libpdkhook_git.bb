@@ -4,7 +4,7 @@ LICENSE = "Proprietary"
 LIC_FILES_CHKSUM = "file://${AMIBASE}/COPYING.AMI;md5=65a69a674f34a9f30737c9f0abd4fc5c"
 
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/libpdkhook.git;protocol=https;branch=main"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/libpdkhook.git;protocol=https;branch=main"
 SRCREV = "33a825db0bdda68e13a10bcaf1463d26259da576"
 
 S = "${WORKDIR}/git"

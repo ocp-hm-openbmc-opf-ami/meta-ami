@@ -16,7 +16,7 @@ DEPENDS += " \
             cli11 \
         "
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/ot-spdmd.git;protocol=https;branch=main"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/ot-spdmd.git;protocol=https;branch=main"
 SRCREV = "eaac7dbcdd2580f8c8de5b57dc44dd53d5d757c8"
 
 S = "${WORKDIR}/git"

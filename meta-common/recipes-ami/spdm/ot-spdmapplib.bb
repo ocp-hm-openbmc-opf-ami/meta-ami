@@ -17,7 +17,7 @@ S = "${WORKDIR}/git"
 PV = "1.0+git${SRCPV}"
 
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/ot-spdmapplib.git;protocol=https;branch=main"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/ot-spdmapplib.git;protocol=https;branch=main"
 SRCREV = "733480786c87a042104636da238d5f9e36b09d31"
 
 SRC_URI:oks-features = "git://git.ami.com/core/ami-bmc/one-tree/core/ot-spdmapplib.git;protocol=https;branch=oks"
