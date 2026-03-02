@@ -74,3 +74,22 @@ sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/bmcweb;branch=master;proto
 
 sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-networkd;branch=main;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-networkd;protocol=https;branch=main;name=override/g' meta-ami/meta-common/recipes-network/network/phosphor-network_%.bbappend
 
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.at-scale-debug.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/firmware.bmc.openbmc.applications.at-scale-debug.git;protocol=https;branch=main/g' ./meta-core/meta-common/recipes-core/at-scale-debug/at-scale-debug_git.bb
+
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/libpeci.git;branch=main;protocol=https/git@github.com\/ocp-hm-openbmc-opf-ami\/libpeci.git;protocol=https;branch=main/g' ./meta-core/meta-common/recipes-core/libpeci/libpeci_%.bbappend
+
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.libraries.spdmapplib.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/firmware.bmc.openbmc.libraries.spdmapplib.git;protocol=https;branch=main/g' ./meta-core/meta-common/recipes-intel/spdm/spdmapplib.bb
+
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.spdmd.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/firmware.bmc.openbmc.applications.spdmd.git;protocol=https;branch=main/g'  ./meta-core/meta-common/recipes-intel/fw-security/spdmd.bb
+
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/ot-spdmd.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/ot-spdmd.git;protocol=https;branch=main/g' ./meta-ami/meta-common/recipes-ami/spdm/ot-spdmd.bb
+
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/ot-spdmapplib.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/ot-spdmapplib.git;protocol=https;branch=main/g'  ./meta-ami/meta-common/recipes-ami/spdm/ot-spdmapplib.bb
+
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/libpdkhook.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/libpdkhook.git;protocol=https;branch=main/g' ./meta-ami/meta-common/recipes-ami/libpdkhook/libpdkhook_git.bb
+
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.mctpd.git;protocol=https;branch=openbmc\/release\/birchstream\/common/git@github.com\/ocp-hm-openbmc-opf-ami\/firmware.bmc.openbmc.applications.mctpd.git;protocol=https;branch=openbmc\/release\/birchstream\/common/g' ./meta-ami/meta-common/recipes-phosphor/pmci/mctpd.bbappend
+
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/libmctp.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/libmctp.git;protocol=https;branch=main/g' ./meta-ami/meta-common/recipes-phosphor/libmctp/libmctp_%.bbappend
+
+sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/x86-power-control.git;branch=master;protocol=https;name=override;/git:\/\/github.com\/ocp-hm-openbmc-opf-ami\/x86-power-control.git;protocol=https;branch=master;name=override;/g' ./meta-ami/meta-common/recipes-x86/chassis/x86-power-control_%.bbappend
