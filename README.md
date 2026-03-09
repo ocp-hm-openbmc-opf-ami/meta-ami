@@ -17,7 +17,7 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 ### 2) Common Repository for All the Build
 ```
 - git clone https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
-- git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-common
+- git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-core
 - git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
 ```
 ### 3) AST2600EVB Build Instruction
