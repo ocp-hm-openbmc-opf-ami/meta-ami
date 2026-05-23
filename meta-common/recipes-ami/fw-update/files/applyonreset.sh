@@ -13,7 +13,7 @@ fi
 
 
 # Get the current time
-current_time=$(date +"%s")
+current_time=$(date -u -d "$(date +"%Y-%m-%d %H:%M:%S")" +%s)
 
 directory="/tmp/images"
 
@@ -23,7 +23,7 @@ rtn_status=1
 
 convert_seconds_to_date() {
     local seconds=$1
-    date -d "@$seconds" +"%Y-%m-%d %H:%M:%S"
+    date -u -d "@$seconds" +"%Y-%m-%d %H:%M:%S"
 }
 echo "Apply time on reset script "
 
@@ -90,19 +90,4 @@ if [ -d "$directory" ]; then
     done
 else
     echo "Directory $directory does not exist."
-fi
-
-# clear boot source
-ADDRESS=0x1E620064
-
-VAL=$(devmem $ADDRESS)
-valBootSource=$((($VAL >> 4) & 1))
-if [[ $valBootSource == 1 ]]
-then
-    VAL=$(cat /proc/mtd | awk '{print $4}' | awk -F'"' '$2=="alt-u-boot" {print $2}')
-    if [[ -n $VAL ]]
-    then
-        devmem $ADDRESS 32 0xEA0000
-        echo "0" > /run/media/slot
-    fi
 fi

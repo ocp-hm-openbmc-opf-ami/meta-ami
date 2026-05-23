@@ -21,7 +21,7 @@ cleanup_overlay_with_blacklist_and_rsync() {
     RWFS_MTD="$3"
     OVERLAY="$4"
     PERSISTENT="$5"
-    EMMC_FILE_LIST=("/etc/extlog/extended.log*" "/etc/extlog/phosphor-logging/errors/" "/etc/extlog/phosphor-logging/ipmi/errors/" "/etc/extlog/phosphor-logging/raid/errors/" "/etc/extlog/phosphor-logging/ipmi_rollover_backup/")
+    EMMC_FILE_LIST=("/etc/extlog/extended.log*" "/etc/extlog/phosphor-logging/errors/" "/etc/extlog/phosphor-logging/raid/errors/" "/etc/extlog/phosphor-logging/ipmi_rollover_backup/")
 
     debug_log "Entered cleanup_overlay_with_blacklist_and_rsync() (blacklist/rsync mode)"
 
@@ -223,7 +223,11 @@ main() {
     log "Calling cleanup_overlay_with_blacklist_and_rsync with:"
     debug_log "RWFS_MOUNT=$RWFS_MOUNT RWFS_OVERLAY=$RWFS_OVERLAY RWFS_MTD=$RWFS_MTD OVERLAY=$OVERLAY PERSISTENT=$PERSISTENT"
     cleanup_overlay_with_blacklist_and_rsync "$RWFS_MOUNT" "$RWFS_OVERLAY" "$RWFS_MTD" "$OVERLAY" "$PERSISTENT"
-    _start_if_inactive xyz.openbmc_project.Software.Sync.service || true
+    if [ "$PERSISTENT" = "0" ]; then
+        touch /etc/sync-enable || true
+        touch /etc/nv-sync-enable || true
+        _start_if_inactive xyz.openbmc_project.Software.Sync.service || true
+    fi
     command -v wait_for_log_sync >/dev/null 2>&1 && wait_for_log_sync || true
     debug_log "wait_for_log_sync called"
     
