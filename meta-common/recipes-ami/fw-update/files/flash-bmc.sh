@@ -249,31 +249,31 @@ write_spi_nor() {
       
       if [ "$DEBUG" = "1" ]; then
         debug_log "Running: flash_erase $FLASH_DEV  $imgsize $block_count"
-        flash_erase "$FLASH_DEV" "$imgsize" "$block_count"
+        flash_erase "$FLASH_DEV" 0 "$block_count"
         debug_log "Running: mtd_debug write $FLASH_DEV $imgsize $imgsize $LOCAL_PATH"
-        mtd_debug write "$FLASH_DEV" "$imgsize" "$imgsize" "$LOCAL_PATH" && return 0
+        mtd_debug write "$FLASH_DEV" 0 "$imgsize" "$LOCAL_PATH"
       else
-        flash_erase "$FLASH_DEV" "$imgsize" "$block_count"
-        mtd_debug write "$FLASH_DEV" "$imgsize" "$imgsize" "$LOCAL_PATH" && return 0
+        flash_erase "$FLASH_DEV" 0 "$block_count"
+        mtd_debug write "$FLASH_DEV" 0 "$imgsize" "$LOCAL_PATH"
       fi
       # Verify by readback
       # comment below readback function , in single spi abr from backup spi read/write is not working
       # once fixed will uncomment to check read status
-      # tmpv="$(mktemp /tmp/mtdv.XXXXXX)"
-      # if mtd_debug read "$FLASH_DEV" 0 "$imgsize" "$tmpv"; then
-      #   if cmp -n "$imgsize" -- "$LOCAL_PATH" "$tmpv"; then
-      #     rm -f -- "$tmpv"
-      #     return 0
-      #   else
-      #     log "ERROR: verification failed: compare mismatch" 2>/dev/null || true
-      #     rm -f -- "$tmpv"
-      #     return 4
-      #   fi
-      # else
-      #   rm -f -- "$tmpv"
-      #   log "ERROR: verification failed: readback error" 2>/dev/null || true
-      #   return 5
-      # fi
+       tmpv="$(mktemp /tmp/mtdv.XXXXXX)"
+       if mtd_debug read "$FLASH_DEV" 0 "$imgsize" "$tmpv"; then
+         if cmp -n "$imgsize" -- "$LOCAL_PATH" "$tmpv"; then
+           rm -f -- "$tmpv"
+           return 0
+         else
+           log "ERROR: verification failed: compare mismatch" 2>/dev/null || true
+           rm -f -- "$tmpv"
+           return 4
+         fi
+       else
+         rm -f -- "$tmpv"
+         log "ERROR: verification failed: readback error" 2>/dev/null || true
+         return 5
+       fi
     else
       if [ "$DEBUG" = "1" ]; then
         debug_log "Running: flashcp -v -- $LOCAL_PATH $FLASH_DEV"
@@ -327,8 +327,8 @@ write_spi_nor() {
     boot_mode="$(_read_boot_mode)"
     boot_source="$(_read_boot_source)"
     if [ "$boot_source" -eq 1 ] && [ "$boot_mode" -eq 1 ]; then
-      flash_erase "$FLASH_DEV" 0 "$block_count"
-      mtd_debug write "$FLASH_DEV" 0 "$imgsize" "$LOCAL_PATH"
+      flash_erase "$FLASH_DEV" "$imgsize" "$block_count"
+      mtd_debug write "$FLASH_DEV" "$imgsize" "$imgsize" "$LOCAL_PATH"
     else
       flash_erase "$FLASH_DEV" "$start_erase" "$block_count"
       mtd_debug write "$FLASH_DEV" "$FLASH_OFFSET" "$imgsize" "$LOCAL_PATH"
