@@ -11,7 +11,7 @@ inherit cmake pkgconfig systemd
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI = "git://git@github.com/intel-bmc/firmware.bmc.openbmc.applications.security-manager.git;protocol=ssh;branch=main"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-amisecurity-manager.git;protocol=https;branch=main"
 SRCREV = "969e945f0e9d756527aceba7c76ff710a39f1cca"
 
 SYSTEMD_SERVICE:${PN} += "xyz.openbmc_project.SecurityManager.service"
