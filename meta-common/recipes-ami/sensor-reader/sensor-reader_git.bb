@@ -5,7 +5,7 @@ LICENSE = "Proprietary"
 LIC_FILES_CHKSUM = "file://${AMIBASE}/COPYING.AMI;md5=65a69a674f34a9f30737c9f0abd4fc5c"
 
 SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/sensor-history-reader.git;protocol=https;branch=master"
-SRCREV = "705d03fc6c6a8a48805891b708bf942aa271da0f"
+SRCREV = "ae0782c7b817a338dca803f0c40f82babe26019d"
 
 PV = "0.0+git${SRCPV}"
 
