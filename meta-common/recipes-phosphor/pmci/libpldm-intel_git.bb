@@ -1,7 +1,7 @@
 SUMMARY = "libpldm_intel"
 DESCRIPTION = "Provides encode/decode APIs for PLDM specifications"
 
-SRC_URI = "git://git@github.com/intel-bmc/firmware.bmc.openbmc.libraries.libpldm.git;protocol=ssh;branch=main"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/libpldm.git;protocol=https;branch=main"
 SRCREV = "c7eaebd454ec1b3f94e54b5ee617acb57046ea4b"
 
 S = "${WORKDIR}/git"
