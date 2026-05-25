@@ -7,6 +7,7 @@ SRCREV_override = "1f9e6f5e96c89c4c85beac6bd9bd1e3076ce8f73"
 
 SRC_URI:append = "\
     file://intrusionsensor-depend-on-networkd.conf \
+    file://0002-intel-cpu-disable-peci-i3c-adapter.patch \
     "
 SRC_URI_EGS:append =  " \
             file://0001-converted-index-to-0-based-and-made-pwm-starts-from-.patch \
