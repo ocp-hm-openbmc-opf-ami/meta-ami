@@ -119,6 +119,9 @@ i3c_target_mctp_rx_packet_enqueue(struct i3c_device *i3cdev, const u8 *data, siz
 	if (!client)
 		return;
 
+	if (count > U16_MAX)
+		goto err;
+
 	packet = i3c_target_mctp_packet_alloc(count);
 	if (!packet)
 		goto err;
