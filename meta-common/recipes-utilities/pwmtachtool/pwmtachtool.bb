@@ -5,16 +5,17 @@ LICENSE = "CLOSED"
 APP_NAME = "pwmtachtool"
 bindir = "/usr/bin"
 
-SRC_URI = "git://github.com/openbmc/openbmc-tools;protocol=https;branch=master"
-SRC_URI += "file://0002-pwm-max-min-value-range.patch"
-SRC_URI += "file://0003-set-fan-speed-set-dutycycle.patch"
-SRC_URI += "file://0001-Mapping-pwm-tach-number-starting-from-0.patch \
-            file://0004-pwmtachtool-dutycycle-is-giving-percentage-instead-o.patch \
-            "
+SRC_URI = "git://github.com/openbmc/openbmc-tools;protocol=https;branch=master \
+           file://0002-pwm-max-min-value-range.patch \
+           file://0003-set-fan-speed-set-dutycycle.patch \
+           file://0001-Mapping-pwm-tach-number-starting-from-0.patch \
+           file://0004-pwmtachtool-dutycycle-is-giving-percentage-instead-o.patch \
+           file://0005-build_fix_pwmtachtool.patch \
+           "
 
-SRCREV = "90cb34fc2f169aef4bb740c95daefcd8f16e0353"
+SRCREV = "8355598fbe7a98ea1d96666157cbbf2459ba8908"
 
-S = "${WORKDIR}/git/hongweiz/pwmtachtool/src"
+S = "${WORKDIR}/git/pwmtachtool/src"
 PV = "0.1+git${SRCPV}"
 
 do_compile() {

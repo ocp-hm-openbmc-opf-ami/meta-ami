@@ -1,0 +1,757 @@
+From 2d00a659d0cc7f1f74dd8391c4ed091fe475debe Mon Sep 17 00:00:00 2001
+From: jasshsu <jasshsu@ami.com>
+Date: Fri, 13 Jun 2025 11:30:08 +0800
+Subject: [PATCH] Enable i3c4 new modify
+
+---
+ libmctp-npcmi3c.h           |  43 ++++++++
+ libmctp-smbus.h             |  15 +++
+ meson.build                 |  15 +++
+ meson_options.txt           |   6 ++
+ npcmi3c.c                   | 176 ++++++++++++++++++++++++++++++++
+ pec.c                       |  34 +++++++
+ pec.h                       |   9 ++
+ tests/meson.build           |   7 ++
+ tests/test_npcmi3c.c        | 193 ++++++++++++++++++++++++++++++++++++
+ utils/mctp-demux-daemon.c   |   1 +
+ utils/mctp-npcmi3c-daemon.c | 106 ++++++++++++++++++++
+ utils/meson.build           |  10 ++
+ 12 files changed, 615 insertions(+)
+ create mode 100644 libmctp-npcmi3c.h
+ create mode 100644 npcmi3c.c
+ create mode 100644 pec.c
+ create mode 100644 pec.h
+ create mode 100644 tests/test_npcmi3c.c
+ create mode 100644 utils/mctp-npcmi3c-daemon.c
+
+diff --git a/libmctp-npcmi3c.h b/libmctp-npcmi3c.h
+new file mode 100644
+index 0000000..1a26b9a
+--- /dev/null
++++ b/libmctp-npcmi3c.h
+@@ -0,0 +1,43 @@
++/* SPDX-License-Identifier: Apache-2.0 OR GPL-2.0-or-later */
++
++#ifndef _LIBMCTP_ASTI3C_H
++#define _LIBMCTP_ASTI3C_H
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#include <assert.h>
++#include <stdbool.h>
++#include <stdlib.h>
++#include <string.h>
++#include <limits.h>
++
++#include "libmctp.h"
++
++/*
++ * I3C HDR transmit data by words(16 bits), let packet size to be word aligned.
++ * 4-byte MCTP_HEADER + 65-byte MCTP payload + 1-byte PEC
++ */
++#define MCTP_BTU_I3C 65
++#define MCTP_I3C_PKT_SIZE 70
++#define MCTP_HEADER_SIZE 4
++
++struct mctp_binding_npcmi3c {
++	struct mctp_binding binding;
++	int fd;
++};
++
++struct mctp_binding_npcmi3c *mctp_npcmi3c_init(void);
++void mctp_npcmi3c_destroy(struct mctp_binding_npcmi3c *npcmi3c);
++int mctp_npcmi3c_open_path(struct mctp_binding_npcmi3c *npcmi3c,
++			   const char *device);
++struct mctp_binding *mctp_binding_npcmi3c_core(struct mctp_binding_npcmi3c *b);
++int mctp_npcmi3c_poll(struct mctp_binding_npcmi3c *npcmi3c, int timeout);
++int mctp_npcmi3c_rx(struct mctp_binding_npcmi3c *npcmi3c);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* _LIBMCTP_NPCMI3C_H */
+diff --git a/libmctp-smbus.h b/libmctp-smbus.h
+index 99278da..ccf9460 100644
+--- a/libmctp-smbus.h
++++ b/libmctp-smbus.h
+@@ -18,6 +18,21 @@ extern "C" {
+ #define MCTP_SMBUS_READ_TIMEOUT_REPEAT	 20
+ #define MCTP_I2C_MAX_BUSES		 4
+ 
++#define MCTP_HEADER_SIZE 4
++#define MCTP_PAYLOAD_SIZE 64
++
++#define SMBUS_HEADER_SIZE 4
++#define SMBUS_PEC_BYTE_SIZE 1
++
++#define SMBUS_TX_BUFF_SIZE                                                     \
++	((MCTP_HEADER_SIZE) + (SMBUS_HEADER_SIZE) + (MCTP_PAYLOAD_SIZE) +      \
++	 (SMBUS_PEC_BYTE_SIZE))
++
++#define IS_MUX_PORT 0x80
++#define PULL_MODEL_HOLD 0x40
++#define CLOSE_AFTER_RESPONSE 0x20
++#define CLOSE_IMMEDIATE 0x10
++
+ struct mctp_binding_smbus;
+ 
+ struct mctp_smbus_pkt_private {
+diff --git a/meson.build b/meson.build
+index a10608a..4660d29 100644
+--- a/meson.build
++++ b/meson.build
+@@ -33,6 +33,13 @@ sources = [
+   'mctp-socket.c'
+ ]
+ 
++# Add npcmi3c support
++if get_option('enable-npcmi3c').enabled()
++    sources += ['npcmi3c.c', 'pec.c']
++    summary('enable-npcmi3c','-DENABLE_NPCMI3C', section : 'Enabled Features')
++    add_project_arguments('-DENABLE_NPCMI3C', language: ['c', 'cpp'])
++endif
++
+ json_c = declare_dependency(dependencies: [comp.find_library('json-c')])
+ 
+ deps = [json_c]
+@@ -83,6 +90,14 @@ install_headers(
+   'libmctp-externals.h'
+ )
+ 
++# Install npcmi3c headers if enabled
++if get_option('enable-npcmi3c').enabled()
++   install_headers(
++    'libmctp-npcmi3c.h',
++    'pec.h'
++  )
++endif
++
+ systemd_system_unit_dir = dependency('systemd').get_variable(
+           pkgconfig: 'systemdsystemunitdir')
+ 
+diff --git a/meson_options.txt b/meson_options.txt
+index 455744f..d392e6f 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -14,6 +14,12 @@ option(
+     value: 'disabled',
+     description: '''Enable MCTPoUSB functionality. Also required libmctp dependency during runtime.'''
+ )
++option(
++    'enable-npcmi3c',
++    type: 'feature',
++    value: 'enabled',
++    description: '''Enable NPCM I3C MCTP binding functionality.'''
++)
+ option(
+     'enable-mockup-endpoint',
+     type: 'feature',
+diff --git a/npcmi3c.c b/npcmi3c.c
+new file mode 100644
+index 0000000..4beada1
+--- /dev/null
++++ b/npcmi3c.c
+@@ -0,0 +1,176 @@
++/* SPDX-License-Identifier: Apache-2.0 */
++#include <errno.h>
++#include <unistd.h>
++#include <poll.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <fcntl.h>
++
++#include "libmctp-log.h"
++#include "libmctp-alloc.h"
++#include "libmctp-npcmi3c.h"
++#include "container_of.h"
++#include "pec.h"
++
++#undef pr_fmt
++#define pr_fmt(x) "npcmi3c: " x
++
++#define binding_to_npcmi3c(b)                                                   \
++    container_of(b, struct mctp_binding_npcmi3c, binding)
++
++int mctp_npcmi3c_poll(struct mctp_binding_npcmi3c *npcmi3c, int timeout)
++{
++    struct pollfd fds[1];
++    int rc;
++
++    fds[0].fd = npcmi3c->fd;
++    fds[0].events = POLLIN;
++
++    rc = poll(fds, 1, timeout);
++
++    if (rc > 0)
++        return fds[0].revents;
++
++    if (rc < 0) {
++        mctp_prwarn("Poll returned error status (errno=%d)", errno);
++
++        return -1;
++    }
++
++    return 0;
++}
++
++static int mctp_npcmi3c_tx(struct mctp_binding *binding, struct mctp_pktbuf *pkt)
++{
++    struct mctp_binding_npcmi3c *npcmi3c = binding_to_npcmi3c(binding);
++    ssize_t write_len, len;
++
++    if (npcmi3c->fd < 0) {
++        mctp_prerr("Invalid file descriptor passed");
++        return -1;
++    }
++
++    len = mctp_pktbuf_size(pkt);
++
++    mctp_prdebug("Transmitting packet, len: %zu", len);
++
++    /* Calculate PEC */
++    pkt->data[len] = calc_pec(0, pkt->data, len);
++    mctp_prdebug("pec=0x%x\n", pkt->data[len]);
++    len++;
++
++    write_len = write(npcmi3c->fd, pkt->data, len);
++    if (write_len != len) {
++        mctp_prerr("TX error");
++        return -1;
++    }
++    return 0;
++}
++
++int mctp_npcmi3c_rx(struct mctp_binding_npcmi3c *npcmi3c)
++{
++    uint8_t data[MCTP_I3C_PKT_SIZE];
++    struct mctp_pktbuf *pkt;
++    ssize_t read_len;
++    uint8_t pec, cal_pec;
++    int rc;
++
++    if (npcmi3c->fd < 0) {
++        mctp_prerr("Invalid file descriptor");
++        return -1;
++    }
++
++    read_len = read(npcmi3c->fd, &data, sizeof(data));
++    if (read_len < 0) {
++        mctp_prerr("Reading RX data failed (errno = %d)", errno);
++        return -1;
++    }
++
++    if (read_len < 2) {
++        mctp_prerr("short RX data: %zd", read_len);
++        return -1;
++    }
++
++    /* PEC byte is handled by libmctp-npcmi3c */
++    if ((read_len > (ssize_t)(npcmi3c->binding.pkt_size + 1)) ||
++        (read_len < (MCTP_HEADER_SIZE + 1))) {
++        mctp_prerr("Incorrect packet size: %zd", read_len);
++        return -1;
++    }
++
++    /* Verify PEC */
++    pec = data[read_len - 1];
++    read_len--;
++    cal_pec = calc_pec(0, data, read_len);
++    if (pec != cal_pec) {
++        mctp_prerr("PEC error: 0x%x 0x%x", pec, cal_pec);
++        return -1;
++    }
++
++    pkt = mctp_pktbuf_alloc(&npcmi3c->binding, 0);
++    if (!pkt) {
++        mctp_prerr("pktbuf allocation failed");
++        return -1;
++    }
++
++    rc = mctp_pktbuf_push(pkt, data, read_len);
++
++    if (rc) {
++        mctp_prerr("Cannot push to pktbuf");
++        mctp_pktbuf_free(pkt);
++        return -1;
++    }
++
++    mctp_bus_rx(&npcmi3c->binding, pkt);
++
++    return 0;
++}
++
++int mctp_npcmi3c_open_path(struct mctp_binding_npcmi3c *npcmi3c,
++              const char *device)
++{
++    npcmi3c->fd = open(device, O_RDWR);
++    if (npcmi3c->fd < 0) {
++        mctp_prerr("can't open device %s: error %d", device, errno);
++        return -1;
++    }
++
++    return 0;
++}
++
++static int mctp_npcmi3c_core_start(struct mctp_binding *binding)
++{
++    mctp_binding_set_tx_enabled(binding, true);
++    return 0;
++}
++
++struct mctp_binding *mctp_binding_npcmi3c_core(struct mctp_binding_npcmi3c *b)
++{
++    return &b->binding;
++}
++
++struct mctp_binding_npcmi3c *mctp_npcmi3c_init(void)
++{
++    struct mctp_binding_npcmi3c *npcmi3c;
++
++    npcmi3c = __mctp_alloc(sizeof(*npcmi3c));
++    if (!npcmi3c)
++        return NULL;
++
++    memset(npcmi3c, 0, sizeof(*npcmi3c));
++
++    npcmi3c->binding.name = "npcmi3c";
++    npcmi3c->binding.version = 1;
++    npcmi3c->binding.pkt_size = MCTP_PACKET_SIZE(MCTP_BTU_I3C);
++    npcmi3c->binding.start = mctp_npcmi3c_core_start;
++    npcmi3c->binding.tx = mctp_npcmi3c_tx;
++
++    return npcmi3c;
++}
++
++void mctp_npcmi3c_destroy(struct mctp_binding_npcmi3c *npcmi3c)
++{
++    if (npcmi3c->fd > 0)
++        close(npcmi3c->fd);
++    __mctp_free(npcmi3c);
++}
+diff --git a/pec.c b/pec.c
+new file mode 100644
+index 0000000..59718f5
+--- /dev/null
++++ b/pec.c
+@@ -0,0 +1,34 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/* Reference from linux/drivers/i2c/i2c-core-smbus.c */
++
++#include "pec.h"
++
++#define POLY    (0x1070U << 3)
++static uint8_t crc8(uint16_t data)
++{
++    int i;
++
++    for (i = 0; i < 8; i++) {
++        if (data & 0x8000)
++            data = data ^ POLY;
++        data = data << 1;
++    }
++    return (uint8_t)(data >> 8);
++}
++
++/**
++ * calc_pec - Incremental CRC8 over the given input data array
++ * @crc: previous return crc8 value
++ * @p: pointer to data buffer.
++ * @count: number of bytes in data buffer.
++ *
++ * Incremental CRC8 over count bytes in the array pointed to by p
++ */
++uint8_t calc_pec(uint8_t crc, uint8_t *p, size_t count)
++{
++    size_t i;
++
++    for (i = 0; i < count; i++)
++        crc = crc8((crc ^ p[i]) << 8);
++    return crc;
++}
+diff --git a/pec.h b/pec.h
+new file mode 100644
+index 0000000..9cb3766
+--- /dev/null
++++ b/pec.h
+@@ -0,0 +1,9 @@
++#ifndef _PEC_H
++#define _PEC_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++uint8_t calc_pec(uint8_t crc, uint8_t *p, size_t count);
++
++#endif
+diff --git a/tests/meson.build b/tests/meson.build
+index 3e5a32a..60e5746 100644
+--- a/tests/meson.build
++++ b/tests/meson.build
+@@ -9,6 +9,11 @@ tests = [
+   'test_serial'
+ ]
+ 
++# Add npcmi3c test if enabled
++if get_option('enable-npcmi3c').enabled()
++   tests += ['test_npcmi3c']
++endif
++
+ if get_option('tests').enabled()
+ 
+   if get_option('mocked-drivers').enabled()
+@@ -23,6 +28,8 @@ if get_option('tests').enabled()
+             build_rpath: get_option('oe-sdk').enabled() ? rpath : '',
+             link_with: libmctp,
+             include_directories: include_directories(['.', '..']),
++            install: true,
++            install_dir: get_option('bindir')
+           ))
+   endforeach
+ endif
+diff --git a/tests/test_npcmi3c.c b/tests/test_npcmi3c.c
+new file mode 100644
+index 0000000..c32d82d
+--- /dev/null
++++ b/tests/test_npcmi3c.c
+@@ -0,0 +1,193 @@
++#include <stdio.h>
++#include <assert.h>
++#include <poll.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <fcntl.h>
++#include <unistd.h>
++#include <getopt.h>
++
++#include "libmctp-npcmi3c.h"
++#include "libmctp-log.h"
++
++#define i3c_tx_packet 0x00, 0x81, 0x04, 0x00
++
++#define i3c_one_packet_btu_write_payload                                       \
++    0x00, 0x81, 0x04, 0x00, 0x20, 0x09, 0xC8, 0x00, 0x81, 0x04, 0x00,      \
++        0x01, 0x09, 0xC8, 0x00, 0x81, 0x04, 0x00, 0x01, 0x20, 0xC8,    \
++        0x00, 0x81, 0x04, 0x00, 0x01, 0x20, 0x09, 0x00, 0x81, 0x04,    \
++        0x00, 0x01, 0x20, 0x09, 0xC8, 0x81, 0x04, 0x00, 0x01, 0x20,    \
++        0x09, 0xC8, 0x00, 0x04, 0x00, 0x01, 0x20, 0x09, 0xC8, 0x00,    \
++        0x81, 0x04, 0x00, 0x01, 0x20, 0x09, 0xC8, 0x00, 0x81, 0x00,    \
++        0x01, 0x20, 0x09, 0x09,
++
++typedef enum testcase {
++    i3c_packet_read = 0,
++    i3c_packet_write,
++    mctp_npcmi3c_daemon_test,
++} testcase;
++
++testcase test = mctp_npcmi3c_daemon_test;
++
++static void test_rx_verify_payload_debug(uint8_t src __attribute__((unused)), 
++                      bool tag_owner __attribute__((unused)), 
++                      uint8_t msg_tag __attribute__((unused)),
++                      void *ctx __attribute__((unused)), 
++                      void *msg, size_t len)
++{
++    char *buf = (char *)msg;
++    size_t i;
++
++    mctp_prdebug("rx payload len: %#zx", len);
++    for (i = 0; i < len; i++)
++        printf("%02x ", buf[i]);
++    printf("\n");
++}
++
++static void test_rx_verify_payload_daemon(uint8_t src __attribute__((unused)), 
++                       bool tag_owner __attribute__((unused)), 
++                       uint8_t msg_tag __attribute__((unused)),
++                       void *ctx, void *msg, size_t len)
++{
++    uint8_t *expected_data = (uint8_t *)ctx;
++    int rc;
++
++    assert(MCTP_BTU_I3C == len);
++    rc = memcmp(expected_data, msg, len);
++    assert(rc == 0);
++}
++
++static void test_npcmi3c_tx_btu(struct mctp_binding_npcmi3c *npcmi3c __attribute__((unused)),
++                struct mctp *mctp, uint8_t dst_eid)
++{
++    uint8_t test_payload[] = { i3c_one_packet_btu_write_payload };
++    bool tag_owner = true;
++    uint8_t tag = 0;
++    int rc = 0;
++
++    rc = mctp_message_tx(mctp, dst_eid, tag_owner, tag, test_payload, sizeof(test_payload));
++    assert(rc == 0);
++}
++
++static void test_npcmi3c_rx(struct mctp_binding_npcmi3c *npcmi3c,
++            struct mctp *mctp)
++{
++    mctp_npcmi3c_poll(npcmi3c, 100000);
++    mctp_set_rx_all(mctp, test_rx_verify_payload_debug, NULL);
++    mctp_npcmi3c_rx(npcmi3c);
++}
++
++static void test_npcmi3c_daemon(struct mctp_binding_npcmi3c *npcmi3c,
++                struct mctp *mctp, uint8_t dst_eid)
++{
++    uint8_t test_payload[MCTP_BTU_I3C];
++    bool tag_owner = true;
++    uint8_t tag = 0;
++    int rc = 0;
++    size_t i;
++
++    for (i = 0; i < MCTP_BTU_I3C; i++)
++        test_payload[i] = (char)random();
++    rc = mctp_message_tx(mctp, dst_eid, tag_owner, tag, test_payload, sizeof(test_payload));
++    assert(rc == 0);
++
++    mctp_npcmi3c_poll(npcmi3c, 100000);
++    mctp_set_rx_all(mctp, test_rx_verify_payload_daemon, test_payload);
++    mctp_npcmi3c_rx(npcmi3c);
++}
++
++const char *sopts = "p:e:d:t:l:h";
++static const struct option lopts[] = {
++    {"path",        required_argument,    NULL,    'p' },
++    {"test",        required_argument,    NULL,    't' },
++    {"eid",            required_argument,    NULL,    'e' },
++    {"dst_eid",        required_argument,    NULL,    'd' },
++    {"loop",        required_argument,    NULL,    'l' },
++    {"help",        no_argument,        NULL,    'h' },
++    {0, 0, 0, 0}
++};
++
++static void print_usage(const char *name)
++{
++    fprintf(stderr, "usage: %s options...\n", name);
++    fprintf(stderr, "  options:\n");
++    fprintf(stderr, "    -p --devpath      <devpath>      device path\n");
++    fprintf(stderr, "    -e --eid          <eid>          my eid\n");
++    fprintf(stderr, "    -d --eid          <eid>          destination eid\n");
++    fprintf(stderr, "    -t --test         <test case>    Run test case\n");
++    fprintf(stderr, "    -l --loop         <loop count>   Test loop count\n");
++    fprintf(stderr, "    -h --help                        Output usage message and exit.\n");
++}
++
++int main(int argc, char **argv)
++{
++    struct mctp_binding_npcmi3c *npcmi3c;
++    struct mctp *mctp;
++    char *i3cdev_path = NULL;
++    int opt, loop = 1;
++    int i;
++    uint8_t eid = 8, dst_eid = 32;
++
++    while ((opt = getopt_long(argc, argv,  sopts, lopts, NULL)) != EOF) {
++        switch (opt) {
++        case 'h':
++            print_usage(argv[0]);
++            exit(EXIT_SUCCESS);
++        case 'p':
++            i3cdev_path = optarg;
++            break;
++        case 'e':
++            eid = atoi(optarg);
++            break;
++        case 'd':
++            dst_eid = atoi(optarg);
++            break;
++        case 'l':
++            loop = atoi(optarg);
++            break;
++        case 't':
++            test = atoi(optarg);
++            break;
++        default:
++            print_usage(argv[0]);
++            exit(EXIT_FAILURE);
++        }
++    }
++    assert(i3cdev_path);
++
++    mctp = mctp_init();
++    assert(mctp);
++
++    npcmi3c = mctp_npcmi3c_init();
++    assert(npcmi3c);
++
++    mctp_npcmi3c_open_path(npcmi3c, i3cdev_path);
++
++    mctp_register_bus(mctp, mctp_binding_npcmi3c_core(npcmi3c), eid);
++
++    switch (test) {
++    case i3c_packet_write:
++        printf("i3c_packet_write test\n");
++        mctp_set_log_stdio(MCTP_LOG_DEBUG);
++        test_npcmi3c_tx_btu(npcmi3c, mctp, dst_eid);
++        printf("i3c_packet_write test complete\n");
++        break;
++    case i3c_packet_read:
++        printf("i3c_packet_read test\n");
++        mctp_set_log_stdio(MCTP_LOG_DEBUG);
++        test_npcmi3c_rx(npcmi3c, mctp);
++        printf("i3c_packet_read test complete\n");
++        break;
++    case mctp_npcmi3c_daemon_test:
++        printf("mctp_npcmi3c_daemon test\n");
++        mctp_set_log_stdio(MCTP_LOG_WARNING);
++        for (i = 0; i < loop; i++) {
++            printf("loop %d\n", i);
++            test_npcmi3c_daemon(npcmi3c, mctp, dst_eid);
++        }
++        printf("mctp_npcmi3c_daemon test complete\n");
++        break;
++    }
++
++    return 0;
++}
+diff --git a/utils/mctp-demux-daemon.c b/utils/mctp-demux-daemon.c
+index ee8fec0..f1afc15 100644
+--- a/utils/mctp-demux-daemon.c
++++ b/utils/mctp-demux-daemon.c
+@@ -29,6 +29,7 @@
+ #include "libmctp.h"
+ #include "libmctp-serial.h"
+ #include "libmctp-astlpc.h"
++#include "libmctp-smbus.h"
+ #include "libmctp-astpcie.h"
+ #include "libmctp-astspi.h"
+ #include "libmctp-externals.h"
+diff --git a/utils/mctp-npcmi3c-daemon.c b/utils/mctp-npcmi3c-daemon.c
+new file mode 100644
+index 0000000..e30e5f1
+--- /dev/null
++++ b/utils/mctp-npcmi3c-daemon.c
+@@ -0,0 +1,106 @@
++/* SPDX-License-Identifier: Apache-2.0 OR GPL-2.0-or-later */
++
++#include "compiler.h"
++#include "libmctp.h"
++#include "libmctp-npcmi3c.h"
++
++#include <assert.h>
++#include <err.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <unistd.h>
++#include <sys/poll.h>
++#include <sys/socket.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <fcntl.h>
++#include <unistd.h>
++#include <getopt.h>
++
++struct ctx {
++    struct mctp *mctp;
++};
++
++static void echo_message(uint8_t eid, bool tag_owner __attribute__((unused)),
++               uint8_t msg_tag __attribute__((unused)), void *data, void *msg, size_t len)
++{
++    struct ctx *ctx = data;
++    ssize_t rc;
++
++    rc = mctp_message_tx(ctx->mctp, eid, MCTP_MESSAGE_TO_SRC, 0, msg, len);
++    if (rc < 0)
++        warn("Write failed");
++}
++
++const char *sopts = "p:e:h";
++static const struct option lopts[] = {
++    {"dev_path",        required_argument,    NULL,    'p' },
++    {"eid",            required_argument,    NULL,    'e' },
++    {"help",        no_argument,        NULL,    'h' },
++    {0, 0, 0, 0}
++};
++static void print_usage(const char *name)
++{
++    fprintf(stderr, "usage: %s options...\n", name);
++    fprintf(stderr, "  options:\n");
++    fprintf(stderr, "    -p --devpath      <path>          device path\n");
++    fprintf(stderr, "    -e --eid          <eid>          my eid\n");
++    fprintf(stderr, "    -h --help                        Output usage message and exit.\n");
++}
++int main(int argc, char **argv)
++{
++    struct mctp_binding_npcmi3c *npcmi3c;
++    struct mctp *mctp;
++    char *i3cdev_path = NULL;
++    struct ctx *ctx, _ctx;
++    int opt;
++    int rc;
++    int eid = 32;
++
++    while ((opt = getopt_long(argc, argv,  sopts, lopts, NULL)) != EOF) {
++        switch (opt) {
++        case 'h':
++            print_usage(argv[0]);
++            exit(EXIT_SUCCESS);
++        case 'p':
++            i3cdev_path = optarg;
++            break;
++        case 'e':
++            eid = atoi(optarg);
++            break;
++        default:
++            print_usage(argv[0]);
++            exit(EXIT_FAILURE);
++        }
++    }
++    assert(i3cdev_path);
++
++    mctp_set_log_stdio(MCTP_LOG_WARNING);
++
++    mctp = mctp_init();
++    assert(mctp);
++
++    npcmi3c = mctp_npcmi3c_init();
++    assert(npcmi3c);
++
++    rc = mctp_npcmi3c_open_path(npcmi3c, i3cdev_path);
++    assert(rc == 0);
++
++    mctp_register_bus(mctp, mctp_binding_npcmi3c_core(npcmi3c), eid);
++
++    ctx = &_ctx;
++    ctx->mctp = mctp;
++    mctp_set_rx_all(mctp, echo_message, ctx);
++
++    for (;;) {
++        rc = mctp_npcmi3c_poll(npcmi3c, -1);
++        if (rc < 0) {
++            break;
++        }
++        rc = mctp_npcmi3c_rx(npcmi3c);
++        if (rc)
++            break;
++    }
++
++    return EXIT_SUCCESS;
++}
+diff --git a/utils/meson.build b/utils/meson.build
+index 8314835..9a92f50 100644
+--- a/utils/meson.build
++++ b/utils/meson.build
+@@ -37,3 +37,13 @@ executable(
+   link_with: libmctp,
+   install: true
+ )
++
++# Add npcmi3c daemon if enabled
++if get_option('enable-npcmi3c').enabled()
++  executable(
++    'mctp-npcmi3c-daemon',
++    'mctp-npcmi3c-daemon.c',
++    include_directories: include_directories(headers),
++    link_with: libmctp,
++    install: true)
++endif
+-- 
+2.34.1
+

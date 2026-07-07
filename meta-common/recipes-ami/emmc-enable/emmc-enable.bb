@@ -18,8 +18,8 @@ python do_convert_json_to_conf() {
     import json
     import os
 
-    json_file = os.path.join(d.getVar('WORKDIR'), 'sd_partition_info.json')
-    conf_file = os.path.join(d.getVar('WORKDIR'), 'sd_partition_info.conf')
+    json_file = os.path.join(d.getVar('UNPACKDIR'), 'sd_partition_info.json')
+    conf_file = os.path.join(d.getVar('UNPACKDIR'), 'sd_partition_info.conf')
 
     def convert_json_to_conf(json_data):
         device = json_data["sdcard"]["DEVICE_NAME"]
@@ -57,9 +57,9 @@ addtask do_convert_json_to_conf after do_compile before do_install
 
 do_install() {
         install -d ${D}${bindir}
-        install -m 0755 ${WORKDIR}/enable-emmc.sh ${D}${bindir}/
+    install -m 0755 ${UNPACKDIR}/enable-emmc.sh ${D}${bindir}/
         install -d ${D}${sysconfdir}
-        install -m 0644 ${WORKDIR}/sd_partition_info.conf ${D}${sysconfdir}/
+    install -m 0644 ${UNPACKDIR}/sd_partition_info.conf ${D}${sysconfdir}/
 }
 
 SYSTEMD_SERVICE:${PN} = "com.ami.eMMCEnable.service"

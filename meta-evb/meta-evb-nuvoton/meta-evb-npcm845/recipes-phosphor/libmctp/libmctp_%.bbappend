@@ -21,6 +21,10 @@ PRE_SRC_URI:append: = " \
                 file://systemd/perst_udev_event.sh \
    "
 
+SRC_URI:append = " \
+    file://0001-add-npcmi3c-and-smbus-binding-test-tool.patch \
+    "
+
 SYSTEMD_SERVICE:${PN}:remove:evb-npcm845 = " mctp-spi-ctrl.service "
 SYSTEMD_SERVICE:${PN}:remove:evb-npcm845 = " mctp-spi-demux.service "
 SYSTEMD_SERVICE:${PN}:remove:evb-npcm845 = " mctp-spi-demux.socket "
@@ -47,18 +51,18 @@ do_install:append:evb-npcm845 () {
 
     # We are not starting the daemon directly, but through a script so the service
     # can restart the mctp controller 
-    #install -m 0755 ${WORKDIR}/systemd/start_mctp.sh ${D}${bindir}/
-    #install -m 0755 ${WORKDIR}/systemd/cpu-boot-complete.sh ${D}${bindir}/
-    #install -m 0755 ${WORKDIR}/systemd/check_failed_host_boot.sh ${D}${bindir}/
-    #install -m 0755 ${WORKDIR}/systemd/perst_udev_event.sh ${D}${bindir}/
+    #install -m 0755 ${S}/systemd/start_mctp.sh ${D}${bindir}/
+    #install -m 0755 ${S}/systemd/cpu-boot-complete.sh ${D}${bindir}/
+    #install -m 0755 ${S}/systemd/check_failed_host_boot.sh ${D}${bindir}/
+    #install -m 0755 ${S}/systemd/perst_udev_event.sh ${D}${bindir}/
     #
-    #install -m 0644 ${WORKDIR}/mctp_cfg_smbus8.json ${D}${datadir}/mctp/mctp_cfg_smbus8.json
+    #install -m 0644 ${S}/mctp_cfg_smbus8.json ${D}${datadir}/mctp/mctp_cfg_smbus8.json
     rm -f ${D}${nonarch_base_libdir}/systemd/system/mctp-spi-ctrl.service
     rm -f ${D}${nonarch_base_libdir}/systemd/system/mctp-spi-demux.service
     rm -f ${D}${nonarch_base_libdir}/systemd/system/mctp-spi-demux.socket
-    #install -m 0644 ${WORKDIR}/systemd/mctp-i2c8-ctrl.service  ${D}${nonarch_base_libdir}/systemd/system/
-    #install -m 0644 ${WORKDIR}/systemd/mctp-i2c8-demux.service ${D}${nonarch_base_libdir}/systemd/system/
-    #install -m 0644 ${WORKDIR}/systemd/mctp-i2c8-demux.socket  ${D}${nonarch_base_libdir}/systemd/system/
+    #install -m 0644 ${S}/systemd/mctp-i2c8-ctrl.service  ${D}${nonarch_base_libdir}/systemd/system/
+    #install -m 0644 ${S}/systemd/mctp-i2c8-demux.service ${D}${nonarch_base_libdir}/systemd/system/
+    #install -m 0644 ${S}/systemd/mctp-i2c8-demux.socket  ${D}${nonarch_base_libdir}/systemd/system/
 
     # Remove empty systemd directory if it exists
     if [ -d ${D}${systemd_system_unitdir} ]; then

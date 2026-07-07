@@ -6,11 +6,11 @@ LICENSE = "CLOSED"
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 
-SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/two-factor-authentication.git;protocol=https;branch=main"
+SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/two-factor-authentication.git;protocol=https;branch=main"
 
 
 
-SRCREV = "ecb0e7a82cde1b346c4252965ce922b3c193df5d"
+SRCREV = "951069b0e180bab9cb1b362aecd11c559fab6afe"
 
 
 S = "${WORKDIR}/git"
@@ -38,7 +38,7 @@ do_install() {
           install -d ${D}${bindir}
           install -d ${D}${systemd_system_unitdir}/
           install -d ${D}/etc/pam.d/
-          install -m 0755 ${WORKDIR}/build/WebTwoFactorAuthentication ${D}${bindir}
+          install -m 0755 ${B}/WebTwoFactorAuthentication ${D}${bindir}
           install -m 0755 ${S}/xyz.openbmc_project.TwoFactorAuthentication.WebTwoFactorAuthentication.service ${D}${systemd_system_unitdir}/
           install -m 0755 ${S}/tfa ${D}/etc/pam.d/
 	

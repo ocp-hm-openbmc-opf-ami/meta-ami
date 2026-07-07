@@ -13,7 +13,7 @@ fi
 
 
 # Get the current time
-current_time=$(date -u -d "$(date +"%Y-%m-%d %H:%M:%S")" +%s)
+current_time=$(date +%s)
 
 directory="/tmp/images"
 

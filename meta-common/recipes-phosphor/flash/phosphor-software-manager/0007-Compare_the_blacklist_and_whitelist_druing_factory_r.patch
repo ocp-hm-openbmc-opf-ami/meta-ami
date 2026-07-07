@@ -1,0 +1,110 @@
+From 31b36e5750c000f86056660b3b625a451bcbf7f7 Mon Sep 17 00:00:00 2001
+From: kirankumarreddyt <kirankumarreddyt@ami.com>
+Date: Fri, 19 Jun 2026 13:03:51 +0530
+Subject: [PATCH] Compare_the_blacklist_and_whitelist_druing_factory_reset
+
+---
+ bmc/static/item_updater_helper.cpp | 59 +++++++++++++++++++++++++++++-
+ 1 file changed, 57 insertions(+), 2 deletions(-)
+
+diff --git a/bmc/static/item_updater_helper.cpp b/bmc/static/item_updater_helper.cpp
+index 059aa51..9adc683 100644
+--- a/bmc/static/item_updater_helper.cpp
++++ b/bmc/static/item_updater_helper.cpp
+@@ -40,13 +40,52 @@ void Helper::factoryReset()
+     // Update whitelist file
+     #ifdef FWUPD_INTEL_FEATURES
+         std::string whitelist = "/tmp/.rwfs/.restore_whitelist";
++        std::string blacklist = "/tmp/.rwfs/.restore_blacklist";
+         std::string u_boot_bkup = "/tmp/.rwfs/uboot_env_data.bin";
+     #else
+         std::string whitelist = "/run/initramfs/rw/cow/whitelist";
++        std::string blacklist = "/run/initramfs/rw/cow/blacklist";
+         std::string u_boot_bkup = "/run/initramfs/rw/cow/uboot_env_data.bin";
+     #endif
+     std::ofstream whitelistFile(whitelist, std::ios::trunc);
++    std::ofstream blacklistFile(blacklist, std::ios::trunc);
++    std::vector<std::string> whitelistPaths;
++    std::vector<std::string> blacklistPaths;
+     auto bus = sdbusplus::bus::new_default();
++
++    auto normalizePath = [](std::string path) {
++        while (path.size() > 1 && path.back() == '/')
++        {
++            path.pop_back();
++        }
++
++        return path;
++    };
++
++    auto isWhitelisted = [&normalizePath](const std::string& blackPath,
++                                          const std::vector<std::string>& whitePaths) {
++        const auto normalizedBlackPath = normalizePath(blackPath);
++
++        for (const auto& whitePath : whitePaths)
++        {
++            const auto normalizedWhitePath = normalizePath(whitePath);
++
++            if (normalizedBlackPath == normalizedWhitePath)
++            {
++                return true;
++            }
++
++            if (normalizedWhitePath.size() < normalizedBlackPath.size() &&
++                normalizedBlackPath.compare(0, normalizedWhitePath.size(),
++                                            normalizedWhitePath) == 0 &&
++                normalizedBlackPath[normalizedWhitePath.size()] == '/')
++            {
++                return true;
++            }
++        }
++
++        return false;
++    };
+     try
+     {
+         auto getpreserveobjectpaths = bus.new_method_call(
+@@ -94,6 +133,7 @@ void Helper::factoryReset()
+                         for (const auto& filePath : *filePaths)
+                         {
+                             whitelistFile << filePath << std::endl;
++                            whitelistPaths.emplace_back(filePath);
+                         }
+                     }
+                     else
+@@ -154,8 +194,8 @@ void Helper::factoryReset()
+                     {
+                         for (const auto& filePath : *filePaths)
+                         {
+-                            std::error_code ec;
+-                            fs::remove_all(filePath, ec);
++                            blacklistFile << filePath << std::endl;
++                            blacklistPaths.emplace_back(filePath);
+                         }
+                     }
+                 }
+@@ -207,6 +247,21 @@ void Helper::factoryReset()
+         return;
+     }
+     whitelistFile.close();
++
++    for (const auto& blackPath : blacklistPaths)
++    {
++        if (isWhitelisted(blackPath, whitelistPaths))
++        {
++            continue;
++        }
++
++        std::error_code ec;
++        fs::remove_all(blackPath, ec);
++    }
++
++    blacklistFile.close();
++    std::error_code blacklistEc;
++    fs::remove(blacklist, blacklistEc);
+     // Set openbmconce=factory-reset env in U-Boot.
+     // The init will cleanup rwfs during boot.
+     utils::execute("/sbin/fw_setenv", "openbmconce", "factory-reset");
+-- 
+2.34.1
+

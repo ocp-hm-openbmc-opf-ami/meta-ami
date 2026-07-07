@@ -1,0 +1,163 @@
+From a297de79f2cea42c05363c447e2257567b7b07fa Mon Sep 17 00:00:00 2001
+From: mvinod <mvinod@ami.com>
+Date: Fri, 13 Mar 2026 22:44:11 +0530
+Subject: [PATCH 69551/69551] Preserved NTP setting after Restore Factory Default
+
+
+Upstream-Status: Pending
+
+
+---
+ src/basic/time-util.c    | 61 +++++++++++++++++++++++++---------------
+ src/basic/time-util.h    |  2 +-
+ src/timedate/timedated.c | 19 ++++++++++++-
+ 3 files changed, 58 insertions(+), 24 deletions(-)
+
+diff --git a/src/basic/time-util.c b/src/basic/time-util.c
+index e6096e71f0..c43f3877b6 100644
+--- a/src/basic/time-util.c
++++ b/src/basic/time-util.c
+@@ -1628,51 +1628,68 @@ int get_timezone(char **ret) {
+         if (!timezone_is_valid(e, LOG_DEBUG))
+                 return -EINVAL;
+ 
+-        /* Ensure that the timezone is valid and update /etc/localtime and /etc/timezone accordingly */
+-        r = ensure_timezone(e);
+-        if (r < 0)
+-                return r;
++        char *ensured = ensure_timezone(e);
++        if (!ensured)
++                return -errno;
+ 
+-        return strdup_to(ret, e);
++        return strdup_to(ret, ensured);
+ }
+ 
+-int ensure_timezone(const char *timezone) {
++char* ensure_timezone(const char *timezone) {
+         _cleanup_free_ char *zone_path = NULL;
+         _cleanup_free_ char *cur_timezone = NULL;
+-         const char *zoneinfo_dir = "/usr/share/zoneinfo/";
++        const char *zoneinfo_dir = "/usr/share/zoneinfo/";
+         int retval;
+ 
+-        if (timezone == NULL && isempty(timezone))
+-                return -EINVAL;
++        if (timezone == NULL || isempty(timezone)) {
++                errno = EINVAL;
++                return NULL;
++        }
++
++        /* Validate requested timezone name first */
++        if (!timezone_is_valid(timezone, LOG_DEBUG)) {
++                errno = EINVAL;
++                return NULL;
++        }
+ 
+         /* Read current /etc/timezone */
+         retval = read_one_line_file("/etc/timezone", &cur_timezone);
+-        if (retval < 0)
+-             return retval;
++        if (retval < 0) {
++                errno = -retval;
++                return NULL;
++        }
+ 
+-        if (streq(timezone, cur_timezone)){
+-                return 0;
+-        } else{
++        if (cur_timezone && streq(timezone, cur_timezone)) {
++                return strdup(timezone);
++        }
++        else {
+                 timezone = cur_timezone;
+ 
+                 /* Validate that the zoneinfo directory exists before constructing the path */
+-                if (access(zoneinfo_dir, F_OK) < 0)
+-                        return log_full_errno(LOG_DEBUG, errno, "Timezone directory '%s' not available: %m", zoneinfo_dir);
++                if (access(zoneinfo_dir, F_OK) < 0) {
++                        errno = errno ? errno : ENOENT;
++                        return NULL;
++                }
+ 
+                 zone_path = strjoin(zoneinfo_dir, timezone, NULL);
+-                if (!zone_path)
+-                        return -ENOMEM;
++                if (!zone_path) {
++                        errno = ENOMEM;
++                        return NULL;
++                }
+ 
+                 /* Create or update /etc/localtime symlink */
+                 retval = symlink_atomic(zone_path, "/etc/localtime");
+-                if (retval < 0)
+-                        return retval;
+-
++                if (retval < 0) {
++                        errno = -retval;
++                        return NULL;
++                }
+                 /* Also write /etc/timezone */
+                 retval = write_string_file("/etc/timezone", timezone, WRITE_STRING_FILE_CREATE);
+                 if (retval < 0)
+                         log_warning_errno(retval, "Failed to write /etc/timezone: %m");
+-                return 0;
++
++                return strdup(timezone);
++
+         }
+ }
+ 
+diff --git a/src/basic/time-util.h b/src/basic/time-util.h
+index 77e019aea9..4027a2c36a 100644
+--- a/src/basic/time-util.h
++++ b/src/basic/time-util.h
+@@ -177,7 +177,7 @@ usec_t usec_shift_clock(usec_t, clockid_t from, clockid_t to);
+ 
+ int get_timezone(char **ret);
+ 
+-int ensure_timezone(const char *timezone);
++char* ensure_timezone(const char *timezone);
+ 
+ int mktime_or_timegm_usec(struct tm *tm, bool utc, usec_t *ret);
+ int localtime_or_gmtime_usec(usec_t t, bool utc, struct tm *ret);
+diff --git a/src/timedate/timedated.c b/src/timedate/timedated.c
+index a08602fb42..f22b32c27a 100644
+--- a/src/timedate/timedated.c
++++ b/src/timedate/timedated.c
+@@ -649,6 +649,8 @@ static int property_get_ntp(
+ 
+         Context *c = ASSERT_PTR(userdata);
+         int r;
++        int ret = 0;
++        _cleanup_free_ char *sync = NULL;
+ 
+         assert(bus);
+         assert(property);
+@@ -663,7 +665,22 @@ static int property_get_ntp(
+         if (r < 0)
+                 return r;
+ 
+-        return sd_bus_message_append(reply, "b", context_ntp_service_is_active(c) > 0);
++        /* Try to read sync method file directly - simpler than checking existence first */
++        const char *sync_method_file = "/var/lib/phosphor-settings-manager/settings/xyz/openbmc_project/time/sync_method_";
++        ret = read_full_file(sync_method_file, &sync, NULL);
++        bool ntp_active = context_ntp_service_is_active(c) > 0;
++        if (ret >= 0 && sync) {
++                if (strstr(sync, "NTP") != NULL  && ntp_active) {
++                        return sd_bus_message_append(reply, "b", true);
++                }
++                else if (strstr(sync, "Manual") != NULL  && !ntp_active) {
++                        return sd_bus_message_append(reply, "b", false);
++                } else {
++                        return sd_bus_message_append(reply, "b", false);
++                }
++        } else {
++                return sd_bus_message_append(reply, "b", ntp_active);
++        }
+ }
+ 
+ static int method_set_timezone(sd_bus_message *m, void *userdata, sd_bus_error *error) {
+-- 
+2.53.0
+

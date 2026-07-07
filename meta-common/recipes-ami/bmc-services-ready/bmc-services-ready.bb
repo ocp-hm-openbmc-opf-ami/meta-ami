@@ -13,11 +13,11 @@ inherit systemd
 
 do_install() {
     install -d ${D}${bindir}
-    install -m 0755 ${WORKDIR}/bmc-services-ready.sh ${D}${bindir}/bmc-services-ready.sh
+    install -m 0755 ${UNPACKDIR}/bmc-services-ready.sh ${D}${bindir}/bmc-services-ready.sh
     install -d ${D}${sysconfdir}
-    install -m 0644 ${WORKDIR}/bmc-services-ready.conf ${D}${sysconfdir}/bmc-services-ready.conf
+    install -m 0644 ${UNPACKDIR}/bmc-services-ready.conf ${D}${sysconfdir}/bmc-services-ready.conf
     install -d ${D}${systemd_system_unitdir}
-    install -m 0644 ${WORKDIR}/bmc-services-ready.service ${D}${systemd_system_unitdir}/bmc-services-ready.service
+    install -m 0644 ${UNPACKDIR}/bmc-services-ready.service ${D}${systemd_system_unitdir}/bmc-services-ready.service
 }
 
 RDEPENDS:${PN} += "bash"

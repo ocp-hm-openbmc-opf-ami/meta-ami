@@ -202,6 +202,7 @@ write_spi_nor() {
   debug_log "Entered write_spi_nor()"
   [ -c "$FLASH_DEV" ] || { log "ERROR: $FLASH_DEV is not an MTD char device" 2>/dev/null || true; return 1; }
   [ -r "$LOCAL_PATH" ] || { log "ERROR: image $LOCAL_PATH not readable" 2>/dev/null || true; return 1; }
+  update_percentage 65 2>/dev/null || true
 
   imgsize="$(wc -c < "$LOCAL_PATH" 2>/dev/null || echo 0)"
   [ "$imgsize" -gt 0 ] || { log "ERROR: image size is zero" 2>/dev/null || true; return 1; }
@@ -220,6 +221,7 @@ write_spi_nor() {
     # Whole-partition write
   command -v flash_unlock >/dev/null 2>&1 && flash_unlock "$FLASH_DEV" 2>/dev/null || true
   if command -v mtd-util >/dev/null 2>&1; then
+    update_percentage 70 2>/dev/null || true
     if [ "$DEBUG" = "1" ]; then
       debug_log "Running: mtd-util -d $FLASH_DEV c $LOCAL_PATH 0"
       tmpout="$(mktemp)"
@@ -227,10 +229,13 @@ write_spi_nor() {
       rc=$?
       while IFS= read -r line; do debug_log "mtd-util: $line"; done < "$tmpout"
       rm -f -- "$tmpout"
+      [ "$rc" -eq 0 ] && update_percentage 95 2>/dev/null || true
       return $rc
     else
       mtd-util -d "$FLASH_DEV" c "$LOCAL_PATH" 0
-      return $?
+      rc=$?
+      [ "$rc" -eq 0 ] && update_percentage 95 2>/dev/null || true
+      return $rc
     fi
   else
     # Check if this is single-SPI ABR case
@@ -246,22 +251,28 @@ write_spi_nor() {
       
       erase_end=$(( ((imgsize + era - 1) / era) * era ))
       block_count=$(( erase_end / era ))
+      update_percentage 70 2>/dev/null || true
       
       if [ "$DEBUG" = "1" ]; then
         debug_log "Running: flash_erase $FLASH_DEV  $imgsize $block_count"
         flash_erase "$FLASH_DEV" 0 "$block_count"
+        update_percentage 78 2>/dev/null || true
         debug_log "Running: mtd_debug write $FLASH_DEV $imgsize $imgsize $LOCAL_PATH"
         mtd_debug write "$FLASH_DEV" 0 "$imgsize" "$LOCAL_PATH"
       else
         flash_erase "$FLASH_DEV" 0 "$block_count"
+        update_percentage 78 2>/dev/null || true
         mtd_debug write "$FLASH_DEV" 0 "$imgsize" "$LOCAL_PATH"
       fi
+      update_percentage 90 2>/dev/null || true
       # Verify by readback
       # comment below readback function , in single spi abr from backup spi read/write is not working
       # once fixed will uncomment to check read status
        tmpv="$(mktemp /tmp/mtdv.XXXXXX)"
        if mtd_debug read "$FLASH_DEV" 0 "$imgsize" "$tmpv"; then
+         update_percentage 95 2>/dev/null || true
          if cmp -n "$imgsize" -- "$LOCAL_PATH" "$tmpv"; then
+           update_percentage 98 2>/dev/null || true
            rm -f -- "$tmpv"
            return 0
          else
@@ -275,17 +286,21 @@ write_spi_nor() {
          return 5
        fi
     else
+      update_percentage 70 2>/dev/null || true
       if [ "$DEBUG" = "1" ]; then
-        debug_log "Running: flashcp -v -- $LOCAL_PATH $FLASH_DEV"
+        debug_log "Running: flashcp -v -p -- $LOCAL_PATH $FLASH_DEV"
         tmpout="$(mktemp)"
         flashcp -v -p -- "$LOCAL_PATH" "$FLASH_DEV" >"$tmpout" 2>&1
         rc=$?
         while IFS= read -r line; do debug_log "flashcp: $line"; done < "$tmpout"
         rm -f -- "$tmpout"
+        [ "$rc" -eq 0 ] && update_percentage 95 2>/dev/null || true
         return $rc
       else
         flashcp -v -p -- "$LOCAL_PATH" "$FLASH_DEV"
-        return $?
+        rc=$?
+        [ "$rc" -eq 0 ] && update_percentage 95 2>/dev/null || true
+        return $rc
       fi
     fi
   fi
@@ -309,6 +324,7 @@ write_spi_nor() {
 
   if command -v mtd-util >/dev/null 2>&1; then
     command -v flash_unlock >/dev/null 2>&1 && flash_unlock "$FLASH_DEV" 2>/dev/null || true
+    update_percentage 70 2>/dev/null || true
     if [ "$DEBUG" = "1" ]; then
       debug_log "Running: mtd-util -d $FLASH_DEV c $LOCAL_PATH $FLASH_OFFSET"
       tmpout="$(mktemp)"
@@ -316,30 +332,39 @@ write_spi_nor() {
       rc=$?
       while IFS= read -r line; do debug_log "mtd-util: $line"; done < "$tmpout"
       rm -f -- "$tmpout"
+      [ "$rc" -eq 0 ] && update_percentage 95 2>/dev/null || true
       return $rc
     else
       mtd-util -d "$FLASH_DEV" c "$LOCAL_PATH" "$FLASH_OFFSET"
-      return $?
+      rc=$?
+      [ "$rc" -eq 0 ] && update_percentage 95 2>/dev/null || true
+      return $rc
     fi
   else
     command -v flash_unlock >/dev/null 2>&1 && flash_unlock "$FLASH_DEV" 2>/dev/null || true
     # Special case: if boot_source is 1 and boot_mode is 1, use offset 0 ass mtd_debug write and flash erase are not switching offsets as per ABR
     boot_mode="$(_read_boot_mode)"
     boot_source="$(_read_boot_source)"
+    update_percentage 70 2>/dev/null || true
     if [ "$boot_source" -eq 1 ] && [ "$boot_mode" -eq 1 ]; then
       flash_erase "$FLASH_DEV" "$imgsize" "$block_count"
+      update_percentage 78 2>/dev/null || true
       mtd_debug write "$FLASH_DEV" "$imgsize" "$imgsize" "$LOCAL_PATH"
     else
       flash_erase "$FLASH_DEV" "$start_erase" "$block_count"
+      update_percentage 78 2>/dev/null || true
       mtd_debug write "$FLASH_DEV" "$FLASH_OFFSET" "$imgsize" "$LOCAL_PATH"
     fi
+    update_percentage 90 2>/dev/null || true
   fi
 
   # Verify by readback
   if [ "$boot_source" -ne 1 ] || [ "$boot_mode" -ne 1 ]; then # remove condition when read/write block issue fixed for single spi abr from backup spi
     tmpv="$(mktemp /tmp/mtdv.XXXXXX)"
     if mtd_debug read "$FLASH_DEV" "$FLASH_OFFSET" "$imgsize" "$tmpv"; then
+      update_percentage 95 2>/dev/null || true
       if cmp -n "$imgsize" -- "$LOCAL_PATH" "$tmpv"; then
+        update_percentage 98 2>/dev/null || true
         rm -f -- "$tmpv"
         return 0
       else

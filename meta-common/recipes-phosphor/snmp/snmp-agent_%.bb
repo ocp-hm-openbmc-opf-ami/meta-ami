@@ -17,10 +17,10 @@ DEPENDS += "phosphor-dbus-interfaces"
 DEPENDS += "net-snmp"
 
 
-SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/snmp-agent;protocol=https;branch=main"
+SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/snmp-agent.git;branch=main;protocol=https"
 SRC_URI += "file://xyz.openbmc_project.Snmp.Conf.service"
 
-SRCREV = "c50c41030a3a8305e83d910a23202850b6260bda"
+SRCREV = "98353b378cc369c74de08b29a045f73b1cfb46e3"
 
 S = "${WORKDIR}/git"
 
@@ -31,7 +31,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 do_install:append() {
         install -d ${D}${systemd_system_unitdir}/
         install -d ${D}${libdir}/
-        install -m 0644 ${WORKDIR}/xyz.openbmc_project.Snmp.Conf.service ${D}${systemd_system_unitdir}/
+        install -m 0644 ${UNPACKDIR}/xyz.openbmc_project.Snmp.Conf.service ${D}${systemd_system_unitdir}/
 }
 
 FILES:${PN}  += "${systemd_system_unitdir}/xyz.openbmc_project.Snmp.Conf.service"

@@ -1,0 +1,112 @@
+From 988af71d0109222b28c84c749ec88e5dadaf866a Mon Sep 17 00:00:00 2001
+From: Vijaysankar R <vijaysankarr@ami.com>
+Date: Fri, 10 Apr 2026 21:05:08 +0530
+Subject: [PATCH 10/10] Fix-For-LF-Sync-Build-Issue
+
+---
+ lib/avpair.c       |  2 +-
+ lib/buildreq.c     | 10 ++++++++--
+ src/radiusclient.c | 11 ++++++-----
+ 3 files changed, 15 insertions(+), 8 deletions(-)
+
+diff --git a/lib/avpair.c b/lib/avpair.c
+index fe428b5..35ee2eb 100644
+--- a/lib/avpair.c
++++ b/lib/avpair.c
+@@ -709,7 +709,7 @@ int rc_avpair_tostr (rc_handle *rh, VALUE_PAIR *pair, char *name, int ln, char *
+ 		}
+ 		else
+ 		{
+-			sprintf (buffer, "%ld", pair->lvalue);
++			sprintf (buffer, "%u", pair->lvalue);
+ 			strncpy(value, buffer, (size_t) lv);
+ 		}
+ 		break;
+diff --git a/lib/buildreq.c b/lib/buildreq.c
+index 8800e5a..ce7b213 100644
+--- a/lib/buildreq.c
++++ b/lib/buildreq.c
+@@ -30,6 +30,7 @@ typedef struct {
+     size_t tls_buffer_len;
+ } eap_tls_state_t;
+ 
++void eap_tls_cleanup(eap_tls_state_t *state);
+ unsigned char rc_get_seqnbr(rc_handle *);
+ 
+ /*
+@@ -183,7 +184,7 @@ static unsigned char rc_guess_seqnbr(void)
+ unsigned char rc_get_seqnbr(rc_handle *rh)
+ {
+ 	FILE *sf;
+-	int tries = 1;
++	int tries = 1,retVal = 0;
+ 	int seq_nbr;
+ 	char *seqfile = rc_conf_str(rh, "seqfile");
+ 
+@@ -221,7 +222,12 @@ unsigned char rc_get_seqnbr(rc_handle *rh)
+ 	}
+ 
+ 	rewind(sf);
+-	ftruncate(fileno(sf),0);
++	retVal = ftruncate(fileno(sf),0);
++    if(retVal != 0)
++    {
++
++		rc_log(LOG_ERR,"rc_get_seqnbr: ftruncate failure val = %d", retVal);
++    }
+ 	fprintf(sf,"%d\n", (seq_nbr+1) & UCHAR_MAX);
+ 
+ 	fflush(sf); /* fflush because a process may read it between the do_unlock and fclose */
+diff --git a/src/radiusclient.c b/src/radiusclient.c
+index 66bd6d5..82528e1 100644
+--- a/src/radiusclient.c
++++ b/src/radiusclient.c
+@@ -33,6 +33,7 @@
+ #include <radiusclient-ng.h>
+ #include <security/pam_appl.h>
+ #include <security/pam_modules.h>
++#include <security/pam_ext.h>
+ #include <stdbool.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -68,8 +69,8 @@
+ #define ADD_PAM_USER 1
+ #define PAM_RADIUS_RES_Q "/var/PAMRADIUSQ"
+ #define PAM_HELPER_Q "/var/PAMHelper"
+-
+-bool *radiusEnableEapTLSStatus=false;
++extern int rc_auth_eaptls(rc_handle *rh, UINT4 client_port,VALUE_PAIR **received, char *msg);
++bool radiusEnableEapTLSStatus=false;
+ struct privilageStruct {
+   int privNum;
+   char privStr[16];
+@@ -642,7 +643,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc,
+   struct pld_ctx *ctx;
+   const char *username, *service;
+   const char *ruser = NULL, *rhost = NULL, *tty = NULL;
+-  char *passwd = NULL;
++  const char *passwd = NULL;
+   struct nslcd_resp resp;
+ 
+   /// usr/lib/libnss_radius.so
+@@ -704,7 +705,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc,
+ 
+   i = 0;
+ 
+-  rc = pam_get_authtok(pamh, PAM_AUTHTOK, (const void **)&passwd, NULL);
++  rc = pam_get_authtok(pamh, PAM_AUTHTOK, &passwd, NULL);
+   if (rc != PAM_SUCCESS) {
+     retval = PAM_AUTH_ERR;
+     /* very strange. */
+@@ -722,7 +723,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc,
+ 
+   acct = 0;
+   server = 0;
+-  while ((ch = getopt(argc, argv, "af:p:s")) != -1) {
++  while ((ch = getopt(argc, (char *const *)argv, "af:p:s")) != -1) {
+     switch (ch) {
+     case 'f':
+       rc_conf = optarg;
+-- 
+2.43.0
+

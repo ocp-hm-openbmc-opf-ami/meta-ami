@@ -3,7 +3,15 @@
 # NOTE: The generated fwupd.sh sets a global ERR trap; this file does not.
 
 set -eu
-# Global debug flag (set DEBUG=1 for verbose output)
+# Global debug flag.
+# Enable with either:
+#   touch /tmp/fwdebug      (flag file — cleared on reboot)
+#   export DEBUG=1          (environment variable)
+_fwupd_debug_active() {
+  [ "${DEBUG:-0}" = "1" ] && return 0
+  [ -f "/tmp/fwdebug" ] && return 0
+  return 1
+}
 DEBUG="${DEBUG:-0}"
 ###############################################################################
 # Update percentages & statuses
@@ -41,9 +49,16 @@ VER_IFACE="xyz.openbmc_project.Software.Version"
 # Basic logging utilities
 ###############################################################################
 
-# Debug log function
+# Tag used for journal entries emitted via logger(1). Allows filtering with
+# `journalctl -t fwupd`. Note: when these scripts run under a systemd-launched
+# service, their stderr is already forwarded to the journal under the syslog
+# identifier "fwupd", so we deliberately do NOT also call logger(1) here —
+# doing so would duplicate every line in the journal.
+: "${FWUPD_LOG_TAG:=fwupd}"
+
+# Debug log function — honours $DEBUG env var and both flag files
 debug_log() {
-    [ "$DEBUG" = "1" ] && echo "[DEBUG] $*" >&2 || true
+    _fwupd_debug_active && echo "[DEBUG] $*" >&2 || true
 }
 log() {
     echo "[INFO] $*" >&2
@@ -85,20 +100,32 @@ _current_img_obj() { [ -n "${IMG_OBJ:-}" ] && printf "%s" "$IMG_OBJ" || printf "
 
 set_progress() {
   val="${1:-0}"
+  # Apply multi-component progress scaling if set by the PLDM bundle dispatcher.
+  # FWUPD_PROGRESS_SCALE: the fraction (0-100) of the full bar this component owns.
+  # FWUPD_PROGRESS_OFFSET: the start of this component's slice of the full bar.
+  _pscale="${FWUPD_PROGRESS_SCALE:-100}"
+  _poffset="${FWUPD_PROGRESS_OFFSET:-0}"
+  _scaled=$(( _poffset + val * _pscale / 100 ))
+  [ "$_scaled" -gt 100 ] && _scaled=100
+  [ "$_scaled" -lt 0 ]   && _scaled=0
+  _last="${FWUPD_PROGRESS_LAST:-0}"
+  [ "$_scaled" -lt "$_last" ] && _scaled="$_last"
+  FWUPD_PROGRESS_LAST="$_scaled"
+  export FWUPD_PROGRESS_LAST
   obj="$(_current_img_obj)"
-  [ -n "$obj" ] || { log "set_progress($val): SKIP (no image object)"; return 0; }
-  _use_dbus || { log "set_progress($val): SKIP (no D-Bus)"; return 0; }
-  log "set_progress($val): $SW_BASE/$obj"
+  [ -n "$obj" ] || { debug_log "set_progress($val->$_scaled): SKIP (no image object)"; return 0; }
+  _use_dbus || { debug_log "set_progress($val->$_scaled): SKIP (no D-Bus)"; return 0; }
+  debug_log "set_progress($val->$_scaled, scale=${_pscale}, offset=${_poffset}): $SW_BASE/$obj"
   dbus_set_prop "$SW_SERVICE" "$SW_BASE/$obj" \
-    xyz.openbmc_project.Software.ActivationProgress Progress y "$val"
+    xyz.openbmc_project.Software.ActivationProgress Progress y "$_scaled"
 }
 
 set_task_status() {
   status="${1:-$UPDATE_STATUS_RUNNING}"
   obj="$(_current_img_obj)"
-  [ -n "$obj" ] || { log "set_task_status($status): SKIP (no image object)"; return 0; }
-  _use_dbus || { log "set_task_status($status): SKIP (no D-Bus)"; return 0; }
-  log "set_task_status($status): $SW_BASE/$obj"
+  [ -n "$obj" ] || { debug_log "set_task_status($status): SKIP (no image object)"; return 0; }
+  _use_dbus || { debug_log "set_task_status($status): SKIP (no D-Bus)"; return 0; }
+  debug_log "set_task_status($status): $SW_BASE/$obj"
   dbus_set_prop "$SW_SERVICE" "$SW_BASE/$obj" \
     xyz.openbmc_project.Common.Task Status s "xyz.openbmc_project.Common.Task.OperationStatus.${status}"
 }
@@ -331,8 +358,9 @@ dbus_get_property_by_mapper() {
 # Returns space-delimited basenames from HttpPushUriTargets on /xyz/openbmc_project/software
 get_pushuri_targets() {
   # Use the well-known Updater service directly (no ObjectMapper here)
+  local new_obj="$(_current_img_obj)"
   local svc="xyz.openbmc_project.Software.BMC.Updater"
-  local obj="/xyz/openbmc_project/software"
+  local obj="/xyz/openbmc_project/software/$new_obj"
   local iface="xyz.openbmc_project.Software.FirmwareUpdateTarget"
 
   local raw

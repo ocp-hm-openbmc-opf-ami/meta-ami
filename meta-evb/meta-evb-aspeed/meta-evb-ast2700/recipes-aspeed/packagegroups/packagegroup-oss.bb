@@ -63,11 +63,11 @@ RDEPENDS:${PN}-extended = " \
     opkg \
     "
 
-SUMMARY:${PN}-extra = "Open Source Extra Applications"
-RDEPENDS:${PN}-extra = " \
-    freeipmi \
-    freeipmi-ipmi-raw \
-    "
+#SUMMARY:${PN}-extra = "Open Source Extra Applications"
+#RDEPENDS:${PN}-extra = " \
+#    freeipmi \
+#    freeipmi-ipmi-raw \
+#    "
 
 SUMMARY:${PN}-intel-pmci = "Open Source Intel PMCI Applications"
 RDEPENDS:${PN}-intel-pmci = " \

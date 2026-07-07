@@ -21,7 +21,12 @@ cleanup_overlay_with_blacklist_and_rsync() {
     RWFS_MTD="$3"
     OVERLAY="$4"
     PERSISTENT="$5"
-    EMMC_FILE_LIST=("/etc/extlog/extended.log*" "/etc/extlog/phosphor-logging/errors/" "/etc/extlog/phosphor-logging/raid/errors/" "/etc/extlog/phosphor-logging/ipmi_rollover_backup/")
+    EMMC_FILE_LIST=("/etc/extlog/extended.log*" "/etc/extlog/phosphor-logging/errors/" "/etc/extlog/phosphor-logging/ipmi/errors/" "/etc/extlog/phosphor-logging/raid/errors/" "/etc/extlog/phosphor-logging/ipmi_rollover_backup/")
+    if [ -d "/run/initramfs" ]; then
+        WHITELIST="${WHITELIST:-/run/initramfs/whitelist}"
+    else
+        WHITELIST="${WHITELIST:-/tmp/whitelist}"
+    fi
 
     debug_log "Entered cleanup_overlay_with_blacklist_and_rsync() (blacklist/rsync mode)"
 
@@ -42,7 +47,41 @@ cleanup_overlay_with_blacklist_and_rsync() {
         fi
         # Rsync overlay to RWFS_OVERLAY (volatile case)
         debug_log "Syncing $OVERLAY to $RWFS_OVERLAY via rsync"
-        rsync -a --inplace --partial --delete "$OVERLAY/" "$RWFS_OVERLAY/" || true
+        if [ -s "$WHITELIST" ]; then
+            debug_log "Using whitelist file for rsync filter: $WHITELIST"
+            RSYNC_FILTER="$(mktemp /tmp/rsync-whitelist.XXXXXX)"
+            while IFS= read -r whitelist_entry || [ -n "$whitelist_entry" ]; do
+                case "$whitelist_entry" in
+                    ""|\#*)
+                        continue
+                        ;;
+                esac
+
+                rel_path="${whitelist_entry#/}"
+		rel_path="${rel_path%/}"
+                [ -n "$rel_path" ] || continue
+
+                parent="$rel_path"
+                while [ "${parent%/*}" != "$parent" ]; do
+                    parent="${parent%/*}"
+                    [ -n "$parent" ] && printf '+ /%s/\n' "$parent" >> "$RSYNC_FILTER"
+                done
+
+                if [ -d "$OVERLAY/$rel_path" ]; then
+                    printf '+ /%s/***\n' "$rel_path" >> "$RSYNC_FILTER"
+                else
+                    printf '+ /%s\n' "$rel_path" >> "$RSYNC_FILTER"
+                fi
+            done < "$WHITELIST"
+
+            printf -- '- *\n' >> "$RSYNC_FILTER"
+            debug_log "Generated rsync filter file $RSYNC_FILTER"
+
+            rsync -a --inplace --partial --delete --delete-excluded --prune-empty-dirs \
+                --filter="merge $RSYNC_FILTER" "$OVERLAY/" "$RWFS_OVERLAY/" || true
+            rm -f "$RSYNC_FILTER"
+            debug_log "Rsync with whitelist complete: $OVERLAY -> $RWFS_OVERLAY (filter: $WHITELIST)"
+        fi
         sync "$RWFS_OVERLAY" || true
         log "Volatile overlay rsync complete: $OVERLAY -> $RWFS_OVERLAY"
     fi
@@ -50,13 +89,13 @@ cleanup_overlay_with_blacklist_and_rsync() {
     # Remove files listed in /tmp/blacklist from overlay (always)
     BLACKLIST="/tmp/blacklist"
     if [ -s "$BLACKLIST" ]; then
-        log "Deleting files from blacklist: $BLACKLIST"
-        while IFS= read -r file; do
-            [ -n "$file" ] || continue
-            target="$RWFS_OVERLAY$file"
-            debug_log "Deleting: $target"
-            rm -rf -- "$target" 2>/dev/null || true
-        done < "$BLACKLIST"
+        # log "Deleting files from blacklist: $BLACKLIST"
+        # while IFS= read -r file; do
+        #     [ -n "$file" ] || continue
+        #     target="$RWFS_OVERLAY$file"
+        #     debug_log "Deleting: $target"
+        #     rm -rf -- "$target" 2>/dev/null || true
+        # done < "$BLACKLIST"
         # remove files if present in emmc
         for emmc_list in "${EMMC_FILE_LIST[@]}"; do
             if grep -q -- "$emmc_list" "$BLACKLIST"; then

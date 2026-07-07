@@ -1,0 +1,673 @@
+From 68c03f88eaeb75855c021ceb12133021dd02f085 Mon Sep 17 00:00:00 2001
+From: Nikhila D <nikhilad@ami.com>
+Date: Tue, 19 May 2026 10:52:04 +0000
+Subject: [PATCH] Multi PSU Runtime support
+
+Added Runtime Multi PSU support such that the code
+now creates object paths for all connected PSUs
+based on entries in psu.json.
+
+Signed-off-by: Nikhila D <nikhilad@ami.com>
+---
+ phosphor-power-supply/main.cpp        |  10 +-
+ phosphor-power-supply/psu_manager.cpp | 466 ++++++++++++++++++++++----
+ phosphor-power-supply/psu_manager.hpp |  53 ++-
+ 3 files changed, 448 insertions(+), 81 deletions(-)
+
+diff --git a/phosphor-power-supply/main.cpp b/phosphor-power-supply/main.cpp
+index 964a66c..50fafdf 100644
+--- a/phosphor-power-supply/main.cpp
++++ b/phosphor-power-supply/main.cpp
+@@ -41,12 +41,10 @@ int main(void)
+ 
+         manager::PSUManager manager(bus, event);
+ 
+-#ifdef SOLUM_PSU
+-        manager.io_run();
+-#else
+-        manager.run();
+-#endif
+-	return -1;
++        // Using run() for both SOLUM_PSU and non-SOLUM_PSU
++        // This runs the sdeventplus event loop which handles the analyze timer
++        int result = manager.run();
++        return result;
+     }
+     catch (const std::exception& e)
+     {
+diff --git a/phosphor-power-supply/psu_manager.cpp b/phosphor-power-supply/psu_manager.cpp
+index 7af050b..6519f78 100644
+--- a/phosphor-power-supply/psu_manager.cpp
++++ b/phosphor-power-supply/psu_manager.cpp
+@@ -10,15 +10,20 @@
+ #include <xyz/openbmc_project/State/Chassis/server.hpp>
+ 
+ #include <algorithm>
+-#include <iostream>
++#include <chrono>
++#include <filesystem>
+ #include <format>
++#include <fstream>
++#include <iomanip>
++#include <iostream>
+ #include <regex>
+ #include <set>
++#include <sstream>
++#include <thread>
+ 
+ /*enable or include SOLUM psu related implementation */
+ #define SOLUM_PSU
+ 
+-
+ namespace phosphor::power::manager
+ {
+ constexpr auto managerBusName = "xyz.openbmc_project.Power.PSUMonitor";
+@@ -63,6 +68,22 @@ const auto driverDirName = "/driver";
+ 
+ constexpr auto INPUT_HISTORY_SYNC_DELAY = 5;
+ 
++// Helper functions for JSON field type validation
++static bool isValidInteger(const nlohmann::json& j)
++{
++    return j.is_number_integer();
++}
++
++static bool isValidString(const nlohmann::json& j)
++{
++    return j.is_string();
++}
++
++static bool isValidArray(const nlohmann::json& j)
++{
++    return j.is_array();
++}
++
+ PSUManager::PSUManager(sdbusplus::bus_t& bus, const sdeventplus::Event& e) :
+     bus(bus), powerSystemInputs(bus, powerSystemsInputsObjPath),
+     objectManager(bus, objectManagerObjPath),
+@@ -82,22 +103,123 @@ PSUManager::PSUManager(sdbusplus::bus_t& bus, const sdeventplus::Event& e) :
+     auto data = phosphor::power::util::loadJSONFromFile(PSU_JSON_PATH);
+     if (data == nullptr)
+     {
+-	    lg2::error("Unable to find JSON file");
++        lg2::error("Unable to find JSON file");
+     }
+-    try
++    else
+     {
+-        for (const auto& channelConfig : data["PowerSupplies"])
++        try
++        {
++            std::this_thread::sleep_for(std::chrono::milliseconds(500));
++            for (const auto& channelConfig : data["PowerSupplies"])
++            {
++                if (!channelConfig.contains("Bus") ||
++                    !isValidInteger(channelConfig["Bus"]))
++                {
++                    lg2::info(
++                        "Skipping PSU config entry: Bus must be an integer");
++                    continue;
++                }
++
++                if (!channelConfig.contains("Address") ||
++                    !isValidInteger(channelConfig["Address"]))
++                {
++                    lg2::info(
++                        "Skipping PSU config entry: Address must be an integer");
++                    continue;
++                }
++
++                if (!channelConfig.contains("Product") ||
++                    !isValidString(channelConfig["Product"]))
++                {
++                    lg2::info(
++                        "Skipping PSU config entry: Product must be a string");
++                    continue;
++                }
++
++                i2cbus = channelConfig["Bus"];
++                i2caddr = channelConfig["Address"];
++                psuProduct = channelConfig["Product"];
++
++                std::string psuName = "PSU";
++                if (channelConfig.contains("Name") &&
++                    isValidString(channelConfig["Name"]))
++                {
++                    psuName = channelConfig["Name"];
++                }
++
++                char ctorAddrBuf[5];
++                snprintf(ctorAddrBuf, sizeof(ctorAddrBuf), "%04x",
++                         (unsigned int)i2caddr);
++                std::string addrStr(ctorAddrBuf);
++
++                auto pmbusIntf = phosphor::pmbus::createPMBus(i2cbus, addrStr);
++                if (pmbusIntf)
++                {
++                    psu_monitor_info monitorInfo;
++                    monitorInfo.bus = i2cbus;
++                    monitorInfo.address = i2caddr;
++                    monitorInfo.name = psuName;
++                    monitorInfo.pmbusInterface = std::move(pmbusIntf);
++                    monitorInfo.isConnected = false;
++
++                    // Set defaults for optional string fields
++                    monitorInfo.inputNominalVoltageType = "AC100To240V";
++                    monitorInfo.powerSupplyType = "AC";
++                    monitorInfo.plugType = "IEC_60320_C14";
++                    monitorInfo.efficiencyRatings = "100";
++
++                    // Override defaults with JSON values if present and valid
++                    if (channelConfig.contains("InputNominalVoltageType") &&
++                        isValidString(channelConfig["InputNominalVoltageType"]))
++                    {
++                        monitorInfo.inputNominalVoltageType =
++                            channelConfig["InputNominalVoltageType"];
++                    }
++
++                    if (channelConfig.contains("PowerSupplyType") &&
++                        isValidString(channelConfig["PowerSupplyType"]))
++                    {
++                        monitorInfo.powerSupplyType =
++                            channelConfig["PowerSupplyType"];
++                    }
++
++                    if (channelConfig.contains("PlugType") &&
++                        isValidString(channelConfig["PlugType"]))
++                    {
++                        monitorInfo.plugType = channelConfig["PlugType"];
++                    }
++
++                    if (channelConfig.contains("EfficiencyRatings") &&
++                        isValidString(channelConfig["EfficiencyRatings"]))
++                    {
++                        monitorInfo.efficiencyRatings =
++                            channelConfig["EfficiencyRatings"];
++                    }
++
++                    if (channelConfig.contains("OutputRails") &&
++                        isValidArray(channelConfig["OutputRails"]))
++                    {
++                        monitorInfo.outputRails =
++                            channelConfig["OutputRails"]
++                                .get<std::vector<std::string>>();
++                    }
++                    else
++                    {
++                        monitorInfo.outputRails = {"12v", "5v", "3v", "1.8v"};
++                    }
++
++                    psuMonitors.push_back(std::move(monitorInfo));
++                }
++                getPSUConfiguration();
++            }
++            getSystemProperties();
++        }
++        catch (const nlohmann::json::exception& e)
+         {
+-            i2cbus = channelConfig["Bus"];
+-            std::string tmp = channelConfig["Address"];
+-            psuProduct = channelConfig["Product"];
+-            i2caddr = stoi(tmp);
++            lg2::error("Failed to parse PSU JSON config, error: {ERROR}",
++                       "ERROR", e.what());
+         }
+     }
+-    catch (const nlohmann::json::exception& e)
+-    {}
+-    getPSUConfiguration();
+-    getSystemProperties();
+ 
+     // Request the bus name before the analyze() function, which is the one that
+     // determines the brownout condition and sets the status d-bus property.
+@@ -135,42 +257,17 @@ PSUManager::PSUManager(sdbusplus::bus_t& bus, const sdeventplus::Event& e) :
+ #ifdef SOLUM_PSU
+ void PSUManager::createPsuProperty()
+ {
+-    // init dbus
+-    conn = std::make_shared<sdbusplus::asio::connection>(io);
+-    // Bus name
+-    conn->request_name(phosphor_power_inventory.c_str());
+-    sdbusplus::asio::object_server inventory =
+-        sdbusplus::asio::object_server(conn);
+-    // create new interface undr power supply
+-    powerIface = inventory.add_interface(
+-        "/xyz/openbmc_project/inventory/system/powersupply",
+-        "xyz.openbmc_project.PsuStatus");
+-    for (auto& psu : psus)
++    // Initialize D-Bus infrastructure for dynamic PSU interface management
++    // Interfaces will be created/destroyed based on in1_input accessibility in
++    // analyze()
++
++    if (!conn)
+     {
+-        powerIface->register_property("InputRanges", psu->inputVoltType());
+-        powerIface->register_property("PowerCapacityWatts",
+-                                      psu->getMaxPowerPsu());
+-        powerIface->register_property("FirmwareVersion", psu->getFWVersion());
+-        powerIface->register_property("InputNominalVoltageType",
+-                                      psu->inputNominalVoltageType());
+-        powerIface->register_property("PowerSupplyType",
+-                                      psu->powerSupplyType());
+-        powerIface->register_property("SparePartNumber", psu->getModelName());
+-        powerIface->register_property("SerialNumber", psu->getSparePart());
+-        powerIface->register_property("PlugType", psu->plugType());
+-        powerIface->register_property("EfficiencyRatings",
+-                                      psu->getPsuEfficiency());
+-        powerIface->register_property("OutputRails", psu->getPsuVoltRail());
+-        powerIface->register_property("AllocatedWatts",
+-                                      psu->getAllocatedWatts());
+-        powerIface->register_property("RequestedWatts",
+-                                      psu->getRequestedWatts());
++        // Initialize boost::asio connection and object_server for D-Bus
++        // interface creation
++        conn = std::make_shared<sdbusplus::asio::connection>(io);
++        objServer = std::make_shared<sdbusplus::asio::object_server>(conn);
+     }
+-    powerIface->initialize();
+-}
+-void PSUManager::io_run()
+-{
+-    io.run();
+ }
+ #endif
+ 
+@@ -182,9 +279,9 @@ void PSUManager::initialize()
+         int pgood = 0;
+         std::string state = "";
+         phosphor::power::util::DbusPropertyMap properties;
+-	auto method = bus.new_method_call(powerService.c_str(), POWER_OBJ_PATH,
++        auto method = bus.new_method_call(powerService.c_str(), POWER_OBJ_PATH,
+                                           POWER_IFACE, "GetAll");
+-	method.append("xyz.openbmc_project.State.Host");
++        method.append("xyz.openbmc_project.State.Host");
+         auto reply = bus.call(method);
+ 
+         reply.read(properties);
+@@ -241,8 +338,6 @@ void PSUManager::getPSUConfiguration()
+     auto depth = 0;
+     auto objects = getSubTree(bus, "/", IBMCFFPSInterface, depth);
+ 
+-    psus.clear();
+-
+     // I should get a map of objects back.
+     // Each object will have a path, a service, and an interface.
+     // The interface should match the one passed into this function.
+@@ -299,7 +394,7 @@ void PSUManager::getPSUProperties(util::DbusPropertyMap& properties)
+     {
+         try
+         {
+-	    if (property.first == psuNameProp)
++            if (property.first == psuNameProp)
+             {
+                 psuname = std::get_if<std::string>(&properties[psuNameProp]);
+             }
+@@ -325,21 +420,6 @@ void PSUManager::getPSUProperties(util::DbusPropertyMap& properties)
+             presline = *preslineptr;
+         }
+ 
+-        auto invMatch =
+-            std::find_if(psus.begin(), psus.end(), [&invpath](auto& psu) {
+-                return psu->getInventoryPath() == invpath;
+-            });
+-        if (invMatch != psus.end())
+-        {
+-            // This power supply has the same inventory path as the one with
+-            // information just added to D-Bus.
+-            // Changes to GPIO line name unlikely, so skip checking.
+-            // Changes to the I2C bus and address unlikely, as that would
+-            // require corresponding device tree updates.
+-            // Return out to avoid duplicate object creation.
+-            return;
+-        }
+-
+         buildDriverName(i2cbus, i2caddr);
+ #ifdef SOLUM_PSU
+         constexpr auto driver = "pmbus";
+@@ -676,6 +756,258 @@ void PSUManager::syncHistory()
+ 
+ void PSUManager::analyze()
+ {
++#ifdef SOLUM_PSU
++
++    for (auto& monitor : psuMonitors)
++    {
++        if (monitor.pmbusInterface)
++        {
++            bool psuAccessible = false;
++            uint64_t in1_input = 0;
++
++            // First check if I2C base device path exists.
++            auto i2cDevicePath =
++                monitor.pmbusInterface->getPath(phosphor::pmbus::Type::Base);
++
++            namespace fs = std::filesystem;
++            bool deviceExists = false;
++
++            try
++            {
++                deviceExists = fs::exists(i2cDevicePath);
++            }
++            catch (const std::exception& e)
++            {
++                deviceExists = false;
++            }
++
++            if (deviceExists && !monitor.isConnected)
++            {
++                try
++                {
++                    char pmbusAddrBuf[5];
++                    snprintf(pmbusAddrBuf, sizeof(pmbusAddrBuf), "%04x",
++                             (unsigned int)monitor.address);
++                    std::string addrStrPmbus(pmbusAddrBuf);
++
++                    monitor.pmbusInterface =
++                        phosphor::pmbus::createPMBus(monitor.bus, addrStrPmbus);
++
++                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
++                }
++                catch (const std::exception& e)
++                {}
++            }
++
++            try
++            {
++                in1_input = monitor.pmbusInterface->read(
++                    "in1_input", phosphor::pmbus::Type::Hwmon, false);
++                psuAccessible = true;
++            }
++            catch (const std::exception& e)
++            {
++                psuAccessible = false;
++
++                if (deviceExists && !monitor.isConnected)
++                {
++                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
++
++                    try
++                    {
++                        in1_input = monitor.pmbusInterface->read(
++                            "in1_input", phosphor::pmbus::Type::Hwmon, false);
++                        psuAccessible = true;
++                    }
++                    catch (const std::exception& e2)
++                    {
++                        psuAccessible = false;
++                    }
++                }
++            }
++
++            std::string psuPath =
++                "/xyz/openbmc_project/power/power_supplies/" + monitor.name;
++
++            if (psuAccessible && !monitor.isConnected)
++            {
++                try
++                {
++                    if (objServer)
++                    {
++                        auto iface = objServer->add_interface(
++                            psuPath, "xyz.openbmc_project.PsuStatus");
++
++                        std::string psuStatus =
++                            (in1_input > 0) ? "Enabled" : "StandbyOffline";
++                        iface->register_property("PSUStatus", psuStatus);
++
++                        monitor.firmwareVersion =
++                            monitor.pmbusInterface->readString(
++                                "mfr_revision",
++                                phosphor::pmbus::Type::HwmonDeviceDebug);
++
++                        monitor.serialNumber =
++                            monitor.pmbusInterface->readString(
++                                "mfr_serial",
++                                phosphor::pmbus::Type::HwmonDeviceDebug);
++
++                        monitor.sparePartNumber =
++                            monitor.pmbusInterface->readString(
++                                "mfr_model",
++                                phosphor::pmbus::Type::HwmonDeviceDebug);
++
++                        try
++                        {
++                            auto powerStr = monitor.pmbusInterface->readString(
++                                "power2_rated_max",
++                                phosphor::pmbus::Type::Hwmon);
++                            uint64_t powerMicrowatts = std::stoull(powerStr);
++                            monitor.powerCapacityWatts =
++                                powerMicrowatts / 1000000;
++                        }
++                        catch (const std::exception& e)
++                        {}
++
++                        uint8_t inputRanges = 0;
++                        double actVoltage =
++                            static_cast<double>(in1_input) / 1000.0;
++                        if (actVoltage >= 200.0)
++                        {
++                            inputRanges = 220;
++                        }
++                        else if (actVoltage >= 100.0 && actVoltage < 200.0)
++                        {
++                            inputRanges = 110;
++                        }
++                        else
++                        {
++                            inputRanges = 0;
++                        }
++
++                        iface->register_property("InputRanges", inputRanges);
++                        iface->register_property("PowerCapacityWatts",
++                                                 monitor.powerCapacityWatts);
++                        iface->register_property("FirmwareVersion",
++                                                 monitor.firmwareVersion);
++                        iface->register_property(
++                            "InputNominalVoltageType",
++                            monitor.inputNominalVoltageType);
++                        iface->register_property("PowerSupplyType",
++                                                 monitor.powerSupplyType);
++                        iface->register_property("SparePartNumber",
++                                                 monitor.sparePartNumber);
++                        iface->register_property("SerialNumber",
++                                                 monitor.serialNumber);
++                        iface->register_property("PlugType", monitor.plugType);
++                        iface->register_property("EfficiencyRatings",
++                                                 monitor.efficiencyRatings);
++                        iface->register_property("OutputRails",
++                                                 monitor.outputRails);
++                        /*Dummy value used, it will deploy on properties it
++                         * won't create any impact on H/W */
++                        iface->register_property("AllocatedWatts",
++                                                 static_cast<uint64_t>(800));
++                        iface->register_property("RequestedWatts",
++                                                 static_cast<uint64_t>(400));
++
++                        iface->initialize();
++
++                        psuInterfaceMap[monitor.name] = iface;
++                        monitor.isConnected = true;
++                    }
++                }
++                catch (const std::exception& e)
++                {}
++            }
++            else if (!psuAccessible && monitor.isConnected)
++            {
++                try
++                {
++                    auto it = psuInterfaceMap.find(monitor.name);
++                    if (it != psuInterfaceMap.end())
++                    {
++                        if (objServer)
++                        {
++                            objServer->remove_interface(it->second);
++                        }
++                        psuInterfaceMap.erase(it);
++                        monitor.isConnected = false;
++                    }
++                }
++                catch (const std::exception& e)
++                {}
++            }
++            else if (psuAccessible && monitor.isConnected)
++            {
++                auto it = psuInterfaceMap.find(monitor.name);
++                if (it != psuInterfaceMap.end())
++                {
++                    try
++                    {
++                        std::string psuStatus =
++                            (in1_input > 0) ? "Enabled" : "StandbyOffline";
++                        it->second->set_property("PSUStatus", psuStatus);
++
++                        uint8_t inputRanges = 0;
++                        double actVoltage =
++                            static_cast<double>(in1_input) / 1000.0;
++                        if (actVoltage >= 200.0)
++                        {
++                            inputRanges = 220;
++                        }
++                        else if (actVoltage >= 100.0 && actVoltage < 200.0)
++                        {
++                            inputRanges = 110;
++                        }
++                        else
++                        {
++                            inputRanges = 0;
++                        }
++                        it->second->set_property("InputRanges", inputRanges);
++
++                        if (monitor.firmwareVersion == "Unknown" ||
++                            monitor.firmwareVersion.empty())
++                        {
++                            monitor.firmwareVersion =
++                                monitor.pmbusInterface->readString(
++                                    "mfr_revision",
++                                    phosphor::pmbus::Type::HwmonDeviceDebug);
++                            it->second->set_property("FirmwareVersion",
++                                                     monitor.firmwareVersion);
++                        }
++
++                        if (monitor.serialNumber == "Unknown" ||
++                            monitor.serialNumber.empty())
++                        {
++                            monitor.serialNumber =
++                                monitor.pmbusInterface->readString(
++                                    "mfr_serial",
++                                    phosphor::pmbus::Type::HwmonDeviceDebug);
++                            it->second->set_property("SerialNumber",
++                                                     monitor.serialNumber);
++                        }
++
++                        if (monitor.sparePartNumber == "Unknown" ||
++                            monitor.sparePartNumber.empty())
++                        {
++                            monitor.sparePartNumber =
++                                monitor.pmbusInterface->readString(
++                                    "mfr_model",
++                                    phosphor::pmbus::Type::HwmonDeviceDebug);
++                            it->second->set_property("SparePartNumber",
++                                                     monitor.sparePartNumber);
++                        }
++                    }
++                    catch (const std::exception& e)
++                    {}
++                }
++            }
++        }
++    }
++
++    io.poll();
++#endif
+     auto syncHistoryRequired =
+         std::any_of(psus.begin(), psus.end(), [](const auto& psu) {
+             return psu->isSyncHistoryRequired();
+diff --git a/phosphor-power-supply/psu_manager.hpp b/phosphor-power-supply/psu_manager.hpp
+index c7d4c4a..268b2b9 100644
+--- a/phosphor-power-supply/psu_manager.hpp
++++ b/phosphor-power-supply/psu_manager.hpp
+@@ -12,6 +12,12 @@
+ #include <sdeventplus/utility/timer.hpp>
+ #include <xyz/openbmc_project/State/Decorator/PowerSystemInputs/server.hpp>
+ 
++#ifdef SOLUM_PSU
++#include <boost/asio/io_context.hpp>
++#include <sdbusplus/asio/connection.hpp>
++#include <sdbusplus/asio/object_server.hpp>
++#endif
++
+ struct sys_properties
+ {
+     int powerSupplyCount;
+@@ -19,6 +25,29 @@ struct sys_properties
+     bool powerConfigFullLoad;
+ };
+ 
++struct psu_monitor_info
++{
++    uint8_t bus;
++    uint8_t address;
++    std::string name;
++    std::unique_ptr<phosphor::pmbus::PMBusBase> pmbusInterface;
++    bool isConnected; // Track if PSU is currently connected based on in1_input
++                      // accessibility
++
++    // JSON properties
++    std::string inputNominalVoltageType;
++    std::string powerSupplyType;
++    std::string plugType;
++    std::string efficiencyRatings;
++    std::vector<std::string> outputRails;
++
++    // Runtime properties sourced from PMBus/debugfs.
++    std::string firmwareVersion = "Unknown";
++    std::string serialNumber = "Unknown";
++    std::string sparePartNumber = "Unknown";
++    uint64_t powerCapacityWatts = 1600;
++};
++
+ using namespace phosphor::power::psu;
+ 
+ namespace phosphor::power::manager
+@@ -106,14 +135,6 @@ class PSUManager
+         return timer->get_event().loop();
+     }
+ 
+-     /**
+-       * start io contex to monitoring dbus properties
+-       */
+-#ifdef SOLUM_PSU
+-        void
+-        io_run();
+-#endif
+-
+     /**
+      * Write PMBus ON_OFF_CONFIG
+      *
+@@ -434,6 +455,22 @@ class PSUManager
+      * @brief The device driver name for all power supplies.
+      */
+     std::string driverName;
++    /**
++     * @brief Vector of PSU monitoring info with PMBus interfaces
++     */
++    std::vector<psu_monitor_info> psuMonitors;
++#ifdef SOLUM_PSU
++    /**
++     * @brief Boost ASIO object server for managing D-Bus interfaces
++     */
++    std::shared_ptr<sdbusplus::asio::object_server> objServer;
++
++    /**
++     * @brief Map of PSU name to D-Bus interface for dynamic management
++     */
++    std::map<std::string, std::shared_ptr<sdbusplus::asio::dbus_interface>>
++        psuInterfaceMap;
++#endif
+ };
+ 
+ } // namespace phosphor::power::manager
+-- 
+2.43.0
+

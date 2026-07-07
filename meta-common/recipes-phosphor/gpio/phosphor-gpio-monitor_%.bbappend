@@ -1,19 +1,5 @@
 FILESEXTRAPATHS:append := ":${THISDIR}/${PN}"
 
-SRC_URI:append = " \
-    file://gpioCallbackHandler.cpp \
-    file://gpioCallbackHandler.hpp \
-    "
-
-SRC_URI:append = "${@bb.utils.contains('MACHINE', 'evb-npcm845','','file://0001-Add-CallbackHandler-support-for-GpioMonitor.patch', d)}"
-
-SRC_URI:append:evb-npcm845 = " file://0001-Add-CallbackHandler-support-for-arbel-GpioMonitor.patch "
-
-do_unpack:append(){
-    bb.build.exec_func('copy_impl_files', d)
-}
-
-copy_impl_files() {
-    cp ${WORKDIR}/gpioCallbackHandler.cpp ${S}/
-    cp ${WORKDIR}/gpioCallbackHandler.hpp ${S}/
-}
+SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-gpio-monitor.git;branch=master;protocol=https;name=override;"
+SRCREV_FORMAT = "override"
+SRCREV_override = "496d5c3687f3bdcc8c7c89d99fe405a8c443fe2e"

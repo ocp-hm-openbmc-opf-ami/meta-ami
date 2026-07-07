@@ -214,10 +214,11 @@ Check_and_update_whitelist "$WHITELIST" "$BLACKLIST" || true
 log "Preserve policy decided: IS_UBOOT_ENABLED=${IS_UBOOT_ENABLED}"
 debug_log "Preserve policy decided: IS_UBOOT_ENABLED=${IS_UBOOT_ENABLED}"
 
-systemctl kill xyz.openbmc_project.Software.Sync.service || true
-systemctl kill nv-sync.service || true
 rm -rf /etc/nv-sync-enable
 rm -rf /etc/sync-enable
+systemctl kill xyz.openbmc_project.Software.Sync.service || true
+systemctl kill nv-sync.service || true
+
 command -v update_percentage >/dev/null 2>&1 && update_percentage "$UPDATE_PERCENT_PRESTAGE_VERIFY_COMPLETE" || true
 command -v redfish_log_fw_evt >/dev/null 2>&1 && redfish_log_fw_evt start || true
 log "prepare stage complete."

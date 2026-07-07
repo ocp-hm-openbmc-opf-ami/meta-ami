@@ -59,7 +59,7 @@ PACKAGES = "\
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-ipmi-blobs', '${PN}-ipmi-blobs', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-biosconfig-manager', '${PN}-biosconfig-manager', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-spdm', '${PN}-spdm', '', d)} \
-		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-intel-pldm', '${PN}-intel-pldm', '', d)} \
+		${@'${PN}-intel-pldm' if (bb.utils.contains('IMAGE_FEATURES', 'onetree-intel-pldm', True, False, d) and not bb.utils.contains('IMAGE_FEATURES', 'onetree-pldm', True, False, d)) else ''} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-intel-mctp', '${PN}-intel-mctp', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-network', '${PN}-network', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-network-system-firewall-support', '${PN}-network-system-firewall-support', '', d)} \
@@ -73,6 +73,7 @@ PACKAGES = "\
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-fwupdate-cpld-update', '${PN}-fwupdate-cpld-update', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-image-sign', '${PN}-image-sign', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-dual-image', '${PN}-dual-image', '', d)} \
+		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-dual-image-common-conf', '${PN}-dual-image-common-conf', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-hw-failsafe-boot', '${PN}-hw-failsafe-boot', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-single-spi-abr', '${PN}-single-spi-abr', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-sync-conf', '${PN}-sync-conf', '', d)} \
@@ -84,6 +85,7 @@ PACKAGES = "\
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-network-phy-configuration-support', '${PN}-network-phy-configuration-support', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-network-nsupdate-support', '${PN}-network-nsupdate-support', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-network-tsig-support', '${PN}-network-tsig-support', '', d)} \
+		 ${@bb.utils.contains('IMAGE_FEATURES', 'onetree-network-doh-support', '${PN}-network-doh-support', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-network-persist-mac-support', '${PN}-network-persist-mac-support', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-network-avahi-support', '${PN}-network-avahi-support', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-phosphor-ipmi-flash', '${PN}-phosphor-ipmi-flash', '', d)} \
@@ -101,6 +103,8 @@ PACKAGES = "\
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-multi-host-support', '${PN}-multi-host-support', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-telemetry', '${PN}-telemetry', '', d)} \
                 ${@bb.utils.contains('IMAGE_FEATURES', 'onetree-ipmb', '${PN}-ipmb', '', d)} \
+		 ${@bb.utils.contains('IMAGE_FEATURES', 'onetree-phosphor-health-monitor', '${PN}-phosphor-health-monitor', '', d)} \
+		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-mac-eeprom-support', '${PN}-onetree-mac-eeprom-support','', d)} \
 		"
 
 
@@ -218,7 +222,6 @@ SUPPORTED_VENDOR:${PN}-gpgpu = "NVIDIA"
 SUMMARY:${PN}-acd = "EP : ACD Autonomously dump system data when crashing"
 DESCRIPTION:${PN}-acd = "Provides debug logs from the host system via the BMC in the event of a crash dump"
 RDEPENDS:${PN}-acd = "  crashdump \
-			aic-crashdump \
 			ami-acd-dbus \
 			bafi-dev \
 		        "
@@ -352,10 +355,10 @@ SUPPORTED_VENDOR:${PN}-gpio-presence = "ALL"
 
 SUMMARY:${PN}-fru = "AMI Core Features: Field Replacable Unit, Inventory Management"
 DESCRIPTION:${PN}-fru = " Provide a D-Bus inventory for configured \
-				data and also scan all available IPMI FRU."
+			     data and also scan all available IPMI FRU."
 RDEPENDS:${PN}-fru = " entity-manager \
-            fru-device \
-			default-fru "
+			       fru-device \
+			      default-fru "
 SUPPORTED_VENDOR:${PN}-fru = "ALL"
 #-----------------------------------#
 
@@ -378,7 +381,8 @@ SUPPORTED_VENDOR:${PN}-postcode = "ALL"
 SUMMARY:${PN}-pef-alert = "AMI Core Features: Platform Event Filtering and Alert manager"
 DESCRIPTION:${PN}-pef-alert = " Monitors system events and triggers alerts to enhance system \
 				management and security"
-RDEPENDS:${PN}-pef-alert = " pef-alert-manager"
+RDEPENDS:${PN}-pef-alert = " pef-alert-manager \
+				    pendtask "
 SUPPORTED_VENDOR:${PN}-pef-alert = "ALL"
 #-----------------------------------#
 
@@ -424,6 +428,22 @@ RDEPENDS:${PN}-radius-client = " radiusclient-ng \
 				nss-pam-radiusd \
 				netbase "
 SUPPORTED_VENDOR:${PN}-radius-client = "ALL"
+#-----------------------------------#
+
+SUMMARY:${PN}-license = "AMI Core Features: License control"
+DESCRIPTION:${PN}-license = " The License Control overseeing licensable services, \
+				      enforcing license validity, and facilitating key \
+				      management service."
+RDEPENDS:${PN}-license = " license-control"
+SUPPORTED_VENDOR:${PN}-license = "ALL"
+#-----------------------------------#
+
+SUMMARY:${PN}-backup-restore = "AMI Core Features: Backup/Restore BMC configurations"
+DESCRIPTION:${PN}-backup-restore = " Backup-Restore BMC Configurations Support provides \
+					     way to backup running BMC configuration and to apply \
+					     the BMC configuration to multiple running BMC's."
+RDEPENDS:${PN}-backup-restore = " backuprestore"
+SUPPORTED_VENDOR:${PN}-backup-restore = "ALL"
 #-----------------------------------#
 
 SUMMARY:${PN}-host-error = "AMI Core Features:"
@@ -549,6 +569,15 @@ RDEPENDS:${PN}-sync-conf = " \
 				phosphor-software-manager-sync \
 			"
 SUPPORTED_VENDOR:${PN}-sync-conf = "ALL"
+
+#-----------------------------------#
+
+SUMMARY:${PN}-dual-image-common-conf = "AMI Core Features : Dual Image common conf mode"
+DESCRIPTION:${PN}-dual-image-common-conf = "This option enables Dual image with common conf mode"
+RDEPENDS:${PN}-dual-image-common-conf = " \
+				${PN}-dual-image \
+			"
+SUPPORTED_VENDOR:${PN}-dual-image-common-conf = "ALL"
 
 #-----------------------------------#
 
@@ -709,6 +738,24 @@ RDEPENDS:${PN}-network-tsig-support = " phosphor-network bind-utils "
 SUPPORTED_VENDOR:${PN}-network-tsig-support = "ALL"
 #-----------------------------------#
 
+SUMMARY:${PN}-network-doh-support = "AMI Core Features: Doh Support"
+DESCRIPTION:${PN}-network-doh-support = "The feature encrypted DNS queries using HTTPS."
+RDEPENDS:${PN}-network-doh-support = " phosphor-network https-dns-proxy iptables "
+SUPPORTED_VENDOR:${PN}-network-doh-support = "ALL"
+#-----------------------------------#
+
+SUMMARY:${PN}-network-doh-support = "AMI Core Features: Doh Support"
+DESCRIPTION:${PN}-network-doh-support = "The feature encrypted DNS queries using HTTPS."
+RDEPENDS:${PN}-network-doh-support = " phosphor-network https-dns-proxy iptables "
+SUPPORTED_VENDOR:${PN}-network-doh-support = "ALL"
+#-----------------------------------#
+
+SUMMARY:${PN}-network-doh-support = "AMI Core Features: Doh Support"
+DESCRIPTION:${PN}-network-doh-support = "The feature encrypted DNS queries using HTTPS."
+RDEPENDS:${PN}-network-doh-support = " phosphor-network https-dns-proxy iptables "
+SUPPORTED_VENDOR:${PN}-network-doh-support = "ALL"
+#-----------------------------------#
+
 SUMMARY:${PN}-network-persist-mac-support = "AMI Core Features: Persist Mac Support"
 DESCRIPTION:${PN}-network-persist-mac-support = "This feature is to persist Mac accross uboot"
 RDEPENDS:${PN}-network-persist-mac-support = " phosphor-network "
@@ -823,7 +870,9 @@ DESCRIPTION:${PN}-tools = "Command-line utilities bundled under a unified tool t
 RDEPENDS:${PN}-tools = " ipmitool \
 			 pwmtachtool \
 			 adcapp \
-			 i3c-tools "
+			 i3c-tools \
+			 dbus-tools \
+			 "
 SUPPORTED_VENDOR:${PN}-tools = "ALL"
 #-----------------------------------#
 
@@ -879,5 +928,17 @@ DESCRIPTION:${PN}-ipmb = " IPMB management library contains dbus methods \
                              and properties for handling IPMB communication"
 RDEPENDS:${PN}-ipmb = " phosphor-ipmi-ipmb"
 SUPPORTED_VENDOR:${PN}-ipmb = "ALL"
+#-----------------------------------#
+
+SUMMARY:${PN}-phosphor-health-monitor = "AMI Core Features: Phosphor-Health-Monitor"
+DESCRIPTION:${PN}-phosphor-health-monitor = " Enabled Phosphor-health-monitor"
+RDEPENDS:${PN}-phosphor-health-monitor = " phosphor-health-monitor"
+SUPPORTED_VENDOR:${PN}-phosphor-health-monitor = "ALL"
+#-----------------------------------#
+
+SUMMARY:${PN}-onetree-mac-eeprom-support = "AMI Core Features: reacd mac from eeprom features"
+DESCRIPTION:${PN}-onetree-mac-eeprom-support = " Reads mac address from the peerom specified in the DTS "
+RDEPENDS:${PN}-onetree-mac-eeprom-support = " "
+SUPPORTED_VENDOR:${PN}-onetree-mac-eeprom-support = "EVB-2600 INTEL_BHS OKS_2700 INTEL_2700"
 #-----------------------------------#
 

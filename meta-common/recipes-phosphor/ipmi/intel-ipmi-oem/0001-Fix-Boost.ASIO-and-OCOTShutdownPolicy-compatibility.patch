@@ -1,0 +1,137 @@
+From ed7138c2687ca24449aa7345b75c028af61a56e5 Mon Sep 17 00:00:00 2001
+From: Manoj Ashok <amanoj@ami.com>
+Date: Mon, 2 Feb 2026 18:41:29 +0530
+Subject: [PATCH] Fix Boost.ASIO and OCOTShutdownPolicy compatibility
+
+1. Replace boost::asio::detached with an empty lambda for Boost compatibility
+2. Comment out OCOTShutdownPolicy include and stub out GET/SET functions
+
+Upstream-Status: Inappropriate [configuration]
+Signed-off-by: Manoj Ashok <amanoj@ami.com>
+---
+ src/oemcommands.cpp     | 77 +++------------------------------------
+ src/storagecommands.cpp |  2 +-
+ 2 files changed, 5 insertions(+), 74 deletions(-)
+
+diff --git a/src/oemcommands.cpp b/src/oemcommands.cpp
+index 0877cf15..0f78edc1 100644
+--- a/src/oemcommands.cpp
++++ b/src/oemcommands.cpp
+@@ -25,7 +25,7 @@
+ #include <boost/container/flat_map.hpp>
+ #include <boost/process/v1/child.hpp>
+ #include <boost/process/v1/io.hpp>
+-#include <com/intel/Control/OCOTShutdownPolicy/server.hpp>
++// #include <com/intel/Control/OCOTShutdownPolicy/server.hpp>
+ #include <commandutils.hpp>
+ #include <gpiod.hpp>
+ 
+@@ -1095,28 +1095,8 @@ ipmi_ret_t ipmiOEMGetShutdownPolicy(ipmi_netfn_t, ipmi_cmd_t, ipmi_request_t,
+             *dbus, service, oemShutdownPolicyObjPath, oemShutdownPolicyIntf,
+             oemShutdownPolicyObjPathProp);
+ 
+-        if (sdbusplus::com::intel::Control::server::OCOTShutdownPolicy::
+-                convertPolicyFromString(std::get<std::string>(variant)) ==
+-            sdbusplus::com::intel::Control::server::OCOTShutdownPolicy::Policy::
+-                NoShutdownOnOCOT)
+-        {
+-            resp->policy = 0;
+-        }
+-        else if (sdbusplus::com::intel::Control::server::OCOTShutdownPolicy::
+-                     convertPolicyFromString(std::get<std::string>(variant)) ==
+-                 sdbusplus::com::intel::Control::server::OCOTShutdownPolicy::
+-                     Policy::ShutdownOnOCOT)
+-        {
+-            resp->policy = 1;
+-        }
+-        else
+-        {
+-            phosphor::logging::log<phosphor::logging::level::ERR>(
+-                "oem_set_shutdown_policy: invalid property!",
+-                phosphor::logging::entry(
+-                    "PROP=%s", std::get<std::string>(variant).c_str()));
+-            return ipmi::ccUnspecifiedError;
+-        }
++        // OCOTShutdownPolicy interface not available, default to 0
++        resp->policy = 0;
+         // TODO needs to check if it is multi-node products,
+         // policy is only supported on node 3/4
+         resp->policySupport = shutdownPolicySupported;
+@@ -1132,59 +1112,11 @@ ipmi_ret_t ipmiOEMGetShutdownPolicy(ipmi_netfn_t, ipmi_cmd_t, ipmi_request_t,
+ }
+ 
+ ipmi_ret_t ipmiOEMSetShutdownPolicy(ipmi_netfn_t, ipmi_cmd_t,
+-                                    ipmi_request_t request, ipmi_response_t,
++                                    ipmi_request_t, ipmi_response_t,
+                                     ipmi_data_len_t dataLen, ipmi_context_t)
+ {
+-    uint8_t* req = reinterpret_cast<uint8_t*>(request);
+-    sdbusplus::com::intel::Control::server::OCOTShutdownPolicy::Policy policy =
+-        sdbusplus::com::intel::Control::server::OCOTShutdownPolicy::Policy::
+-            NoShutdownOnOCOT;
+-
+-    // TODO needs to check if it is multi-node products,
+-    // policy is only supported on node 3/4
+-    if (*dataLen != 1)
+-    {
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "oem_set_shutdown_policy: invalid input len!");
+-        *dataLen = 0;
+-        return ipmi::ccReqDataLenInvalid;
+-    }
+-
++    // OCOTShutdownPolicy interface not available, just accept and return success
+     *dataLen = 0;
+-    if ((*req != noShutdownOnOCOT) && (*req != shutdownOnOCOT))
+-    {
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
+-            "oem_set_shutdown_policy: invalid input!");
+-        return ipmi::ccInvalidFieldRequest;
+-    }
+-
+-    if (*req == noShutdownOnOCOT)
+-    {
+-        policy = sdbusplus::com::intel::Control::server::OCOTShutdownPolicy::
+-            Policy::NoShutdownOnOCOT;
+-    }
+-    else
+-    {
+-        policy = sdbusplus::com::intel::Control::server::OCOTShutdownPolicy::
+-            Policy::ShutdownOnOCOT;
+-    }
+-
+-    try
+-    {
+-        std::shared_ptr<sdbusplus::asio::connection> dbus = getSdBus();
+-        std::string service =
+-            getService(*dbus, oemShutdownPolicyIntf, oemShutdownPolicyObjPath);
+-        setDbusProperty(
+-            *dbus, service, oemShutdownPolicyObjPath, oemShutdownPolicyIntf,
+-            oemShutdownPolicyObjPathProp,
+-            sdbusplus::com::intel::Control::server::convertForMessage(policy));
+-    }
+-    catch (const sdbusplus::exception_t& e)
+-    {
+-        phosphor::logging::log<phosphor::logging::level::ERR>(e.description());
+-        return ipmi::ccUnspecifiedError;
+-    }
+-
+     return ipmi::ccSuccess;
+ }
+ 
+diff --git a/src/storagecommands.cpp b/src/storagecommands.cpp
+index a72ffe84..47ae058e 100644
+--- a/src/storagecommands.cpp
++++ b/src/storagecommands.cpp
+@@ -365,7 +365,7 @@ void startMatch(void)
+         [](boost::asio::yield_context yield) {
+             replaceCacheFru(getSdBus(), yield);
+         },
+-        boost::asio::detached);
++        [](const std::exception_ptr&) {});
+ }
+ 
+ /** @brief implements the read FRU data command
+-- 
+2.34.1
+

@@ -1,4 +1,4 @@
-FILESEXTRAPATHS:prepend:= "${THISDIR}/files:"
+FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
 SRC_URI:append = " \
 	file://0001-Adding_new_file_i2c-npcm_u-boot.patch \
@@ -8,7 +8,9 @@ SRC_URI:append = " \
 	file://0005-Re-enable-sgmii-auto-neg-feature-after-set-PCS-mode.patch \
 	file://0006-u-boot-arbel-Add-the-WOL-init-sequence-as-part-of-la.patch \
 	file://0007-Modified-i2c-eeprom-file.patch \
+	file://0008-enable-fieldmode-in-uboot-and-save-the-env-before-au.patch \
 	file://enable-i2c-eeprom.cfg \
 	file://disable_wdt_autostart.cfg \
-	file://0008-enable-fieldmode-in-uboot-and-save-the-env-before-au.patch \
+	file://u-boot-env-update.cfg \
+	file://0001-revert-uimage_flash_addr-to-80400000.patch \
 	"

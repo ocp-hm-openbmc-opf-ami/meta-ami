@@ -1,0 +1,85 @@
+From: Hemanth Kumar M <hemanthkumarm@ami.com>
+Date: Thu, 15 May 2026 00:00:00 +0000
+Subject: [PATCH] pldm: package_parser libpldm API compatibility for old/new signatures
+
+Ensures package_parser builds with both default libpldm (8-argument
+decode_firmware_device_id_record) and newer libpldm (9-argument variant
+with format revision).
+
+Changes:
+ - add compile-time compatibility wrapper for decode_firmware_device_id_record
+ - keep pkgHeaderFormatRevision usage when new API is present
+
+Upstream-Status: Inappropriate [AMI-specific fwupd integration]
+
+Signed-off-by: Hemanth Kumar M <hemanthkumarm@ami.com>
+---
+ common/pldm/package_parser.cpp | 39 ++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 34 insertions(+), 5 deletions(-)
+
+diff --git a/common/pldm/package_parser.cpp b/common/pldm/package_parser.cpp
+index f99ebb669..b546fc35c 100644
+--- a/common/pldm/package_parser.cpp
++++ b/common/pldm/package_parser.cpp
+@@ -9,6 +9,7 @@
+ 
+ #include <cstdlib>
+ #include <iostream>
++#include <type_traits>
+ #include <memory>
+ 
+ using namespace std;
+@@ -48,6 +49,36 @@ bool parserDebugEnabled()
+     return (v != nullptr) && (v[0] != '\0') && (v[0] != '0');
+ }
+ 
++template <typename Fn>
++int decodeFirmwareDeviceIdRecordCompat(
++    Fn fn, const uint8_t* msg, size_t length,
++    ComponentBitmapBitLength componentBitmapBitLength,
++    pldm_firmware_device_id_record* deviceIdRecHeader,
++    variable_field* applicableComponents,
++    variable_field* compImageSetVersionStr,
++    variable_field* recordDescriptors, variable_field* fwDevicePkgData,
++    size_t pkgHeaderFormatRevision)
++{
++    if constexpr (std::is_invocable_r_v<
++                      int, Fn, const uint8_t*, size_t,
++                      ComponentBitmapBitLength,
++                      pldm_firmware_device_id_record*, variable_field*,
++                      variable_field*, variable_field*, variable_field*,
++                      size_t>)
++    {
++        return fn(msg, length, componentBitmapBitLength, deviceIdRecHeader,
++                  applicableComponents, compImageSetVersionStr,
++                  recordDescriptors, fwDevicePkgData,
++                  pkgHeaderFormatRevision);
++    }
++    else
++    {
++        return fn(msg, length, componentBitmapBitLength, deviceIdRecHeader,
++                  applicableComponents, compImageSetVersionStr,
++                  recordDescriptors, fwDevicePkgData);
++    }
++}
++
+ } // namespace
+ 
+ using InternalFailure =
+@@ -67,11 +98,11 @@ size_t PackageParser::parseFDIdentificationArea(
+         variable_field recordDescriptors{};
+         variable_field fwDevicePkgData{};
+ 
+-        auto rc = decode_firmware_device_id_record(
+-            pkgHdr.data() + offset, pkgHdrRemainingSize,
+-            componentBitmapBitLength, &deviceIdRecHeader, &applicableComponents,
+-            &compImageSetVersionStr, &recordDescriptors, &fwDevicePkgData,
+-            pkgHeaderFormatRevision);
++        auto rc = decodeFirmwareDeviceIdRecordCompat(
++            decode_firmware_device_id_record, pkgHdr.data() + offset,
++            pkgHdrRemainingSize, componentBitmapBitLength, &deviceIdRecHeader,
++            &applicableComponents, &compImageSetVersionStr,
++            &recordDescriptors, &fwDevicePkgData, pkgHeaderFormatRevision);
+         if (rc)
+         {
+             error(

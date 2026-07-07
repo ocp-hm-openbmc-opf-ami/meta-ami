@@ -13,7 +13,7 @@ SRC_URI = " \
            file://platforminit.service \
           "
 
-S = "${WORKDIR}"
+S = "${UNPACKDIR}"
 
 inherit pkgconfig meson systemd
 inherit obmc-phosphor-systemd

@@ -9,11 +9,10 @@ SRC_URI += " \
 # Enable flash_bios for PFR firmware update.
 PACKAGECONFIG:append = " verify_signature flash_bios"
 
-EXTRA_OEMESON:append = " \
-    -Doptional-images='bios_signed_cap.bin bmc_signed_cap.bin zephyr_signed.bin' \
-"
+# Append PFR-specific images to the base OPTIONAL_IMAGES variable
+OPTIONAL_IMAGES:append = ",bios_signed_cap.bin,bmc_signed_cap.bin,zephyr_signed.bin"
 
 do_install:append() {
     install -d ${D}/usr/sbin
-    install -m 0755 ${WORKDIR}/pfr_update.sh ${D}/usr/sbin/pfr_update.sh
+    install -m 0755 ${UNPACKDIR}/pfr_update.sh ${D}/usr/sbin/pfr_update.sh
 }

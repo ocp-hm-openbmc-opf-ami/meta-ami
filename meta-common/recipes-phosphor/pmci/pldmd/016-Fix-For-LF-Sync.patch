@@ -1,0 +1,196 @@
+From 209bd8cdfb4109eae5490aa7133242db170a2d9f Mon Sep 17 00:00:00 2001
+From: arjuncr <arjuncr@ami.com>
+Date: Thu, 19 Feb 2026 12:09:00 -0500
+Subject: [PATCH] Fix For LF Sync
+
+---
+ CMakeLists.txt                   |  4 ++--
+ src/firmware_update.cpp          | 10 +++++-----
+ src/numeric_effecter_handler.cpp |  4 ++--
+ src/pdr_manager.cpp              | 25 ++++++++++++++++++++-----
+ src/platform.cpp                 |  2 +-
+ src/pldmd.cpp                    |  2 +-
+ src/state_effecter_handler.cpp   |  4 ++--
+ 7 files changed, 33 insertions(+), 18 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 7049fb6..b5bfa5e 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -28,7 +28,7 @@ set (
+     -Wduplicated-cond \
+     -Wduplicated-branches \
+     -Wlogical-op \
+-    -Wnull-dereference \
++    -Wno-null-dereference \
+     -Wuseless-cast \
+     -Wdouble-promotion \
+     -Wno-strict-aliasing \
+@@ -88,7 +88,7 @@ set (SERVICE_FILES
+ add_executable(${PROJECT_NAME} ${SRC_FILES} ${HEADER_FILES})
+ 
+ target_link_libraries (${PROJECT_NAME} sdbusplus sdeventplus -lsystemd -lpldm_intel
+-                        -lpthread -lstdc++fs -lphosphor_dbus -lboost_coroutine -lphosphor_logging)
++                        -lpthread -lstdc++fs -lphosphor_dbus -lboost_coroutine -lboost_context -lphosphor_logging)
+ 
+ find_package (PkgConfig REQUIRED)
+ pkg_get_variable(SYSTEMD_SYSTEM_UNIT_DIR systemd systemdsystemunitdir)
+diff --git a/src/firmware_update.cpp b/src/firmware_update.cpp
+index e4f5dc0..dd5e6a3 100644
+--- a/src/firmware_update.cpp
++++ b/src/firmware_update.cpp
+@@ -22,7 +22,6 @@
+ 
+ #include <filesystem>
+ #include <phosphor-logging/log.hpp>
+-#include <xyz/openbmc_project/PLDM/FWU/FWUBase/server.hpp>
+ 
+ #include "utils.h"
+ #include <sdeventplus/event.hpp>
+@@ -83,7 +82,7 @@ constexpr uint16_t retryRequestForUpdateDelay = 5000;
+ // Maximum GetDeviceMetaData response count
+ constexpr size_t deviceMetaDataResponseCount = 100;
+ 
+-using FWUBase = sdbusplus::xyz::openbmc_project::PLDM::FWU::server::FWUBase;
++static constexpr const char* fwuBaseInterface = "xyz.openbmc_project.PLDM.FWU.FWUBase";
+ extern std::map<pldm_tid_t, FDProperties> terminusFwuProperties;
+ std::shared_ptr<boost::asio::steady_timer> expectedCommandTimer = nullptr;
+ std::unique_ptr<PLDMImg> pldmImg = nullptr;
+@@ -2603,7 +2602,7 @@ static void initializeFWUBase()
+     expectedCommandTimer =
+         std::make_shared<boost::asio::steady_timer>(*getIoContext());
+     auto objServer = getObjServer();
+-    auto fwuBaseIface = objServer->add_interface(objPath, FWUBase::interface);
++    auto fwuBaseIface = objServer->add_interface(objPath, fwuBaseInterface);
+     fwuBaseIface->register_method(
+         "StartFWUpdate", [](const std::string filePath) {
+             int rc = -1;
+@@ -2634,7 +2633,8 @@ static void initializeFWUBase()
+                                              filePath.c_str()));
+                 return rc;
+             }
+-            boost::asio::spawn([](boost::asio::yield_context yield) {
++            boost::asio::spawn(*getIoContext(),
++                [](boost::asio::yield_context yield) {
+                 int ret = initUpdate(yield);
+                 if (ret != PLDM_SUCCESS)
+                 {
+@@ -2642,7 +2642,7 @@ static void initializeFWUBase()
+                         "StartFWUpdate: initUpdate failed.");
+                 }
+                 pldmImg = nullptr;
+-            });
++            }, boost::asio::detached);
+             return rc;
+         });
+     fwuBaseIface->initialize();
+diff --git a/src/numeric_effecter_handler.cpp b/src/numeric_effecter_handler.cpp
+index 3a2fa00..1d3aa7e 100644
+--- a/src/numeric_effecter_handler.cpp
++++ b/src/numeric_effecter_handler.cpp
+@@ -538,12 +538,12 @@ void NumericEffecterHandler::registerSetEffecter()
+                                         phosphor::logging::entry("TID=%d",
+                                                                  _tid));
+                                 }
+-                            });
++                            }, boost::asio::detached);
+                     });
+             };
+ 
+             // Refresh the value on D-Bus
+-            getIoContext()->post(refreshEffecterInterfaces);
++            boost::asio::post(*getIoContext(), refreshEffecterInterfaces);
+         });
+     setEffecterInterface->initialize();
+ }
+diff --git a/src/pdr_manager.cpp b/src/pdr_manager.cpp
+index e079131..d97f281 100644
+--- a/src/pdr_manager.cpp
++++ b/src/pdr_manager.cpp
+@@ -21,7 +21,6 @@
+ #include "pldm.hpp"
+ #include "utils.hpp"
+ 
+-#include <codecvt>
+ #include <fstream>
+ #include <phosphor-logging/log.hpp>
+ #include <queue>
+@@ -524,10 +523,26 @@ static std::optional<std::string> getAuxName(const uint8_t nameStrCount,
+         // Only supports English
+         if (langTag == supportedLangTag)
+         {
+-            std::string auxName =
+-                std::wstring_convert<std::codecvt_utf8_utf16<char16_t>,
+-                                     char16_t>{}
+-                    .to_bytes(u16_str);
++            std::string auxName;
++            auxName.reserve(u16_str.size());
++            for (char16_t ch : u16_str)
++            {
++                if (ch <= 0x7F)
++                {
++                    auxName.push_back(static_cast<char>(ch));
++                }
++                else if (ch <= 0x7FF)
++                {
++                    auxName.push_back(static_cast<char>(0xC0 | ((ch >> 6) & 0x1F)));
++                    auxName.push_back(static_cast<char>(0x80 | (ch & 0x3F)));
++                }
++                else
++                {
++                    auxName.push_back(static_cast<char>(0xE0 | ((ch >> 12) & 0x0F)));
++                    auxName.push_back(static_cast<char>(0x80 | ((ch >> 6) & 0x3F)));
++                    auxName.push_back(static_cast<char>(0x80 | (ch & 0x3F)));
++                }
++            }
+ 
+             // Auxiliary names are used to create D-Bus object paths.
+             // Replacing all non-alphanumeric with underscore
+diff --git a/src/platform.cpp b/src/platform.cpp
+index 6c06106..7914d1c 100644
+--- a/src/platform.cpp
++++ b/src/platform.cpp
+@@ -159,7 +159,7 @@ void Platform::pollAllSensors()
+                 } while (!stopSensorPoll);
+                 stopSensorPoll = false;
+             }
+-        });
++        }, boost::asio::detached);
+ }
+ 
+ void Platform::startSensorPolling()
+diff --git a/src/pldmd.cpp b/src/pldmd.cpp
+index d693b2e..2c6e29a 100644
+--- a/src/pldmd.cpp
++++ b/src/pldmd.cpp
+@@ -431,7 +431,7 @@ int main(void)
+ 			initDevice(static_cast<mctpw_eid_t>(val), yield);
+             pldm::platform::resumeSensorPolling();
+         }
+-    });
++    }, boost::asio::detached);
+ 
+     ioc->run();
+ 
+diff --git a/src/state_effecter_handler.cpp b/src/state_effecter_handler.cpp
+index e946cd4..0a6fd13 100644
+--- a/src/state_effecter_handler.cpp
++++ b/src/state_effecter_handler.cpp
+@@ -572,12 +572,12 @@ void StateEffecterHandler::registerSetEffecter()
+                                         phosphor::logging::entry("TID=%d",
+                                                                  _tid));
+                                 }
+-                            });
++                            }, boost::asio::detached);
+                     });
+             };
+ 
+             // Refresh the value on D-Bus
+-            getIoContext()->post(refreshEffecterInterfaces);
++            boost::asio::post(*getIoContext(), refreshEffecterInterfaces);
+         });
+     setEffecterInterface->initialize();
+ }
+-- 
+2.34.1
+

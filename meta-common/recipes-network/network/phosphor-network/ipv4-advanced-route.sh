@@ -19,7 +19,7 @@ case "$IFACE" in
         if ! [ -f "/etc/systemd/network/00-bmc-$IFACE.network" ]; then
             MODE="ipv4"
         else
-            MODE=`cat /etc/systemd/network/00-bmc-$IFACE.network 2> /dev/null | grep "DHCP=" | cut -d"=" -f2`
+            MODE=`awk -F'=' '/DHCP=/ {print $2}' /etc/systemd/network/00-bmc-$IFACE.network 2> /dev/null`
         fi
         ;;
 esac
@@ -45,15 +45,8 @@ NetworkAddress()
     octetip=$(IPToOctets $ip_address)
     octetsn=$(IPToOctets $subnetmask)
 
-    octetip1=$(echo $octetip | awk '{print $1}')
-    octetip2=$(echo $octetip | awk '{print $2}')
-    octetip3=$(echo $octetip | awk '{print $3}')
-    octetip4=$(echo $octetip | awk '{print $4}')
-
-    octetsn1=$(echo $octetsn | awk '{print $1}')
-    octetsn2=$(echo $octetsn | awk '{print $2}')
-    octetsn3=$(echo $octetsn | awk '{print $3}')
-    octetsn4=$(echo $octetsn | awk '{print $4}')
+    read octetip1 octetip2 octetip3 octetip4 <<< "$octetip"
+    read octetsn1 octetsn2 octetsn3 octetsn4 <<< "$octetsn"
 
     netaddress=$(($octetip1 & $octetsn1)).$(($octetip2 & $octetsn2)).$(($octetip3 & $octetsn3)).$(($octetip4 & $octetsn4))
     echo $netaddress
@@ -79,28 +72,36 @@ MaskToCidr() {
 }
 
 if [ "$STATE" == "UP" ]; then
-    sleep 1;
-
-    IP=`ifconfig "$IFACE" | grep "inet addr" | cut -d":" -f2 | awk '{print $1}'`
-
-    NETMASK=`ifconfig "$IFACE" | grep "inet addr" | cut -d":" -f4 | awk '{print $1}'`
+    read IP CIDR NETMASK < <(
+        ip -4 addr show dev $IFACE scope global | awk '
+            /inet/ {
+                    split($2,a,"/")   # a[1] = IP, a[2] = CIDR
+                    cidr=a[2]
+                    mask = (2**32 - 1) * (2**(32 - cidr))
+                    netmask=""
+                    for (i=3; i>=0; i--) {
+                            octet = int(mask / 256^(i)) % 256
+                            netmask = netmask octet (i>0?".":"")
+                    }
+                    print a[1], cidr, netmask
+            }'
+    )
 
     if [[ "$MODE" == "false" ]] || [[ "$MODE" == "ipv6" ]]; then
-        GATEWAY=`cat /etc/systemd/network/00-bmc-$IFACE.network 2> /dev/null | grep -i "Gateway=" | grep -v ":" | cut -d"=" -f2`
+        GATEWAY=`awk -F"=" '/Gateway=/ && !/:/ {print $2}' /etc/systemd/network/00-bmc-$IFACE.network 2> /dev/null`
     elif [ $HOSTINTF -ne 1 ]; then
-        GATEWAY=`route -A inet -n | grep "$IFACE" | grep "UG" | awk '{print $2}'`
+        GATEWAY=`ip route show default dev "$IFACE" | cut -d" " -f3`
     fi
 
-    if [[ -z "$IP" ]] || [[ -z "$NETMASK" ]] ; then
+    if [[ -z "$IP" ]] || [[ -z "$CIDR" ]] ; then
         exit 0
     fi
 
-    CIDR=$(MaskToCidr $NETMASK)
     NETADDR=$(NetworkAddress $IP $NETMASK $CIDR)
 
     grep -q "$IFACE" "$RT_TABLE"
     if [ $? -ne 0 ]; then
-        NUM=`grep -v "#" "$RT_TABLE" | wc -l`
+        NUM=`awk '!/^#/ {count++} END{print count}' "$RT_TABLE"`
         echo "$(($NUM + 255)) $IFACE" >> "$RT_TABLE"
     fi
 
@@ -118,10 +119,6 @@ if [ "$STATE" == "UP" ]; then
         fi
 
         METRIC=0
-        ROUTE=`route -n | grep UG | grep $IFACE | awk '{print $2}' | uniq`
-        if [ -z "$ROUTE" ]; then
-            route add default gw $GATEWAY dev $IFACE metric $METRIC 2> /dev/null
-        fi
         ip route add default via $GATEWAY dev $IFACE table $IFACE metric $((METRIC++)) 2> /dev/null
         ip route add "$NETADDR/$CIDR" dev $IFACE table $IFACE 2> /dev/null
     fi

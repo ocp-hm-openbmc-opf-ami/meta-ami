@@ -1,0 +1,120 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: hemanthkumarm <hemanthkumarm@ami.com>
+Date: Sat, 28 Jun 2026 00:00:00 +0000
+Subject: [PATCH] Run deferred image-object deletes on the main async context
+
+Upstream-Status: Inappropriate [AMI-specific customizations]
+
+After a FWUPD_SCRIPT update completes, the staged image object under
+/xyz/openbmc_project/software (and its /tmp/images/<id> directory) is removed
+by deferring deleteObject->delete_() -> ItemUpdater::erase() ->
+deleteImageManagerObject(). The defer was implemented with
+boost::asio::post(getIOContext(), ...), which runs the work on a DETACHED
+boost::asio io_context thread (see task.cpp). That callback makes blocking
+sd_bus calls (ObjectMapper lookup + xyz.openbmc_project.Object.Delete) on the
+SAME bus connection the main sdbusplus::async loop owns. sd_bus is not
+thread-safe, so this cross-thread use races the main loop and was observed to:
+
+  - fail intermittently with org.freedesktop.DBus.Error.Timeout
+    ("Connection timed out") logged by phosphor-image-updater, and
+  - silently leave the version object and its /tmp/images directory behind
+    (the object remained owned by both xyz.openbmc_project.Software.BMC.Updater
+    and xyz.openbmc_project.Software.Version after a successful update).
+
+Fix the root cause by deferring the delete onto the MAIN async context with
+ctx.spawn(...) instead of the foreign io_context thread. This still breaks out
+of the current call stack (so we never destroy an Activation/Version object
+whose method is still on the stack) while keeping every bus call on the
+bus-owning thread -- the same pattern already used for the BIOS upgrade path
+and by Task. The coroutine takes its state by value (not by capture) to remain
+valid across suspension.
+
+This supersedes the earlier "retry the no-reply delete with backoff" workaround:
+once the cross-thread race is removed the timeout no longer occurs, and a
+blocking retry loop on the async thread would stall the event loop.
+
+Signed-off-by: hemanthkumarm <hemanthkumarm@ami.com>
+---
+ bmc/activation.cpp   | 19 +++++++++++++------
+ bmc/item_updater.cpp | 32 ++++++++++++++++++++++++--------
+ 2 files changed, 37 insertions(+), 14 deletions(-)
+
+diff --git a/bmc/activation.cpp b/bmc/activation.cpp
+--- a/bmc/activation.cpp
++++ b/bmc/activation.cpp
+@@ -410,12 +410,19 @@
+         Activation::unsubscribeFromSystemdSignals();
+     }
+ 
+-    // Delete the uploaded activation
+-    auto it = parent.versions.find(versionId);
+-    if (it != parent.versions.end())
++    // Delete the uploaded activation on the MAIN async context (not the detached
++    // io_context thread) to avoid racing the shared bus connection -- see
++    // ItemUpdater::flushDeferredDeletes for the full rationale.
++    if (parent.versions.find(versionId) != parent.versions.end())
+     {
+-        boost::asio::post(getIOContext(),
+-                          [it]() { it->second->deleteObject->delete_(); });
++        ctx.spawn([](auto self) -> sdbusplus::async::task<> {
++            auto it = self->parent.versions.find(self->versionId);
++            if (it != self->parent.versions.end())
++            {
++                it->second->deleteObject->delete_();
++            }
++            co_return;
++        }(this));
+     }
+ }
+ 
+diff --git a/bmc/item_updater.cpp b/bmc/item_updater.cpp
+--- a/bmc/item_updater.cpp
++++ b/bmc/item_updater.cpp
+@@ -350,17 +350,37 @@
+ 
+ void ItemUpdater::flushDeferredDeletes()
+ {
+-    for (auto& versionId : deferredDeleteQueue)
++    if (deferredDeleteQueue.empty())
+     {
+-        boost::asio::post(getIOContext(), [this, versionId]() {
+-            auto it = versions.find(versionId);
+-            if (it != versions.end())
+-            {
+-                it->second->deleteObject->delete_();
+-            }
+-        });
++        return;
+     }
++
++    // Run the deferred deletes on the MAIN async context (the thread that owns
++    // the D-Bus connection) rather than on the detached boost::asio io_context
++    // thread. deleteObject->delete_() ultimately makes blocking sd_bus calls
++    // (ObjectMapper lookup + Object.Delete); issuing those from a foreign thread
++    // races with the main sdbusplus::async loop on the shared bus connection and
++    // was observed to fail with org.freedesktop.DBus.Error.Timeout, leaving the
++    // staged image object (and its /tmp/images directory) behind. Spawning onto
++    // ctx still defers the work past the current call stack -- so we never
++    // destroy an Activation/Version object whose method is still executing --
++    // while keeping every bus call on the bus-owning thread.
++    std::vector<std::string> ids(deferredDeleteQueue.begin(),
++                                 deferredDeleteQueue.end());
+     deferredDeleteQueue.clear();
++    ctx.spawn(
++        [](ItemUpdater* self,
++           std::vector<std::string> versionIds) -> sdbusplus::async::task<> {
++            for (const auto& versionId : versionIds)
++            {
++                auto it = self->versions.find(versionId);
++                if (it != self->versions.end())
++                {
++                    it->second->deleteObject->delete_();
++                }
++            }
++            co_return;
++        }(this, std::move(ids)));
+ }
+ 
+ bool ItemUpdater::requestActivation(std::string& id)
+-- 
+2.34.1

@@ -13,19 +13,33 @@ if [ "$1" == "deregister" ]; then
             continue
         fi
 
-        IFACE=`echo $i | cut -d"_" -f2 | cut -d"-" -f3`
-        UseTSIG=`sed -n "/^\[$IFACE\]/,/\[.*\]/p" /etc/dns.d/dns.conf.bak | grep UseTSIG | cut -d"=" -f2`
+        IFACE=`echo $i | awk -F[_-] '{print $4}'`
+        read UseTSIG < <(awk -v iface="$IFACE" '
+            $0 == "[" iface "]" {inblock=1; next}
+            inblock && /^\[.*\]/ {inblock=0}
+            inblock && /UseTSIG/ {split($0,a,"="); print a[2]} 
+        ' /etc/dns.d/dns.conf.bak)
         echo "UseTSIG: $UseTSIG"
         if [ "$UseTSIG" == "true" ]; then
             TSIG_KEY_FILE=$TSIG_KEY_DIR"tsig_"$IFACE"_prev.private"
             if [ -f "$TSIG_KEY_FILE" ]; then
-                TSIG_KEY_NAME=`grep "filename:" $TSIG_KEY_FILE | awk {'print $2'} | cut -d "+" -f1 | sed 's/^.//' | sed 's/.$//'`
-                TSIG_KEY_METHOD=`grep "Algorithm" $TSIG_KEY_FILE | awk '{print substr($3, 1, length($3) -1 )}' | awk '{print substr($1, 2)}' | awk '{gsub("_", "-", $1); print tolower($1)}'`
-                TSIG_KEY_SECRET=`grep "Key" $TSIG_KEY_FILE | awk -F": " '{print $2}'`
+                unset TSIG_KEY_NAME TSIG_KEY_METHOD TSIG_KEY_SECRET
+
+                eval $(awk -F": " '
+                            /filename:/ {split($2,a,"+"); val = substr(a[1],2,length(a[1])-2); print "TSIG_KEY_NAME=\"" val "\""}
+                            /Algorithm/ {split($2, a, " "); val = substr(a[2],2,length(a[2])-2); print "val="a[2]; gsub("_","-",val); val = tolower(val); print "TSIG_KEY_METHOD=\"" val "\""}
+                            /Key/ {print "TSIG_KEY_SECRET=\"" $2 "\""}
+                        ' $TSIG_KEY_FILE
+                )
+
                 if [ -z "$TSIG_KEY_METHOD" ]; then
-                    TSIG_KEY_METHOD=`grep "algorithm" $TSIG_KEY_FILE | awk '{print $2}'| sed 's/;//g'  | awk '{gsub("_", "-", $1); print tolower($1)}'`
-                    TSIG_KEY_NAME=`grep "key " $TSIG_KEY_FILE | cut -d "\"" -f2`
-                    TSIG_KEY_SECRET=`grep "secret" $TSIG_KEY_FILE | awk '{print $2}' | sed 's/\"//g' | sed 's/;//g'`
+                    eval $(
+                        awk '
+                            /algorithm/ {val=substr($2,1, length($2)-1); gsub("_", "-", val); print "TSIG_KEY_METHOD="tolower(val)}
+                            /key/ {split($2, a, "\""); print "TSIG_KEY_NAME="a[2]}
+                            /secret/ {split($2, a, "\""); print "TSIG_KEY_SECRET="a[2]}
+                        ' $TSIG_KEY_FILE
+                    )
                 fi
 
                 nsupdate -v -y $TSIG_KEY_METHOD:$TSIG_KEY_NAME:$TSIG_KEY_SECRET $i &
@@ -41,7 +55,7 @@ if [ "$1" == "deregister" ]; then
         while [ $COUNT != 3 ];
         do
             COUNT=$(($COUNT+1))
-            ps | grep -v grep | grep -q "nsupdate.*$i"
+            ps | awk -v file="nsupdate.*$i" '!/awk/ && $0 ~ file {found=1;} END {if (found==1) {exit 0} else {exit 1}}'
             if [ $? != 0 ]; then
                 break
             fi
@@ -49,12 +63,12 @@ if [ "$1" == "deregister" ]; then
         done
 
         if [ $COUNT == 3 ]; then
-            ps | grep "nsupdate.*$i" | grep -v grep| awk '{print $1}' | xargs kill > /dev/null 2>&1
+            ps | awk -v file="nsupdate.*$i" '!/awk/ && $0 ~ file {found=1; pid=$1}' | xargs kill
         fi
     done
 elif [ "$1" == "register" ]; then
     ENABLED=`busctl get-property xyz.openbmc_project.Network /xyz/openbmc_project/network/dns xyz.openbmc_project.Network.DDNS SendNsupdateEnabled | cut -d" " -f2`
-    if [ "$ENABLED" = "true" ]; then
+    if [ "$ENABLED" = "true" ] || [ "$3" = "force" ]; then
         if [ -n "$2" ]; then
             FILES="/etc/dns.d/nsupdate_tmp-add-$2"
         else
@@ -66,18 +80,32 @@ elif [ "$1" == "register" ]; then
                 continue
             fi
 
-            IFACE=`echo $i | cut -d"_" -f2 | cut -d"-" -f3`
-            UseTSIG=`sed -n "/^\[$IFACE\]/,/\[.*\]/p" /etc/dns.d/dns.conf | grep UseTSIG | cut -d"=" -f2`
+            IFACE=`echo $i | awk -F[_-] '{print $4}'`
+            read UseTSIG < <(awk -v iface="$IFACE" '
+                $0 == "[" iface "]" {inblock=1; next}
+                inblock && /^\[.*\]/ {inblock=0}
+                inblock && /UseTSIG/ {split($0,a,"="); print a[2]} 
+            ' /etc/dns.d/dns.conf)
+            echo "UseTSIG: $UseTSIG"
             if [ "$UseTSIG" == "true" ]; then
                 TSIG_KEY_FILE=$TSIG_KEY_DIR"tsig_$IFACE.private"
                 if [ -f "$TSIG_KEY_FILE" ]; then
-                    TSIG_KEY_NAME=`grep "filename:" $TSIG_KEY_FILE | awk {'print $2'} | cut -d "+" -f1 | sed 's/^.//' | sed 's/.$//'`
-                    TSIG_KEY_METHOD=`grep "Algorithm" $TSIG_KEY_FILE | awk '{print substr($3, 1, length($3) -1 )}' | awk '{print substr($1, 2)}' | awk '{gsub("_", "-", $1); print tolower($1)}'`
-                    TSIG_KEY_SECRET=`grep "Key" $TSIG_KEY_FILE | awk -F": " '{print $2}'`
+                    unset TSIG_KEY_NAME TSIG_KEY_METHOD TSIG_KEY_SECRET
+
+                    eval $(awk -F": " '
+                            /filename:/ {split($2,a,"+"); val = substr(a[1],2,length(a[1])-2); print "TSIG_KEY_NAME=\"" val "\""}
+                            /Algorithm/ {split($2, a, " "); val = substr(a[2],2,length(a[2])-2); print "val="a[2]; gsub("_","-",val); val = tolower(val); print "TSIG_KEY_METHOD=\"" val "\""}
+                            /Key/ {print "TSIG_KEY_SECRET=\"" $2 "\""}
+                        ' $TSIG_KEY_FILE
+                    )
                     if [ -z "$TSIG_KEY_METHOD" ]; then
-                        TSIG_KEY_METHOD=`grep "algorithm" $TSIG_KEY_FILE | awk '{print $2}'| sed 's/;//g'  | awk '{gsub("_", "-", $1); print tolower($1)}'`
-                        TSIG_KEY_NAME=`grep "key " $TSIG_KEY_FILE | cut -d "\"" -f2`
-                        TSIG_KEY_SECRET=`grep "secret" $TSIG_KEY_FILE | awk '{print $2}' | sed 's/\"//g' | sed 's/;//g'`
+                        eval $(
+                            awk '
+                                /algorithm/ {val=substr($2,1, length($2)-1); gsub("_", "-", val); print "TSIG_KEY_METHOD="tolower(val)}
+                                /key/ {split($2, a, "\""); print "TSIG_KEY_NAME="a[2]}
+                                /secret/ {split($2, a, "\""); print "TSIG_KEY_SECRET="a[2]}
+                            ' $TSIG_KEY_FILE
+                        )
                     fi
 
                     nsupdate -v -y $TSIG_KEY_METHOD:$TSIG_KEY_NAME:$TSIG_KEY_SECRET $i &
@@ -102,7 +130,7 @@ elif [ "$1" == "register" ]; then
             while [ $COUNT != 3 ];
             do
                 COUNT=$(($COUNT+1))
-                ps | grep -v grep | grep -q "nsupdate.*$i"
+                ps | awk -v file="nsupdate.*$i" '!/awk/ && $0 ~ file {found=1;} END {if (found==1) {exit 0} else {exit 1}}'
                 if [ $? != 0 ]; then
                     break
                 fi
@@ -111,7 +139,7 @@ elif [ "$1" == "register" ]; then
             done
 
             if [ $COUNT == 3 ]; then
-                ps | grep "nsupdate.*$i" | grep -v grep| awk '{print $1}' | xargs kill > /dev/null 2>&1
+                ps | awk -v file="nsupdate.*$i" '!/awk/ && $0 ~ file {found=1; pid=$1}' | xargs kill
             fi
         done
     fi

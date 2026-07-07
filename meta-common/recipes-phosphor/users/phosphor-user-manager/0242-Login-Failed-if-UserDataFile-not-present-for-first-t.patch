@@ -1,0 +1,88 @@
+From fa53a2e6eb4a5b68fc18bbc53aee46888d632bc6 Mon Sep 17 00:00:00 2001
+From: madhankumars <madhankumars@ami.com>
+Date: Mon, 23 Mar 2026 20:18:26 +0530
+Subject: [PATCH 242/242] Login Failed if UserDataFile not present for first
+ time
+
+---
+ meson.build  |  6 ++----
+ user_mgr.cpp | 39 +++++++++++++++++++++++++++++++++++----
+ 2 files changed, 37 insertions(+), 8 deletions(-)
+
+diff --git a/meson.build b/meson.build
+index f94fc18..94831aa 100644
+--- a/meson.build
++++ b/meson.build
+@@ -185,10 +185,8 @@ meson.add_install_script(
+     ),
+ )
+ 
+-if get_option('ldap').allowed() and ldap_dep.found()
+-    subdir('phosphor-ldap-config')
+-    subdir('phosphor-kerberos-config')
+-endif
++subdir('phosphor-ldap-config')
++subdir('phosphor-kerberos-config')
+ 
+ if get_option('tests').allowed()
+     subdir('test')
+diff --git a/user_mgr.cpp b/user_mgr.cpp
+index 96e1da8..1f0ccf6 100644
+--- a/user_mgr.cpp
++++ b/user_mgr.cpp
+@@ -100,6 +100,8 @@ static constexpr const char* defaultPWQualityConfigFile =
+     "/etc/security/pwquality.conf";
+ constexpr const char* pamCommonAuthConf = "/etc/pam.d/common-auth";
+ constexpr const char* pamCommonAccountConf = "/etc/pam.d/common-account";
++constexpr const char* ipmiUserDataFile =
++    "/var/lib/ipmi/ipmi_user.json";
+ constexpr const char* ipmiUserDataBackupFile =
+     "/var/lib/ipmi/ipmi_user_backup.json";
+ 
+@@ -2592,10 +2594,39 @@ void UserMgr::initUserObjects(void)
+             bool snmpAccessEnableStatus = false;
+             std::string mailId;
+             if (!userJsonOpt)
+-            {
+-                lg2::warning(
+-                    "User JSON backup file missing or invalid, SNMP access state will default to false");
+-            }
++	    {
++		    lg2::warning(
++				    "User JSON backup file missing or invalid, SNMP access state will default to false");
++		    if (std::filesystem::exists(ipmiUserDataFile))
++		    {
++			    try
++			    {
++				    std::filesystem::copy_file(
++						    ipmiUserDataFile,
++						    ipmiUserDataBackupFile,
++						    std::filesystem::copy_options::overwrite_existing);
++
++				    lg2::debug("Copied {SRC} to {DST}",
++						    "SRC", ipmiUserDataFile,
++						    "DST", ipmiUserDataBackupFile);
++
++				    // Retry reading the backup file after copy
++				    userJsonOpt = readJsonFile(ipmiUserDataBackupFile);
++			    }
++			    catch (const std::filesystem::filesystem_error& e)
++			    {
++				    lg2::error("Failed to copy {SRC} to {DST}: {ERROR}",
++						    "SRC", ipmiUserDataFile,
++						    "DST", ipmiUserDataBackupFile,
++						    "ERROR", e.what());
++			    }
++		    }
++		    else
++		    {
++			    lg2::error("Source file also not found: {PATH}",
++					    "PATH", ipmiUserDataFile);
++		    }
++	    }
+             nlohmann::json userJson = *userJsonOpt;
+             for (const auto& entry : userJson)
+             {
+-- 
+2.34.1
+

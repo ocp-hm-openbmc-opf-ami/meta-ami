@@ -5,15 +5,18 @@
 # SRCREV = "f763cd2e39ffce9b10191402243e8704794f08ff"
 
 # AMI own repository for webui-vue with main branch
-SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/webui-vue;protocol=https;branch=main"
+SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/webui-vue.git;branch=main;protocol=https;name=webui"
 
 # Use AUTOREV to get the latest revision from the repository
 # SRCREV = "${AUTOREV}"
-SRCREV = "bd662ae7302ad90ff2d0606d180486ddfb7d6cf7"
+SRCREV_webui = "c757b32cc2940f19429af1903d3d0bda9f20c150"
+SRCREV_webuilib = "faee31cd989194062d62e501bb42f73991b158a0"
+SRCREV_FORMAT = "webui_webuilib"
 
 SRC_URI += " \
     file://login-company-logo.svg \
     file://logo-header.svg \
+    git://git.ami.com/core/ami-bmc/one-tree/core/webui-libraries.git;branch=main;protocol=https;destsuffix=webui-libs;name=webuilib \
     "
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 do_compile:prepend() {
@@ -70,4 +73,39 @@ do_compile:prepend() {
     while IFS= read -r line; do
         bbplain "$line"
     done < ${S}/.env.intel
+}
+
+# Disable network access - dependencies are provided via vendored node_modules
+do_compile[network] = "0"
+
+# Extract node_modules once at configure time.
+# do_configure is sstate-cached: extraction is skipped on unchanged rebuilds,
+# avoiding the performance cost of untarring 200-500 MB on every compile.
+do_configure:append() {
+    if [ ! -f "${UNPACKDIR}/webui-libs/node_modules.tar.gz" ]; then
+        bbfatal "node_modules.tar.gz not found in ${UNPACKDIR}/webui-libs. \
+Ensure webui-libraries repository contains this archive."
+    fi
+
+    bbplain "Extracting vendored node_modules from ${UNPACKDIR}/webui-libs/node_modules.tar.gz"
+    rm -rf "${S}/node_modules"
+    tar -xzf "${UNPACKDIR}/webui-libs/node_modules.tar.gz" -C "${S}"
+
+    if [ ! -d "${S}/node_modules" ]; then
+        bbfatal "node_modules directory not found after extraction. \
+Check the archive structure in node_modules.tar.gz."
+    fi
+
+    bbplain "node_modules successfully extracted"
+}
+
+do_compile() {
+    cd ${S}
+
+    if [ ! -d "${S}/node_modules" ]; then
+        bbfatal "node_modules missing in ${S}. Re-run do_configure to extract dependencies."
+    fi
+
+    # Build the Vue project using vendored dependencies - no npm install
+    npm run build ${EXTRA_OENPM}
 }

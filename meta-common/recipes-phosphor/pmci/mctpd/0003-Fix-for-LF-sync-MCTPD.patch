@@ -1,0 +1,310 @@
+From c4f1f5a0bea5bd98da992d832f0702400af9f1b5 Mon Sep 17 00:00:00 2001
+From: arjuncr <arjuncr@ami.com>
+Date: Wed, 25 Feb 2026 11:42:49 -0500
+Subject: [PATCH] Fix for LF sync MCTPD
+
+---
+ CMakeLists.txt                   |  7 ++++---
+ src/I3CBinding.cpp               | 14 +++++++-------
+ src/MCTPBinding.cpp              |  4 ++--
+ src/PCIeBinding.cpp              |  4 ++--
+ src/mctp_bridge.cpp              |  4 ++--
+ src/mctp_endpoint.cpp            |  2 +-
+ src/service_scanner.cpp          |  8 ++++----
+ src/smbus_bridge.cpp             |  2 +-
+ src/smbus_device.cpp             |  5 +----
+ src/smbus_endpoint.cpp           |  2 +-
+ src/utils/transmission_queue.cpp |  3 ++-
+ 11 files changed, 27 insertions(+), 28 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index bf57931..f992e2d 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -25,7 +25,6 @@ set(CMAKE_CXX_FLAGS
+     -Woverloaded-virtual \
+     -Wpedantic \
+     -Wconversion \
+-    -Wnull-dereference \
+     -Wdouble-promotion \
+     -Wformat=2 \
+ ")
+@@ -142,7 +141,8 @@ target_link_libraries(
+   mctp_intel
+   udev
+   i2c
+-  boost_coroutine)
++  boost_coroutine
++  boost_context)
+ 
+ find_package (PkgConfig REQUIRED)
+ pkg_get_variable(SYSTEMD_SYSTEM_UNIT_DIR systemd systemdsystemunitdir)
+@@ -181,7 +181,8 @@ if(${MCTPD_BUILD_UT})
+     pthread
+     phosphor_dbus
+     i2c
+-    boost_coroutine)
++    boost_coroutine
++    boost_context)
+ 
+   add_test(test-mctpd test-mctpd "--gtest_output=xml:test-mctpd.xml")
+   install(TARGETS test-mctpd DESTINATION bin)
+diff --git a/src/I3CBinding.cpp b/src/I3CBinding.cpp
+index 8960b6a..04d6c9b 100644
+--- a/src/I3CBinding.cpp
++++ b/src/I3CBinding.cpp
+@@ -158,7 +158,7 @@ void I3CBinding::triggerDeviceDiscovery()
+             hw->pollRx();
+             endpointDiscoveryFlow();
+         }
+-    });
++    }, boost::asio::detached);
+ }
+ 
+ void I3CBinding::endpointDiscoveryFlow()
+@@ -199,7 +199,7 @@ void I3CBinding::endpointDiscoveryFlow()
+                 discoverNoftifyDone = true;
+             }
+         }
+-    });
++    }, boost::asio::detached);
+ }
+ 
+ mctp_server::BindingModeTypes
+@@ -469,7 +469,7 @@ void I3CBinding::updateRoutingTable()
+ 
+         getRoutingTableTimer.async_wait(
+             std::bind(&I3CBinding::updateRoutingTable, this));
+-    });
++    }, boost::asio::detached);
+ }
+ 
+ void I3CBinding::populateDeviceProperties(
+@@ -610,7 +610,7 @@ bool I3CBinding::handleDiscoveryNotify(
+                 {
+                     eidTable.insert(endPoint.value());
+                 }
+-            });
++            }, boost::asio::detached);
+     }
+     else
+     {
+@@ -891,7 +891,7 @@ bool I3CBinding::setEIDPool(const uint8_t startEID, const uint8_t poolSize)
+                     entry.isUpstream = false;
+                     this->MctpBinding::routingTable.updateEntry(eid, entry);
+                 }
+-            });
++            }, boost::asio::detached);
+     }
+     return true;
+ }
+@@ -1035,7 +1035,7 @@ void I3CBinding::onEIDPool()
+         {
+             eidTable.insert(endPoint.value());
+         }
+-    });
++    }, boost::asio::detached);
+ }
+ 
+ void I3CBinding::onPCIeEnumerationChange()
+@@ -1073,7 +1073,7 @@ void I3CBinding::onPCIeEnumerationChange()
+                 }
+                 setDownStreamEIDPools(allocatedPoolSize, allocatedPoolFirstEID);
+             }
+-        });
++        }, boost::asio::detached);
+ }
+ 
+ void I3CBinding::clearAllRegisteredEIDs()
+diff --git a/src/MCTPBinding.cpp b/src/MCTPBinding.cpp
+index 53194be..ff29a48 100644
+--- a/src/MCTPBinding.cpp
++++ b/src/MCTPBinding.cpp
+@@ -970,7 +970,7 @@ bool MctpBinding::setEIDPool(const uint8_t startEID, const uint8_t poolSize)
+         eidPool.initializeEidPool(eidRange);
+ 
+         onEIDPool();
+-    });
++    }, boost::asio::detached);
+ 
+     return true;
+ }
+@@ -1011,7 +1011,7 @@ void MctpBinding::onNewService(const std::string& service)
+                 phosphor::logging::log<phosphor::logging::level::INFO>(
+                     "SetEID pool returned false from service callback");
+             }
+-        });
++        }, boost::asio::detached);
+ }
+ 
+ void MctpBinding::onEIDPool()
+diff --git a/src/PCIeBinding.cpp b/src/PCIeBinding.cpp
+index ef8910a..54572b1 100644
+--- a/src/PCIeBinding.cpp
++++ b/src/PCIeBinding.cpp
+@@ -99,7 +99,7 @@ void PCIeBinding::endpointDiscoveryFlow()
+             phosphor::logging::log<phosphor::logging::level::ERR>(
+                 "Discovery Notify failed");
+         }
+-    });
++    }, boost::asio::detached);
+ }
+ 
+ mctp_server::BindingModeTypes
+@@ -426,7 +426,7 @@ void PCIeBinding::updateRoutingTable()
+         }
+         getRoutingTableTimer.async_wait(
+             std::bind(&PCIeBinding::updateRoutingTable, this));
+-    });
++    }, boost::asio::detached);
+ }
+ 
+ void PCIeBinding::populateDeviceProperties(
+diff --git a/src/mctp_bridge.cpp b/src/mctp_bridge.cpp
+index 13ffe6d..93a6d11 100644
+--- a/src/mctp_bridge.cpp
++++ b/src/mctp_bridge.cpp
+@@ -770,7 +770,7 @@ void MCTPBridge::sendRoutingTableEntries(
+     std::optional<std::vector<uint8_t>> bindingPrivateData,
+     const mctp_eid_t eid)
+ {
+-    boost::asio::spawn([entries = entries, eid, bindingPrivateData,
++    boost::asio::spawn(io, [entries = entries, eid, bindingPrivateData,
+                         this](boost::asio::yield_context yield) mutable {
+         std::vector<uint8_t> req = formatRoutingInfoUpdateCommand(entries);
+         std::vector<uint8_t> resp;
+@@ -804,7 +804,7 @@ void MCTPBridge::sendRoutingTableEntries(
+             phosphor::logging::log<phosphor::logging::level::ERR>(
+                 "RoutingInfoUpdate: Unsuccesful response received");
+         }
+-    });
++    }, boost::asio::detached);
+ }
+ 
+ void MCTPBridge::sendNewRoutingTableEntryToAllBridges(
+diff --git a/src/mctp_endpoint.cpp b/src/mctp_endpoint.cpp
+index 92072c9..cf3fb2c 100644
+--- a/src/mctp_endpoint.cpp
++++ b/src/mctp_endpoint.cpp
+@@ -329,7 +329,7 @@ void MCTPEndpoint::setDownStreamEIDPools(uint8_t eidPoolSize, uint8_t firstEID)
+             startEID += allocInfo.size;
+             remainingPoolSize -= allocInfo.size;
+         }
+-    });
++    }, boost::asio::detached);
+ }
+ 
+ bool MCTPEndpoint::handleAllocateEID(std::vector<uint8_t>& request,
+diff --git a/src/service_scanner.cpp b/src/service_scanner.cpp
+index 3f22faf..db0f37f 100644
+--- a/src/service_scanner.cpp
++++ b/src/service_scanner.cpp
+@@ -275,7 +275,7 @@ void MCTPServiceScanner::scan()
+     // required.
+     if (!allowedDestBuses.empty())
+     {
+-        boost::asio::spawn(connection->get_io_context(), scanTask);
++        boost::asio::spawn(connection->get_io_context(), scanTask, boost::asio::detached);
+     }
+ }
+ 
+@@ -432,7 +432,7 @@ void MCTPServiceScanner::onHotPluggedEid(sdbusplus::message::message& message)
+                          e.what())
+                             .c_str());
+                 }
+-            });
++            }, boost::asio::detached);
+     }
+     catch (const std::exception& e)
+     {
+@@ -540,7 +540,7 @@ void MCTPServiceScanner::onEidRemoved(sdbusplus::message::message& message)
+                          e.what())
+                             .c_str());
+                 }
+-            });
++            }, boost::asio::detached);
+     }
+     catch (const std::exception& e)
+     {
+@@ -638,7 +638,7 @@ void MCTPServiceScanner::getConnectedCPUs()
+                 i++;
+             }
+             this->detectedCPUs = cpuCountFromDbus;
+-        });
++        }, boost::asio::detached);
+ }
+ 
+ size_t MCTPServiceScanner::getAllowedCPUBusses()
+diff --git a/src/smbus_bridge.cpp b/src/smbus_bridge.cpp
+index 6ad35cc..0ffb18c 100644
+--- a/src/smbus_bridge.cpp
++++ b/src/smbus_bridge.cpp
+@@ -346,7 +346,7 @@ void SMBusBridge::scanDevices()
+             }
+             scanDevices();
+         });
+-    });
++    }, boost::asio::detached);
+ }
+ 
+ void SMBusBridge::restoreMuxIdleMode()
+diff --git a/src/smbus_device.cpp b/src/smbus_device.cpp
+index 25fbde9..ec5cace 100644
+--- a/src/smbus_device.cpp
++++ b/src/smbus_device.cpp
+@@ -126,9 +126,6 @@ std::string SMBusDevice::SMBusInit()
+     {
+         throwRunTimeError("Error in opening smbus binding out bus");
+     }
+-    mctp_smbus_set_in_fd(smbus, inFd);
+-    mctp_smbus_set_out_fd(smbus, outFd);
+-
+     smbusReceiverFd.assign(inFd);
+     readResponse();
+     return rootPort;
+@@ -192,7 +189,7 @@ void SMBusDevice::readResponse()
+                 readResponse();
+             }
+             // through libmctp this will invoke rxMessage and message assembly
+-            mctp_smbus_read(smbus);
++            mctp_smbus_read(smbus, inFd, outFd);
+             readResponse();
+         });
+ }
+diff --git a/src/smbus_endpoint.cpp b/src/smbus_endpoint.cpp
+index 3b51c86..1732037 100644
+--- a/src/smbus_endpoint.cpp
++++ b/src/smbus_endpoint.cpp
+@@ -309,7 +309,7 @@ void SMBusEndpoint::updateRoutingTable()
+             smbusDeviceTable = smbusDeviceTableTmp;
+         }
+         entryHdlCounter++;
+-    });
++    }, boost::asio::detached);
+ 
+     smbusRoutingTableTimer->expires_after(
+         std::chrono::seconds(smbusRoutingInterval));
+diff --git a/src/utils/transmission_queue.cpp b/src/utils/transmission_queue.cpp
+index a0dc283..1e3d8d5 100644
+--- a/src/utils/transmission_queue.cpp
++++ b/src/utils/transmission_queue.cpp
+@@ -16,6 +16,7 @@
+ 
+ #include "utils/transmission_queue.hpp"
+ 
++#include <boost/asio/post.hpp>
+ #include <phosphor-logging/log.hpp>
+ 
+ using mctpd::MctpTransmissionQueue;
+@@ -119,7 +120,7 @@ bool MctpTransmissionQueue::receive(struct mctp* mctp, mctp_eid_t srcEid,
+ 
+     // Now that another tag is available, try to transmit any queued messages
+     message->timer.cancel();
+-    ioc.post([this, mctp, srcEid] {
++    boost::asio::post(ioc, [this, mctp, srcEid] {
+         endpoints[srcEid].transmitQueuedMessages(mctp, srcEid);
+     });
+     return true;
+-- 
+2.34.1
+

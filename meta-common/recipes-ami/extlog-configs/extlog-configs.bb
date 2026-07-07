@@ -12,7 +12,7 @@ SRC_URI = "file://src/main.cpp \
 	   file://meson.build \
 	   file://service/xyz.openbmc_project.Extlog.ExtlogConfig.service"
 
-S = "${WORKDIR}"
+S = "${UNPACKDIR}"
 
 DBUS_SERVICE:${PN} += "xyz.openbmc_project.Extlog.ExtlogConfig.service"
 
@@ -31,11 +31,11 @@ inherit obmc-phosphor-dbus-service
 do_install:append() {
 	
 	install -d ${D}${systemd_system_unitdir}/
-	install -m 0644 ${S}/service/xyz.openbmc_project.Extlog.ExtlogConfig.service ${D}${systemd_system_unitdir}/
+	install -m 0644 ${UNPACKDIR}/service/xyz.openbmc_project.Extlog.ExtlogConfig.service ${D}${systemd_system_unitdir}/
 
 	install -d ${D}${sysconfdir_native}/extlog-configs/
-    	install -m 0744 ${S}/configs/extlogconfig.json ${D}${sysconfdir_native}/extlog-configs/
-    	install -m 0744 ${S}/configs/LogIndividualCmds.json ${D}${sysconfdir_native}/extlog-configs/
+    	install -m 0744 ${UNPACKDIR}/configs/extlogconfig.json ${D}${sysconfdir_native}/extlog-configs/
+    	install -m 0744 ${UNPACKDIR}/configs/LogIndividualCmds.json ${D}${sysconfdir_native}/extlog-configs/
 }
 
 FILES:${PN}  += "${systemd_system_unitdir}/xyz.openbmc_project.Extlog.ExtlogConfig.service"

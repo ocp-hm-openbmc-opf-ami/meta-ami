@@ -1,0 +1,432 @@
+From 04833b3c5c34adb29408de7d03817c205d3efbec Mon Sep 17 00:00:00 2001
+From: Kirubagharan A S <kirubagharanas@ami.com>
+Date: Wed, 3 Jun 2026 18:19:56 +0530
+Subject: [PATCH] Added Parallel FW update support
+
+Upstream-Status: Inappropriate [AMI-specific fwupd integration]
+
+Signed-off-by: Kirubagharan A S <kirubagharanas@ami.com>
+
+---
+ bmc/item_updater.cpp | 50 ++++++++++++++++++++++++++++++++++--------
+ bmc/version.hpp      | 12 +++++++---
+ 2 files changed, 49 insertions(+), 13 deletions(-)
+
+diff --git a/bmc/item_updater.cpp b/bmc/item_updater.cpp
+index 07678e3..e79c6bf 100644
+--- a/bmc/item_updater.cpp
++++ b/bmc/item_updater.cpp
+@@ -65,11 +65,21 @@  void ItemUpdater::createActivation(sdbusplus::message_t& msg)
+             {
+                 if (property.first == "Purpose")
+                 {
+-                    auto value = SVersion::convertVersionPurposeFromString(
+-                        std::get<std::string>(property.second));
+-                    if (value != VersionPurpose::Unknown)
++                    try
+                     {
+-                        purpose = value;
++                        auto value = SVersion::convertVersionPurposeFromString(
++                            std::get<std::string>(property.second));
++                        if (value != VersionPurpose::Unknown)
++                        {
++                            purpose = value;
++                        }
++                    }
++                    catch (const std::exception& e)
++                    {
++                        error(
++                            "Failed to parse Version Purpose for object {PATH}: {ERROR}",
++                            "PATH", path, "ERROR", e);
++                        purpose = VersionPurpose::Unknown;
+                     }
+                 }
+                 else if (property.first == "Version")
+@@ -128,8 +138,18 @@  void ItemUpdater::createActivation(sdbusplus::message_t& msg)
+ 
+     if (activations.find(versionId) == activations.end())
+     {
+-        verifyAndCreateObjects(versionId, path, version, purpose,
+-                               extendedVersion, filePath, compatibleNames);
++        try
++        {
++            verifyAndCreateObjects(versionId, path, version, purpose,
++                                   extendedVersion, filePath, compatibleNames);
++        }
++        catch (const std::exception& e)
++        {
++            error(
++                "Unhandled exception while creating software object {PATH}: {ERROR}",
++                "PATH", path, "ERROR", e);
++            return;
++        }
+     }
+     return;
+ }
+@@ -180,13 +200,77 @@  ActivationIntf::Activations ItemUpdater::verifyAndCreateObjects(
+     }
+
++    const auto requestedTargets = httpPushUriTargets();
++    if (!requestedTargets.empty())
++    {
++        for (const auto& [existingId, existingVersion] : versions)
++        {
++            if (existingId == id)
++            {
++                continue;
++            }
++
++            const auto existingTargets = existingVersion->httpPushUriTargets();
++            for (const auto& target : requestedTargets)
++            {
++                bool targetFound = false;
++                for (const auto& existingTarget : existingTargets)
++                {
++                    if (existingTarget == target)
++                    {
++                        targetFound = true;
++                        break;
++                    }
++                }
++                if (!targetFound)
++                {
++                    continue;
++                }
++
++                error(
++                    "Target already in FW update mode (target={TARGET}, existing={EXISTING_ID}, new={NEW_ID}). Cancel existing update and retry.",
++                    "TARGET", target, "EXISTING_ID", existingId, "NEW_ID", id);
++
++                // Reject this new upload and remove its software object.
++                try
++                {
++                    auto deleteMethod = bus.new_method_call(
++                        VERSION_BUSNAME, path.c_str(),
++                        "xyz.openbmc_project.Object.Delete", "Delete");
++                    bus.call_noreply(deleteMethod);
++                }
++                catch (const std::exception& e)
++                {
++                    error(
++                        "Failed to delete rejected software object {PATH}: {ERROR}",
++                        "PATH", path, "ERROR", e.what());
++                }
++
++                return server::Activation::Activations::Invalid;
++            }
++        }
++    }
+ 
+     auto versionPtr = std::make_unique<VersionClass>(
+-        bus, path, version, purpose, extendedVersion, filePath, compatibleNames,
+-        std::bind(&ItemUpdater::erase, this, std::placeholders::_1), id);
++        bus, path, version, purpose, extendedVersion, filePath,
++        compatibleNames, std::bind(&ItemUpdater::erase, this,
++                                   std::placeholders::_1),
++        id, httpPushUriTargets(), httpPushUriTargetsBusy());
++    info(
++        "Copied HttpPushUri target state to version object {ID}: targetCount={COUNT}, busy={BUSY}",
++        "ID", id, "COUNT",
++        static_cast<uint32_t>(httpPushUriTargets().size()), "BUSY",
++        httpPushUriTargetsBusy() ? "true" : "false");
++
+     versionPtr->deleteObject =
+         std::make_unique<phosphor::software::manager::Delete>(
+             bus, path, *versionPtr);
+     versions.insert(std::make_pair(id, std::move(versionPtr)));
+ 
++    // Once copied to the new image object, clear root updater target state.
++    httpPushUriTargets({});
++    httpPushUriTargetsBusy(false);
++    info("Cleared root HttpPushUri target state after version object creation for {ID}",
++         "ID", id);
++
+     auto activation = activations.find(id);
+     if (activation == activations.end())
+     {
+diff --git a/bmc/version.hpp b/bmc/version.hpp
+index 5f97955..1e8d1b3 100644
+--- a/bmc/version.hpp
++++ b/bmc/version.hpp
+@@ -4,6 +4,7 @@
+ #include "xyz/openbmc_project/Inventory/Decorator/Compatible/server.hpp"
+ #include "xyz/openbmc_project/Object/Delete/server.hpp"
+ #include "xyz/openbmc_project/Software/ExtendedVersion/server.hpp"
++#include "xyz/openbmc_project/Software/FirmwareUpdateTarget/server.hpp"
+ #include "xyz/openbmc_project/Software/Version/server.hpp"
+ 
+ #include <sdbusplus/bus.hpp>
+@@ -25,7 +26,8 @@  using VersionInherit = sdbusplus::server::object_t<
+     sdbusplus::server::xyz::openbmc_project::software::ExtendedVersion,
+     sdbusplus::server::xyz::openbmc_project::software::Version,
+     sdbusplus::server::xyz::openbmc_project::common::FilePath,
+-    sdbusplus::server::xyz::openbmc_project::inventory::decorator::Compatible>;
++    sdbusplus::server::xyz::openbmc_project::inventory::decorator::Compatible,
++    sdbusplus::xyz::openbmc_project::Software::server::FirmwareUpdateTarget>;
+ using DeleteInherit = sdbusplus::server::object_t<
+     sdbusplus::server::xyz::openbmc_project::object::Delete>;
+ 
+@@ -84,7 +86,9 @@  class Version : public VersionInherit
+             const std::string& versionString, VersionPurpose versionPurpose,
+             const std::string& extVersion, const std::string& filePath,
+             const std::vector<std::string>& compatibleNames, eraseFunc callback,
+-            const std::string& id) :
++            const std::string& id,
++            std::vector<std::string> pushUriTargets = {},
++            bool pushUriTargetsBusy = false) :
+         VersionInherit(bus, (objPath).c_str(),
+                        VersionInherit::action::defer_emit),
+         eraseCallback(std::move(callback)), id(id), objPath(objPath),
+@@ -96,6 +100,8 @@  class Version : public VersionInherit
+         version(versionString);
+         path(filePath);
+         names(compatibleNames);
++        httpPushUriTargets(std::move(pushUriTargets));
++        httpPushUriTargetsBusy(pushUriTargetsBusy);
+         // Emit deferred signal.
+         emit_object_added();
+     }
+@@ -190,6 +196,6 @@  class Version : public VersionInherit
+     /** @brief The path of the object */
+     std::string objPath;
+ 
+-  private:
++    private:
+     /** @brief This Version's version string */
+     const std::string versionStr;
+
+diff --git a/bmc/activation.cpp b/bmc/activation.cpp
+index 2222222..3333333 100644
+--- a/bmc/activation.cpp
++++ b/bmc/activation.cpp
+@@ -147,8 +147,28 @@  auto Activation::activation(Activations value) -> Activations
+                 if (!activationBlocksTransition)
+                 {
+                     activationBlocksTransition =
+                         std::make_unique<ActivationBlocksTransition>(bus, path);
+                 }
++
++                auto versionIt = parent.versions.find(versionId);
++                if (versionIt == parent.versions.end())
++                {
++                    error("Unable to acquire target lock because version is missing: {ID}",
++                          "ID", versionId);
++                    return softwareServer::Activation::activation(
++                        softwareServer::Activation::Activations::Failed);
++                }
++
++                auto targets = versionIt->second->httpPushUriTargets();
++                if (!parent.tryAcquireTargetLocks(targets, versionId))
++                {
++                    info(
++                        "Update deferred due to busy PushURI target lock (targets={COUNT}, version={ID})",
++                        "COUNT", static_cast<uint32_t>(targets.size()), "ID", versionId);
++                    return softwareServer::Activation::activation(
++                        softwareServer::Activation::Activations::Staged);
++                }
++
+                 parent.activeUpdatesCount++;
+                 flashWrite();
+             }
+@@ -387,5 +409,30 @@  void Activation::onFlashWriteSuccess()
+     activation(softwareServer::Activation::Activations::Active);
+     parent.activeUpdatesCount--;
++
++    auto versionIt = parent.versions.find(versionId);
++    if (versionIt != parent.versions.end())
++    {
++        parent.releaseTargetLocks(versionIt->second->httpPushUriTargets(),
++                                  versionId);
++
++        // Latch reboot intent as soon as a BMC update completes successfully,
++        // even when other component flashes are still in progress.
++        if (!parent.performReboot &&
++            versionIt->second->purpose() == VersionPurpose::BMC)
++        {
++            std::string rebootDecisionCmd =
++                "/usr/bin/fwupd-reboot-decision.sh " + versionId +
++                " >/dev/null 2>&1";
++            if (std::system(rebootDecisionCmd.c_str()) == 0)
++            {
++                parent.performReboot = true;
++            }
++        }
++    }
++
++    // Defer delete until all in-flight updates are done to avoid D-Bus races.
++    parent.deferVersionDelete(versionId);
++
+     if (!parent.activeUpdatesCount)
+     {
+         activationBlocksTransition->disableRebootGuard();
+@@ -396,15 +429,9 @@  void Activation::onFlashWriteSuccess()
+             Activation::rebootBmc();
+         }
++        parent.flushDeferredDeletes();
+     }
+     activationProgress.reset(nullptr);
+     Activation::unsubscribeFromSystemdSignals();
+-    // Delete the uploaded activation
+-    auto it = parent.versions.find(versionId);
+-    if (it != parent.versions.end())
+-    {
+-        boost::asio::post(getIOContext(),
+-                          [it]() { it->second->deleteObject->delete_(); });
+-    }
+ #endif
+ 
+ }
+@@ -415,6 +442,15 @@ void Activation::onFlashWriteFailure()
++    auto versionIt = parent.versions.find(versionId);
++    if (versionIt != parent.versions.end())
++    {
++        parent.releaseTargetLocks(versionIt->second->httpPushUriTargets(),
++                                  versionId);
++    }
++
++    parent.deferVersionDelete(versionId);
++
+     if (task->isTaskCancelled == false)
+     {
+         parent.activeUpdatesCount--;
+         if (!parent.activeUpdatesCount)
+         {
+             if (activationBlocksTransition)
+diff --git a/bmc/item_updater.cpp b/bmc/item_updater.cpp
+index e79c6bf..e7f3ee1 100644
+--- a/bmc/item_updater.cpp
++++ b/bmc/item_updater.cpp
+@@ -202,6 +204,84 @@ ActivationIntf::Activations ItemUpdater::verifyAndCreateObjects(
+      return activationState;
+ }
+ 
++bool ItemUpdater::tryAcquireTargetLocks(
++    const std::vector<std::string>& targets, const std::string& versionId)
++{
++    auto lockTargets = targets;
++    if (lockTargets.empty())
++    {
++        lockTargets.emplace_back("__untargeted__");
++    }
++
++    for (const auto& target : lockTargets)
++    {
++        auto lockIt = targetLockOwners.find(target);
++        if (lockIt != targetLockOwners.end() && lockIt->second != versionId)
++        {
++            return false;
++        }
++    }
++
++    for (const auto& target : lockTargets)
++    {
++        targetLockOwners[target] = versionId;
++    }
++
++    return true;
++}
++
++void ItemUpdater::releaseTargetLocks(const std::vector<std::string>& targets,
++                                     const std::string& versionId)
++{
++    auto lockTargets = targets;
++    if (lockTargets.empty())
++    {
++        lockTargets.emplace_back("__untargeted__");
++    }
++
++    for (const auto& target : lockTargets)
++    {
++        auto lockIt = targetLockOwners.find(target);
++        if (lockIt != targetLockOwners.end() && lockIt->second == versionId)
++        {
++            targetLockOwners.erase(lockIt);
++        }
++    }
++}
++
++void ItemUpdater::deferVersionDelete(const std::string& versionId)
++{
++    bool exists = false;
++    for (const auto& id : deferredDeleteQueue)
++    {
++        if (id == versionId)
++        {
++            exists = true;
++            break;
++        }
++    }
++
++    if (!exists)
++    {
++        deferredDeleteQueue.emplace_back(versionId);
++    }
++}
++
++void ItemUpdater::flushDeferredDeletes()
++{
++    for (auto& versionId : deferredDeleteQueue)
++    {
++        boost::asio::post(getIOContext(), [this, versionId]() {
++            auto it = versions.find(versionId);
++            if (it != versions.end())
++            {
++                it->second->deleteObject->delete_();
++            }
++        });
++    }
++    deferredDeleteQueue.clear();
++}
++
+ bool ItemUpdater::requestActivation(std::string& id)
+ {
+      auto activation = activations.find(id);
+
+diff --git a/bmc/item_updater.hpp b/bmc/item_updater.hpp
+index 7ac2d10..8bc1001 100644
+--- a/bmc/item_updater.hpp
++++ b/bmc/item_updater.hpp
+@@ -15,6 +15,8 @@
+ #include <xyz/openbmc_project/Software/FirmwareUpdateTarget/server.hpp>
+ #include <xyz/openbmc_project/Software/MinimumVersion/server.hpp>
+ 
++#include <deque>
++#include <map>
+ #include <string>
+ #include <vector>
+
+@@ -146,6 +148,16 @@ class ItemUpdater : public ItemUpdaterInherit
+      * @brief Create and populate the active BMC Version.
+      */
+     void processBMCImage();
++    /** @brief Acquire PushURI target activation locks. */
++    bool tryAcquireTargetLocks(const std::vector<std::string>& targets,
++                               const std::string& versionId);
++
++    /** @brief Release previously acquired PushURI target activation locks. */
++    void releaseTargetLocks(const std::vector<std::string>& targets,
++                            const std::string& versionId);
++
++    void deferVersionDelete(const std::string& versionId);
++    void flushDeferredDeletes();
+
+     /**
+      * @brief Verifies the image at filepath and creates the version and
+@@ -282,6 +294,13 @@ class ItemUpdater : public ItemUpdaterInherit
+
+     /** @brief whether to perform reboot or not after update sucessful*/
+     bool performReboot = false;
++    /**
++     * @brief Tracks the owner version id for each PushURI target.
++     */
++    std::map<std::string, std::string> targetLockOwners;
++
++    /** @brief Ordered software object delete queue drained after updates end. */
++    std::deque<std::string> deferredDeleteQueue;
+
+     /** @brief The type of updater. */
+     UpdaterType type;
+ 
+-- 
+2.34.1
+

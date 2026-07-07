@@ -1,0 +1,197 @@
+From a9ea4ea579d5fc8017954ef6bb90b01dbb5660c0 Mon Sep 17 00:00:00 2001
+From: madhankumars <madhankumars@ami.com>
+Date: Wed, 4 Mar 2026 00:03:12 +0530
+Subject: [PATCH 231/231] Kerberos Config User Manager
+
+---
+ meson.build                                   |  1 +
+ phosphor-kerberos-config/kerberos_config.cpp  | 90 +++++++++++++++++++
+ phosphor-kerberos-config/kerberos_config.hpp  | 22 +++++
+ phosphor-kerberos-config/meson.build          | 17 ++++
+ .../phosphor-kerberos-config.service          | 12 +++
+ 5 files changed, 142 insertions(+)
+ create mode 100644 phosphor-kerberos-config/kerberos_config.cpp
+ create mode 100644 phosphor-kerberos-config/kerberos_config.hpp
+ create mode 100644 phosphor-kerberos-config/meson.build
+ create mode 100644 phosphor-kerberos-config/phosphor-kerberos-config.service
+
+diff --git a/meson.build b/meson.build
+index 4044cf0..f94fc18 100644
+--- a/meson.build
++++ b/meson.build
+@@ -187,6 +187,7 @@ meson.add_install_script(
+ 
+ if get_option('ldap').allowed() and ldap_dep.found()
+     subdir('phosphor-ldap-config')
++    subdir('phosphor-kerberos-config')
+ endif
+ 
+ if get_option('tests').allowed()
+diff --git a/phosphor-kerberos-config/kerberos_config.cpp b/phosphor-kerberos-config/kerberos_config.cpp
+new file mode 100644
+index 0000000..0ad96e4
+--- /dev/null
++++ b/phosphor-kerberos-config/kerberos_config.cpp
+@@ -0,0 +1,90 @@
++
++/* ****************************************************************
++ *
++ * Filename : kerberos_config.cpp
++ *
++ * @brief Implementation of Kerberos Config Manager
++ *
++ * Author: Krishna Raj krishnar@ami.com
++ *
++ *****************************************************************/
++
++#include <boost/asio/io_context.hpp>
++#include <kerberos_config.hpp>
++#include <sdbusplus/asio/connection.hpp>
++
++#include <fstream>
++#include <iostream>
++
++/** @brief Implementation to append ip and hostname of Kerberos
++ *  server to /etc/hosts.
++ *
++ *  @param[in] ip - ip of kerberos server
++ *  @param[in] hostname - Hostname of kerberos server
++ *
++ *  @return rsp[bool] - success or failure
++ */
++
++bool updateHostsFile(const std::string& ip, const std::string& hostname)
++{
++    const std::string hostsFilePath = "/etc/hosts";
++    std::ifstream hostsFile(hostsFilePath);
++    std::string line;
++
++    // Check if the IP already exists
++    bool ipExists = false;
++    while (std::getline(hostsFile, line))
++    {
++        if (line.find(ip) == 0)
++        { // Check if line starts with the IP
++            std::cout << "IP address already exists: " << ip << std::endl;
++            ipExists = true;
++            break; // Exit the loop if found
++        }
++    }
++    hostsFile.close(); // Close the input file
++
++    // If the IP does not exist, append the new entry
++    if (!ipExists)
++    {
++        std::ofstream appendFile(hostsFilePath, std::ios_base::app);
++        if (appendFile.is_open())
++        {
++            appendFile << ip << " " << hostname << std::endl;
++            std::cout << "Entry appended: " << ip << " " << hostname
++                      << std::endl;
++        }
++        else
++        {
++            std::cerr << "Failed to open file: " << hostsFilePath << std::endl;
++            return false;
++        }
++        appendFile.close(); // Close the output file
++    }
++    return true;
++}
++
++int main()
++{
++    // setup connection to dbus
++    boost::asio::io_context io;
++    auto conn = std::make_shared<sdbusplus::asio::connection>(io);
++
++    // object server
++    conn->request_name("xyz.openbmc_project.Kerberos.Config");
++    auto server = sdbusplus::asio::object_server(conn);
++
++    std::shared_ptr<sdbusplus::asio::dbus_interface> iface =
++        server.add_interface(kerberosMgrObj, kerberosDbusNmae);
++
++    iface->register_method("UpdateHosts",
++                           [](std::string ip, std::string hostName) {
++                               bool response = updateHostsFile(ip, hostName);
++                               return response;
++                           });
++
++    iface->initialize();
++    io.run();
++
++    return 0;
++}
+diff --git a/phosphor-kerberos-config/kerberos_config.hpp b/phosphor-kerberos-config/kerberos_config.hpp
+new file mode 100644
+index 0000000..f8406a6
+--- /dev/null
++++ b/phosphor-kerberos-config/kerberos_config.hpp
+@@ -0,0 +1,22 @@
++/* ****************************************************************
++ *
++ * Filename : kerberos_config.hpp
++ *
++ * @brief Implementation of kerberos config Manager
++ *
++ * Author: Krishna Raj krishnar@ami.com
++ *
++ *****************************************************************/
++
++#include <string.h>
++
++#include <sdbusplus/asio/object_server.hpp>
++
++#include <iostream>
++#include <map>
++
++static constexpr const char* kerberosMgrObj =
++    "/xyz/openbmc_project/kerberos/config";
++static constexpr const char* kerberosDbusNmae =
++    "xyz.openbmc_project.Kerberos.Config";
++static constexpr const char* interface = "xyz.openbmc_project.Kerberos.Config";
+diff --git a/phosphor-kerberos-config/meson.build b/phosphor-kerberos-config/meson.build
+new file mode 100644
+index 0000000..eeea24a
+--- /dev/null
++++ b/phosphor-kerberos-config/meson.build
+@@ -0,0 +1,17 @@
++deps = [
++  dependency('systemd'),
++  dependency('sdbusplus'),
++  dependency('phosphor-logging'),
++]
++systemd = dependency('systemd')
++install_data(
++    ['phosphor-kerberos-config.service'],
++    install_dir: systemd.get_variable('systemdsystemunitdir')
++  )
++
++executable(
++  'phosphor-kerberos-config',
++  'kerberos_config.cpp',
++  dependencies: deps,
++  install: true,
++)
+diff --git a/phosphor-kerberos-config/phosphor-kerberos-config.service b/phosphor-kerberos-config/phosphor-kerberos-config.service
+new file mode 100644
+index 0000000..560b5b8
+--- /dev/null
++++ b/phosphor-kerberos-config/phosphor-kerberos-config.service
+@@ -0,0 +1,12 @@
++[Unit]
++Description=Kerberos Config Manager
++Wants=bmcweb.service
++After=bmcweb.service
++
++[Service]
++Restart=always
++RestartSec=5
++ExecStart=/usr/bin/phosphor-kerberos-config
++
++[Install]
++WantedBy=multi-user.target
+-- 
+2.34.1
+

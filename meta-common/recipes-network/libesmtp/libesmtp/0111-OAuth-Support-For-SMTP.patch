@@ -1,0 +1,348 @@
+From c199b841db7ae506ca98d9ade1fa8dabaecab957 Mon Sep 17 00:00:00 2001
+From: madhankumars <madhankumars@ami.com>
+Date: Mon, 22 Sep 2025 23:52:19 +0530
+Subject: [PATCH 111/111] OAuth Support For SMTP
+
+---
+ auth-client.c | 77 +++++++++++++++++++++++++++++++++-------
+ auth-client.h |  1 +
+ base64.c      | 24 +++++++++++++
+ base64.h      |  2 +-
+ meson.build   |  3 +-
+ smtp-auth.c   | 97 +++++++++++++++++++++++++++++++++++----------------
+ 6 files changed, 158 insertions(+), 46 deletions(-)
+
+diff --git a/auth-client.c b/auth-client.c
+index 9995202..037d886 100644
+--- a/auth-client.c
++++ b/auth-client.c
+@@ -50,7 +50,7 @@
+ #include <string.h>
+ #include <strings.h>
+ #include <ctype.h>
+-
++#include <stdio.h>
+ #include <missing.h>
+ 
+ #include "auth-client.h"
+@@ -168,6 +168,46 @@ load_client_plugin (const char *name)
+   return info;
+ }
+ 
++static const struct auth_client_plugin *
++load_xoauth2_client_plugin(const char *name)
++{
++  void *module = NULL;
++  char *plugin = NULL;
++  const struct auth_client_plugin *info = NULL;
++
++  assert(name != NULL);
++
++  /* Try searching for a plugin. */
++  plugin = plugin_name(name);
++  if (plugin == NULL) {
++    return NULL;
++  }
++  module = dlopen(plugin, RTLD_LAZY);
++  free(plugin);
++  if (module == NULL) {
++    return NULL;
++  }
++
++  info = dlsym(module, "sasl_xoauth2_client");
++  if (info == NULL) {
++    dlclose(module);
++    return NULL;
++  }
++
++  if (info->response == NULL) {
++    dlclose(module);
++    return NULL;
++  }
++
++  /* This plugin module is OK. Add it to the list of loaded modules. */
++  if (!append_plugin(module, info)) {
++    dlclose(module);
++    return NULL;
++  }
++
++  return info;
++}
++
+ /**
+  * auth_client_init() - Initialise the auth client.
+  *
+@@ -429,29 +469,40 @@ auth_set_mechanism (auth_context_t context, const char *name)
+       }
+ 
+   /* Load the module if not found above. */
+-  if (info == NULL && (info = load_client_plugin (name)) == NULL)
+-    {
++  if (info == NULL) {
++    if (strcasecmp(name, "XOAUTH2") == 0) {
++      info = load_xoauth2_client_plugin(name);
++    } else {
++      info = load_client_plugin(name);
++    }
++  }
++
++  if (info == NULL) {
+ #ifdef USE_PTHREADS
+       pthread_mutex_unlock (&plugin_mutex);
+ #endif
+       return 0;
+     }
+ 
+-  /* Check the application's requirements regarding minimum SSF and
+-     whether anonymous or plain text mechanisms are explicitly allowed.
+-     This has to be checked here since the list of loaded plugins is
+-     global and the plugin may have been acceptable in another context
+-     but not in this one.  */
+-  if (info->ssf < context->min_ssf
+-      || mechanism_disabled (info, context, EXTERNAL)
+-      || mechanism_disabled (info, context, ANONYMOUS)
+-      || mechanism_disabled (info, context, PLAIN))
+-    {
++  /* Check the application's requirements regarding minimum SSF */
++  if (info->ssf < context->min_ssf) {
+ #ifdef USE_PTHREADS
+       pthread_mutex_unlock (&plugin_mutex);
++#endif
++    return 0;
++  }
++
++  /* Don't filter out XOAUTH2 based on flags */
++  if (strcasecmp(name, "XOAUTH2") != 0) {
++    if (mechanism_disabled(info, context, EXTERNAL) ||
++        mechanism_disabled(info, context, ANONYMOUS) ||
++        mechanism_disabled(info, context, PLAIN)) {
++#ifdef USE_PTHREADS
++      pthread_mutex_unlock(&plugin_mutex);
+ #endif
+       return 0;
+     }
++  }
+ 
+   context->client = info;
+ #ifdef USE_PTHREADS
+diff --git a/auth-client.h b/auth-client.h
+index 55c0554..0db9db0 100644
+--- a/auth-client.h
++++ b/auth-client.h
+@@ -63,6 +63,7 @@ typedef int (*auth_recode_t) (void *ctx, char **dstbuf, int *dstlen,
+ #define AUTH_PLUGIN_ANONYMOUS	0x01	/* mechanism is anonymous */
+ #define AUTH_PLUGIN_PLAIN	0x02	/* mechanism uses plaintext passwords */
+ #define AUTH_PLUGIN_EXTERNAL	0x04	/* mechanism is EXTERNAL */
++#define AUTH_PLUGIN_XOAUTH2     0x08    /* mechanism uses XOAUTH2 */
+ 
+ 
+ void auth_client_init(void);
+diff --git a/base64.c b/base64.c
+index ae730a4..ff2035d 100644
+--- a/base64.c
++++ b/base64.c
+@@ -30,6 +30,8 @@
+ #include <string.h>
+ #include "base64.h"
+ 
++#include <openssl/evp.h>
++
+ /* RFC 2045 section 6.8 */
+ 
+ static const char base64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+@@ -163,3 +165,25 @@ b64_encode (char *dst, int dstlen, const void *src, int srclen)
+   return to - dst;
+ }
+ 
++char *base64_encode_dynamic(const char *input, int length)
++{
++
++    if (!input || length <= 0) return NULL;
++
++    // Calculate output size: 4*(n/3) rounded up
++    size_t output_size = ((length + 2) / 3) * 4 + 1;
++    char *output = malloc(output_size);
++    if (!output) return NULL;
++
++    int encoded_len = EVP_EncodeBlock((unsigned char *)output,
++                                    (const unsigned char *)input,
++                                    length);
++    if (encoded_len < 0) {
++        free(output);
++        return NULL;
++    }
++
++    output[encoded_len] = '\0';
++
++    return output;
++}
+diff --git a/base64.h b/base64.h
+index 37fe03a..9a8410e 100644
+--- a/base64.h
++++ b/base64.h
+@@ -24,5 +24,5 @@
+ 
+ int b64_decode (void *dst, int dstlen, const char *src, int srclen);
+ int b64_encode (char *dst, int dstlen, const void *src, int srclen);
+-
++char *base64_encode_dynamic(const char *input, int length);
+ #endif
+diff --git a/meson.build b/meson.build
+index 04e24e4..811ef1b 100644
+--- a/meson.build
++++ b/meson.build
+@@ -117,7 +117,7 @@ conf.set('HAVE_LIBCRYPTO', ssldep.found().to_int())
+ conf.set('HAVE_LOCALTIME_R', 1, description : 'SUSV2')
+ conf.set('HAVE_LWRES_NETDB_H', lwresdep.found().to_int())
+ conf.set('HAVE_STRERROR_R', 1)
+-conf.set('HAVE_WORKING_STRERROR_R', 0)
++conf.set('HAVE_WORKING_STRERROR_R', 1)
+ conf.set('HAVE_STRUCT_TM_TM_ZONE', 0)
+ conf.set('HAVE_UNAME', 1)
+ conf.set('HAVE_STRFTIME', 1)
+@@ -222,6 +222,7 @@ include_dir = include_directories('.')
+ subdir('login')
+ subdir('plain')
+ subdir('crammd5')
++subdir('oauth')
+ if ntlmdep.found()
+   if cc.has_header('openssl/md4.h') and cc.has_function('MD4_Init', dependencies : ntlmdep)
+     subdir('ntlm')
+diff --git a/smtp-auth.c b/smtp-auth.c
+index 76661cb..a84d3e7 100644
+--- a/smtp-auth.c
++++ b/smtp-auth.c
+@@ -27,6 +27,7 @@
+ /* Support for the SMTP AUTH verb.
+  */
+ #include <stdlib.h>
++#include <stdio.h>
+ #include <string.h>
+ #include <strings.h>
+ #include <ctype.h>
+@@ -183,18 +184,28 @@ cmd_auth (siobuf_t conn, smtp_session_t session)
+ 
+   /* Ask SASL for the initial response (if there is one). */
+   response = auth_response (session->auth_context, NULL, &len);
+-  if (response != NULL)
+-    {
+-      /* Encode the response and send it back to the server */
+-      len = b64_encode (buf, sizeof buf, response, len);
+-      if (len == 0)
+-	sio_write (conn, " =", 2);
+-      else if (len > 0)
+-	{
+-	  sio_write (conn, " ", 1);
+-	  sio_write (conn, buf, len);
+-	}
+-    }
++  if (response != NULL && len > 0)
++  {
++	  char *b64 = base64_encode_dynamic(response, len);
++	  if (b64 != NULL)
++	  {
++		  sio_write (conn, " ", 1);
++		  sio_write (conn, b64, strlen(b64));
++		  free(b64);
++	  }
++	  else
++	  {
++		  sio_write (conn, " =", 2);
++	  }
++  }
++  else if (response != NULL && len == 0)
++  {
++	  sio_write (conn, " =", 2);
++  }
++  else
++  {
++	  fprintf(stderr, "cmd_auth: no initial response\n");
++  }
+ 
+   sio_write (conn, "\r\n", 2);
+   session->cmd_state = -1;
+@@ -211,6 +222,21 @@ rsp_auth (siobuf_t conn, smtp_session_t session)
+       session->rsp_state = S_quit;
+       return;
+     }
++
++  if (session->mta_status.code == 235) {
++    fprintf(stderr,"rsp_auth: XOAUTH2 authentication successful!\n");
++    session->authenticated = 1;
++
++    // For XOAUTH2, we should proceed to mail transaction, not try another AUTH mechanism
++#ifdef USE_ETRN
++    if (check_etrn (session))
++      session->rsp_state = S_etrn;
++    else
++#endif
++      session->rsp_state = initial_transaction_state (session);
++    return;
++  }
++
+   if (code == 4 || code == 5)
+     {
+       /* If auth mechanism is too weak or encryption is required, give up.
+@@ -267,31 +293,40 @@ rsp_auth (siobuf_t conn, smtp_session_t session)
+ void
+ cmd_auth2 (siobuf_t conn, smtp_session_t session)
+ {
+-  char buf[2048];
++  char *decoded_buf = NULL;
+   const char *response;
+   int len;
+ 
+-  /* Decode the text from the server to get the challenge. */
+-  len = b64_decode (buf, sizeof buf, session->mta_status.text, -1);
+-  if (len >= 0)
+-    {
+-      /* Send it through SASL and get the response. */
+-      response = auth_response (session->auth_context, buf, &len);
++  int decoded_len = b64_decode(NULL, 0, session->mta_status.text, -1);
++  if (decoded_len > 0)
++  {
++	  decoded_buf = malloc(decoded_len + 1);
++	  if (decoded_buf)
++	  {
++		  b64_decode(decoded_buf, decoded_len + 1, session->mta_status.text, -1);
++		  decoded_buf[decoded_len] = '\0';
++		  /* Send it through SASL and get the response. */
++		  response = auth_response (session->auth_context, decoded_buf, &len);
++		  free(decoded_buf);
++	  }
++  }
+ 
+-      /* Encode the response and send it back to the server */
+-      len = (response != NULL) ? b64_encode (buf, sizeof buf, response, len)
+-			       : -1;
+-    }
++  /* If base64 decode fails or memory allocation fails */
++  if (decoded_buf == NULL) {
++    sio_write (conn, "*\r\n", 3);
++    session->cmd_state = -1;
++    return;
++  }
+ 
+-  /* Abort the AUTH command if base 64 encode/decode fails. */
+-  if (len < 0)
++  /* Encode the response using dynamic base64 */
++  char *b64 = base64_encode_dynamic(response, len);
++  if (b64 != NULL) {
++    sio_write (conn, b64, strlen(b64));
++    free(b64);
++  } else {
+     sio_write (conn, "*\r\n", 3);
+-  else
+-    {
+-      if (len > 0)
+-	sio_write (conn, buf, len);
+-      sio_write (conn, "\r\n", 2);
+-    }
++  }
++  sio_write (conn, "\r\n", 2);
+   session->cmd_state = -1;
+ }
+ 
+-- 
+2.34.1
+

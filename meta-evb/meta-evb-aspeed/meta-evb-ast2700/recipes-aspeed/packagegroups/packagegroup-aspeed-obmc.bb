@@ -37,10 +37,10 @@ RDEPENDS:${PN}-fans = " \
     phosphor-pid-control \
     "
 
-SUMMARY:${PN}-flash = "AspeedTech Flash"
-RDEPENDS:${PN}-flash = " \
-    phosphor-software-manager \
-    "
+#SUMMARY:${PN}-flash = "AspeedTech Flash"
+#RDEPENDS:${PN}-flash = " \
+#    phosphor-software-manager \
+#    "
 
 SUMMARY:${PN}-system = "AspeedTech System"
 RDEPENDS:${PN}-system = " \

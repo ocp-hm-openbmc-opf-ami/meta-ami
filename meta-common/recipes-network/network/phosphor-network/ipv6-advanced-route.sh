@@ -27,14 +27,16 @@ if [ "$STATE" == "UP" ]; then
         exit 0
     fi
 
-    staticRtrEnable=`grep "IPv6EnableStaticRtr" "/etc/interface/$IFACE" 2> /dev/null | cut -d"=" -f2`
+    staticRtrEnable=`awk -F'=' '/IPv6EnableStaticRtr/ {print $2}' /etc/interface/$IFACE 2> /dev/null`
     if [ "$staticRtrEnable" = "true" ]; then
-        staticRtr1=`grep "IPv6StaticRtrAddr" "/etc/interface/$IFACE"  | cut -d"=" -f2`
-        staticRtr1Prefix=`grep "IPv6StaticRtrPrefix" "/etc/interface/$IFACE" | cut -d"=" -f2`
-        ip -6 route add "$staticRtr1""/""$staticRtr1Prefix" dev $IFACE > /dev/null 2>&1
+        eval $(awk -F= '
+            /IPv6StaticRtrAddr/      {print "staticRtr1="$2}
+            /IPv6StaticRtrPrefix/    {print "staticRtr1Prefix="$2}
+            /IPv6StaticRtr2Addr/     {print "staticRtr2="$2}
+            /IPv6StaticRtr2Prefix/   {print "staticRtr2Prefix="$2}
+        ' "/etc/interface/$IFACE")
 
-        staticRtr2=`grep "IPv6StaticRtr2Addr" "/etc/interface/$IFACE"  | cut -d"=" -f2`
-        staticRtr2Prefix=`grep "IPv6StaticRtr2Prefix" "/etc/interface/$IFACE" | cut -d"=" -f2`
+        ip -6 route add "$staticRtr1""/""$staticRtr1Prefix" dev $IFACE > /dev/null 2>&1
         ip -6 route add "$staticRtr2""/""$staticRtr2Prefix" dev $IFACE > /dev/null 2>&1
     fi
 
@@ -47,7 +49,7 @@ if [ "$STATE" == "UP" ]; then
 
     grep -q "$IFACE" "$RT_TABLE"
     if [ $? -ne 0 ]; then
-        NUM=`grep -v "#" "$RT_TABLE" | wc -l`
+        NUM=`awk '!/^#/ {count++} END{print count}' "$RT_TABLE"`
         echo "$(($NUM + 255)) $IFACE" >> "$RT_TABLE"
     fi
 
@@ -72,7 +74,7 @@ if [ "$STATE" == "UP" ]; then
 
     ip -6 route show table $IFACE | grep "dev $IFACE" > $ROUTE_RULE.$IFACE
     ip -6 rule flush table $IFACE 2>/dev/null
-    IPV6_ADDRS=$(ip -6 addr show dev "$IFACE" scope global | grep inet6 | awk '{split($2,a,"/"); print a[1]}')
+    IPV6_ADDRS=$(ip -6 addr show dev "$IFACE" scope global | awk '/inet6/ {split($2,a,"/"); print a[1]}')
     for IPV6_ADDR in $IPV6_ADDRS; do
         if [ -n "$IPV6_ADDR" ]; then
             ip -6 route add "$IPV6_ADDR" dev "$IFACE" table "$IFACE" > /dev/null 2>&1

@@ -1,0 +1,57 @@
+From f02c3eb561a37e5ac7ba26d26819245d8e24a9aa Mon Sep 17 00:00:00 2001
+From: rarun <rarun@ami.com>
+Date: Thu, 18 Jun 2026 11:36:45 +0530
+Subject: [PATCH] SPI aspeed smc Fix RDSFDP timing issue with DMA optimizations
+
+spi: aspeed-smc: Fix SFDP signature corruption by routing RDSFDP to USER mode
+
+When DMA write and low-clock optimizations are enabled via DTS flags
+(fmc-spi-dma-write and low-spi-clk-write), the RDSFDP (0x5A) instruction
+timing becomes unreliable in normal_mode. This causes the 8 dummy cycles
+requirement (per JESD216 standard) to be violated, resulting in 1-byte
+read offset corruption and SFDP signature validation failure (0x06504446
+instead of 0x50444653).
+
+Route RDSFDP commands specifically through aspeed_spi_read_user() which
+provides conservative CPU-controlled timing that correctly implements the
+JEDEC JESD216 timing requirements regardless of DMA configuration.
+
+This fix:
+- Maintains JESD216 standard compliance (opcode 0x5A, 3-byte address, 8 dummy cycles)
+- Uses proven code path already employed by dirmap_read() fallback
+- Only affects RDSFDP reads (one-time at boot, 256 bytes)
+- Does not impact normal flash read/write performance
+
+Fixes: w25q01jvq flash not detected on AST2600 EVB FMC with DMA optimizations
+
+Signed-off-by: rarun <rarun@ami.com>
+---
+ drivers/spi/spi-aspeed-smc.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/drivers/spi/spi-aspeed-smc.c b/drivers/spi/spi-aspeed-smc.c
+index 834091a61ca0..40c258ae1e99 100644
+--- a/drivers/spi/spi-aspeed-smc.c
++++ b/drivers/spi/spi-aspeed-smc.c
+@@ -736,6 +736,18 @@ static int aspeed_spi_exec_op_normal_mode(struct spi_mem *mem,
+ 		op->addr.buswidth, op->dummy.nbytes, op->dummy.buswidth,
+ 		op->data.nbytes, op->data.buswidth);
+ 
++	/*
++	 * SFDP reads must use USER mode to avoid timing alignment issues
++	 * when DMA write and low-clock optimizations are enabled in normal_mode.
++	 * The RDSFDP (0x5A) command requires 8 dummy cycles and is sensitive to
++	 * timing variations that can cause 1-byte read offset corruption.
++	 */
++	if (op->cmd.opcode == 0x5A && op->data.dir == SPI_MEM_DATA_IN) {
++		dev_dbg(dev, "RDSFDP (0x5A) detected: routing to USER mode for stability\n");
++		return aspeed_spi_read_user(chip, op, op->addr.val,
++					    op->data.nbytes, op->data.buf.in);
++	}
++
+ 	addr_mode_reg = readl(aspi->regs + CE_CTRL_REG);
+ 	addr_mode_reg_backup = addr_mode_reg;
+ 	addr_data_mask = readl(aspi->regs + CMD_CTRL_REG);
+-- 
+2.34.1
+

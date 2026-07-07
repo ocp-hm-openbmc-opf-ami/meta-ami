@@ -1,0 +1,369 @@
+From 6a26e7a68bc9e17aee267439e3feeff7cf8323f1 Mon Sep 17 00:00:00 2001
+From: rupeshs <rupeshs@ami.com>
+Date: Fri, 15 May 2026 13:09:09 +0530
+Subject: [PATCH] dummy
+
+Signed-off-by: rupeshs <rupeshs@ami.com>
+---
+ Kconfig                         |  2 +
+ Makefile                        |  2 +
+ common/board_r.c                | 21 ++++++++
+ drivers/misc/i2c_eeprom.c       |  6 ++-
+ include/configs/aspeed-common.h | 22 +++++++-
+ oem/Kconfig                     | 16 ++++++
+ oem/Makefile                    |  1 +
+ oem/ami/Makefile                |  1 +
+ oem/ami/mac_eeprom/Kconfig      | 38 ++++++++++++++
+ oem/ami/mac_eeprom/Makefile     |  1 +
+ oem/ami/mac_eeprom/mac_eeprom.c | 116 +++++++++++++++++++++++++++++++++++++++++++++
+ 11 files changed, 226 insertions(+), 2 deletions(-)
+ create mode 100644 oem/Kconfig
+ create mode 100644 oem/Makefile
+ create mode 100644 oem/ami/Makefile
+ create mode 100644 oem/ami/mac_eeprom/Kconfig
+ create mode 100644 oem/ami/mac_eeprom/Makefile
+ create mode 100644 oem/ami/mac_eeprom/mac_eeprom.c
+
+diff --git a/Kconfig b/Kconfig
+index 0165ca33c5..5aee923c32 100644
+--- a/Kconfig
++++ b/Kconfig
+@@ -585,3 +585,5 @@ source "fs/Kconfig"
+ source "lib/Kconfig"
+ 
+ source "test/Kconfig"
++
++source "oem/Kconfig"
+diff --git a/Makefile b/Makefile
+index e1fa881b2a..fbed5c9c64 100644
+--- a/Makefile
++++ b/Makefile
+@@ -738,6 +738,8 @@ libs-$(CONFIG_UT_OVERLAY) += test/overlay/
+ 
+ libs-y += $(if $(BOARDDIR),board/$(BOARDDIR)/)
+ 
++libs-$(CONFIG_OEM_FEATURE) += oem/
++
+ libs-y := $(sort $(libs-y))
+ 
+ u-boot-dirs	:= $(patsubst %/,%,$(filter %/, $(libs-y))) tools examples
+diff --git a/common/board_r.c b/common/board_r.c
+index 8a849faa08..8990617617 100644
+--- a/common/board_r.c
++++ b/common/board_r.c
+@@ -52,6 +52,7 @@
+ #include <asm/gpio.h>
+ #endif
+ 
++
+ DECLARE_GLOBAL_DATA_PTR;
+ 
+ ulong monitor_flash_len;
+@@ -494,6 +495,10 @@ static int initr_enable_interrupts(void)
+ }
+ #endif
+ 
++#ifdef CONFIG_MACADDR_IN_EEPROM
++int eth_env_update_enetaddr_eeprom(const char *name, unsigned char *enetaddr);
++#endif
++
+ #ifdef CONFIG_CMD_NET
+ static int initr_ethaddr(void)
+ {
+@@ -501,14 +506,29 @@ static int initr_ethaddr(void)
+ 
+ 	/* kept around for legacy kernels only ... ignore the next section */
+ 	eth_env_get_enetaddr("ethaddr", bd->bi_enetaddr);
++#ifdef CONFIG_HAS_ETH0
++#ifdef CONFIG_MACADDR_IN_EEPROM
++	eth_env_update_enetaddr_eeprom("ethaddr", bd->bi_enetaddr);
++#endif
++#endif
++
+ #ifdef CONFIG_HAS_ETH1
+ 	eth_env_get_enetaddr("eth1addr", bd->bi_enet1addr);
++#ifdef CONFIG_MACADDR_IN_EEPROM
++	eth_env_update_enetaddr_eeprom("eth1addr", bd->bi_enet1addr);
++#endif
+ #endif
+ #ifdef CONFIG_HAS_ETH2
+ 	eth_env_get_enetaddr("eth2addr", bd->bi_enet2addr);
++#ifdef CONFIG_MACADDR_IN_EEPROM
++	eth_env_update_enetaddr_eeprom("eth2addr", bd->bi_enet2addr);
++#endif
+ #endif
+ #ifdef CONFIG_HAS_ETH3
+ 	eth_env_get_enetaddr("eth3addr", bd->bi_enet3addr);
++#ifdef CONFIG_MACADDR_IN_EEPROM
++	eth_env_update_enetaddr_eeprom("eth3addr", bd->bi_enet3addr);
++#endif
+ #endif
+ #ifdef CONFIG_HAS_ETH4
+ 	eth_env_get_enetaddr("eth4addr", bd->bi_enet4addr);
+@@ -793,6 +813,7 @@ static init_fnc_t init_sequence_r[] = {
+ #endif
+ 	/* PPC has a udelay(20) here dating from 2002. Why? */
+ #ifdef CONFIG_CMD_NET
++	/* MAC address and ether net driver initialization */
+ 	initr_ethaddr,
+ #endif
+ #if defined(CONFIG_GPIO_HOG)
+diff --git a/drivers/misc/i2c_eeprom.c b/drivers/misc/i2c_eeprom.c
+index 29ad87c1d7..4379c79889 100644
+--- a/drivers/misc/i2c_eeprom.c
++++ b/drivers/misc/i2c_eeprom.c
+@@ -60,7 +60,11 @@ static int i2c_eeprom_std_ofdata_to_platdata(struct udevice *dev)
+ 
+ static int i2c_eeprom_std_probe(struct udevice *dev)
+ {
+-	return 0;
++	u32 offset_len;
++
++	if (dev_read_u32(dev, "offset_len", &offset_len) == 0)
++		i2c_set_chip_offset_len(dev, offset_len);
++    return 0;
+ }
+ 
+ static const struct udevice_id i2c_eeprom_std_ids[] = {
+diff --git a/include/configs/aspeed-common.h b/include/configs/aspeed-common.h
+index b437ba380c..74f40ddeea 100644
+--- a/include/configs/aspeed-common.h
++++ b/include/configs/aspeed-common.h
+@@ -98,4 +98,24 @@
+ #define CONFIG_ENV_OFFSET_REDUND	(CONFIG_ENV_OFFSET + CONFIG_ENV_SIZE)
+ #endif
+ 
+-#endif	/* __ASPEED_COMMON_CONFIG_H */
++/* mac eeprom specific macros */
++#ifdef CONFIG_ETH0_MAC_FROM_EEPROM
++#define CONFIG_HAS_ETH0
++#endif
++#ifdef CONFIG_ETH1_MAC_FROM_EEPROM
++#define CONFIG_HAS_ETH1
++#endif
++#ifdef CONFIG_ETH2_MAC_FROM_EEPROM
++#define CONFIG_HAS_ETH2
++#endif
++#ifdef CONFIG_ETH3_MAC_FROM_EEPROM
++#define CONFIG_HAS_ETH3
++#endif
++#ifdef CONFIG_ETH4_MAC_FROM_EEPROM
++#define CONFIG_HAS_ETH4
++#endif
++#ifdef CONFIG_ETH5_MAC_FROM_EEPROM
++#define CONFIG_HAS_ETH5
++#endif
++
++#endif	/* __ASPEED_COMMON_CONFIG_H */
+diff --git a/oem/Kconfig b/oem/Kconfig
+new file mode 100644
+index 0000000000..19e0259e9d
+--- /dev/null
++++ b/oem/Kconfig
+@@ -0,0 +1,16 @@
++menu "OEM Features"
++
++config OEM_FEATURE
++       bool "Enable OEM feature support"
++       default n
++       help
++         Enable OEM-specific features and custom drivers.
++         When enabled, the oem/ami/ directory will be built.
++
++if OEM_FEATURE
++
++source "oem/ami/mac_eeprom/Kconfig"
++
++endif
++
++endmenu
+diff --git a/oem/Makefile b/oem/Makefile
+new file mode 100644
+index 0000000000..3af814f256
+--- /dev/null
++++ b/oem/Makefile
+@@ -0,0 +1 @@
++obj-$(CONFIG_OEM_FEATURE) += ami/
+diff --git a/oem/ami/Makefile b/oem/ami/Makefile
+new file mode 100644
+index 0000000000..2fa8d89b73
+--- /dev/null
++++ b/oem/ami/Makefile
+@@ -0,0 +1 @@
++obj-$(CONFIG_MACADDR_IN_EEPROM) += mac_eeprom/
+diff --git a/oem/ami/mac_eeprom/Kconfig b/oem/ami/mac_eeprom/Kconfig
+new file mode 100644
+index 0000000000..c468b09df6
+--- /dev/null
++++ b/oem/ami/mac_eeprom/Kconfig
+@@ -0,0 +1,38 @@
++config MACADDR_IN_EEPROM
++       bool "Configure if MAC address is stored in EEPROM"
++       depends on OEM_FEATURE && I2C_EEPROM
++       default n
++       help
++         Enable reading MAC addresses from an I2C EEPROM device.
++         The EEPROM device must have a 'macoffset' property in the DTS
++         specifying the byte offset for each ethernet interface.
++
++config ETH0_MAC_FROM_EEPROM
++       bool "Read eth0 (ethaddr) MAC address from EEPROM"
++       depends on MACADDR_IN_EEPROM
++       default n
++
++config ETH1_MAC_FROM_EEPROM
++       bool "Read eth1 (eth1addr) MAC address from EEPROM"
++       depends on MACADDR_IN_EEPROM
++       default n
++
++config ETH2_MAC_FROM_EEPROM
++       bool "Read eth2 (eth2addr) MAC address from EEPROM"
++       depends on MACADDR_IN_EEPROM
++       default n
++
++config ETH3_MAC_FROM_EEPROM
++       bool "Read eth3 (eth3addr) MAC address from EEPROM"
++       depends on MACADDR_IN_EEPROM
++       default n
++
++config ETH4_MAC_FROM_EEPROM
++       bool "Read eth4 (eth4addr) MAC address from EEPROM"
++       depends on MACADDR_IN_EEPROM
++       default n
++
++config ETH5_MAC_FROM_EEPROM
++       bool "Read eth5 (eth5addr) MAC address from EEPROM"
++       depends on MACADDR_IN_EEPROM
++       default n
+diff --git a/oem/ami/mac_eeprom/Makefile b/oem/ami/mac_eeprom/Makefile
+new file mode 100644
+index 0000000000..8071efce6b
+--- /dev/null
++++ b/oem/ami/mac_eeprom/Makefile
+@@ -0,0 +1 @@
++obj-$(CONFIG_MACADDR_IN_EEPROM) += mac_eeprom.o
+diff --git a/oem/ami/mac_eeprom/mac_eeprom.c b/oem/ami/mac_eeprom/mac_eeprom.c
+new file mode 100644
+index 0000000000..0d5b345695
+--- /dev/null
++++ b/oem/ami/mac_eeprom/mac_eeprom.c
+@@ -0,0 +1,116 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright (C) 2022 AMI Inc
++ *               Hongwei Zhang <hongewiz@ami.com>
++ */
++
++#include <common.h>
++#include <dm.h>
++#include <environment.h>
++#include <i2c_eeprom.h>
++#include <netdev.h>
++#include <search.h>
++
++#define MAC_ADDR_LEN        6
++#define MAX_ETH_NUM         4
++#define ETH_NAME_LEN         16
++
++int eth_env_update_enetaddr_eeprom(const char *name, unsigned char *enetaddr);
++
++
++int get_mac_eeprom(const char *ethaddr_name, unsigned char *ethaddr)
++{
++    struct udevice *dev;
++    u32 mac_offset;
++    int ret, ret_check;
++    char c;
++    char eth_name[ETH_NAME_LEN];
++    u32 offset_len ;
++
++    c = *(ethaddr_name + 3);
++    if (c == 'a')
++        c = '0';
++
++    snprintf(eth_name, ETH_NAME_LEN, "macoffset%c", c);
++    debug("MAC scan: Looking for %s in EEPROM\n", eth_name);
++    for (ret = uclass_first_device_err(UCLASS_I2C_EEPROM, &dev);
++         !ret && dev;
++         ret = uclass_next_device_err(&dev)) {
++        debug("MAC scan: Device: %s\n", dev->name);
++
++        ret = dev_read_u32(dev, "offset_len", &offset_len);
++        if (ret)
++            continue;
++
++        u32 max_offset = (1u << (8 * offset_len)) - MAC_ADDR_LEN;
++
++        u32 i2c_addr = (u32)dev_read_addr(dev);
++        debug("MAC scan: I2C address of device %s: 0x%X\n", dev->name, i2c_addr);
++        if (i2c_addr < 0x08 || i2c_addr > 0x77) {
++            printf("MAC scan: Skipping device %s: I2C address 0x%X out of valid range (0x08-0x77)\n",
++                   dev->name, i2c_addr);
++            continue;
++        }
++
++        ret_check = dev_read_u32(dev, eth_name, &mac_offset);
++        if (ret_check)
++            continue;
++
++        debug("MAC scan: Offset read from EEPROM: 0x%X\n", mac_offset);
++        if (mac_offset >= 0x00 && mac_offset < max_offset) {
++            ret_check = i2c_eeprom_read(dev, mac_offset, ethaddr, MAC_ADDR_LEN);
++            if (ret_check)
++                return ret_check;
++
++            debug("MAC scan: Read MAC address from EEPROM: %pM\n", ethaddr);
++            if (!is_valid_ethaddr((const u8 *)ethaddr)) {
++                printf("MAC scan: Invalid MAC address read from EEPROM: %pM\n", ethaddr);
++                return -EINVAL;
++            }
++            printf("MAC read successful from EEPROM @ address 0x%X and MAC %pM\n", i2c_addr, ethaddr);
++            return 0;
++        } else {
++            printf("MAC scan: Invalid offset read from EEPROM: 0x%X\n", mac_offset);
++        }
++    }
++
++    return -ENODEV;
++}
++
++int eth_env_update_enetaddr_eeprom(const char *name, unsigned char *enetaddr)
++{
++    const int ETH_ADDR_LEN = 6;
++    unsigned char ethaddr_eeprom[ETH_ADDR_LEN];
++    char buf[ARP_HLEN_ASCII + 1];
++    bool match = true;
++    int ret;
++    int i;
++
++    ret = get_mac_eeprom(name, ethaddr_eeprom);
++    if (ret < 0)
++        return ret;
++
++    /* compare MAC addresses */
++    for (i = 0; i < ETH_ADDR_LEN; i++) {
++        if (ethaddr_eeprom[i] != enetaddr[i]) {
++            match = false;
++            break;
++        }
++    }
++
++    if (!match) {
++        ENTRY e, *ep;
++
++        sprintf(buf, "%pM", ethaddr_eeprom);
++        e.key  = (char *)name;
++        e.data = buf;
++        hsearch_r(e, ENTER, &ep, &env_htab, H_FORCE);
++        if (!ep) {
++            printf("MAC: Failed to force-set %s\n", name);
++            return -EPERM;
++        }
++        return 0;
++    }
++
++    return 0;
++}
+-- 
+2.53.0
+

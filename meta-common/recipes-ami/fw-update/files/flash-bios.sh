@@ -90,14 +90,19 @@ check_preserve_bios_config() {
             config_keys="$(echo "$json_data" | grep -o '"[^"]*": {' | awk -F'"' '{print $2}')"
 
             for key in $config_keys; do
-                block="$(echo "$json_data" | awk -v RS="}" "/\"$key\"/ {print $0 RS}")"
+	         block="$(echo "$json_data" | awk -v RS="}" -v key="\"$key\"" 'index($0,key){print $0 RS}')"
                 start="$(echo "$block" | grep -o '"start": *"[^"]*"' | awk -F'"' '{print $4}')"
                 length="$(echo "$block" | grep -o '"length": *"[^"]*"' | awk -F'"' '{print $4}')"
 
                 if [ -n "$mtdPart" ] && [ -n "$start" ] && [ -n "$length" ]; then
-                    nanddump -s "$start" -l "$length" "/dev/$mtdPart" > "/tmp/preserve_bios_$key" 2>&1
-                    if [ $? -eq 0 ]; then
-                        log "BIOS $key Configs Preserved successfully"
+                    dump_file="/tmp/preserve_bios_$key"
+                    dump_log="/tmp/preserve_bios_${key}.log"
+                    if nanddump -q -s "$start" -l "$length" -f "$dump_file" "/dev/$mtdPart" >"$dump_log" 2>&1; then
+                        if [ -s "$dump_file" ]; then
+                            log "BIOS $key Configs Preserved successfully"
+                        else
+                            log "BIOS $key Configs Preserve failed"
+                        fi
                     else
                         log "BIOS $key Configs Preserve failed"
                     fi
@@ -137,7 +142,7 @@ restore_bios_configs() {
     config_keys="$(echo "$json_data" | grep -o '"[^"]*": {' | awk -F'"' '{print $2}')"
 
     for key in $config_keys; do
-        block="$(echo "$json_data" | awk -v RS="}" "/\"$key\"/ {print $0 RS}")"
+	 block="$(echo "$json_data" | awk -v RS="}" -v key="\"$key\"" 'index($0,key){print $0 RS}')"
         start="$(echo "$block" | grep -o '"start": *"[^"]*"' | awk -F'"' '{print $4}')"
 
         if [ -n "$mtdPart" ] && [ -n "$start" ] && [ -s "/tmp/preserve_bios_$key" ]; then

@@ -19,5 +19,5 @@ SYSTEMD_SERVICE:${PN} += "${PN}.service"
 
 do_install:append() {
     install -d ${D}${bindir}
-    install -m 0755 ${WORKDIR}/uboot-mac-addr.sh ${D}${bindir}
+    install -m 0755 ${UNPACKDIR}/uboot-mac-addr.sh ${D}${bindir}
 }

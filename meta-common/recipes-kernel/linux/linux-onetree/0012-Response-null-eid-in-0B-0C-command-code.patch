@@ -1,0 +1,79 @@
+From 720a1f02f336d609b9836ae719ce9516b0f2f3cf Mon Sep 17 00:00:00 2001
+From: roycheng <roycheng@ami.com>
+Date: Wed, 1 Jul 2026 01:21:29 +0800
+Subject: [PATCH] Response null eid in 0B 0C command code
+
+---
+ drivers/net/mctp/mctp-pcie-vdm.c | 42 +++++++++++++++++++++++++++++++-
+ 1 file changed, 41 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/mctp/mctp-pcie-vdm.c b/drivers/net/mctp/mctp-pcie-vdm.c
+index 5b12e8291fee..c682c6d1be35 100644
+--- a/drivers/net/mctp/mctp-pcie-vdm.c
++++ b/drivers/net/mctp/mctp-pcie-vdm.c
+@@ -39,6 +39,13 @@
+ /* 16byte */
+ #define MCTP_PCIE_VDM_HDR_SIZE 16
+ #define MCTP_PAYLOAD_IC_TYPE_SIZE 1
++#define MCTP_PCIE_VDM_TRANSPORT_HDR_OFFSET (MCTP_PCIE_VDM_HDR_SIZE - 4)
++#define MCTP_PCIE_VDM_TRANSPORT_DEST_EID_OFFSET \
++	(MCTP_PCIE_VDM_TRANSPORT_HDR_OFFSET + 1)
++#define MCTP_PCIE_VDM_TRANSPORT_SRC_EID_OFFSET \
++	(MCTP_PCIE_VDM_TRANSPORT_HDR_OFFSET + 2)
++#define MCTP_PCIE_VDM_CTRL_MSG_TYPE_OFFSET (MCTP_PCIE_VDM_HDR_SIZE + 0)
++#define MCTP_PCIE_VDM_CTRL_CMD_OFFSET (MCTP_PCIE_VDM_HDR_SIZE + 2)
+ #define MCTP_RECEIVE_PKT_TIMEOUT_MS 5
+ 
+ #define MCTP_PCIE_VDM_NET_DEV_TX_QUEUE_LEN 1100
+@@ -152,6 +159,28 @@ static int mctp_pcie_vdm_xmit(struct net_device *ndev, struct sk_buff *skb)
+ 		ALIGN(payload_len_byte, sizeof(u32)) - payload_len_byte;
+ 	pr_debug("%s: skb len %d pad len %d\n", __func__, skb->len,
+ 		 hdr->tag_pad_len);
++	/*
++     * During endpoint discovery the endpoint has no EID yet.  Zero src EID
++     * for all three discovery-related control messages.
++     * For Discovery Notify (0x0D) also zero dest EID: the message is
++     * addressed to the bus owner by BDF (pci_target_id), not by EID.
++     *   0x0B Prepare Endpoint Discovery response (Rq=0)
++     *   0x0C Endpoint Discovery response         (Rq=0)
++     *   0x0D Discovery Notify request            (Rq=1, sent by endpoint)
++     */
++    if (skb->len > MCTP_PCIE_VDM_CTRL_CMD_OFFSET &&
++        (skb->data[MCTP_PCIE_VDM_CTRL_MSG_TYPE_OFFSET] & MCTP_MSG_TYPE_MASK) == 0) {
++        u8 cmd = skb->data[MCTP_PCIE_VDM_CTRL_CMD_OFFSET];
++
++        if (cmd == MCTP_CTRL_CMD_PREPARE_ENDPOINT_DISCOVERY ||
++            cmd == MCTP_CTRL_CMD_ENDPOINT_DISCOVERY ||
++            cmd == MCTP_CTRL_CMD_DISCOVERY_NOTIFY) {
++            skb->data[MCTP_PCIE_VDM_TRANSPORT_SRC_EID_OFFSET] = 0;
++            if (cmd == MCTP_CTRL_CMD_DISCOVERY_NOTIFY)
++                skb->data[MCTP_PCIE_VDM_TRANSPORT_DEST_EID_OFFSET] = 0;
++        }
++    }
++
+ 	MCTP_PCIE_SWAP_NET_ENDIAN((u32 *)hdr,
+ 				  sizeof(struct mctp_pcie_vdm_hdr) / sizeof(u32));
+ 
+@@ -187,7 +216,18 @@ static netdev_tx_t mctp_pcie_vdm_start_xmit(struct sk_buff *skb,
+ 		rc = mctp_pcie_vdm_xmit(ndev, skb);
+ 		if (rc) {
+ 			pr_debug("%s: failed to send packet, rc %d\n", __func__, rc);
+-			ret = NETDEV_TX_BUSY;
++			if (rc == -ENETDOWN) {
++                /*
++                 * Link is down: the VDM header was already
++                 * byte-swapped before send_packet failed.
++                 * Drop the skb to avoid requeueing a
++                 * header-corrupted packet in an infinite
++                 * retry loop.
++                 */
++                kfree_skb(skb);
++                return NETDEV_TX_OK;
++            }
++            ret = NETDEV_TX_BUSY;
+ 		} else {
+ 			ret = NETDEV_TX_OK;
+ 			kfree_skb(skb);
+-- 
+2.34.1
+

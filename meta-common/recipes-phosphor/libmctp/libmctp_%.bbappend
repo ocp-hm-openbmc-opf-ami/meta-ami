@@ -1,8 +1,8 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/libmctp.git;protocol=https;branch=main \
+SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/libmctp.git;protocol=https;branch=main \
            file://default"
-SRCREV = "bdb05b6e23232b5148df256004150ff2ea50fd87"
+SRCREV = "823b18fbf9d9802a40e1a2800a9f14986209d5cc"
 
 PACKAGECONFIG ??= ""
 PACKAGECONFIG[libmctp-kernel-mode] = " -Dmctp-in-kernel-enable=enabled "
@@ -30,7 +30,11 @@ FILES:${PN}:append = "${datadir} ${datadir}/mctp"
 do_install:append() {
     install -d ${D}${datadir}/mctp
 
-#    if [ -e "${WORKDIR}/mctp-restart-notify.service" ]; then
-#        install -m 0644 ${WORKDIR}/mctp-restart-notify.service ${D}${nonarch_base_libdir}/systemd/system/mctp-restart-notify.service
+    if [ -z "$(ls -A ${D}${nonarch_base_libdir}/systemd)" ]; then
+        rm -rf ${D}${nonarch_base_libdir}/systemd
+    fi
+
+#    if [ -e "${UNPACKDIR}/mctp-restart-notify.service" ]; then
+#        install -m 0644 ${UNPACKDIR}/mctp-restart-notify.service ${D}${nonarch_base_libdir}/systemd/system/mctp-restart-notify.service
 #    fi
 }

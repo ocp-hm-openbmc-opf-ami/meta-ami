@@ -1,30 +1,35 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 PROJECT_SRC_DIR := "${THISDIR}/${PN}"
 
-#SRCREV="9fa224c5eadf64505ef2c41334f7125fe899176b"
+SRCREV_override = "59a245b0c717361fb02e0e0e95e2b1d0cae8d732"
+SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-sel-logger.git;branch=master;protocol=https;name=override;"
+SRCREV_FORMAT = "override"
 
-SRCREV="483ae8f09371cadeda4be02d8c109ac5dae5a98e"
-
-
-SRC_URI += " \
-           file://0001-Add-PEF-support-for-SEL-Events.patch \
-           file://0002-Add-Linear-SEL-Support.patch \
-           file://0003-Add-Support-to-handle-OS-Critical-Sensor-Event.patch \
-           file://0004-Add-D-Bus-SEL-Logging-and-SEL-Policy-support.patch \
-           file://0005-Add-Systemd-Unit-crash-logging-support.patch \
-           file://0006-Add-Logging-event-basaed-on-severity.patch \
-           file://0008-Fix-for-OT-12242-lnr-unr-events-not-logging.patch \
-           file://0009-Fix-sel-logger-crash-and-add-discrete-event-severity.patch \
-           file://0010-coverity-fix.patch \
-           file://0011-crashErrorEventMonitor-coredump-fixed.patch \
-	   file://0012-Added-Extended-SEL-support.patch \
-	   file://0012-High-Coverity-Fix-CM-4-phosphor-sel-logger.patch \
-	   file://0013-Update-SEL-message-format-for-Temperature-Threshold.patch \
-           "
-
-
-DEPENDS += "intel-ipmi-oem"
-RDEPENDS:${PN} += "intel-ipmi-oem"
 EXTRA_OEMESON +=  "-Dsel-extended=true"
+DEPENDS += "intel-ipmi-oem-ext"
+RDEPENDS:${PN} += "intel-ipmi-oem-ext"
 
+DEPENDS:intel-ast2600 += "intel-ipmi-oem"
+RDEPENDS:${PN}:intel-ast2600 += "intel-ipmi-oem"
+RDEPENDS:${PN}:intel-ast2600:remove = "intel-ipmi-oem-ext"
+
+DEPENDS:intel-ast2700 += "intel-ipmi-oem"
+RDEPENDS:${PN}:intel-ast2700 += "intel-ipmi-oem"
+RDEPENDS:${PN}:intel-ast2700:remove = "intel-ipmi-oem-ext"
+
+DEPENDS:ast2700-dcscm += "intel-ipmi-oem"
+RDEPENDS:${PN}:ast2700-dcscm += "intel-ipmi-oem"
+RDEPENDS:${PN}:ast2700-dcscm:remove = "intel-ipmi-oem-ext"
+
+DEPENDS:evb-ast2600 += "intel-ipmi-oem"
+RDEPENDS:${PN}:evb-ast2600 += "intel-ipmi-oem"
+RDEPENDS:${PN}:evb-ast2600:remove = "intel-ipmi-oem-ext"
+
+DEPENDS:ast2700-default += "intel-ipmi-oem"
+RDEPENDS:${PN}:ast2700-default += "intel-ipmi-oem"
+RDEPENDS:${PN}:ast2700-default:remove = "intel-ipmi-oem-ext"
+
+PACKAGECONFIG[log-crash] = "-Dlog-crash=true,-Dlog-crash=false"
 PACKAGECONFIG:append = " send-to-logger log-threshold log-crash"
+
+EXTRA_OEMESON:append = "${@' -Dstatic-sensor-number=true' if d.getVar('STATIC_SENSOR_NUMBER_ENABLE') == '1' else ' -Dstatic-sensor-number=false'}"

@@ -6,20 +6,22 @@ require linux-onetree.inc
 
 LINUX_VERSION = "6.6.100"
 
-KERNEL_VERSION_SANITY_SKIP="1"
+KERNEL_VERSION_SANITY_SKIP = "1"
 
 EXTRA_OEMAKE += "KCFLAGS=-DCONFIG_I3C_MCTP_HELPERS"
 
-#KSRC = "git://git@github.com/ocp-hm-openbmc-opf-ami/linux.git;protocol=https;branch=onetree-dev-6.6"
+#KSRC = "git://git.ami.com/core/ami-bmc/base-tech/linux-lf.git;protocol=https;branch=onetree-dev-6.6"
 
 # Include this as a comment only for downstream auto-bump
 # SRC_URI = "git://git@github.com/intel-bmc/os.linux.kernel.openbmc.linux.git;protocol=ssh;branch=dev-6.1-intel"
-SRC_URI:append = "git://git@github.com/ocp-hm-openbmc-opf-ami/linux.git;protocol=https;branch=onetree-dev-6.6 "
+SRC_URI:append = "git://git.ami.com/core/ami-bmc/base-tech/linux-lf.git;protocol=https;branch=onetree-dev-6.6 "
 
 # KBRANCH is added for devtool to checkout to the same branch as the linux-lf branch. This variable is only used by the devtool utility and must be updated whenever the linux-lf branch changes.
 KBRANCH = "onetree-dev-6.6"
 
-SRCREV = "0d4833fe2c5da12700510296ff1f04d0bb4d5456"
+KBUILD_CFLAGS += "-ffile-prefix-map=${WORKDIR}=/usr/src/debug/${PN}/${PV}"
+KBUILD_CFLAGS += "-ffile-prefix-map=${B}=/usr/src/debug/${PN}/${PV}"
+SRCREV = "8f00e3e5a6f0448177ce0cf026001cf573b190f8"
 
 
 do_compile:prepend(){
@@ -104,7 +106,71 @@ SRC_URI += "file://dts-ami/ \
             file://CVE-2025-38721.patch \
             file://CVE-2025-39683.patch \
             file://CVE-2025-39697.patch \
+            file://CVE-2025-38677.patch \
+            file://CVE-2025-39749.patch \
+            file://CVE-2025-39788.patch \
+            file://CVE-2025-39866.patch \
+            file://CVE-2025-39944.patch \
+            file://CVE-2025-38680.patch \
+            file://CVE-2025-39757.patch \
+            file://CVE-2025-39790.patch \
+            file://CVE-2025-39869.patch \
+            file://CVE-2025-39945.patch \
+            file://CVE-2025-39685.patch \
+            file://CVE-2025-39759.patch \
+            file://CVE-2025-39806.patch \
+            file://CVE-2025-39870.patch \
+            file://CVE-2025-39687.patch \
+            file://CVE-2025-39760.patch \
+            file://CVE-2025-39817.patch \
+            file://CVE-2025-39883.patch \
+            file://CVE-2025-39738.patch \
+            file://CVE-2025-39766.patch \
+            file://CVE-2025-39841.patch \
+            file://CVE-2025-39911.patch \
+            file://CVE-2025-39743.patch \
+            file://CVE-2025-39783.patch \
+            file://CVE-2025-39853.patch \
+            file://CVE-2025-39913.patch \
+            file://CVE-2025-40129.patch \
+            file://CVE-2025-71120.patch \
+            file://CVE-2025-38617.patch \
+            file://CVE-2025-39782.patch \
+            file://CVE-2025-39744.patch \
+            file://CVE-2025-39795.patch \
+            file://CVE-2025-39798.patch \
+            file://CVE-2025-39813.patch \
+            file://CVE-2025-39825.patch \
+            file://CVE-2025-39819.patch \
+            file://CVE-2025-39844.patch \
+            file://CVE-2025-39843.patch \
+            file://CVE-2025-39770.patch \
+            file://CVE-2025-39914.patch \
+            file://CVE-2025-39902.patch \
+            file://CVE-2025-39953.patch \
+            file://CVE-2025-39931.patch \
+            file://CVE-2025-38588.patch \
+            file://CVE-2025-38587.patch \
+            file://CVE-2025-38727.patch \
+            file://CVE-2026-23398.patch \
+            file://CVE-2026-23397.patch \
+            file://CVE-2026-31414.patch \
+            file://CVE-2026-31448.patch \
+            file://CVE-2026-31685.patch \
+            file://CVE-2026-43038.patch \
+            file://CVE-2026-43071.patch \
+            file://CVE-2026-43186.patch \
+            file://CVE-2026-43341.patch \
+            file://CVE-2026-43383.patch \
+            file://CVE-2026-46185.patch \
+            file://CVE-2026-46195.patch \
+            file://CVE-2026-46115.patch \
             "
+
+# Include the below cfg file to get the proper mounting of the SD card partitions in Slot 1.
+#SRC_URI += " file://enable_regulators_SDcard.cfg \"
+# However the power operation gpio pins gets conflict with the voltage regulator pins.
+# So after enabling it adjust and handle the power control gpio pins based on the platform configurations.
 
 SRC_CPLD_SPI = " file://cpld-spidev.cfg \
                  file://0006-enable-spidev-in-driver-file.patch \
@@ -130,8 +196,12 @@ NETWORK_BONDING_SRC_URI += "file://bond.cfg \
                            "
 SRC_URI += "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
 
-SRC_URI:append = " ${@bb.utils.contains('ENABLE_MCTP_KERNEL_MODE', '1', ' file://Enable_MCTP_vdm.cfg ', '', d)}"
-SRC_URI:append = " ${@bb.utils.contains('ENABLE_MCTP_KERNEL_MODE', '1', ' file://0007-Receive-MCTP-Broadcast-Package.patch.patch ', '', d)}"
+SRC_URI:append = " ${@bb.utils.contains('ENABLE_COMMUNITY_MCTP_KERNEL_MODE', '1', ' file://Enable_MCTP_vdm.cfg ', '', d)}"
+SRC_URI:append = " file://0007-Receive-MCTP-Broadcast-Package.patch "
+SRC_URI:append = " file://0008-MCTP-route-type-default-value.patch "
+SRC_URI:append = " file://0009-mctp-pcie-vdm-add-carrier-state-for-PCIe-reset.patch "
+SRC_URI:append = " file://0010-aspeed-mctp-handle-PCIe-host-reset.patch "
+SRC_URI:append = " file://0012-Response-null-eid-in-0B-0C-command-code.patch "
 
 # ABR mode detection patch for AST2600
 SRC_URI_ABR_PATCH = "file://0001-spi-aspeed-Add-ABR-mode-detection-support-for-AST260.patch"

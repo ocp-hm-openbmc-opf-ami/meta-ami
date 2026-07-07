@@ -1,6 +1,8 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRCREV = "218bf9119e45f2a46601e709af39d5b338ee944e"
+SRC_URI  += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-debug-collector.git;branch=master;protocol=https;name=override; "
+SRCREV_FORMAT = "override"
+SRCREV_override = "f793d1b618406db870834619fbe7911f5dd972e7"
 
 SRC_URI += "file://plugins.d/arpcntlconf \
 	    file://plugins.d/arptableinfo  \
@@ -23,11 +25,18 @@ SRC_URI += "file://plugins.d/arpcntlconf \
 	    file://plugins.d/softIRQs  \
 	    file://plugins.d/tmpfilelist  \
 	    file://plugins.d/varfilelist  \
-	    file://0001-Added-a-fix-for-creating-a-dump-entry-when-terminating-services.patch \
+	    file://service_files/obmc-dump-monitor.service \
+	    file://service_files/ramoops-monitor.service \
+	    file://service_files/xyz.openbmc_project.Dump.Manager.service \
 	   "
+
+do_install:prepend() {
+    # Copy service files from subdirectory to WORKDIR root so base recipe picks them up
+    cp ${UNPACKDIR}/service_files/*.service ${UNPACKDIR}/
+}
 
 do_install:append() {
     install -d ${D}${dreport_plugin_dir}
-    install -m 0755 ${WORKDIR}/plugins.d/* ${D}${dreport_plugin_dir}/
+    install -m 0755 ${UNPACKDIR}/plugins.d/* ${D}${dreport_plugin_dir}/
 }
 

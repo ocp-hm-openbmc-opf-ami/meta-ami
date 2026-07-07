@@ -39,12 +39,12 @@ deploy_verity_hash() {
 }
 IMAGE_POSTPROCESS_COMMAND += '${@bb.utils.contains("DM_VERITY_IMAGE", "obmc-phosphor-image", "deploy_verity_hash; ", "",d)}'
 
+# Todo: Removed entity-manager to avoid build failure
 OBMC_IMAGE_EXTRA_INSTALL:append = " \
                                   ipmitool \
                                   phosphor-sel-logger \
                                   phosphor-host-postd \
                                   phosphor-post-code-manager \
-                                  entity-manager \
                                   default-fru \
                                   dbus-sensors  \
                                  "

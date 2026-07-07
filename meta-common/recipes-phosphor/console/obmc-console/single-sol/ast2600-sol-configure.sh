@@ -12,7 +12,10 @@ setup_routing() {
     echo "Enabling UART routing"
 
     route uart1 uart3
-    #route uart4 io1
+    route uart4 io1
+    # Fan-out BIOS TX to physical serial pin (io1) directly from uart1
+    # This allows minicom to see BIOS output alongside SOL
+    echo -n "uart1" > "$ROUTER/io1"
 }
 
 setup() {
@@ -42,7 +45,7 @@ teardown() {
     echo "Disabling UART routing"
     route uart1 io1
     route uart3 io3
-    #route uart4 io4
+    route uart4 io4
 }
 
 $1

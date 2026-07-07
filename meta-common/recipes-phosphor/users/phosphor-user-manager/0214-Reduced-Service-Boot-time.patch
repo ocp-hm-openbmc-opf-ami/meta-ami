@@ -1,0 +1,421 @@
+From b789fc566b61392e932619138dd5351523ed0035 Mon Sep 17 00:00:00 2001
+From: Vijaysankar R <vijaysankarr@ami.com>
+Date: Fri, 27 Mar 2026 13:32:50 +0530
+Subject: [PATCH 214/214] Reduced Service Boot time
+
+---
+ user_mgr.cpp | 195 +++++++++++++++++++--------------------------------
+ user_mgr.hpp |  31 +++-----
+ 2 files changed, 82 insertions(+), 144 deletions(-)
+
+diff --git a/user_mgr.cpp b/user_mgr.cpp
+index 4d45ab9..e1abe81 100644
+--- a/user_mgr.cpp
++++ b/user_mgr.cpp
+@@ -504,7 +504,7 @@ void UserMgr::throwForMaxGrpUserCount(
+ void UserMgr::throwForInvalidPrivilege(const std::vector<std::string>& priv,
+                                        std::string userName)
+ {
+-    std::vector<uint8_t> availableChannels = getAvailableChannelIds();
++    std::vector<uint8_t> availableChannels = cachedAvailableChannels;
+     if (priv.size() != availableChannels.size())
+     {
+         lg2::error(
+@@ -537,7 +537,7 @@ void UserMgr::throwForInvalidPrivilege(const std::vector<std::string>& priv,
+ void UserMgr::throwForInvalidUserChannelAccess(
+     const std::vector<uint8_t>& channelAccess, std::string userName)
+ {
+-    std::vector<uint8_t> availableChannels = getAvailableChannelIds();
++    std::vector<uint8_t> availableChannels = cachedAvailableChannels;
+     if (channelAccess.size() != availableChannels.size())
+     {
+         lg2::error(
+@@ -1389,45 +1389,32 @@ bool UserMgr::otpValidationPasswordUpdate(std::string userName, std::string otp,
+     return false;
+ }
+ 
+-int UserMgr::getPamModuleConfValue(const std::string& confFile,
+-                                   const std::string& argName,
+-                                   std::string& argValue)
++std::map<std::string, std::string>
++    UserMgr::readPamConfigFile(const std::string& filePath)
+ {
+-    std::ifstream fileToRead(confFile, std::ios::in);
+-    if (!fileToRead.is_open())
++    std::map<std::string, std::string> config;
++    std::ifstream ifs(filePath);
++    if (!ifs.is_open())
+     {
+-        lg2::error("Failed to open pam configuration file {FILENAME}",
+-                   "FILENAME", confFile);
+-        return failure;
++        lg2::error("Failed to open PAM config file {FILENAME}", "FILENAME",
++                   filePath);
++        return config;
+     }
+     std::string line;
+-    auto argSearch = argName + "=";
+-    size_t startPos = 0;
+-    size_t endPos = 0;
+-    while (getline(fileToRead, line))
++    while (std::getline(ifs, line))
+     {
+-        // skip comments section starting with #
+-        if ((startPos = line.find('#')) != std::string::npos)
++        auto comment = line.find('#');
++        if (comment != std::string::npos)
+         {
+-            if (startPos == 0)
+-            {
+-                continue;
+-            }
+-            // skip comments after meaningful section and process those
+-            line = line.substr(0, startPos);
++            line = line.substr(0, comment);
+         }
+-        if ((startPos = line.find(argSearch)) != std::string::npos)
++        auto pos = line.find('=');
++        if (pos != std::string::npos)
+         {
+-            if ((endPos = line.find(' ', startPos)) == std::string::npos)
+-            {
+-                endPos = line.size();
+-            }
+-            startPos += argSearch.size();
+-            argValue = line.substr(startPos, endPos - startPos);
+-            return success;
++            config[line.substr(0, pos)] = line.substr(pos + 1);
+         }
+     }
+-    return failure;
++    return config;
+ }
+ 
+ int UserMgr::setPamModuleConfValue(const std::string& confFile,
+@@ -2027,17 +2014,6 @@ std::optional<nlohmann::json> readJsonFile(const std::string& path)
+     }
+ }
+ 
+-std::vector<uint8_t> UserMgr::getAvailableChannelIds()
+-{
+-    std::vector<uint8_t> channelIds;
+-    auto channelMap = getChannelInterfaceMap();
+-    for (const auto& [id, name] : channelMap)
+-    {
+-        channelIds.push_back(id);
+-    }
+-    return channelIds;
+-}
+-
+ uint8_t UserMgr::getChannelFromIP(const std::string& targetIp)
+ {
+     std::map<uint8_t, std::string> channelMap = getChannelInterfaceMap();
+@@ -2305,11 +2281,13 @@ UserInfoMap UserMgr::getUserInfo(std::string userName, std::string ipAddress)
+ 
+ void UserMgr::initializeAccountPolicy()
+ {
+-    std::string valueStr;
+-    auto value = minPasswdLength;
+     unsigned long tmp = 0;
+-    if (getPamModuleConfValue(pwQualityConfigFile, minPasswdLenProp,
+-                              valueStr) != success)
++    auto pwQuality = readPamConfigFile(pwQualityConfigFile);
++    auto pwHistory = readPamConfigFile(pwHistoryConfigFile);
++    auto faillock = readPamConfigFile(faillockConfigFile);
++    /*minPasswordLength*/
++    auto it = pwQuality.find(minPasswdLenProp);
++    if (it == pwQuality.end())
+     {
+         AccountPolicyIface::minPasswordLength(minPasswdLength);
+     }
+@@ -2317,37 +2295,37 @@ void UserMgr::initializeAccountPolicy()
+     {
+         try
+         {
+-            tmp = std::stoul(valueStr, nullptr);
++            tmp = std::stoul(it->second);
++            auto value = minPasswdLength;
+             if (tmp > std::numeric_limits<decltype(value)>::max())
+             {
+                 throw std::out_of_range("Out of range");
+             }
+-            value = static_cast<decltype(value)>(tmp);
++            AccountPolicyIface::minPasswordLength(
++                static_cast<decltype(value)>(tmp));
+         }
+         catch (const std::exception& e)
+         {
+             lg2::error("Exception for MinPasswordLength: {ERR}", "ERR", e);
+             throw;
+         }
+-        AccountPolicyIface::minPasswordLength(value);
+     }
+-    valueStr.clear();
+-    if (getPamModuleConfValue(pwHistoryConfigFile, remOldPasswdCount,
+-                              valueStr) != success)
+-    {
++    /*rememberOldPasswordTimes*/
++    it = pwHistory.find(remOldPasswdCount);
++    if (it == pwHistory.end())
+         AccountPolicyIface::rememberOldPasswordTimes(0);
+-    }
+     else
+     {
+-        value = 0;
+         try
+         {
+-            tmp = std::stoul(valueStr, nullptr);
++            tmp = std::stoul(it->second);
++            auto value = minPasswdLength;
+             if (tmp > std::numeric_limits<decltype(value)>::max())
+             {
+                 throw std::out_of_range("Out of range");
+             }
+-            value = static_cast<decltype(value)>(tmp);
++            AccountPolicyIface::rememberOldPasswordTimes(
++                static_cast<decltype(value)>(tmp));
+         }
+         catch (const std::exception& e)
+         {
+@@ -2355,84 +2333,54 @@ void UserMgr::initializeAccountPolicy()
+                        e);
+             throw;
+         }
+-        AccountPolicyIface::rememberOldPasswordTimes(value);
+     }
+-    valueStr.clear();
+-    // setup password policy
+-    if (getPamModuleConfValue(pwQualityConfigFile, minClass, valueStr) ==
+-        success)
++    /*passwordPolicyComplexity (minClass + maxClassRepeat from same pwQuality
++     * map)*/
++    it = pwQuality.find(minClass);
++    if (it != pwQuality.end())
+     {
+-        value = 0;
+         try
+         {
+-            tmp = std::stoul(valueStr, nullptr);
+-            if (tmp > std::numeric_limits<decltype(value)>::max())
++            tmp = std::stoul(it->second);
++            if (tmp < 3)
+             {
+-                throw std::out_of_range("Out of range");
++                AccountPolicyIface::passwordPolicyComplexity("Disabled");
++            }
++            else if (tmp == 3)
++            {
++                AccountPolicyIface::passwordPolicyComplexity("Low");
++            }
++            else
++            {
++                auto it2 = pwQuality.find(maxClassRepeat);
++                if (it2 != pwQuality.end())
++                    AccountPolicyIface::passwordPolicyComplexity(
++                        std::stoul(it2->second) == 0 ? "Medium" : "High");
+             }
+-            value = static_cast<decltype(value)>(tmp);
+         }
+         catch (const std::exception& e)
+         {
+             lg2::error("Exception for PasswordPolicy: {ERR}", "ERR", e);
+             throw;
+         }
+-        if (value < 3)
+-        {
+-            AccountPolicyIface::passwordPolicyComplexity("Disabled");
+-        }
+-        else if (value == 3)
+-        {
+-            AccountPolicyIface::passwordPolicyComplexity("Low");
+-        }
+-        else
+-        {
+-            if (getPamModuleConfValue(pwQualityConfigFile, maxClassRepeat,
+-                                      valueStr) == success)
+-            {
+-                value = 0;
+-                try
+-                {
+-                    tmp = std::stoul(valueStr, nullptr);
+-                    if (tmp > std::numeric_limits<decltype(value)>::max())
+-                    {
+-                        throw std::out_of_range("Out of range");
+-                    }
+-                    value = static_cast<decltype(value)>(tmp);
+-                }
+-                catch (const std::exception& e)
+-                {
+-                    lg2::error("Exception for PasswordPolicy: {ERR}", "ERR", e);
+-                    throw;
+-                }
+-                if (value == 0)
+-                {
+-                    AccountPolicyIface::passwordPolicyComplexity("Medium");
+-                }
+-                else
+-                {
+-                    AccountPolicyIface::passwordPolicyComplexity("High");
+-                }
+-            }
+-        }
+     }
+-    valueStr.clear();
+-    if (getPamModuleConfValue(faillockConfigFile, maxFailedAttempt, valueStr) !=
+-        success)
++    /*maxLoginAttemptBeforeLockout*/
++    it = faillock.find(maxFailedAttempt);
++    if (it == faillock.end())
+     {
+         AccountPolicyIface::maxLoginAttemptBeforeLockout(0);
+     }
+     else
+     {
+-        uint16_t value16 = 0;
+         try
+         {
+-            tmp = std::stoul(valueStr, nullptr);
+-            if (tmp > std::numeric_limits<decltype(value16)>::max())
++            tmp = std::stoul(it->second);
++            if (tmp > std::numeric_limits<uint16_t>::max())
+             {
+                 throw std::out_of_range("Out of range");
+             }
+-            value16 = static_cast<decltype(value16)>(tmp);
++            AccountPolicyIface::maxLoginAttemptBeforeLockout(
++                static_cast<uint16_t>(tmp));
+         }
+         catch (const std::exception& e)
+         {
+@@ -2440,35 +2388,32 @@ void UserMgr::initializeAccountPolicy()
+                        "ERR", e);
+             throw;
+         }
+-        AccountPolicyIface::maxLoginAttemptBeforeLockout(value16);
+     }
+-    valueStr.clear();
+-    if (getPamModuleConfValue(faillockConfigFile, unlockTimeout, valueStr) !=
+-        success)
++    /*accountUnlockTimeout*/
++    it = faillock.find(unlockTimeout);
++    if (it == faillock.end())
+     {
+         AccountPolicyIface::accountUnlockTimeout(0);
+     }
+     else
+     {
+-        uint16_t value16 = 0;
+         try
+         {
+-            tmp = std::stoul(valueStr, nullptr);
+-            if (tmp > std::numeric_limits<decltype(value16)>::max())
++            tmp = std::stoul(it->second);
++            if (tmp > std::numeric_limits<uint32_t>::max())
+             {
+                 throw std::out_of_range("Out of range");
+             }
+-            value16 = static_cast<decltype(value16)>(tmp);
++            AccountPolicyIface::accountUnlockTimeout(
++                static_cast<uint32_t>(tmp));
+         }
+         catch (const std::exception& e)
+         {
+             lg2::error("Exception for AccountUnlockTimeout: {ERR}", "ERR", e);
+             throw;
+         }
+-        AccountPolicyIface::accountUnlockTimeout(static_cast<uint32_t>(value16));
+     }
+ }
+-
+ void UserMgr::initUserObjects(void)
+ {
+     // All user management lock has to be based on /etc/shadow
+@@ -2480,6 +2425,7 @@ void UserMgr::initUserObjects(void)
+     sshGrpUsersList = std::move(userSSHLists.second);
+     auto userJsonOpt = readJsonFile(ipmiUserDataBackupFile);
+     bool defaultUser = true;
++    std::vector<uint8_t> availableChannels = cachedAvailableChannels;
+ 
+     if (!userNameList.empty())
+     {
+@@ -2509,7 +2455,6 @@ void UserMgr::initUserObjects(void)
+             std::vector<std::string> userGroups;
+             std::vector<std::string> userPriv;
+             std::vector<uint8_t> userChannelAccess;
+-            std::vector<uint8_t> availableChannels = getAvailableChannelIds();
+             bool snmpAccessEnableStatus = false;
+             std::string mailId;
+             if (!userJsonOpt)
+@@ -2644,6 +2589,10 @@ UserMgr::UserMgr(sdbusplus::asio::connection* asyncBus,
+     groupsMgr = readAllGroupsOnSystem();
+     std::sort(groupsMgr.begin(), groupsMgr.end());
+     UserMgrIface::allGroups(groupsMgr);
++    for (const auto& [id, name] : getChannelInterfaceMap())
++    {
++        cachedAvailableChannels.push_back(id);
++    }
+     initializeAccountPolicy();
+     initUserObjects();
+ 
+diff --git a/user_mgr.hpp b/user_mgr.hpp
+index 4f9aa1d..0d985af 100644
+--- a/user_mgr.hpp
++++ b/user_mgr.hpp
+@@ -421,17 +421,6 @@ class UserMgr : public Ifaces
+      **/
+     virtual bool userPasswordExpired(const std::string& userName);
+ 
+-    /**@brief Get a list of available IPMI channel IDs.
+-     *
+-     * This is a convenience wrapper around getChannelInterfaceMap(),
+-     * which returns a map of channel ID to channel name.
+-     * This function extracts and returns only the list of channel IDs
+-     * from that map.
+-     *
+-     * @return std::vector<uint8_t> List of available channel IDs.
+-     */
+-    std::vector<uint8_t> getAvailableChannelIds();
+-
+     /**@brief Determines the IPMI channel number corresponding to a given IP
+      * address.
+      *
+@@ -526,19 +515,17 @@ class UserMgr : public Ifaces
+     int getPamModuleArgValue(const std::string& moduleName,
+                              const std::string& argName, std::string& argValue);
+ 
+-    /** @brief get pam argument value
+-     *  method to get argument value from pam configuration
++    /** @brief Reads a PAM configuration file and returns key-value pairs.
+      *
+-     *  @param[in] confFile - path of the module config file from where arg has
+-     * to be read
+-     *  @param[in] argName - argument name
+-     *  @param[out] argValue - argument value
++     *  Parses a PAM module config file (e.g., pwquality.conf, faillock.conf)
++     *  into a map of parameter names to their values. Comment lines and
++     *  inline comments are stripped before parsing.
+      *
+-     *  @return 0 - success state of the function
++     *  @param[in] filePath - absolute path to the PAM config file
++     *  @return std::map<std::string, std::string> - map of key=value pairs
+      */
+-    int getPamModuleConfValue(const std::string& confFile,
+-                              const std::string& argName,
+-                              std::string& argValue);
++    std::map<std::string, std::string>
++        readPamConfigFile(const std::string& filePath);
+ 
+     /** @brief set pam argument value
+      *  method to set argument value in pam configuration
+@@ -705,6 +692,8 @@ class UserMgr : public Ifaces
+     std::unordered_map<UserName, std::unique_ptr<phosphor::user::Users>>
+         usersList;
+ 
++    std::vector<uint8_t> cachedAvailableChannels;
++
+     /** @brief get users in group
+      *  method to get group user list
+      *
+-- 
+2.43.0
+
