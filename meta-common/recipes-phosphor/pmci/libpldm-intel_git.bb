@@ -2,9 +2,9 @@ SUMMARY = "libpldm_intel"
 DESCRIPTION = "Provides encode/decode APIs for PLDM specifications"
 
 SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/libpldm.git;protocol=https;branch=main"
-SRCREV = "c7eaebd454ec1b3f94e54b5ee617acb57046ea4b"
+SRCREV = "4ba1ff6e1751c7c9e2b0cab949e3d8544288cb4e"
 
-S = "${WORKDIR}/git"
+S = "${UNPACKDIR}/git"
 
 PV = "1.0+git${SRCPV}"
 

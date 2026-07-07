@@ -23,7 +23,7 @@ MAJOR_VERSION = "${@'.'.join(d.getVar('PV').split('.')[0:2])}"
 SRC_URI = "${KERNELORG_MIRROR}/linux/utils/util-linux/v${MAJOR_VERSION}/util-linux-${MAJOR_VERSION}.tar.xz \
            "
 
-S = "${WORKDIR}/util-linux-${MAJOR_VERSION}"
+S = "${UNPACKDIR}/util-linux-${MAJOR_VERSION}"
 EXTRA_AUTORECONF += "--exclude=gtkdocsize"
 EXTRA_OECONF = " --disable-nls --disable-all-programs  \
     --disable-libuuid --disable-libblkid --disable-libmount \

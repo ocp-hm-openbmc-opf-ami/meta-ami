@@ -1,7 +1,7 @@
 # The URI is required for the autobump script but keep it commented
 # to not override the upstream value
 # SRC_URI = "git://github.com/openbmc/bmcweb.git;branch=master;protocol=https"
-SRCREV = "a88942019fdd3d8fc366999f7c178f3e1c18b2fe"
+# SRCREV = "a88942019fdd3d8fc366999f7c178f3e1c18b2fe"
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 

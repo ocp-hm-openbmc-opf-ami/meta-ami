@@ -10,9 +10,13 @@
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI += " \
+SRC_URI:bhs-features += " \
     file://001_ASD-integration.patch \
     file://002_OT-12593_fixJtagTestFailed.patch \
     file://003_OT-12607-fixCoverityIssue.patch \
     file://004_OT-20873_ClangFormat \
+"
+
+SRC_URI:oks-features += " \
+    file://001_ASD-integration.patch \
 "

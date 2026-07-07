@@ -125,7 +125,7 @@ SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-sec
 SRC_URI:append:intel-ast2600 = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'debug-tweaks', '', U_BOOT_RELEASE_FEATURE, d)}"
 
 do_install:append () {
-    install -m 0644 ${WORKDIR}/fw_env.config ${D}${sysconfdir}/fw_env.config
-    install -m 0644 ${WORKDIR}/fw_env.config ${S}/tools/env/fw_env.config
+    install -m 0644 ${UNPACKDIR}/fw_env.config ${D}${sysconfdir}/fw_env.config
+    install -m 0644 ${UNPACKDIR}/fw_env.config ${S}/tools/env/fw_env.config
 }
 RDEPENDS:${PN} = "udev-aspeed-mtd-partitions"

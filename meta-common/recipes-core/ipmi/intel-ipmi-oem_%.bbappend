@@ -6,7 +6,7 @@ EXTRA_OECMAKE += "-DUSING_ENTITY_MANAGER_DECORATORS=OFF"
 # The URI is required for the autobump script but keep it commented
 # to not override the upstream value
 # SRC_URI = "git://github.com/openbmc/intel-ipmi-oem.git;branch=master;protocol=https"
-SRCREV = "77a44298a726b20e595ee596ce0018e00493ef7e"
+#SRCREV = "77a44298a726b20e595ee596ce0018e00493ef7e"
 
 inherit pkgconfig
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"

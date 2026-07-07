@@ -1,7 +1,7 @@
 SUMMARY = "Settings"
 
 SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/settings-manager.git;protocol=https;branch=main"
-SRCREV = "f147002a5afa4a7967788d3d7d82c5160a43972a"
+SRCREV = "c4c2218f49ee04ca5c902f5d8df39505cc02329a"
 PV = "0.1+git${SRCPV}"
 
 LICENSE = "Apache-2.0"
@@ -14,7 +14,7 @@ DEPENDS = "boost \
            nlohmann-json \
            sdbusplus"
 
-S = "${WORKDIR}/git"
+S = "${UNPACKDIR}/git"
 inherit cmake pkgconfig systemd
 
 EXTRA_OECMAKE = "-DYOCTO=1"

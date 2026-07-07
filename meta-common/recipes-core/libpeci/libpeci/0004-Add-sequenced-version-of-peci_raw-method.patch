@@ -1,0 +1,115 @@
+From cd573569697ec61e82ba074eb2e2431e14b1a59c Mon Sep 17 00:00:00 2001
+From: Zbigniew Kurzynski <zbigniew.kurzynski@intel.com>
+Date: Thu, 2 Nov 2023 14:58:31 +0100
+Subject: [PATCH] Add sequenced version of peci_raw method.
+
+Most of libpeci methods have its sequenced version,
+in case of intensive peci method usage it allows to
+avoid unnecessary file opening and closing with each
+function call.
+This change adds such sequenced version for method
+peci_raw that for some reason was not implemented before.
+
+Signed-off-by: Zbigniew Kurzynski <zbigniew.kurzynski@intel.com>
+---
+ peci.c | 38 +++++++++++++++++++++++++++++++-------
+ peci.h |  5 +++++
+ 2 files changed, 36 insertions(+), 7 deletions(-)
+
+diff --git a/peci.c b/peci.c
+index 0ffce47f5..8c382e1e1 100644
+--- a/peci.c
++++ b/peci.c
+@@ -2361,6 +2361,7 @@ EPECIStatus peci_Telemetry_GetCrashlogSample_dom(
+     return ret;
+ }
+ 
++
+ /*-------------------------------------------------------------------------
+  *  This function provides raw PECI command access
+  *------------------------------------------------------------------------*/
+@@ -2369,11 +2370,6 @@ EPECIStatus peci_raw(uint8_t target, uint8_t u8ReadLen, const uint8_t* pRawCmd,
+                      uint32_t respSize)
+ {
+     int peci_fd = -1;
+-    struct peci_xfer_msg cmd = {0};
+-    uint8_t u8TxBuf[PECI_BUFFER_SIZE] = {0};
+-    uint8_t u8RxBuf[PECI_BUFFER_SIZE] = {0};
+-    EPECIStatus ret = PECI_CC_SUCCESS;
+-
+     if (u8ReadLen && pRawResp == NULL)
+     {
+         return PECI_CC_INVALID_REQ;
+@@ -2390,12 +2386,40 @@ EPECIStatus peci_raw(uint8_t target, uint8_t u8ReadLen, const uint8_t* pRawCmd,
+         return PECI_CC_DRIVER_ERR;
+     }
+ 
++    EPECIStatus ret = peci_raw_seq(target, u8ReadLen, pRawCmd, cmdSize,
++                                   pRawResp, respSize, peci_fd);
++    peci_Close(peci_fd);
++    return ret;
++}
++
++/*-------------------------------------------------------------------------
++ *  This function provides sequential raw PECI command access
++ *------------------------------------------------------------------------*/
++EPECIStatus peci_raw_seq(uint8_t target, uint8_t u8ReadLen, const uint8_t* pRawCmd,
++                     const uint32_t cmdSize, uint8_t* pRawResp,
++                     uint32_t respSize, int peci_fd)
++{
++    struct peci_xfer_msg cmd = {0};
++    uint8_t u8TxBuf[PECI_BUFFER_SIZE] = {0};
++    uint8_t u8RxBuf[PECI_BUFFER_SIZE] = {0};
++    EPECIStatus ret = PECI_CC_SUCCESS;
++
++    if (u8ReadLen && pRawResp == NULL)
++    {
++        return PECI_CC_INVALID_REQ;
++    }
++
++    // The target address must be in the valid range
++    if (target < MIN_CLIENT_ADDR || target > MAX_CLIENT_ADDR)
++    {
++        return PECI_CC_INVALID_REQ;
++    }
++
+     // Check for valid buffer sizes
+     if (cmdSize > PECI_BUFFER_SIZE || respSize < u8ReadLen ||
+         u8ReadLen >
+             (PECI_BUFFER_SIZE - 1)) // response buffer is data + 1 status byte
+     {
+-        peci_Close(peci_fd);
+         return PECI_CC_INVALID_REQ;
+     }
+ 
+@@ -2414,10 +2438,10 @@ EPECIStatus peci_raw(uint8_t target, uint8_t u8ReadLen, const uint8_t* pRawCmd,
+         memcpy(pRawResp, u8RxBuf, u8ReadLen);
+     }
+ 
+-    peci_Close(peci_fd);
+     return ret;
+ }
+ 
++
+ /*-------------------------------------------------------------------------
+  * This function returns the CPUID (Model and stepping) for the given PECI
+  * client address
+diff --git a/peci.h b/peci.h
+index b6559d97e..2922f6b94 100644
+--- a/peci.h
++++ b/peci.h
+@@ -491,6 +491,11 @@ extern "C"
+                          const uint8_t* pRawCmd, const uint32_t cmdSize,
+                          uint8_t* pRawResp, uint32_t respSize);
+ 
++    // Provides sequential raw PECI command access
++    EPECIStatus peci_raw_seq(uint8_t target, uint8_t u8ReadLen,
++                         const uint8_t* pRawCmd, const uint32_t cmdSize,
++                         uint8_t* pRawResp, uint32_t respSize, int peci_fd);
++
+     EPECIStatus peci_Lock(int* peci_fd, int timeout_ms);
+     void peci_Unlock(int peci_fd);
+     EPECIStatus peci_Ping(uint8_t target);
+-- 
+2.25.1
+

@@ -1,6 +1,8 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/linux-onetree:"
 
-SRC_URI:append:intel-ast2600 = " file://0001-Enabled-the-RTC-driver.patch \
+SRC_URI:append:intel-ast2600 = " file://defconfig \
+				 file://intel-base.cfg \
+				 file://0001-Enabled-the-RTC-driver.patch \
 				 file://0002-Intel-aspeed-g6-dtsi-changes.patch \
 				 file://0003-Ported-PECI-driver-support-from-INTEL-AMI.patch \
 				 file://0004-Work-Around-Fix-For-Peci-Time-Out.patch \
@@ -25,12 +27,16 @@ SRC_URI:append:intel-ast2600 = " file://0001-Enabled-the-RTC-driver.patch \
                                  file://0023-kernel-aspeed-espi-oob-coverity-fix.patch \
 				 file://0024-jtagDriver-coverity-fix.patch \
 				 file://intel-i3c-hub.cfg \
-				 file://intel-base.cfg \
 				 file://0023-Fix-the-I3C-medium-Coverity-issue-about-double-lock.patch \
+				 file://0025-disable-logs-and-fix-polling-work-during-rescan.patch \
+                                 file://0025-Enable-pass-through-on-GPIOP1-GPIOP3-free.patch \
+				 file://0026-Update-Intel-Espi-Driver-to-Latest-BKC.patch \
 			       "
 
-SRC_URI += "file://defconfig \
-"
-SRC_URI += "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'debug-tweaks', 'file://debug.cfg ', '', d)}"
+SRC_URI:append:oks-ast2600 = "  file://0027-Adding-intel-bkc-changes-for-uart-routing.patch "
+
+
+SRC_URI += "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'allow-root-login', 'file://debug.cfg ', '', d)}"
 
 SRC_URI:append:intel-ast2600 = " ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '',  " file://zram.cfg ", d)}"
+

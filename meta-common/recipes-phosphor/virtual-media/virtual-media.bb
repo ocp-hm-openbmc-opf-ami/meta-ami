@@ -4,7 +4,7 @@ DESCRIPTION = "Virtual Media Service"
 SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/virtual-media.git;protocol=https;branch=main"
 SRCREV = "c2de0095742bbbbb5160791f1bb89417fcf66a4d"
 
-S = "${WORKDIR}/git"
+S = "${UNPACKDIR}/git"
 PV = "1.0+git${SRCPV}"
 
 LICENSE = "Apache-2.0"

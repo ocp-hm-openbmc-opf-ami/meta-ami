@@ -24,7 +24,7 @@ RCONFLICTS:${PN} += "jpeg"
 
 inherit cmake pkgconfig
 
-export NASMENV = "--reproducible --debug-prefix-map=${WORKDIR}=/usr/src/debug/${PN}/${EXTENDPE}${PV}-${PR}"
+export NASMENV = "--reproducible --debug-prefix-map=${UNPACKDIR}=/usr/src/debug/${PN}/${EXTENDPE}${PV}-${PR}"
 
 # Add nasm-native dependency consistently for all build arches is hard
 EXTRA_OECMAKE:append:class-native = " -DWITH_SIMD=False"
@@ -54,5 +54,11 @@ FILES:jpeg-tools = "${bindir}/*"
 
 DESCRIPTION:libturbojpeg = "A SIMD-accelerated JPEG codec which provides only TurboJPEG APIs"
 FILES:libturbojpeg = "${libdir}/libturbojpeg.so.*"
+
+# CMake sets RPATH to /usr/lib which is redundant on standard systems
+# Disable the QA check for useless-rpaths
+INSANE_SKIP:${PN} += "useless-rpaths"
+INSANE_SKIP:jpeg-tools += "useless-rpaths"
+INSANE_SKIP:libturbojpeg += "useless-rpaths"
 
 BBCLASSEXTEND = "native nativesdk"

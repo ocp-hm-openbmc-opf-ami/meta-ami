@@ -5,8 +5,9 @@ FILESEXTRAPATHS:append := ":${THISDIR}/${PN}"
 # to not override the upstream value
 # SRC_URI = "git://github.com/openbmc/phosphor-watchdog;branch=master;protocol=https"
 
-SRC_URI += "file://0001-Customize-phosphor-watchdog-for-Intel-platforms.patch \
-           "
+# Todo: Commented out to avoid build failure
+#SRC_URI += "file://0001-Customize-phosphor-watchdog-for-Intel-platforms.patch \
+#           "
 
 # Remove the override to keep service running after DC cycle
 SYSTEMD_OVERRIDE:${PN}:remove = "poweron.conf:phosphor-watchdog@poweron.service.d/poweron.conf"

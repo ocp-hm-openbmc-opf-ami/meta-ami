@@ -31,7 +31,7 @@ PACKAGECONFIG[no-tls1] = "no-tls1"
 PACKAGECONFIG[no-tls1_1] = "no-tls1_1"
 PACKAGECONFIG[manpages] = ""
 
-B = "${WORKDIR}/build"
+B = "${UNPACKDIR}/build"
 do_configure[cleandirs] = "${B}"
 
 #| ./libcrypto.so: undefined reference to `getcontext'
@@ -56,12 +56,12 @@ DEPRECATED_CRYPTO_FLAGS ?= ""
 do_configure () {
 	# When we upgrade glibc but not uninative we see obtuse failures in openssl. Make
 	# the issue really clear that perl isn't functional due to symbol mismatch issues.
-	cat <<- EOF > ${WORKDIR}/perltest
+	cat <<- EOF > ${UNPACKDIR}/perltest
 	#!/usr/bin/env perl
 	use POSIX;
 	EOF
-	chmod a+x ${WORKDIR}/perltest
-	${WORKDIR}/perltest
+	chmod a+x ${UNPACKDIR}/perltest
+	${UNPACKDIR}/perltest
 
 	os=${HOST_OS}
 	case $os in
@@ -176,7 +176,7 @@ do_install:append:class-native () {
 
 do_install:append:class-nativesdk () {
 	mkdir -p ${D}${SDKPATHNATIVE}/environment-setup.d
-	install -m 644 ${WORKDIR}/environment.d-openssl.sh ${D}${SDKPATHNATIVE}/environment-setup.d/openssl.sh
+	install -m 644 ${UNPACKDIR}/environment.d-openssl.sh ${D}${SDKPATHNATIVE}/environment-setup.d/openssl.sh
 	sed 's|/usr/lib/ssl/|/usr/lib/ssl-3/|g' -i ${D}${SDKPATHNATIVE}/environment-setup.d/openssl.sh
 }
 

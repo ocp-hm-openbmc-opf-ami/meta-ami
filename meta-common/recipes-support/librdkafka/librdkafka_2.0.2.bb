@@ -21,4 +21,4 @@ SRC_URI += " \
     file://0001-Add-support-for-setting-TLSv1.3-ciphers.patch \
 "
 
-S = "${WORKDIR}/git"
+S = "${UNPACKDIR}/git"

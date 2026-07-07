@@ -14,12 +14,12 @@ SRC_URI += "file://sol-configure.sh \
 
 do_install:append() {
     install -d ${D}${bindir}
-    install -m 0755 ${WORKDIR}/sol-configure.sh ${D}${bindir}
+    install -m 0755 ${UNPACKDIR}/sol-configure.sh ${D}${bindir}
 
     local drop_in=${D}${sysconfdir}/systemd/system/${PN}@${OBMC_CONSOLE_HOST_TTY}
     local service_drop_in=${drop_in}.service.d
 
     # Install service drop-in override to add UART routing and baud configuration
     install -d $service_drop_in
-    install -m 0644 ${WORKDIR}/pre-post-routing.conf $service_drop_in
+    install -m 0644 ${UNPACKDIR}/pre-post-routing.conf $service_drop_in
 }

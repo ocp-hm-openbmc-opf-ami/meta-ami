@@ -5,7 +5,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 # SRC_URI  = "git://github.com/openbmc/host-error-monitor;branch=master;protocol=https"
 SRCREV = "58fa67cb3c299c3c3d82e847ecd109655043c279"
 inherit pkgconfig
-PACKAGECONFIG[send-to-logger] =""
+PACKAGECONFIG[send-to-logger] = ""
 # PACKAGECONFIG:remove += "send-to-logger"
 EXTRA_OECMAKE = "-DYOCTO=1 -DLIBPECI=1 -DCRASHDUMP=1"
 

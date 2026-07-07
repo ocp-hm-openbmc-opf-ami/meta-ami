@@ -22,7 +22,7 @@ LIC_FILES_CHKSUM = "file://LICENSE;md5=3b83ef96387f14655fc854ddc3c6bd57"
 
 SECTION = "libs"
 
-S = "${WORKDIR}/git"
+S = "${UNPACKDIR}/git"
 SRCREV = "a021d63bf7f5b33fc2e4b567a8db99de049318f2"
 SRC_URI = "git://github.com/ARMmbed/mbedtls.git;protocol=https;branch=development"
 

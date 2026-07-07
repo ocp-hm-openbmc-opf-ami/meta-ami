@@ -11,7 +11,7 @@ PV = "1.0+git${SRCPV}"
 #SRCREV = "${AUTOREV}"
 SRCREV = "be43c79742dc36ee55b21c5d531a5ff301d0ef8d"
 
-S = "${WORKDIR}/git"
+S = "${UNPACKDIR}/git"
 
 do_install () {
     install -d ${D}/usr/include

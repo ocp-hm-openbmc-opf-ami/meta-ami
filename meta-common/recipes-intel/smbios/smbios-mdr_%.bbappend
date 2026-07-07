@@ -7,6 +7,10 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 PACKAGECONFIG[assoc-trim-path] = ""
 PACKAGECONFIG[cpuinfo-peci] = ""
+PACKAGECONFIG[expose-firmware-component-name] = ""
+PACKAGECONFIG[firmware-inventory-dbus] = ""
+PACKAGECONFIG[slot-drive-presence] = ""
+PACKAGECONFIG[tpm-dbus] = ""
 
 SRCREV = "21cb0e8750b76fff5860b985d8122fd653ca8a1f"
 SRC_URI += " \

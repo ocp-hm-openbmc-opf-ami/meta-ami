@@ -1,0 +1,943 @@
+From 906b1c0a42146d0e9dbe7ec2b5e31646271b973c Mon Sep 17 00:00:00 2001
+From: Kushal Molabanti <kushalx.molabanti@intel.com>
+Date: Mon, 2 Feb 2026 18:48:42 +0000
+Subject: [PATCH] Add Support for SMM Runtime Update
+
+This commit adds support for SMM Runtime Update through REDFISH.
+Added Magic number for detection of SMM Runtime Update Capsule.
+The image received from REDFISH is validated against known
+MagicNumbers to determine the Capsule type.
+Once the Capsule type is determined, the Capsule header is further
+checked for valid Firmware Version, Runtime Version and Platform ID.
+
+The fwupd script now calls the required Dbus method to initiate SMM
+Runtime Update.
+
+Tested:
+ - POST SMM Capsule on /redfish/v1/UpdateService
+   successfuly created a task
+ - fwupd.sh script picked up the capsule and triggered
+   StartFwUpdate method under /xyz/openbmc_project/smm_runtime_update
+   object of xyz.openbmc_project.MMBI_0.Seamless service.
+
+Signed-off-by: P Dheeraj Srujan Kumar <p.dheeraj.srujan.kumar@intel.com>
+Signed-off-by: Hardik Panchal <hardikx.panchal@intel.com>
+
+Signed-off-by: Kushal Molabanti <kushalx.molabanti@intel.com>
+Upstream-Status: Pending
+---
+ smm_runtime_update.hpp | 902 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 902 insertions(+)
+ create mode 100644 bmc/smm_runtime_update.hpp
+
+diff --git a/smm_runtime_update.hpp b/smm_runtime_update.hpp
+new file mode 100644
+index 0000000..6d695ec
+--- /dev/null
++++ b/smm_runtime_update.hpp
+@@ -0,0 +1,902 @@
++#include <phosphor-logging/elog-errors.hpp>
++#include <xyz/openbmc_project/Software/Image/error.hpp>
++
++#include <fstream>
++namespace smru
++{
++
++/********************** Constants **********************/
++static constexpr const uint32_t smruMagic = 0x6DCBD5ED;
++static constexpr const uint64_t codeInjectionCapability = 0x01;
++static constexpr const uint64_t driverUpdateCapability = 0x02;
++static constexpr unsigned uuidSize = 16;
++
++static constexpr const char* mmbiSeamlessServiceName =
++    "xyz.openbmc_project.MMBI_0.Seamless";
++static constexpr const char* smruBaseObjPath =
++    "/xyz/openbmc_project/smm_runtime_update";
++static constexpr const char* smruCapabilitiesIntf =
++    "xyz.openbmc_project.SMRUCapabilities";
++static constexpr const char* dbusPropertiesIntf =
++    "org.freedesktop.DBus.Properties";
++
++static constexpr const char* capabilitiesProperty = "Capabilities";
++static constexpr const char* mMCodeInjectionUUIDProperty =
++    "MMCodeInjectionUUID";
++static constexpr const char* mMFirmwareVersionProperty = "MMFirmwareVersion";
++static constexpr const char* mMCodeInjRuntimeVersionProperty =
++    "MMCodeInjRuntimeVersion";
++static constexpr const char* mMDriverUpdateUUIDProperty = "MMDriverUpdateUUID";
++static constexpr const char* mMDriverUpdateRuntimeVersionProperty =
++    "MMDriverUpdateRuntimeVersion";
++static constexpr const char* mMDriverUpdateRuntimeSVNProperty =
++    "MMDriverUpdateRuntimeSVN";
++static constexpr const char* platformUUIDProperty = "PlatformUUID";
++
++/********************** Data Types **********************/
++using GuidObj = std::array<uint8_t, uuidSize>;
++using namespace sdbusplus::xyz::openbmc_project::Software::Image::Error;
++namespace Software = phosphor::logging::xyz::openbmc_project::Software;
++using ImageFail = Software::Image::ImageFailure;
++
++/************************* Enums ************************/
++enum SMMCapsuleType
++{
++    codeInject = 0,
++    updateDriver = 1,
++    others
++};
++
++/*************** Query Update Capabilities **************/
++struct SMMUpdateCapabilities
++{
++    uint64_t updateCapabilities;
++    std::vector<uint8_t> mmCodeInjImgType;
++    uint64_t mmFwVersion;
++    uint64_t mmCodeInjRuntimeVer;
++    std::vector<uint8_t> mmDriverUpdateImgType;
++    uint64_t mmDriverUpdateRuntimeVer;
++    uint64_t mmDriverUpdateRuntimeSvn;
++    std::vector<uint8_t> platformId;
++};
++
++/******************* Headers Definitions ******************/
++/* EFI_CAPSULE_HEADER */
++struct CapsuleHeader
++{
++    GuidObj capsuleGuid;
++    uint32_t headerSize;
++    uint32_t flags;
++    uint32_t capsuleImageSize;
++} __attribute__((packed));
++
++/* EFI_FIRMWARE_MANAGEMENT_CAPSULE_HEADER */
++struct FirmwareManagementCapsuleHeader
++{
++    uint32_t version;
++    uint16_t embeddedDriverCount;
++    uint16_t payloadItemCount;
++    // This header contains a dynamic array of type uint64_t, whose
++    // size is determined by sum of embeddedDriverCount and
++    // payloadItemCount.
++    // So the Actual size of this header would be :
++    // sizeof(FirmwareManagementCapsuleHeader) +
++    // ((uint64_t)*(embeddedDriverCount + payloadItemCount))
++} __attribute__((packed));
++
++/* EFI_FIRMWARE_MANAGEMENT_CAPSULE_IMAGE_HEADER */
++struct FirmwareManagementCapsuleImageHeader
++{
++    uint32_t version;
++    GuidObj updateImageTypeId;
++    uint8_t updateImageIndex;
++    uint8_t reserved_bytes[3];
++    uint32_t updateImageSize;
++    uint32_t updateVendorCodeSize;
++    // This Header has two more elements of type uint64_t which
++    // are determined based on the Version of this Header.
++    // Ver 1 : Does not Support either of updateHardwareInstance
++    //         or imageCapsuleSupport
++    // Ver 2 : Supports only updateHardwareInstance.
++    //         imageCapsuleSupport is not supported.
++    // Ver 3 : Supports both updateHardwareInstance and
++    //         imageCapsuleSupport.
++
++} __attribute__((packed));
++
++struct FirmwareManagementCapsuleImageHeaderV1
++{
++    // Version 1 of this header does not support
++    // updateHardwareInstance and imageCapsuleSupport
++    // So only Header is present
++    FirmwareManagementCapsuleImageHeader hdr;
++} __attribute__((packed));
++
++struct FirmwareManagementCapsuleImageHeaderV2
++{
++    // Version 2 of this header supports only updateHardwareInstance
++    FirmwareManagementCapsuleImageHeader hdr;
++    uint64_t updateHardwareInstance;
++} __attribute__((packed));
++
++struct FirmwareManagementCapsuleImageHeaderV3
++{
++    // Version 3 of this header supports both updateHardwareInstance
++    // and imageCapsuleSupport
++    FirmwareManagementCapsuleImageHeader hdr;
++    uint64_t updateHardwareInstance;
++    uint64_t imageCapsuleSupport;
++} __attribute__((packed));
++
++/******************** PKCS7 Signature ********************/
++struct WinCertificate
++{
++    uint32_t dwLength;
++    uint16_t wRevision;
++    uint16_t wCertificateType;
++    // This header contains a dynamic array of type uint8_t, whose
++    // size depends on the type of certificate used
++} __attribute__((packed));
++
++struct WinCertificateUefiGuid
++{
++    WinCertificate hdr;
++    GuidObj certType;
++    // This header contains a dynamic array of type uint8_t, whose
++    // size depends on the type of certificate used
++} __attribute__((packed));
++
++struct FirmwareImageAuthentication
++{
++    uint64_t monotonicCount;
++    WinCertificateUefiGuid authInfo;
++} __attribute__((packed));
++
++/******************** Firmware Headers ********************/
++/* EDKII_SMM_CODE_INJECTION_PAYLOAD_HEADER */
++struct SmmCodeInjectionPayloadHeader
++{
++    uint32_t signature;
++    uint32_t headerVersion;
++    uint32_t headerSize;
++    uint32_t supportedSmmFirmwareVersion;
++    uint32_t smmCodeInjectionRuntimeVersion;
++    GuidObj platformId;
++    GuidObj oemHeaderType;
++    uint32_t oemHeaderSize;
++    // This header contains a dynamic array of type uint8_t, whose
++    // size is determined by oemHeaderSize.
++    // So the Actual size of this header would be :
++    // sizeof(SmmCodeInjectionPayloadHeader) +
++    // ((uint8_t)*(oemHeaderSize))
++} __attribute__((packed));
++
++/* EDKII_SMM_DRIVER_UPDATE_PAYLOAD_HEADER */
++struct SmmDriverUpdatePayloadHeader
++{
++    uint32_t signature;
++    uint32_t headerVersion;
++    uint32_t headerSize;
++    uint32_t supportedSmmFirmwareVersion;
++    uint32_t smmDriverUpdateRuntimeVersion;
++    GuidObj platformId;
++    uint32_t smmDriverUpdateRuntimeSecureVersionNumber;
++    uint32_t staticImageSize;
++    uint32_t perProcDynamicMemorySize;
++    uint32_t additionalDynamicMemorySize;
++    GuidObj oemHeaderType;
++    uint32_t oemHeaderSize;
++    // This header contains a dynamic array of type uint8_t, whose
++    // size is determined by oemHeaderSize.
++    // So the Actual size of this header would be :
++    // sizeof(SmmCodeInjectionPayloadHeader) +
++    // ((uint8_t)*(oemHeaderSize))
++} __attribute__((packed));
++
++/****************** Function Definitions ******************/
++template <typename PropertyType, typename DbusSmmCapabilities>
++static bool getSmruProperty(const char* property, PropertyType& propVal,
++                            DbusSmmCapabilities& Capabilities)
++{
++    for (auto& cap : Capabilities)
++    {
++        if (cap.first == property)
++        {
++            if (!std::holds_alternative<PropertyType>(cap.second))
++            {
++                phosphor::logging::log<phosphor::logging::level::ERR>(
++                    "The property was recived with different type than expected",
++                    phosphor::logging::entry("PROP_ERROR=%s", property));
++                return false;
++            }
++            try
++            {
++                propVal = std::get<PropertyType>(cap.second);
++            }
++            catch (...)
++            {
++                phosphor::logging::log<phosphor::logging::level::ERR>(
++                    "Property Conversion/GET Failed !!",
++                    phosphor::logging::entry("PROP_ERROR=%s", property));
++                return false;
++            }
++            return true;
++        }
++    }
++
++    return false;
++}
++
++static bool getSmruCapabilities(sdbusplus::bus::bus& bus,
++                                SMMUpdateCapabilities& capabilities)
++{
++    std::vector<
++        std::pair<std::string, std::variant<uint64_t, std::vector<uint8_t>>>>
++        dbusResult;
++
++    auto method = bus.new_method_call(mmbiSeamlessServiceName, smruBaseObjPath,
++                                      dbusPropertiesIntf, "GetAll");
++    method.append(smruCapabilitiesIntf);
++
++    try
++    {
++        auto reply = bus.call(method);
++        reply.read(dbusResult);
++    }
++    catch (const sdbusplus::exception::exception& e)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Get SMRU Capabilities Failed with Error",
++            phosphor::logging::entry("ERROR=%s", e.what()));
++        return false;
++    }
++
++    if (!getSmruProperty(capabilitiesProperty, capabilities.updateCapabilities,
++                         dbusResult) ||
++        !getSmruProperty(mMCodeInjectionUUIDProperty,
++                         capabilities.mmCodeInjImgType, dbusResult) ||
++        !getSmruProperty(mMFirmwareVersionProperty, capabilities.mmFwVersion,
++                         dbusResult) ||
++        !getSmruProperty(mMCodeInjRuntimeVersionProperty,
++                         capabilities.mmCodeInjRuntimeVer, dbusResult) ||
++        !getSmruProperty(mMDriverUpdateUUIDProperty,
++                         capabilities.mmDriverUpdateImgType, dbusResult) ||
++        !getSmruProperty(mMDriverUpdateRuntimeVersionProperty,
++                         capabilities.mmDriverUpdateRuntimeVer, dbusResult) ||
++        !getSmruProperty(mMDriverUpdateRuntimeSVNProperty,
++                         capabilities.mmDriverUpdateRuntimeSvn, dbusResult) ||
++        !getSmruProperty(platformUUIDProperty, capabilities.platformId,
++                         dbusResult))
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Failed to get one of the SMRU Capabilities");
++        return false;
++    }
++
++    return true;
++}
++
++static inline bool compareUUID(GuidObj& uuid1, std::vector<uint8_t>& uuid2)
++{
++    return std::equal(uuid1.begin(), uuid1.end(), uuid2.begin(), uuid2.end(),
++                      [](uint8_t a, uint8_t b) { return a == b; });
++}
++
++static inline bool isValidFirmwareVersion(uint32_t value,
++                                          SMMUpdateCapabilities& capabilities)
++{
++    return value == capabilities.mmFwVersion;
++}
++
++static inline bool isValidCodeInjRuntimeVersion(
++    uint32_t value, SMMUpdateCapabilities& capabilities)
++{
++    return value >= capabilities.mmCodeInjRuntimeVer;
++}
++
++static inline bool isValidUpdateDriverRuntimeVersion(
++    uint32_t value, SMMUpdateCapabilities& capabilities)
++{
++    return value >= capabilities.mmDriverUpdateRuntimeVer;
++}
++
++static inline bool isValidRuntimeSVN(uint32_t value,
++                                     SMMUpdateCapabilities& capabilities)
++{
++    return value >= capabilities.mmDriverUpdateRuntimeSvn;
++}
++
++static inline bool isValidCummulativeHeaderLength(size_t cummulativeHeaderLen,
++                                                  size_t imgSize)
++{
++    if (cummulativeHeaderLen >= imgSize)
++    {
++        // The Image is Corrupted as header(s) size is exceeding total Image
++        // Size
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Malformed Capsule Received",
++            phosphor::logging::entry("IMG_SIZE=%s",
++                                     std::to_string(imgSize).c_str()),
++            phosphor::logging::entry(
++                "CUMMULATIVE_HEADER_LEN=%s",
++                std::to_string(cummulativeHeaderLen).c_str()));
++        return false;
++    }
++    return true;
++}
++
++static inline bool getSizeofFwManagementHeader(uint32_t version, size_t& size)
++{
++    if (version == 1)
++    {
++        size = sizeof(FirmwareManagementCapsuleImageHeaderV1);
++        return true;
++    }
++
++    if (version == 2)
++    {
++        size = sizeof(FirmwareManagementCapsuleImageHeaderV2);
++        return true;
++    }
++
++    if (version == 3)
++    {
++        size = sizeof(FirmwareManagementCapsuleImageHeaderV2);
++        return true;
++    }
++
++    return false;
++}
++
++static bool processSmmCapsule(
++    const std::filesystem::path imgPath, const size_t& imgSize,
++    SMMUpdateCapabilities& capabilities, SMMCapsuleType& capType,
++    size_t& cummulativeHeaderLen)
++{
++    /* ******* Basic Format of SMM Capsule *********
++     *  -------------------------------------------
++     *                Capsule Header
++     *  -------------------------------------------
++     *         FW_Management_Capsule_Header
++     *  -------------------------------------------
++     *      FW_Management_Capsule_Image_Header
++     *  -------------------------------------------
++     *  FirmwareImageAuthentication (PKCS7 Header)
++     *  -------------------------------------------
++     *         SmmCodeInjectionPayloadHeader
++     *                     OR
++     *         SmmDriverUpdatePayloadHeader
++     *  -------------------------------------------
++     *                  < IMAGE >
++     *  -------------------------------------------
++     */
++
++    std::ifstream imgFile(imgPath, std::ios::binary | std::ios::in);
++    if (!imgFile.good())
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Image file Open failed");
++        return false;
++    }
++
++    /********* Capsule Header *********/
++    std::array<char, sizeof(CapsuleHeader)> readCapHeadBuffer = {};
++    imgFile.read(readCapHeadBuffer.data(), sizeof(CapsuleHeader));
++
++    auto* smmCapsuleHeader =
++        reinterpret_cast<CapsuleHeader*>(readCapHeadBuffer.data());
++
++    // Check if received Capsule size matches Image Size specified in Capsule
++    // header
++    if (imgSize != smmCapsuleHeader->capsuleImageSize)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Incomplete Capsule Received",
++            phosphor::logging::entry(
++                "IMG_SIZE=%s",
++                std::to_string(smmCapsuleHeader->capsuleImageSize).c_str()));
++        phosphor::logging::report<ImageFailure>(
++            ImageFail::FAIL("Incomplete Capsule Received"),
++            ImageFail::PATH(imgPath.c_str()));
++        return false;
++    }
++
++    // Skip untill Capsule Header to enable reading the next header
++    cummulativeHeaderLen = smmCapsuleHeader->headerSize;
++    if (!isValidCummulativeHeaderLength(cummulativeHeaderLen, imgSize))
++    {
++        phosphor::logging::report<ImageFailure>(
++            ImageFail::FAIL("Malformed Capsule Received"),
++            ImageFail::PATH(imgPath.c_str()));
++        return false;
++    }
++
++    imgFile.seekg(cummulativeHeaderLen, std::ios::beg);
++
++    /********* Firmware Management Header *********/
++    std::array<char, sizeof(FirmwareManagementCapsuleHeader)>
++        readFwManageHeadBuffer = {};
++    imgFile.read(readFwManageHeadBuffer.data(),
++                 sizeof(FirmwareManagementCapsuleHeader));
++
++    auto* fwManagementHeader =
++        reinterpret_cast<FirmwareManagementCapsuleHeader*>(
++            readFwManageHeadBuffer.data());
++
++    size_t actualFwManagementHeaderSize =
++        sizeof(FirmwareManagementCapsuleHeader) +
++        (sizeof(uint64_t) * (fwManagementHeader->embeddedDriverCount +
++                             fwManagementHeader->payloadItemCount));
++
++    // Skip untill Firmware Management Header to enable reading the next header
++    cummulativeHeaderLen += actualFwManagementHeaderSize;
++    if (!isValidCummulativeHeaderLength(cummulativeHeaderLen, imgSize))
++    {
++        phosphor::logging::report<ImageFailure>(
++            ImageFail::FAIL("Malformed Capsule Received"),
++            ImageFail::PATH(imgPath.c_str()));
++        return false;
++    }
++
++    imgFile.seekg(cummulativeHeaderLen, std::ios::beg);
++
++    /********* Firmware Management Image Header *********/
++    std::array<char, sizeof(FirmwareManagementCapsuleImageHeader)>
++        readFwManageImageHeadBuffer = {};
++    imgFile.read(readFwManageImageHeadBuffer.data(),
++                 sizeof(FirmwareManagementCapsuleImageHeader));
++
++    auto* fwManagementImageHeader =
++        reinterpret_cast<FirmwareManagementCapsuleImageHeader*>(
++            readFwManageImageHeadBuffer.data());
++
++    std::string updImageGUIDStr(
++        fwManagementImageHeader->updateImageTypeId.begin(),
++        fwManagementImageHeader->updateImageTypeId.end());
++
++    // Determine the Capsule Type
++    // The field updateImageTypeId in FirmwareManagementCapsuleImageHeader
++    // determines the type of Capsule.
++    if (compareUUID(fwManagementImageHeader->updateImageTypeId,
++                    capabilities.mmCodeInjImgType))
++    {
++        phosphor::logging::log<phosphor::logging::level::INFO>(
++            "Code Inject Capsule Detected",
++            phosphor::logging::entry("IMG_GUID=%s", updImageGUIDStr.c_str()));
++        capType = codeInject;
++    }
++    else if (compareUUID(fwManagementImageHeader->updateImageTypeId,
++                         capabilities.mmDriverUpdateImgType))
++    {
++        phosphor::logging::log<phosphor::logging::level::INFO>(
++            "Update Driver Capsule Detected",
++            phosphor::logging::entry("IMG_GUID=%s", updImageGUIDStr.c_str()));
++        capType = updateDriver;
++    }
++    else
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Invalid Image! Image UUID doesnt match with any known UUID(s)",
++            phosphor::logging::entry("IMG_GUID=%s", updImageGUIDStr.c_str()));
++        capType = others;
++    }
++
++    // Determine which version of Image header is used to determine size of this
++    // header.
++    size_t actualFwManagementImageHeaderSize = 0;
++    if (!getSizeofFwManagementHeader(fwManagementImageHeader->version,
++                                     actualFwManagementImageHeaderSize))
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Unsuported Image Header Version",
++            phosphor::logging::entry(
++                "VERSION=%s",
++                std::to_string(fwManagementImageHeader->version).c_str()));
++        phosphor::logging::report<ImageFailure>(
++            ImageFail::FAIL("Unsuported Image Header Version"),
++            ImageFail::PATH(imgPath.c_str()));
++        return false;
++    }
++
++    // Skip untill Firmware Management Image Header to enable reading the next
++    // header
++    cummulativeHeaderLen += actualFwManagementImageHeaderSize;
++    if (!isValidCummulativeHeaderLength(cummulativeHeaderLen, imgSize))
++    {
++        phosphor::logging::report<ImageFailure>(
++            ImageFail::FAIL("Malformed Capsule Received"),
++            ImageFail::PATH(imgPath.c_str()));
++        return false;
++    }
++
++    return true;
++}
++
++static bool skipPKCS7Header(const std::filesystem::path imgPath,
++                            const size_t& imgSize, size_t& cummulativeHeaderLen)
++{
++    std::ifstream imgFile(imgPath, std::ios::binary | std::ios::in);
++    if (!imgFile.good())
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Image file Open failed");
++        return false;
++    }
++
++    if (!isValidCummulativeHeaderLength(cummulativeHeaderLen, imgSize))
++    {
++        phosphor::logging::report<ImageFailure>(
++            ImageFail::FAIL("Malformed Capsule Received"),
++            ImageFail::PATH(imgPath.c_str()));
++        return false;
++    }
++
++    // Skip till PKCS7 Header
++    imgFile.seekg(cummulativeHeaderLen, std::ios::beg);
++
++    /****** PKCS7 Header ******/
++    std::array<char, sizeof(FirmwareImageAuthentication)> readPKCS7HeadBuffer =
++        {};
++    imgFile.read(readPKCS7HeadBuffer.data(),
++                 sizeof(FirmwareImageAuthentication));
++
++    auto* pKCS7Header = reinterpret_cast<FirmwareImageAuthentication*>(
++        readPKCS7HeadBuffer.data());
++
++    // The dw length specifies the size of WinCertificateUefiGuid which is
++    // the entire certificate along with its header.
++    // So to get the complete PKSC7 header length, add dwLength with
++    // sizeof(uint64_t) as monotonicCount is uint64_t type.
++    size_t actualPKCS7HeaderSize =
++        (sizeof(uint64_t) + pKCS7Header->authInfo.hdr.dwLength);
++
++    // Skip untill PKCS7 Header to enable reading the next header
++    cummulativeHeaderLen += actualPKCS7HeaderSize;
++    if (!isValidCummulativeHeaderLength(cummulativeHeaderLen, imgSize))
++    {
++        phosphor::logging::report<ImageFailure>(
++            ImageFail::FAIL("Malformed Capsule Received"),
++            ImageFail::PATH(imgPath.c_str()));
++        return false;
++    }
++
++    return true;
++}
++
++static bool verifyCodeInjectionHeader(
++    const std::filesystem::path imgPath, const size_t& imgSize,
++    SMMUpdateCapabilities& capabilities, size_t& cummulativeHeaderLen,
++    std::string& version)
++{
++    if (!skipPKCS7Header(imgPath, imgSize, cummulativeHeaderLen))
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Caching PKCS7 failed");
++        return false;
++    }
++
++    std::ifstream imgFile(imgPath, std::ios::binary | std::ios::in);
++    if (!imgFile.good())
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Image file Open failed");
++        return false;
++    }
++
++    if (!isValidCummulativeHeaderLength(cummulativeHeaderLen, imgSize))
++    {
++        phosphor::logging::report<ImageFailure>(
++            ImageFail::FAIL("Malformed Capsule Received"),
++            ImageFail::PATH(imgPath.c_str()));
++        return false;
++    }
++
++    // Skip all the way untill PKCS7 Header
++    imgFile.seekg(cummulativeHeaderLen, std::ios::beg);
++
++    /****** Code Injection Header ******/
++    std::array<char, sizeof(SmmCodeInjectionPayloadHeader)>
++        readCodeInjHeadBuffer = {};
++    imgFile.read(readCodeInjHeadBuffer.data(),
++                 sizeof(SmmCodeInjectionPayloadHeader));
++
++    auto* codeInjectionHeader =
++        reinterpret_cast<SmmCodeInjectionPayloadHeader*>(
++            readCodeInjHeadBuffer.data());
++
++    // Check for Platform UUID, Firmware Version and Runtime Version
++    if (!compareUUID(codeInjectionHeader->platformId, capabilities.platformId))
++    {
++        std::string capsulePlatformGUIDStr(
++            codeInjectionHeader->platformId.begin(),
++            codeInjectionHeader->platformId.end());
++        std::string capabilityPlatformGUIDStr(capabilities.platformId.begin(),
++                                              capabilities.platformId.end());
++
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Platform UUID match Failed",
++            phosphor::logging::entry("CAPSULE_PLAT_GUID=%s",
++                                     capsulePlatformGUIDStr.c_str()),
++            phosphor::logging::entry("CAPABILITY_PLAT_GUID=%s",
++                                     capabilityPlatformGUIDStr.c_str()));
++        return false;
++    }
++
++    if (!isValidFirmwareVersion(
++            codeInjectionHeader->supportedSmmFirmwareVersion, capabilities))
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Invalid Firmware Version",
++            phosphor::logging::entry(
++                "CAPSULE_FW_VERSION=%s",
++                std::to_string(codeInjectionHeader->supportedSmmFirmwareVersion)
++                    .c_str()),
++            phosphor::logging::entry(
++                "CAPABILITY_FW_VERSION=%s",
++                std::to_string(capabilities.mmFwVersion).c_str()));
++        return false;
++    }
++
++    if (!isValidCodeInjRuntimeVersion(
++            codeInjectionHeader->smmCodeInjectionRuntimeVersion, capabilities))
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Invalid Runtime Version",
++            phosphor::logging::entry(
++                "CAPSULE_RUN_VERSION=%s",
++                std::to_string(
++                    codeInjectionHeader->smmCodeInjectionRuntimeVersion)
++                    .c_str()),
++            phosphor::logging::entry(
++                "CAPABILITY_RUN_VERSION=%s",
++                std::to_string(capabilities.mmCodeInjRuntimeVer).c_str()));
++        return false;
++    }
++
++    version =
++        std::to_string(codeInjectionHeader->smmCodeInjectionRuntimeVersion);
++    return true;
++}
++
++static bool verifyUpdateDriverHeader(
++    const std::filesystem::path imgPath, const size_t& imgSize,
++    SMMUpdateCapabilities& capabilities, size_t& cummulativeHeaderLen,
++    std::string& version)
++{
++    if (!skipPKCS7Header(imgPath, imgSize, cummulativeHeaderLen))
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Caching PKCS7 failed");
++        return false;
++    }
++
++    std::ifstream imgFile(imgPath, std::ios::binary | std::ios::in);
++    if (!imgFile.good())
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Image file Open failed");
++        return false;
++    }
++
++    if (!isValidCummulativeHeaderLength(cummulativeHeaderLen, imgSize))
++    {
++        phosphor::logging::report<ImageFailure>(
++            ImageFail::FAIL("Malformed Capsule Received"),
++            ImageFail::PATH(imgPath.c_str()));
++        return false;
++    }
++
++    // Skip all the way untill PKCS7 Header
++    imgFile.seekg(cummulativeHeaderLen, std::ios::beg);
++
++    /****** Update Driver Header ******/
++    std::array<char, sizeof(SmmDriverUpdatePayloadHeader)>
++        readUpdDriverHeadBuffer = {};
++    imgFile.read(readUpdDriverHeadBuffer.data(),
++                 sizeof(SmmDriverUpdatePayloadHeader));
++
++    auto* updateDriverHeader = reinterpret_cast<SmmDriverUpdatePayloadHeader*>(
++        readUpdDriverHeadBuffer.data());
++
++    // Check for Platform UUID, Firmware Version and Runtime Version
++    if (!compareUUID(updateDriverHeader->platformId, capabilities.platformId))
++    {
++        std::string capsulePlatformGUIDStr(
++            updateDriverHeader->platformId.begin(),
++            updateDriverHeader->platformId.end());
++        std::string capabilityPlatformGUIDStr(capabilities.platformId.begin(),
++                                              capabilities.platformId.end());
++
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Platform UUID match Failed",
++            phosphor::logging::entry("CAPSULE_PLAT_GUID=%s",
++                                     capsulePlatformGUIDStr.c_str()),
++            phosphor::logging::entry("CAPABILITY_PLAT_GUID=%s",
++                                     capabilityPlatformGUIDStr.c_str()));
++        return false;
++    }
++
++    if (!isValidFirmwareVersion(updateDriverHeader->supportedSmmFirmwareVersion,
++                                capabilities))
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Invalid Firmware Version",
++            phosphor::logging::entry(
++                "CAPSULE_FW_VERSION=%s",
++                std::to_string(updateDriverHeader->supportedSmmFirmwareVersion)
++                    .c_str()),
++            phosphor::logging::entry(
++                "CAPABILITY_FW_VERSION=%s",
++                std::to_string(capabilities.mmFwVersion).c_str()));
++        return false;
++    }
++
++    if (!isValidUpdateDriverRuntimeVersion(
++            updateDriverHeader->smmDriverUpdateRuntimeVersion, capabilities))
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Invalid Runtime Version",
++            phosphor::logging::entry(
++                "CAPSULE_RUN_VERSION=%s",
++                std::to_string(
++                    updateDriverHeader->smmDriverUpdateRuntimeVersion)
++                    .c_str()),
++            phosphor::logging::entry(
++                "CAPABILITY_RUN_VERSION=%s",
++                std::to_string(capabilities.mmDriverUpdateRuntimeVer).c_str()));
++        return false;
++    }
++
++    if (!isValidRuntimeSVN(
++            updateDriverHeader->smmDriverUpdateRuntimeSecureVersionNumber,
++            capabilities))
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Invalid Runtime SVN",
++            phosphor::logging::entry(
++                "CAPSULE_RUN_SVN=%s",
++                std::to_string(updateDriverHeader
++                                   ->smmDriverUpdateRuntimeSecureVersionNumber)
++                    .c_str()),
++            phosphor::logging::entry(
++                "CAPABILITY_RUN_SVN=%s",
++                std::to_string(capabilities.mmDriverUpdateRuntimeSvn).c_str()));
++        return false;
++    }
++
++    version =
++        std::to_string(updateDriverHeader->smmDriverUpdateRuntimeVersion) +
++        "." +
++        std::to_string(
++            updateDriverHeader->smmDriverUpdateRuntimeSecureVersionNumber);
++    return true;
++}
++
++static bool verifyCapsule(sdbusplus::bus::bus& bus,
++                          const std::filesystem::path imgPath,
++                          std::string& version)
++{
++    // Get SMM Capabilities
++    smru::SMMUpdateCapabilities capabilities;
++    if (!smru::getSmruCapabilities(bus, capabilities))
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Get Capabilities Failed");
++        return false;
++    }
++
++    // Check if Received UUID's are Valid
++    if ((capabilities.mmCodeInjImgType.size() != smru::uuidSize) ||
++        (capabilities.mmDriverUpdateImgType.size() != smru::uuidSize) ||
++        (capabilities.platformId.size() != smru::uuidSize))
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Invalid UUID in Capabilities");
++        return false;
++    }
++
++    // Check if any of the Capbility is Supported to begin with
++    if (!capabilities.updateCapabilities)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "No SMM Update Capabilities are Supported");
++        phosphor::logging::report<ImageFailure>(
++            ImageFail::FAIL("SMM Update is currently not supported"),
++            ImageFail::PATH(imgPath.c_str()));
++        return false;
++    }
++
++    // Get Image/Capsule Size
++    std::ifstream imgFile(imgPath, std::ios::binary | std::ios::in);
++    if (!imgFile.good())
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Image file Open failed");
++        return false;
++    }
++
++    imgFile.seekg(0, std::ios_base::end);
++    const size_t imgSize = imgFile.tellg();
++
++    // Find whether Capsule is Code Injection Capsule
++    // or Driver Update Capsule
++    smru::SMMCapsuleType smmCapType = smru::others;
++    size_t cummulativeHeaderLen = 0;
++
++    // This function call is going to process the Capsule and fill
++    // in smmCapType and cummulativeHeaderLen. This cummulativeHeaderLen
++    // is needed to process and get further details on Firmware version etc.
++    // cummulativeHeaderLen is used to keep track of the point to which the
++    // capsule is read.
++    if (!processSmmCapsule(imgPath, imgSize, capabilities, smmCapType,
++                           cummulativeHeaderLen))
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Get Capsule Type Failed !");
++        return false;
++    }
++
++    switch (smmCapType)
++    {
++        case smru::codeInject:
++            // Check if Code Injection Capsule is Supported
++            if (!(capabilities.updateCapabilities &
++                  smru::codeInjectionCapability))
++            {
++                phosphor::logging::log<phosphor::logging::level::ERR>(
++                    "Code Injection Capsule is NOT Supported");
++                phosphor::logging::report<ImageFailure>(
++                    ImageFail::FAIL("Unsupported Image Type"),
++                    ImageFail::PATH(imgPath.c_str()));
++                return false;
++            }
++
++            // Verify the Image Header and get the Version
++            if (!verifyCodeInjectionHeader(imgPath, imgSize, capabilities,
++                                           cummulativeHeaderLen, version))
++            {
++                phosphor::logging::log<phosphor::logging::level::ERR>(
++                    "Code Injection Capsule Verification Failed");
++                phosphor::logging::report<ImageFailure>(
++                    ImageFail::FAIL("Capsule Verification Failed"),
++                    ImageFail::PATH(imgPath.c_str()));
++                return false;
++            }
++            break;
++
++        case smru::updateDriver:
++            // Check if Driver Update Capsule is Supported
++            if (!(capabilities.updateCapabilities &
++                  smru::driverUpdateCapability))
++            {
++                phosphor::logging::log<phosphor::logging::level::ERR>(
++                    "Driver Update Capsule is NOT Supported");
++                phosphor::logging::report<ImageFailure>(
++                    ImageFail::FAIL("Unsupported Image Type"),
++                    ImageFail::PATH(imgPath.c_str()));
++                return false;
++            }
++
++            // Verify the Image Header and get the Version
++            if (!verifyUpdateDriverHeader(imgPath, imgSize, capabilities,
++                                          cummulativeHeaderLen, version))
++            {
++                phosphor::logging::log<phosphor::logging::level::ERR>(
++                    "Update Driver Capsule Verification Failed");
++                phosphor::logging::report<ImageFailure>(
++                    ImageFail::FAIL("Capsule Verification Failed"),
++                    ImageFail::PATH(imgPath.c_str()));
++                return false;
++            }
++            break;
++
++        default:
++            phosphor::logging::report<ImageFailure>(
++                ImageFail::FAIL("Unknown Image Type"),
++                ImageFail::PATH(imgPath.c_str()));
++            return false;
++    }
++    return true;
++}
++
++} // namespace smru
+-- 
+2.43.0
+

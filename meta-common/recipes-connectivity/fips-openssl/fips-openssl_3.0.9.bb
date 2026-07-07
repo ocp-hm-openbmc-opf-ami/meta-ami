@@ -12,12 +12,12 @@ SRC_URI = "http://www.openssl.org/source/openssl-${PV}.tar.gz \
            file://afalg.patch \
            file://0001-Configure-do-not-tweak-mips-cflags.patch \
            "
-S = "${WORKDIR}/openssl-${PV}"
+S = "${UNPACKDIR}/openssl-${PV}"
 
 DISABLE_STATIC = ""
 SRC_URI[sha256sum] = "eb1ab04781474360f77c318ab89d8c5a03abc38e63d65a603cabbf1b00a1dc90"
 
-B = "${WORKDIR}/build"
+B = "${UNPACKDIR}/build"
 do_configure[cleandirs] = "${B}"
 
 # General config settings.
@@ -52,12 +52,12 @@ DEPRECATED_CRYPTO_FLAGS ?= ""
 do_configure () {
 	# When we upgrade glibc but not uninative we see obtuse failures in openssl. Make
 	# the issue really clear that perl isn't functional due to symbol mismatch issues.
-	cat <<- EOF > ${WORKDIR}/perltest
+	cat <<- EOF > ${UNPACKDIR}/perltest
 	#!/usr/bin/env perl
 	use POSIX;
 	EOF
-	chmod a+x ${WORKDIR}/perltest
-	${WORKDIR}/perltest
+	chmod a+x ${UNPACKDIR}/perltest
+	${UNPACKDIR}/perltest
 
 	os=${HOST_OS}
 	case $os in

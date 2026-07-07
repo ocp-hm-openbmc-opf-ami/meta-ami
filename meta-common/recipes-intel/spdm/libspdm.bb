@@ -8,11 +8,11 @@ DEPENDS += " \
             openssl\
             "
 LICENSE = "DMTF"
-LIC_FILES_CHKSUM = "file://LICENSE.md;md5=31d8b5ee5c0ad0dd6f6465d88d8caacd"
+LIC_FILES_CHKSUM = "file://LICENSE.md;md5=8f9b59a81a88da8e812af43728b72dd7"
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRCREV ="269e520c0bd87c2b82f4455f7c3e9b3f87b8eca5"
+SRCREV ="d7c8c8247b4d0bd8ed75d9f35a558a4df173a4c7"
 
 SRC_URI += " \
   gitsm://github.com/DMTF/libspdm.git;protocol=https;nobranch=1 \
@@ -20,7 +20,7 @@ SRC_URI += " \
   file://0002-create-libspdm.patch \
   file://0003-Add-libspdm.pc.in.patch \
 "
-S = "${WORKDIR}/git"
+S = "${UNPACKDIR}/git"
 
 OBMCGCC_OPTION = "${CC}"
 OBMCGCC_OPTION:remove = "arm-openbmc-linux-gnueabi-gcc"

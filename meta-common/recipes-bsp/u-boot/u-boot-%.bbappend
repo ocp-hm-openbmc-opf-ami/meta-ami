@@ -6,7 +6,8 @@ SRC_URI += " \
 
 # This patch was removed from upstream for a new version of u-boot. We still
 # it for our version of u-boot, so pull patch into downstream.
-SRC_URI += "file://0001-scripts-dtc-pylibfdt-libfdt.i_shipped-Use-SWIG_Appen.patch"
+# Todo: Commented out the patch to avoid build failure
+#SRC_URI += "file://0001-scripts-dtc-pylibfdt-libfdt.i_shipped-Use-SWIG_Appen.patch"
 
 # Temporary workaround: With the old upstream u-boot this patch is already
 # applied and fails the build. This removes the duplicate patch entry for the

@@ -15,8 +15,8 @@ SRC_URI = "git://github.com/apache/avro;branch=${BRANCH};protocol=https \
 	   file://0001-enable-cross-compilation-and-pkgconfig.patch \ 
           "
 
-S = "${WORKDIR}/git/lang/c++"
+S = "${UNPACKDIR}/git/lang/c++"
 
-EXTRA_OECMAKE = "-DSNAPPY_INCLUDE_DIR='' -DYOCTO_BUILD=ON -DCMAKE_BUILD_TYPE=MinSizeRel"
+EXTRA_OECMAKE = "-DSNAPPY_INCLUDE_DIR='' -DYOCTO_BUILD=ON -DCMAKE_BUILD_TYPE=MinSizeRel -DCMAKE_CXX_STANDARD=23"
 inherit cmake
 

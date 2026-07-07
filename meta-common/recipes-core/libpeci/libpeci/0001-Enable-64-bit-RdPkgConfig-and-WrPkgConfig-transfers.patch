@@ -1,0 +1,274 @@
+From a034af7c916fa1f9cae7e31485de05d14ba60ba5 Mon Sep 17 00:00:00 2001
+From: Yaswanth <yaswanthsai@ami.com>
+Date: Tue, 23 Jan 2024 12:41:00 +0530
+Subject: [PATCH 1/1] Enable 64-bit RdPkgConfig and WrPkgConfig transfers
+
+The PECI design specification permits 8, 16, 32 or 64-bit
+Rd/WrPkgConfig to be performed.
+
+Enable 64-bit transfer methods.
+
+Tested:
+Issued a 32-bit RdPkgConfig request. Request succeeded.
+Issued a 64-bit RdPkgConfig request.
+  * Request succeeded
+  * CPU returned an error due to unsupported 64-bit mode
+Confirm 64-bit requests get into the 64-bit write buffer.
+Confirm existing write transactions function as expected.
+
+Change-Id: Ibc9f422f1783b3c82693d8e2fe8f0fc130a26f3d
+Signed-off-by: Johnathan Mantey <johnathanx.mantey@intel.com>
+Upstream-Status: Pending
+---
+ linux/peci-ioctl.h |  6 ++++--
+ peci.c             | 28 +++++++++++++++-------------
+ peci.h             | 15 ++++++++-------
+ peci_cmds.c        | 16 ++++++++--------
+ 4 files changed, 35 insertions(+), 30 deletions(-)
+
+diff --git a/linux/peci-ioctl.h b/linux/peci-ioctl.h
+index 9b1dc5391..0ebd54b62 100644
+--- a/linux/peci-ioctl.h
++++ b/linux/peci-ioctl.h
+@@ -172,6 +172,7 @@ struct peci_get_temp_msg {
+ struct peci_rd_pkg_cfg_msg {
+ #define PECI_RDPKGCFG_WRITE_LEN			5
+ #define PECI_RDPKGCFG_READ_LEN_BASE		1
++#define PECI_RDPKGCFG_PKGCFG_LEN                8
+ #define PECI_RDPKGCFG_CMD			0xa1
+ 
+ 	__u8	addr;
+@@ -240,7 +241,7 @@ struct peci_rd_pkg_cfg_msg {
+ 	__u8	rx_len;
+ 	__u8	cc;
+ 	__u8	padding[2];
+-	__u8	pkg_config[4];
++	__u8    pkg_config[PECI_RDPKGCFG_PKGCFG_LEN];
+ 	__u8	domain_id;
+ 	__u8	padding1[3];
+ } __attribute__((__packed__));
+@@ -263,6 +264,7 @@ struct peci_rd_pkg_cfg_msg {
+  */
+ struct peci_wr_pkg_cfg_msg {
+ #define PECI_WRPKGCFG_WRITE_LEN_BASE	6
++#define PECI_WRPKGCFG_MAX_WRITE_LEN     8
+ #define PECI_WRPKGCFG_READ_LEN		1
+ #define PECI_WRPKGCFG_CMD		0xa5
+ 
+@@ -275,7 +277,7 @@ struct peci_wr_pkg_cfg_msg {
+ 	__u8	tx_len;
+ 	__u8	cc;
+ 	__u8	padding[2];
+-	__u32	value;
++	__u8    pkg_data[PECI_WRPKGCFG_MAX_WRITE_LEN];
+ 	__u8	domain_id;
+ 	__u8	padding1[3];
+ } __attribute__((__packed__));
+diff --git a/peci.c b/peci.c
+index 11434acf3..5733d412d 100644
+--- a/peci.c
++++ b/peci.c
+@@ -473,8 +473,8 @@ EPECIStatus peci_RdPkgConfig_seq_dom(uint8_t target, uint8_t domainId,
+         return PECI_CC_INVALID_REQ;
+     }
+ 
+-    // Per the PECI spec, the write length must be a byte, word, or dword
+-    if (u8ReadLen != 1 && u8ReadLen != 2 && u8ReadLen != 4)
++    // Support PECI 4.0 read lengths
++    if (u8ReadLen != 1 && u8ReadLen != 2 && u8ReadLen != 4 && u8ReadLen != 8)
+     {
+         return PECI_CC_INVALID_REQ;
+     }
+@@ -506,10 +506,11 @@ EPECIStatus peci_RdPkgConfig_seq_dom(uint8_t target, uint8_t domainId,
+  * space within the processor
+  *------------------------------------------------------------------------*/
+ EPECIStatus peci_WrPkgConfig(uint8_t target, uint8_t u8Index, uint16_t u16Param,
+-                             uint32_t u32Value, uint8_t u8WriteLen, uint8_t* cc)
++                             const void* pPkgData, uint8_t u8WriteLen,
++			     uint8_t* cc)
+ {
+     //  Default to domain ID 0
+-    return peci_WrPkgConfig_dom(target, 0, u8Index, u16Param, u32Value,
++    return peci_WrPkgConfig_dom(target, 0, u8Index, u16Param, pPkgData,
+                                 u8WriteLen, cc);
+ }
+ 
+@@ -519,13 +520,13 @@ EPECIStatus peci_WrPkgConfig(uint8_t target, uint8_t u8Index, uint16_t u16Param,
+  *------------------------------------------------------------------------*/
+ EPECIStatus peci_WrPkgConfig_dom(uint8_t target, uint8_t domainId,
+                                  uint8_t u8Index, uint16_t u16Param,
+-                                 uint32_t u32Value, uint8_t u8WriteLen,
++                                 const void* pPkgData, uint8_t u8WriteLen,
+                                  uint8_t* cc)
+ {
+     int peci_fd = -1;
+     EPECIStatus ret = PECI_CC_SUCCESS;
+ 
+-    if (cc == NULL)
++    if (cc == NULL || pPkgData == NULL)
+     {
+         return PECI_CC_INVALID_REQ;
+     }
+@@ -541,7 +542,7 @@ EPECIStatus peci_WrPkgConfig_dom(uint8_t target, uint8_t domainId,
+         return PECI_CC_DRIVER_ERR;
+     }
+     ret = peci_WrPkgConfig_seq_dom(target, domainId, u8Index, u16Param,
+-                                   u32Value, u8WriteLen, peci_fd, cc);
++                                   pPkgData, u8WriteLen, peci_fd, cc);
+ 
+     peci_Close(peci_fd);
+     return ret;
+@@ -552,11 +553,11 @@ EPECIStatus peci_WrPkgConfig_dom(uint8_t target, uint8_t domainId,
+  * peci file descriptor.
+  *------------------------------------------------------------------------*/
+ EPECIStatus peci_WrPkgConfig_seq(uint8_t target, uint8_t u8Index,
+-                                 uint16_t u16Param, uint32_t u32Value,
++                                 uint16_t u16Param, const void* pPkgData,
+                                  uint8_t u8WriteLen, int peci_fd, uint8_t* cc)
+ {
+     //  Default to domain ID 0
+-    return peci_WrPkgConfig_seq_dom(target, 0, u8Index, u16Param, u32Value,
++    return peci_WrPkgConfig_seq_dom(target, 0, u8Index, u16Param, pPkgData,
+                                     u8WriteLen, peci_fd, cc);
+ }
+ 
+@@ -566,13 +567,13 @@ EPECIStatus peci_WrPkgConfig_seq(uint8_t target, uint8_t u8Index,
+  *------------------------------------------------------------------------*/
+ EPECIStatus peci_WrPkgConfig_seq_dom(uint8_t target, uint8_t domainId,
+                                      uint8_t u8Index, uint16_t u16Param,
+-                                     uint32_t u32Value, uint8_t u8WriteLen,
++                                     const void* pPkgData, uint8_t u8WriteLen,
+                                      int peci_fd, uint8_t* cc)
+ {
+     struct peci_wr_pkg_cfg_msg cmd = {0};
+     EPECIStatus ret = PECI_CC_SUCCESS;
+ 
+-    if (cc == NULL)
++    if (cc == NULL || pPkgData == NULL)
+     {
+         return PECI_CC_INVALID_REQ;
+     }
+@@ -584,7 +585,8 @@ EPECIStatus peci_WrPkgConfig_seq_dom(uint8_t target, uint8_t domainId,
+     }
+ 
+     // Per the PECI spec, the write length must be a byte, word, or dword
+-    if ((u8WriteLen != 1) && (u8WriteLen != 2) && (u8WriteLen != 4))
++    if ((u8WriteLen != 1) && (u8WriteLen != 2) && (u8WriteLen != 4) &&
++		    (u8WriteLen != 8))
+     {
+         return PECI_CC_INVALID_REQ;
+     }
+@@ -593,7 +595,7 @@ EPECIStatus peci_WrPkgConfig_seq_dom(uint8_t target, uint8_t domainId,
+     cmd.index = u8Index;  // RdPkgConfig index
+     cmd.param = u16Param; // parameter value
+     cmd.tx_len = u8WriteLen;
+-    cmd.value = u32Value;
++    memcpy(cmd.pkg_data, pPkgData, u8WriteLen);
+     cmd.domain_id = domainId;
+ 
+     ret = HW_peci_issue_cmd(PECI_IOC_WR_PKG_CFG, (char*)&cmd, peci_fd);
+diff --git a/peci.h b/peci.h
+index 7aea0ae52..113f73227 100644
+--- a/peci.h
++++ b/peci.h
+@@ -132,28 +132,29 @@ EPECIStatus peci_RdPkgConfig_seq_dom(uint8_t target, uint8_t domainId,
+ 
+ // Provides write access to the package configuration space within the
+ // processor
+-EPECIStatus peci_WrPkgConfig(uint8_t target, uint8_t u8Index, uint16_t u16Param,
+-                             uint32_t u32Value, uint8_t u8WriteLen,
+-                             uint8_t* cc);
++EPECIStatus peci_WrPkgConfig(uint8_t target, uint8_t u8Index, 
++                             uint16_t u16Param, const void* pPkgData,
++			     uint8_t u8WriteLen,uint8_t* cc);
+ 
+ // Provides write access to the package configuration space within the
+ // processor in the specified domain
+ EPECIStatus peci_WrPkgConfig_dom(uint8_t target, uint8_t domainId,
+                                  uint8_t u8Index, uint16_t u16Param,
+-                                 uint32_t u32Value, uint8_t u8WriteLen,
++                                 const void* pPkgData, uint8_t u8WriteLen,
+                                  uint8_t* cc);
+ 
+ // Allows sequential WrPkgConfig with the provided peci file descriptor
+ EPECIStatus peci_WrPkgConfig_seq(uint8_t target, uint8_t u8Index,
+-                                 uint16_t u16Param, uint32_t u32Value,
++                                 uint16_t u16Param, const void* pPkgData,
+                                  uint8_t u8WriteLen, int peci_fd, uint8_t* cc);
+ 
+ // Allows sequential WrPkgConfig with the provided peci file descriptor in
+ // the specified domain
+ EPECIStatus peci_WrPkgConfig_seq_dom(uint8_t target, uint8_t domainId,
+                                      uint8_t u8Index, uint16_t u16Param,
+-                                     uint32_t u32Value, uint8_t u8WriteLen,
+-                                     int peci_fd, uint8_t* cc);
++                                     const void* pPkgData,
++				     uint8_t u8WriteLen, int peci_fd,
++				     uint8_t* cc);
+ 
+ // Provides read access to Model Specific Registers
+ EPECIStatus peci_RdIAMSR(uint8_t target, uint8_t threadID, uint16_t MSRAddress,
+diff --git a/peci_cmds.c b/peci_cmds.c
+index 673d5630e..4dadd0522 100644
+--- a/peci_cmds.c
++++ b/peci_cmds.c
+@@ -137,7 +137,7 @@ int main(int argc, char* argv[])
+     uint64_t u64MmioWriteVal = 0;
+     uint8_t u8PkgIndex = 0;
+     uint16_t u16PkgParam = 0;
+-    uint32_t u32PkgValue = 0;
++    uint64_t u64PkgValue = 0;
+     uint8_t u8MsrThread = 0;
+     uint16_t u16MsrAddr = 0;
+     uint64_t u64MsrVal = 0;
+@@ -392,7 +392,7 @@ int main(int argc, char* argv[])
+             clock_gettime(CLOCK_REALTIME, &begin);
+             ret = peci_RdPkgConfig_dom(address, domainId, u8PkgIndex,
+                                        u16PkgParam, u8Size,
+-                                       (uint8_t*)&u32PkgValue, &cc);
++                                       (uint8_t*)&u64PkgValue, &cc);
+             timeSpent = getTimeDifference(begin);
+             if (verbose && measureTime)
+             {
+@@ -412,8 +412,7 @@ int main(int argc, char* argv[])
+                 }
+                 else
+                 {
+-                    printf("   cc:0x%02x 0x%0*x\n", cc, u8Size * 2,
+-                           u32PkgValue);
++                    printf("   cc:0x%02x 0x%" PRIx64 "\n", cc, u64PkgValue);
+                 }
+             }
+         }
+@@ -428,7 +427,7 @@ int main(int argc, char* argv[])
+         switch (argc - optind)
+         {
+             case 3:
+-                u32PkgValue = (uint32_t)strtoul(argv[--index], NULL, 0);
++                u64PkgValue = strtoull(argv[--index], NULL, 0);
+                 u16PkgParam = (uint16_t)strtoul(argv[--index], NULL, 0);
+                 u8PkgIndex = (uint8_t)strtoul(argv[--index], NULL, 0);
+                 break;
+@@ -439,15 +438,16 @@ int main(int argc, char* argv[])
+         }
+         if (verbose)
+         {
+-            printf("Pkg Write of Index %02x Param %04x: 0x%0*x\n", u8PkgIndex,
+-                   u16PkgParam, u8Size * 2, u32PkgValue);
++            printf("Pkg Write of Index %02x Param %04x: 0x%" PRIx64 "\n",
++			    u8PkgIndex, u16PkgParam, u64PkgValue);
+         }
+         while (loops--)
+         {
+             cc = 0; // reset the cc for each loop
+             clock_gettime(CLOCK_REALTIME, &begin);
+             ret = peci_WrPkgConfig_dom(address, domainId, u8PkgIndex,
+-                                       u16PkgParam, u32PkgValue, u8Size, &cc);
++                                       u16PkgParam, (uint8_t*)&u64PkgValue,
++				       u8Size, &cc);
+             timeSpent = getTimeDifference(begin);
+             if (verbose && measureTime)
+             {
+-- 
+2.34.1
+

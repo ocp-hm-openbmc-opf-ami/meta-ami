@@ -1,12 +1,14 @@
 SUMMARY = "i3c-tools"
 DESCRIPTION = "Set of tools to interact with i3c devices from user space"
 
-SRC_URI = "git://github.com/vitor-soares-snps/i3c-tools.git;branch=master;protocol=https \
-           file://0001-Output-error-message-for-invalid-device.patch \
-           "
+SRC_URI = "git://github.com/vitor-soares-snps/i3c-tools.git;branch=master;protocol=https"
+#Todo: recreate patched if needed,
+#           file://0001-Output-error-message-for-invalid-device.patch 
+
+
 SRCREV = "5d752038c72af8e011a2cf988b1476872206e706"
 
-S = "${WORKDIR}/git"
+S = "${UNPACKDIR}/git"
 
 PV = "0.1+git${SRCPV}"
 
