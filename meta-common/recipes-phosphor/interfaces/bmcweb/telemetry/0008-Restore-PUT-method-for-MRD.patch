@@ -1,0 +1,223 @@
+From 5a70f91eac61fad03c2ddb2aaca14f1d15321d60 Mon Sep 17 00:00:00 2001
+From: Jakub Nowacki <jakubx.nowacki@intel.com>
+Date: Tue, 18 Jul 2023 13:46:46 +0200
+Subject: [PATCH] Restore PUT method for MRD
+
+Most recent revision of "Add PUT and PATCH for MetricReportDefinition"
+reverts support for PUT method. This is downstream-only patch to
+restore PUT support.
+
+Tested:
+1. Manually sending PUT commands on MRD collection
+2. By running Metric_report_definition test
+
+Signed-off-by: Jakub Nowacki <jakubx.nowacki@intel.com>
+---
+ redfish-core/lib/metric_report_definition.hpp | 128 ++++++++++++++++--
+ 1 file changed, 118 insertions(+), 10 deletions(-)
+
+diff --git a/redfish-core/lib/metric_report_definition.hpp b/redfish-core/lib/metric_report_definition.hpp
+index f386bfbb..44539441 100644
+--- a/redfish-core/lib/metric_report_definition.hpp
++++ b/redfish-core/lib/metric_report_definition.hpp
+@@ -37,6 +37,12 @@ using ReadingParameters = std::vector<std::tuple<
+     std::vector<std::tuple<sdbusplus::message::object_path, std::string>>,
+     std::string, std::string, uint64_t>>;
+ 
++enum class AddReportType
++{
++    create,
++    replace
++};
++
+ class ErrorVerificator
+ {
+   public:
+@@ -800,22 +806,25 @@ class AddReport
+ {
+   public:
+     AddReport(AddReportArgs argsIn, ReportUserArgs userArgsIn,
+-              const std::shared_ptr<bmcweb::AsyncResp>& asyncRespIn) :
++              const std::shared_ptr<bmcweb::AsyncResp>& asyncRespIn,
++              AddReportType typeIn) :
+         asyncResp(asyncRespIn), args(std::move(argsIn)),
+-        userArgs(std::move(userArgsIn))
++        userArgs(std::move(userArgsIn)), type(typeIn)
+     {}
+ 
+     ~AddReport()
+     {
+         boost::asio::post(crow::connections::systemBus->get_io_context(),
+                           std::bind_front(&performAddReport, asyncResp, args,
+-                                          userArgs, std::move(uriToDbus)));
++                                          userArgs, std::move(uriToDbus),
++                                          type));
+     }
+ 
+     static void performAddReport(
+         const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+         const AddReportArgs& args, const ReportUserArgs& userArgs,
+-        const boost::container::flat_map<std::string, std::string>& uriToDbus)
++        const boost::container::flat_map<std::string, std::string>& uriToDbus,
++        AddReportType type)
+     {
+         if (asyncResp->res.result() != boost::beast::http::status::ok)
+         {
+@@ -857,9 +866,9 @@ class AddReport
+         }
+ 
+         crow::connections::systemBus->async_method_call(
+-            [asyncResp, id = args.id, userArgs,
+-             uriToDbus](const boost::system::error_code& ec,
+-                        const sdbusplus::message_t& msg, const std::string&) {
++            [asyncResp, id = args.id, userArgs, uriToDbus,
++             type](const boost::system::error_code& ec,
++                   const sdbusplus::message_t& msg, const std::string&) {
+             ErrorVerificator ev(asyncResp->res, ec, msg);
+             if (!ev.verifyId(userArgs.id) || !ev.verifyName(userArgs.name) ||
+                 !ev.verifyReportingType(userArgs.reportingTypeStr) ||
+@@ -872,8 +881,14 @@ class AddReport
+             {
+                 return;
+             }
+-
+-            messages::created(asyncResp->res);
++            if (type == AddReportType::create)
++            {
++                messages::created(asyncResp->res);
++            }
++            else
++            {
++                messages::success(asyncResp->res);
++            }
+         },
+             telemetry::service, "/xyz/openbmc_project/Telemetry/Reports",
+             "xyz.openbmc_project.Telemetry.ReportManager", "AddReport",
+@@ -897,8 +912,35 @@ class AddReport
+     AddReportArgs args;
+     ReportUserArgs userArgs;
+     boost::container::flat_map<std::string, std::string> uriToDbus{};
++    AddReportType type;
+ };
+ 
++inline void retrieveMetricPropertyToDbusPaths(
++    boost::container::flat_set<std::pair<std::string, std::string>>
++        chassisSensors,
++    std::function<void(const std::map<std::string, std::string>& uriToDbus)>
++        callback)
++{
++    for (const auto& [chassis, sensorType] : chassisSensors)
++    {
++        retrieveUriToDbusMap(
++            chassis, sensorType,
++            [callback](const boost::beast::http::status status,
++                       const std::map<std::string, std::string>& uriToDbus) {
++            if (status != boost::beast::http::status::ok)
++            {
++                BMCWEB_LOG_ERROR(
++                    "Failed to retrieve URI to dbus sensors map with err {}",
++                    static_cast<unsigned>(status));
++
++                callback({});
++                return;
++            }
++            callback(uriToDbus);
++        });
++    }
++}
++
+ class UpdateMetrics
+ {
+   public:
+@@ -1358,6 +1400,64 @@ inline void
+     }
+ }
+ 
++inline void handleReportPut(App& app, const crow::Request& req,
++                            const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                            std::string_view id)
++{
++    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++    {
++        return;
++    }
++
++    telemetry::AddReportArgs args;
++    telemetry::ReportUserArgs userArgs;
++    if (!userArgs.getUserParameters(asyncResp->res, req, args))
++    {
++        return;
++    }
++
++    boost::container::flat_set<std::pair<std::string, std::string>>
++        chassisSensors;
++    if (!telemetry::getChassisSensorNodeFromMetrics(asyncResp, args.metrics,
++                                                    chassisSensors))
++    {
++        return;
++    }
++
++    const std::string reportPath = getDbusReportPath(id);
++
++    crow::connections::systemBus->async_method_call(
++        [asyncResp, reportId = std::string(id), args = std::move(args),
++         userArgs = std::move(userArgs),
++         chassisSensors = std::move(chassisSensors)](
++            const boost::system::error_code& ec) {
++        telemetry::AddReportType addReportMode =
++            telemetry::AddReportType::replace;
++        if (ec)
++        {
++            if (ec.value() != EBADR)
++            {
++                BMCWEB_LOG_ERROR("respHandler DBus error {}", ec);
++                messages::internalError(asyncResp->res);
++                return;
++            }
++            BMCWEB_LOG_INFO("Report not found, creating new report: {}",
++                            reportId);
++            addReportMode = telemetry::AddReportType::create;
++        }
++
++        auto addReportReq = std::make_shared<telemetry::AddReport>(
++            args, userArgs, asyncResp, addReportMode);
++        retrieveMetricPropertyToDbusPaths(
++            chassisSensors,
++            [asyncResp, addReportReq](const std::map<std::string, std::string>&
++                                          metricPropertyToDbusPaths) {
++            addReportReq->insert(metricPropertyToDbusPaths);
++        });
++    },
++        service, reportPath, "xyz.openbmc_project.Object.Delete", "Delete");
++}
++
+ inline void
+     handleReportDelete(App& app, const crow::Request& req,
+                        const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+@@ -1425,8 +1525,10 @@ inline void handleMetricReportDefinitionsPost(
+         return;
+     }
+ 
++    telemetry::AddReportType addReportMode = telemetry::AddReportType::create;
++
+     auto addReportReq = std::make_shared<telemetry::AddReport>(
+-        std::move(args), std::move(userArgs), asyncResp);
++        std::move(args), std::move(userArgs), asyncResp, addReportMode);
+     for (const auto& [chassis, sensorType] : chassisSensors)
+     {
+         retrieveUriToDbusMap(chassis, sensorType,
+@@ -1560,5 +1662,11 @@ inline void requestRoutesMetricReportDefinition(App& app)
+         .privileges(redfish::privileges::patchMetricReportDefinition)
+         .methods(boost::beast::http::verb::patch)(
+             std::bind_front(telemetry::handleReportPatch, std::ref(app)));
++
++    BMCWEB_ROUTE(app,
++                 "/redfish/v1/TelemetryService/MetricReportDefinitions/<str>/")
++        .privileges(redfish::privileges::putMetricReportDefinition)
++        .methods(boost::beast::http::verb::put)(
++            std::bind_front(telemetry::handleReportPut, std::ref(app)));
+ }
+ } // namespace redfish
+-- 
+2.25.1
+

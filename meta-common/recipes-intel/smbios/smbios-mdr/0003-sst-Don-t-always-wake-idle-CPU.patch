@@ -1,0 +1,237 @@
+From b5d7222f549d6e60742b139155f9cf0f55d4f8c1 Mon Sep 17 00:00:00 2001
+From: Jonathan Doman <jonathan.doman@intel.com>
+Date: Thu, 11 Jan 2024 14:20:13 -0800
+Subject: [PATCH] sst: Don't always wake idle CPU
+
+Some parts of SST are important (initial discovery, appliedConfig
+change) and should use wake-on-PECI to ensure success even if the CPU is
+in an idle PkgC state. Other parts are not important enough to justify
+increasing the CPU power draw. Add a WakePolicy parameter to the
+SSTInterface infrastructure to use a different policy in different
+contexts.
+
+Change-Id: I91435cc0357ab60ca4656e1bc51286e046ae3809
+Signed-off-by: Jonathan Doman <jonathan.doman@intel.com>
+---
+ include/speed_select.hpp | 23 ++++++++++++++++++++++-
+ src/speed_select.cpp     | 29 +++++++++++++++++------------
+ src/sst_mailbox.cpp      | 20 +++++++++++---------
+ 3 files changed, 50 insertions(+), 22 deletions(-)
+
+diff --git a/include/speed_select.hpp b/include/speed_select.hpp
+index 1c6944f..1cb783d 100644
+--- a/include/speed_select.hpp
++++ b/include/speed_select.hpp
+@@ -138,6 +138,27 @@ class SSTInterface
+     virtual void setCurrentLevel(unsigned int level) = 0;
+ };
+ 
++/**
++ * Policy for whether the SST interface should wake up an idle CPU to complete
++ * requested operations. Waking should be used sparingly to avoid excess CPU
++ * power draw, so the policy depends on the context.
++ */
++enum WakePolicy
++{
++    /**
++     * If CPU rejects the request due to being in a low-power state, enable
++     * wake-on-PECI on the CPU and retry. Wake-on-PECI is disabled for the CPU
++     * when the SST interface is destroyed.
++     */
++    wakeAllowed,
++
++    /**
++     * If CPU rejects the request due to being in a low-power state, it results
++     * in a PECIError exception.
++     */
++    dontWake
++};
++
+ /**
+  * BackendProvider represents a function which may create an SSTInterface given
+  * a CPU PECI address, and the CPU Model information. Usually the CPUModel is
+@@ -147,7 +168,7 @@ class SSTInterface
+  * arbitrary order until one of them returns a non-null pointer.
+  */
+ using BackendProvider =
+-    std::function<std::unique_ptr<SSTInterface>(uint8_t, CPUModel)>;
++    std::function<std::unique_ptr<SSTInterface>(uint8_t, CPUModel, WakePolicy)>;
+ 
+ /**
+  * Backends should use 1 instance of the SSTProviderRegistration macro at file
+diff --git a/src/speed_select.cpp b/src/speed_select.cpp
+index 3ae89b8..d393e4a 100644
+--- a/src/speed_select.cpp
++++ b/src/speed_select.cpp
+@@ -80,7 +80,8 @@ void registerBackend(BackendProvider providerFn)
+     getProviders().push_back(providerFn);
+ }
+ 
+-std::unique_ptr<SSTInterface> getInstance(uint8_t address, CPUModel model)
++std::unique_ptr<SSTInterface> getInstance(uint8_t address, CPUModel model,
++                                          WakePolicy wakePolicy)
+ {
+     DEBUG_PRINT << "Searching for provider for " << address << ", model "
+                 << std::hex << model << std::dec << '\n';
+@@ -88,7 +89,7 @@ std::unique_ptr<SSTInterface> getInstance(uint8_t address, CPUModel model)
+     {
+         try
+         {
+-            auto interface = provider(address, model);
++            auto interface = provider(address, model, wakePolicy);
+             DEBUG_PRINT << "returned " << interface << '\n';
+             if (interface)
+             {
+@@ -161,12 +162,13 @@ class CPUConfig : public BaseCurrentOperatingConfig
+     }
+ 
+   public:
+-    CPUConfig(sdbusplus::bus_t& bus_, uint8_t index, CPUModel model) :
++    CPUConfig(sdbusplus::bus_t& bus_, uint8_t index, CPUModel model,
++              unsigned int currentLevel_, bool bfEnabled_) :
+         BaseCurrentOperatingConfig(bus_, generatePath(index).c_str(),
+                                    action::defer_emit),
+         bus(bus_), peciAddress(index + MIN_CLIENT_ADDR),
+-        path(generatePath(index)), cpuModel(model), currentLevel(0),
+-        bfEnabled(false)
++        path(generatePath(index)), cpuModel(model), currentLevel(currentLevel_),
++        bfEnabled(bfEnabled_)
+     {}
+ 
+     //
+@@ -179,7 +181,7 @@ class CPUConfig : public BaseCurrentOperatingConfig
+         if (hostState != HostState::off)
+         {
+             // Otherwise, try to read current state
+-            auto sst = getInstance(peciAddress, cpuModel);
++            auto sst = getInstance(peciAddress, cpuModel, dontWake);
+             if (!sst || !sst->ready())
+             {
+                 std::cerr << __func__
+@@ -206,7 +208,7 @@ class CPUConfig : public BaseCurrentOperatingConfig
+         DEBUG_PRINT << "Reading BaseSpeedPriorityEnabled\n";
+         if (hostState != HostState::off)
+         {
+-            auto sst = getInstance(peciAddress, cpuModel);
++            auto sst = getInstance(peciAddress, cpuModel, dontWake);
+             if (!sst || !sst->ready())
+             {
+                 std::cerr << __func__
+@@ -247,7 +249,7 @@ class CPUConfig : public BaseCurrentOperatingConfig
+                 InvalidArgument();
+         }
+ 
+-        auto sst = getInstance(peciAddress, cpuModel);
++        auto sst = getInstance(peciAddress, cpuModel, wakeAllowed);
+         if (!sst)
+         {
+             std::cerr << __func__ << ": Failed to get SST provider instance\n";
+@@ -422,7 +424,8 @@ static bool discoverCPUsAndConfigs(boost::asio::io_context& ioc,
+             continue;
+         }
+ 
+-        std::unique_ptr<SSTInterface> sst = getInstance(i, cpuModel);
++        std::unique_ptr<SSTInterface> sst = getInstance(i, cpuModel,
++                                                        wakeAllowed);
+ 
+         if (!sst)
+         {
+@@ -445,8 +448,10 @@ static bool discoverCPUsAndConfigs(boost::asio::io_context& ioc,
+         }
+ 
+         // Create the per-CPU configuration object
++        unsigned int currentLevel = sst->currentLevel();
+         cpuList.emplace_back(
+-            std::make_unique<CPUConfig>(conn, cpuIndex, cpuModel));
++            std::make_unique<CPUConfig>(conn, cpuIndex, cpuModel, currentLevel,
++                                        sst->bfEnabled(currentLevel)));
+         CPUConfig& cpu = *cpuList.back();
+ 
+         bool foundCurrentLevel = false;
+@@ -467,13 +472,13 @@ static bool discoverCPUsAndConfigs(boost::asio::io_context& ioc,
+ 
+             getSingleConfig(*sst, level, cpu.newConfig(level));
+ 
+-            if (level == sst->currentLevel())
++            if (level == currentLevel)
+             {
+                 foundCurrentLevel = true;
+             }
+         }
+ 
+-        DEBUG_PRINT << "current level is " << sst->currentLevel() << '\n';
++        DEBUG_PRINT << "current level is " << currentLevel << '\n';
+ 
+         if (!foundCurrentLevel)
+         {
+diff --git a/src/sst_mailbox.cpp b/src/sst_mailbox.cpp
+index 2627894..b086c55 100644
+--- a/src/sst_mailbox.cpp
++++ b/src/sst_mailbox.cpp
+@@ -38,9 +38,11 @@ struct PECIManager
+     bool peciWoken;
+     CPUModel cpuModel;
+     uint8_t mbBus;
++    WakePolicy wakePolicy;
+ 
+-    PECIManager(uint8_t address, CPUModel model) :
+-        peciAddress(address), peciWoken(false), cpuModel(model)
++    PECIManager(uint8_t address, CPUModel model, WakePolicy wakePolicy_) :
++        peciAddress(address), peciWoken(false), cpuModel(model),
++        wakePolicy(wakePolicy_)
+     {
+         mbBus = (model == icx) ? mbBusICX : mbBusOther;
+     }
+@@ -120,7 +122,7 @@ struct PECIManager
+     void wrMailboxReg(uint16_t regAddress, uint32_t data)
+     {
+         uint8_t completionCode;
+-        bool tryWaking = true;
++        bool tryWaking = (wakePolicy == wakeAllowed);
+         while (true)
+         {
+             EPECIStatus libStatus = peci_WrEndPointPCIConfigLocal(
+@@ -152,7 +154,7 @@ struct PECIManager
+     {
+         uint8_t completionCode;
+         uint32_t outputData;
+-        bool tryWaking = true;
++        bool tryWaking = (wakePolicy == wakeAllowed);
+         while (true)
+         {
+             EPECIStatus libStatus = peci_RdEndPointConfigPciLocal(
+@@ -397,9 +399,9 @@ class SSTMailbox : public SSTInterface
+     static constexpr int mhzPerRatio = 100;
+ 
+   public:
+-    SSTMailbox(uint8_t _address, CPUModel _model) :
++    SSTMailbox(uint8_t _address, CPUModel _model, WakePolicy wakePolicy) :
+         address(_address), model(_model),
+-        pm(static_cast<uint8_t>(address), model)
++        pm(static_cast<uint8_t>(address), model, wakePolicy)
+     {}
+     ~SSTMailbox() {}
+ 
+@@ -568,8 +570,8 @@ class SSTMailbox : public SSTInterface
+     }
+ };
+ 
+-static std::unique_ptr<SSTInterface> createMailbox(uint8_t address,
+-                                                   CPUModel model)
++static std::unique_ptr<SSTInterface>
++    createMailbox(uint8_t address, CPUModel model, WakePolicy wakePolicy)
+ {
+     DEBUG_PRINT << "createMailbox\n";
+     switch (model)
+@@ -578,7 +580,7 @@ static std::unique_ptr<SSTInterface> createMailbox(uint8_t address,
+         case icxd:
+         case spr:
+         case emr:
+-            return std::make_unique<SSTMailbox>(address, model);
++            return std::make_unique<SSTMailbox>(address, model, wakePolicy);
+         default:
+             return nullptr;
+     }
+-- 
+2.25.1
+

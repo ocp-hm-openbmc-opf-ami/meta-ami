@@ -1,0 +1,93 @@
+From d834df61f8303dbcb87a2bc92f4fe72f403b5102 Mon Sep 17 00:00:00 2001
+From: Arun Lal K M <arun.lal@intel.com>
+Date: Thu, 30 Nov 2023 06:42:39 +0000
+Subject: [PATCH] Fixing bios.xml parsing
+
+The main fix is the change translate 'sif','gif','dif' from 'IF' to 'IF
+NOT'. Now all bios knobs with depex equal "TRUE" will be visible over
+RF.
+
+Tested: manually checked on platform, all knobs with depex set as "TRUE"
+are visible over RF. PSYS bios knobs are visible and it is possible to
+set them over redfish.
+
+Signed-off-by: Jatkiewicz, Joanna <joanna.jatkiewicz@intel.com>
+---
+ include/biosxml.hpp | 26 ++++++++++++++++++++++----
+ 1 file changed, 22 insertions(+), 4 deletions(-)
+
+diff --git a/include/biosxml.hpp b/include/biosxml.hpp
+index ffc20ba..62f7cbb 100644
+--- a/include/biosxml.hpp
++++ b/include/biosxml.hpp
+@@ -176,8 +176,8 @@ class Depex
+     {
+         return !s.empty() &&
+                std::find_if(s.begin(), s.end(), [](unsigned char c) {
+-                   return !std::isdigit(c);
+-               }) == s.end();
++            return !std::isdigit(c);
++        }) == s.end();
+     }
+ 
+     /* Returns 'true' if the argument string is hex representation of a number.
+@@ -301,7 +301,14 @@ class Depex
+                 {
+                     if (cnt > 3)
+                     {
+-                        subExpression += " OR ";
++                        if (operatorStr == "_EQU_" || operatorStr == "EQU")
++                        {
++                            subExpression += " OR ";
++                        }
++                        if (operatorStr == "_NEQ_" || operatorStr == "NEQ")
++                        {
++                            subExpression += " AND ";
++                        }
+                     }
+ 
+                     subExpression += "( ";
+@@ -495,6 +502,7 @@ class Depex
+ 
+         size_t i;
+         int value;
++        bool ifFormSetOperator = false;
+         std::stack<int> values;
+         std::stack<knob::DepexOperators> operators;
+         std::string subExpression;
+@@ -586,6 +594,10 @@ class Depex
+                      * by taking the inner/sub expression and evaluating it */
+                     if (word.back() == '(')
+                     {
++                        if (word == "Sif(" || word == "Gif(" || word == "Dif(")
++                        {
++                            ifFormSetOperator = true;
++                        }
+                         if (!getSubExpression(expression, subExpression, i))
+                             break;
+ 
+@@ -611,7 +623,7 @@ class Depex
+                     {
+                         try
+                         {
+-                            value = std::stoi(word);
++                            value = std::stoi(word, nullptr, 0);
+                         }
+                         catch (const std::exception& ex)
+                         {
+@@ -626,6 +638,12 @@ class Depex
+                             break;
+                     }
+ 
++                    /* 'Sif(', 'Gif(', 'Dif( == IF NOT,
++                    we have to negate the vaule */
++                    if (ifFormSetOperator == true)
++                    {
++                        value = !value;
++                    }
+                     values.emplace(value);
+                 }
+             }
+-- 
+2.34.1
+

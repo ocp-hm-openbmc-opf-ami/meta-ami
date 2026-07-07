@@ -1,0 +1,474 @@
+From ed09014171f579284259760af6b0d41f2cb28d69 Mon Sep 17 00:00:00 2001
+From: P Dheeraj Srujan Kumar <p.dheeraj.srujan.kumar@intel.com>
+Date: Tue, 18 Jul 2023 03:23:08 +0530
+Subject: [PATCH] Fix SSE Subscription with upstream sync
+
+The Upstream code has basic layer of SSE support.
+This commit adds the missing components to make SSE functional
+
+TESTED:
+ - SSE Subscription was successful
+ - Events wee displayed on the browser
+
+Signed-off-by: P Dheeraj Srujan Kumar <p.dheeraj.srujan.kumar@intel.com>
+---
+ http/http_connection.hpp                      |  14 +-
+ http/http_response.hpp                        |   8 ++
+ http/routing/sserule.hpp                      |  22 ++--
+ http/server_sent_event.hpp                    | 123 +++++++++++++-----
+ .../include/event_service_manager.hpp         |  41 ++++--
+ redfish-core/lib/eventservice_sse.hpp         |  24 +++-
+ 6 files changed, 170 insertions(+), 62 deletions(-)
+
+diff --git a/http/http_connection.hpp b/http/http_connection.hpp
+index 1ec80ae7..49ded2b8 100644
+--- a/http/http_connection.hpp
++++ b/http/http_connection.hpp
+@@ -272,9 +272,19 @@ class Connection :
+             [self(shared_from_this())](crow::Response& thisRes) {
+             self->completeRequest(thisRes);
+         });
++
++        // Check request hedder for SSE is not correct way but upstream,
++        // using that way. Need to work with ustream is sort it out. Meanwhile
++        // checking with URI is most realibale way and so used it. Need to
++        // find more appropriate way and work with upstream community to
++        // resolve.
++        // bool isSse =
++        //    isContentTypeAllowed(req->getHeaderValue("Accept"),
++        //                         http_helpers::ContentType::EventStream,
++        //                         false);
+         bool isSse =
+-            isContentTypeAllowed(req->getHeaderValue("Accept"),
+-                                 http_helpers::ContentType::EventStream, false);
++            (req->url().encoded_path() == "/redfish/v1/EventService/SSE");
++
+         if ((thisReq.isUpgrade() &&
+              boost::iequals(
+                  thisReq.getHeaderValue(boost::beast::http::field::upgrade),
+diff --git a/http/http_response.hpp b/http/http_response.hpp
+index a5f95a90..132a4aa5 100644
+--- a/http/http_response.hpp
++++ b/http/http_response.hpp
+@@ -21,10 +21,18 @@ class Connection;
+ 
+ namespace http = boost::beast::http;
+ 
++namespace sse_socket
++{
++template <typename Adaptor>
++class ConnectionImpl;
++} // namespace sse_socket
++
+ struct Response
+ {
+     template <typename Adaptor, typename Handler>
+     friend class crow::Connection;
++    template <typename Adaptor>
++    friend class crow::sse_socket::ConnectionImpl;
+ 
+     using string_response = http::response<http::string_body>;
+     using file_response = http::response<http::file_body>;
+diff --git a/http/routing/sserule.hpp b/http/routing/sserule.hpp
+index c0a4e504..4bc7b1fc 100644
+--- a/http/routing/sserule.hpp
++++ b/http/routing/sserule.hpp
+@@ -1,15 +1,9 @@
+ #pragma once
+ 
+ #include "baserule.hpp"
+-#include "http_request.hpp"
+-#include "http_response.hpp"
+ #include "server_sent_event.hpp"
+ 
+-#include <boost/beast/http/verb.hpp>
+-
+ #include <functional>
+-#include <memory>
+-#include <string>
+ 
+ namespace crow
+ {
+@@ -31,7 +25,7 @@ class SseSocketRule : public BaseRule
+     }
+ 
+ #ifndef BMCWEB_ENABLE_SSL
+-    void handleUpgrade(const Request& /*req*/,
++    void handleUpgrade(const Request& req,
+                        const std::shared_ptr<bmcweb::AsyncResp>& /*asyncResp*/,
+                        boost::asio::ip::tcp::socket&& adaptor) override
+     {
+@@ -39,11 +33,11 @@ class SseSocketRule : public BaseRule
+             crow::sse_socket::ConnectionImpl<boost::asio::ip::tcp::socket>>
+             myConnection = std::make_shared<
+                 crow::sse_socket::ConnectionImpl<boost::asio::ip::tcp::socket>>(
+-                std::move(adaptor), openHandler, closeHandler);
++                req, std::move(adaptor), openHandler, closeHandler);
+         myConnection->start();
+     }
+ #else
+-    void handleUpgrade(const Request& /*req*/,
++    void handleUpgrade(const Request& req,
+                        const std::shared_ptr<bmcweb::AsyncResp>& /*asyncResp*/,
+                        boost::beast::ssl_stream<boost::asio::ip::tcp::socket>&&
+                            adaptor) override
+@@ -52,7 +46,7 @@ class SseSocketRule : public BaseRule
+             boost::beast::ssl_stream<boost::asio::ip::tcp::socket>>>
+             myConnection = std::make_shared<crow::sse_socket::ConnectionImpl<
+                 boost::beast::ssl_stream<boost::asio::ip::tcp::socket>>>(
+-                std::move(adaptor), openHandler, closeHandler);
++                req, std::move(adaptor), openHandler, closeHandler);
+         myConnection->start();
+     }
+ #endif
+@@ -72,8 +66,12 @@ class SseSocketRule : public BaseRule
+     }
+ 
+   private:
+-    std::function<void(crow::sse_socket::Connection&)> openHandler;
+-    std::function<void(crow::sse_socket::Connection&)> closeHandler;
++    std::function<void(std::shared_ptr<crow::sse_socket::Connection>&,
++                       const crow::Request&,
++                       const std::shared_ptr<bmcweb::AsyncResp>&)>
++        openHandler;
++    std::function<void(std::shared_ptr<crow::sse_socket::Connection>&)>
++        closeHandler;
+ };
+ 
+ } // namespace crow
+diff --git a/http/server_sent_event.hpp b/http/server_sent_event.hpp
+index 77339483..b210fd09 100644
+--- a/http/server_sent_event.hpp
++++ b/http/server_sent_event.hpp
+@@ -25,6 +25,7 @@ namespace sse_socket
+ struct Connection : std::enable_shared_from_this<Connection>
+ {
+   public:
++    explicit Connection(const crow::Request& reqIn) : req(reqIn) {}
+     Connection() = default;
+ 
+     Connection(const Connection&) = delete;
+@@ -34,19 +35,26 @@ struct Connection : std::enable_shared_from_this<Connection>
+     virtual ~Connection() = default;
+ 
+     virtual boost::asio::io_context& getIoContext() = 0;
++    virtual void sendSSEHeader() = 0;
++    virtual void completeRequest(crow::Response& thisRes) = 0;
+     virtual void close(std::string_view msg = "quit") = 0;
+     virtual void sendEvent(std::string_view id, std::string_view msg) = 0;
++
++    crow::Request req;
+ };
+ 
+ template <typename Adaptor>
+ class ConnectionImpl : public Connection
+ {
+   public:
+-    ConnectionImpl(Adaptor&& adaptorIn,
+-                   std::function<void(Connection&)> openHandlerIn,
+-                   std::function<void(Connection&)> closeHandlerIn) :
+-        adaptor(std::move(adaptorIn)),
+-        timer(ioc), openHandler(std::move(openHandlerIn)),
++    ConnectionImpl(
++        const crow::Request& reqIn, Adaptor adaptorIn,
++        std::function<void(std::shared_ptr<Connection>&, const crow::Request&,
++                           const std::shared_ptr<bmcweb::AsyncResp>&)>
++            openHandlerIn,
++        std::function<void(std::shared_ptr<Connection>&)> closeHandlerIn) :
++        Connection(reqIn), adaptor(std::move(adaptorIn)), timer(ioc),
++        openHandler(std::move(openHandlerIn)),
+         closeHandler(std::move(closeHandlerIn))
+     {
+         BMCWEB_LOG_DEBUG("SseConnectionImpl: SSE constructor {}", logPtr(this));
+@@ -70,45 +78,60 @@ class ConnectionImpl : public Connection
+ 
+     void start()
+     {
+-        if (!openHandler)
++        if (openHandler)
+         {
+-            BMCWEB_LOG_CRITICAL("No open handler???");
+-            return;
++            auto asyncResp = std::make_shared<bmcweb::AsyncResp>();
++            std::shared_ptr<Connection> self = this->shared_from_this();
++
++            asyncResp->res.setCompleteRequestHandler(
++                [self(shared_from_this())](crow::Response& thisRes) {
++                if (thisRes.resultInt() != 200)
++                {
++                    self->completeRequest(thisRes);
++                }
++            });
++
++            openHandler(self, req, asyncResp);
+         }
+-        openHandler(*this);
+     }
+ 
+     void close(const std::string_view msg) override
+     {
++        BMCWEB_LOG_DEBUG("Closing SSE connection {} - {}", logPtr(this), msg);
++        boost::beast::get_lowest_layer(adaptor).close();
++
+         // send notification to handler for cleanup
+         if (closeHandler)
+         {
+-            closeHandler(*this);
++            std::shared_ptr<Connection> self = shared_from_this();
++            closeHandler(self);
+         }
+-        BMCWEB_LOG_DEBUG("Closing SSE connection {} - {}", logPtr(this), msg);
+-        boost::beast::get_lowest_layer(adaptor).close();
+     }
+ 
+-    void sendSSEHeader()
++    void sendSSEHeader() override
+     {
+         BMCWEB_LOG_DEBUG("Starting SSE connection");
+         using BodyType = boost::beast::http::buffer_body;
+-        boost::beast::http::response<BodyType> res(
+-            boost::beast::http::status::ok, 11, BodyType{});
+-        res.set(boost::beast::http::field::content_type, "text/event-stream");
+-        res.body().more = true;
++        auto res = std::make_shared<boost::beast::http::response<BodyType>>(
++            boost::beast::http::status::ok, 11);
++        res->set(boost::beast::http::field::server, "bmcweb");
++        res->set(boost::beast::http::field::content_type, "text/event-stream");
++        res->body().more = true;
++
+         boost::beast::http::response_serializer<BodyType>& ser =
+-            serializer.emplace(std::move(res));
++            serializer.emplace(*res);
+ 
+         boost::beast::http::async_write_header(
+             adaptor, ser,
+             std::bind_front(&ConnectionImpl::sendSSEHeaderCallback, this,
+-                            shared_from_this()));
++                            shared_from_this(), res));
+     }
+ 
+-    void sendSSEHeaderCallback(const std::shared_ptr<Connection>& /*self*/,
+-                               const boost::system::error_code& ec,
+-                               size_t /*bytesSent*/)
++    void sendSSEHeaderCallback(
++        const std::shared_ptr<Connection>& /*self*/,
++        const std::shared_ptr<boost::beast::http::response<
++            boost::beast::http::buffer_body>> /*res*/,
++        const boost::system::error_code& ec, size_t /*bytesSent*/)
+     {
+         serializer.reset();
+         if (ec)
+@@ -119,14 +142,13 @@ class ConnectionImpl : public Connection
+         }
+         BMCWEB_LOG_DEBUG("SSE header sent - Connection established");
+ 
+-        serializer.reset();
+-
+         // SSE stream header sent, So let us setup monitor.
+         // Any read data on this stream will be error in case of SSE.
+ 
+-        adaptor.async_wait(boost::asio::ip::tcp::socket::wait_error,
+-                           std::bind_front(&ConnectionImpl::afterReadError,
+-                                           this, shared_from_this()));
++        boost::beast::get_lowest_layer(adaptor).async_wait(
++            boost::asio::ip::tcp::socket::wait_error,
++            std::bind_front(&ConnectionImpl::afterReadError, this,
++                            shared_from_this()));
+     }
+ 
+     void afterReadError(const std::shared_ptr<Connection>& /*self*/,
+@@ -196,6 +218,47 @@ class ConnectionImpl : public Connection
+         doWrite();
+     }
+ 
++    void completeRequest(crow::Response& thisRes) override
++    {
++        auto asyncResp = std::make_shared<bmcweb::AsyncResp>();
++        asyncResp->res = std::move(thisRes);
++
++        if (!asyncResp->res.jsonValue.empty())
++        {
++            asyncResp->res.addHeader(boost::beast::http::field::content_type,
++                                     "application/json");
++            asyncResp->res.write(asyncResp->res.jsonValue.dump(
++                2, ' ', true, nlohmann::json::error_handler_t::replace));
++        }
++
++        asyncResp->res.preparePayload();
++
++        boost::beast::async_write(
++            adaptor, asyncResp->res.generator(),
++            std::bind_front(&ConnectionImpl::completeRequestCallback, this,
++                            shared_from_this(), asyncResp));
++    }
++
++    void completeRequestCallback(
++        const std::shared_ptr<Connection>& /*self*/,
++        const std::shared_ptr<bmcweb::AsyncResp> asyncResp,
++        const boost::system::error_code& ec, std::size_t bytesTransferred)
++    {
++        BMCWEB_LOG_DEBUG("{} async_write {} bytes", logPtr(this),
++                         bytesTransferred);
++        if (ec)
++        {
++            BMCWEB_LOG_DEBUG("{} from async_write failed", logPtr(this));
++            return;
++        }
++
++        BMCWEB_LOG_DEBUG("{} Closing SSE connection - Request invalid",
++                         logPtr(this));
++        serializer.reset();
++        close("Request invalid");
++        asyncResp->res.releaseCompleteRequestHandler();
++    }
++
+     void sendEvent(std::string_view id, std::string_view msg) override
+     {
+         if (msg.empty())
+@@ -284,8 +347,10 @@ class ConnectionImpl : public Connection
+     boost::asio::steady_timer timer;
+     bool doingWrite = false;
+ 
+-    std::function<void(Connection&)> openHandler;
+-    std::function<void(Connection&)> closeHandler;
++    std::function<void(std::shared_ptr<Connection>&, const crow::Request&,
++                       const std::shared_ptr<bmcweb::AsyncResp>&)>
++        openHandler;
++    std::function<void(std::shared_ptr<Connection>&)> closeHandler;
+ };
+ } // namespace sse_socket
+ } // namespace crow
+diff --git a/redfish-core/include/event_service_manager.hpp b/redfish-core/include/event_service_manager.hpp
+index 04681b5e..074af7ba 100644
+--- a/redfish-core/include/event_service_manager.hpp
++++ b/redfish-core/include/event_service_manager.hpp
+@@ -387,9 +387,14 @@ class Subscription : public persistent_data::UserSubscription
+         policy->invalidResp = retryRespHandler;
+     }
+ 
+-    explicit Subscription(crow::sse_socket::Connection& connIn) :
+-        sseConn(&connIn)
+-    {}
++    explicit Subscription(
++        std::shared_ptr<crow::sse_socket::Connection>& connIn) :
++        policy(std::make_shared<crow::ConnectionPolicy>(getSubPolicy())),
++        sseConn(connIn)
++    {
++        // Subscription constructor
++        policy->invalidResp = retryRespHandler;
++    }
+ 
+     ~Subscription() = default;
+ 
+@@ -600,9 +605,16 @@ class Subscription : public persistent_data::UserSubscription
+         return subId;
+     }
+ 
+-    bool matchSseId(const crow::sse_socket::Connection& thisConn)
++    std::optional<std::string> getSubscriptionId(
++        const std::shared_ptr<crow::sse_socket::Connection>& connPtr)
+     {
+-        return &thisConn == sseConn;
++        if (sseConn != nullptr && connPtr == sseConn)
++        {
++            BMCWEB_LOG_DEBUG("{} conn matched, subId: {}", __FUNCTION__, subId);
++            return subId;
++        }
++
++        return std::nullopt;
+     }
+ 
+   private:
+@@ -610,7 +622,7 @@ class Subscription : public persistent_data::UserSubscription
+     uint64_t eventSeqNum = 1;
+     boost::urls::url host;
+     std::shared_ptr<crow::ConnectionPolicy> policy;
+-    crow::sse_socket::Connection* sseConn = nullptr;
++    std::shared_ptr<crow::sse_socket::Connection> sseConn = nullptr;
+     std::optional<crow::HttpClient> client;
+     std::string path;
+     std::string uriProto;
+@@ -1059,18 +1071,21 @@ class EventServiceManager
+         }
+     }
+ 
+-    void deleteSseSubscription(const crow::sse_socket::Connection& thisConn)
++    void deleteSseSubscription(
++        const std::shared_ptr<crow::sse_socket::Connection>& thisConn)
+     {
+         for (const auto& it : subscriptionsMap)
+         {
+             std::shared_ptr<Subscription> entry = it.second;
+-            bool entryIsThisConn = entry->matchSseId(thisConn);
+-            if (entryIsThisConn)
++            if (entry->subscriptionType == subscriptionTypeSSE)
+             {
+-                persistent_data::EventServiceStore::getInstance()
+-                    .subscriptionsConfigMap.erase(
+-                        it.second->getSubscriptionId());
+-                return;
++                std::optional<std::string> id =
++                    entry->getSubscriptionId(thisConn);
++                if (id)
++                {
++                    deleteSubscription(*id);
++                    return;
++                }
+             }
+         }
+     }
+diff --git a/redfish-core/lib/eventservice_sse.hpp b/redfish-core/lib/eventservice_sse.hpp
+index 4ad29a67..46a07ed0 100644
+--- a/redfish-core/lib/eventservice_sse.hpp
++++ b/redfish-core/lib/eventservice_sse.hpp
+@@ -6,15 +6,18 @@
+ namespace redfish
+ {
+ 
+-inline void createSubscription(crow::sse_socket::Connection& conn)
++inline void
++    createSubscription(std::shared_ptr<crow::sse_socket::Connection>& conn,
++                       const crow::Request& /*req*/,
++                       const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
+ {
+     EventServiceManager& manager =
+-        EventServiceManager::getInstance(&conn.getIoContext());
++        EventServiceManager::getInstance(&conn->getIoContext());
+     if ((manager.getNumberOfSubscriptions() >= maxNoOfSubscriptions) ||
+         manager.getNumberOfSSESubscriptions() >= maxNoOfSSESubscriptions)
+     {
+         BMCWEB_LOG_WARNING("Max SSE subscriptions reached");
+-        conn.close("Max SSE subscriptions reached");
++        messages::eventSubscriptionLimitExceeded(asyncResp->res);
+         return;
+     }
+     std::shared_ptr<redfish::Subscription> subValue =
+@@ -30,13 +33,22 @@ inline void createSubscription(crow::sse_socket::Connection& conn)
+     std::string id = manager.addSubscription(subValue, false);
+     if (id.empty())
+     {
+-        conn.close("Internal Error");
++        BMCWEB_LOG_WARNING("SSE subscriptions creation failed !");
++        messages::internalError(asyncResp->res);
++        return;
+     }
++
++    subValue->setSubscriptionId(id);
++
++    // All success, So lets send SSE headers
++    conn->sendSSEHeader();
++    return;
+ }
+ 
+-inline void deleteSubscription(crow::sse_socket::Connection& conn)
++inline void
++    deleteSubscription(std::shared_ptr<crow::sse_socket::Connection>& conn)
+ {
+-    redfish::EventServiceManager::getInstance(&conn.getIoContext())
++    redfish::EventServiceManager::getInstance(&conn->getIoContext())
+         .deleteSseSubscription(conn);
+ }
+ 
+-- 
+2.25.1
+

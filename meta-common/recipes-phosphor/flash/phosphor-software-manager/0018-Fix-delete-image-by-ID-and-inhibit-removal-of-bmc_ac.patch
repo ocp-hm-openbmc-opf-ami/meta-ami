@@ -1,0 +1,71 @@
+From 560218a3cc54f68126f1ca0e9da50c460cbc2527 Mon Sep 17 00:00:00 2001
+From: Sunita Kumari <sunitax.kumari@intel.com>
+Date: Thu, 24 Mar 2022 10:41:48 +0000
+Subject: [PATCH] Fix delete image by ID and inhibit removal of bmc_active
+
+Delete image by ID was broken because when hitting the delete dbus
+interface, it recalculated the ID from the parent version, which then
+does not match because of the random number addition that was added
+to the ID when the parent interface was created. This saves away the
+parent interface ID and recalls it rather than recalculating it.
+
+Also, there was a logic error in deleting images that would delete the
+active BMC image. This fixes up that error.
+
+Tested: run multiple back-to back updates and see that when the fwupd
+        script calls delete, the interfaces are deleted and that the
+        bmc_active interface is not deleted.
+
+Signed-off-by: Sunita Kumari <sunitax.kumari@intel.com>
+Signed-off-by: Vernon Mauery <vernon.mauery@intel.com>
+Signed-off-by: AppaRao Puli <apparao.puli@linux.intel.com>
+Upstream-Status: Pending
+---
+ item_updater.cpp      | 9 +++++++--
+ pfr_image_manager.cpp | 2 +-
+ 2 files changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/item_updater.cpp b/item_updater.cpp
+index 9e92e26..07d719b 100644
+--- a/item_updater.cpp
++++ b/item_updater.cpp
+@@ -396,9 +396,9 @@ void ItemUpdater::erase(std::string entryId)
+     auto it = versions.find(entryId);
+     if (it != versions.end())
+     {
+-        if (it->second->isFunctional() && ACTIVE_BMC_MAX_ALLOWED > 1)
++        if (it->second->isFunctional())
+         {
+-            error(
++            info(
+                 "Version ({VERSIONID}) is currently running on the BMC; unable to remove.",
+                 "VERSIONID", entryId);
+             return;
+@@ -764,6 +764,11 @@ void ItemUpdater::freeSpace([[maybe_unused]] const Activation& caller)
+     std::size_t count = 0;
+     for (const auto& iter : activations)
+     {
++        if (versions.find(iter.second->versionId)->second->isFunctional())
++        {
++            // don't bother with function versions
++            continue;
++        }
+         if ((iter.second.get()->activation() ==
+              server::Activation::Activations::Active) ||
+             (iter.second.get()->activation() ==
+diff --git a/pfr_image_manager.cpp b/pfr_image_manager.cpp
+index 840f378..4046a86 100644
+--- a/pfr_image_manager.cpp
++++ b/pfr_image_manager.cpp
+@@ -381,7 +381,7 @@ int Manager::processImage(const std::string& imgFilePath)
+     auto versionPtr = std::make_unique<Version>(
+         bus, objPath, ver, purpose, extVer, imageDirPath.string(),
+         std::vector<std::string>(),
+-        std::bind(&Manager::erase, this, std::placeholders::_1));
++        std::bind(&Manager::erase, this, std::placeholders::_1), id);
+     versionPtr->deleteObject =
+         std::make_unique<phosphor::software::manager::Delete>(bus, objPath,
+                                                               *versionPtr);
+-- 
+2.25.1
+

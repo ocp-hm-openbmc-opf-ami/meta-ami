@@ -1,0 +1,231 @@
+From 46be0c7a2c3238b7b8dd3aaf109bf896c323ae0d Mon Sep 17 00:00:00 2001
+From: arjuncr <arjuncr@ami.com>
+Date: Tue, 16 Sep 2025 05:18:09 -0400
+Subject: [PATCH] update aspeed espi mm i to latest intel bkc
+
+---
+ drivers/soc/aspeed/aspeed-espi-mmbi.c | 81 ++++++++++++++++++---------
+ 1 file changed, 53 insertions(+), 28 deletions(-)
+
+diff --git a/drivers/soc/aspeed/aspeed-espi-mmbi.c b/drivers/soc/aspeed/aspeed-espi-mmbi.c
+index 7b9887eee157..96f79189a6b8 100644
+--- a/drivers/soc/aspeed/aspeed-espi-mmbi.c
++++ b/drivers/soc/aspeed/aspeed-espi-mmbi.c
+@@ -230,9 +230,9 @@ static int get_b2h_avail_buf_len(struct aspeed_mmbi_channel *channel,
+ 		hrop.b2h_wp, hrop.h2b_rp);
+ 
+ 	if (hrop.b2h_wp >= b2h_rp)
+-		*avail_buf_len = channel->b2h_cb_size - hrop.b2h_wp + b2h_rp;
++		*avail_buf_len = channel->b2h_cb_size - hrop.b2h_wp + b2h_rp - 1;
+ 	else
+-		*avail_buf_len = b2h_rp - hrop.b2h_wp;
++		*avail_buf_len = b2h_rp - hrop.b2h_wp - 1;
+ 
+ 	return 0;
+ }
+@@ -337,16 +337,10 @@ static void update_host_rop(struct aspeed_mmbi_channel *channel,
+ 		hrop.h2b_rp);
+ 
+ 	/* Advance the B2H CB offset for next write */
+-	if ((hrop.b2h_wp + w_len) <= channel->b2h_cb_size)
+-		hrop.b2h_wp += w_len;
+-	else
+-		hrop.b2h_wp = hrop.b2h_wp + w_len - channel->b2h_cb_size;
++	hrop.b2h_wp = (hrop.b2h_wp + w_len) % channel->b2h_cb_size;
+ 
+ 	/* Advance the H2B CB offset till where BMC read data */
+-	if ((hrop.h2b_rp + r_len) <= channel->h2b_cb_size)
+-		hrop.h2b_rp += r_len;
+-	else
+-		hrop.h2b_rp = hrop.h2b_rp + r_len - channel->h2b_cb_size;
++	hrop.h2b_rp = (hrop.h2b_rp + r_len) % channel->h2b_cb_size;
+ 
+ 	/*
+ 	 * Clear BMC reset request state its set:
+@@ -390,6 +384,7 @@ static int send_bmc_reset_request(struct aspeed_mmbi_channel *channel)
+ 	hrop.h2b_rp = 0;
+ 	hrop.b_rdy = 0;
+ 	hrop.b_rst = 1;
++	memset(channel->b2h_cb_vmem, 0, channel->b2h_cb_size);
+ 
+ 	dev_info(channel->priv->dev,
+ 		 "Send BMC reset request on MMBI channel(%d)\n",
+@@ -403,19 +398,19 @@ static int send_bmc_reset_request(struct aspeed_mmbi_channel *channel)
+ 	return 0;
+ }
+ 
+-void check_host_reset_request(struct aspeed_mmbi_channel *channel)
++static bool check_host_reset_request(struct aspeed_mmbi_channel *channel)
+ {
+ 	struct host_rop hrop;
+ 	u32 h_rwp1;
+ 
+ 	if (read_host_rwp_val(channel, ASPEED_MMBI_HRWP1_INSTANCE0, &h_rwp1)) {
+ 		dev_err(channel->priv->dev, "Failed to read Host RWP\n");
+-		return;
++		return 0;
+ 	}
+ 
+ 	/* If its not host reset request, just discard */
+ 	if (!GET_HOST_RESET_REQ_BIT(h_rwp1))
+-		return;
++		return 0;
+ 
+ 	/*  Host requested for MMBI buffer reset */
+ 	memcpy(&hrop, channel->hrop_vmem, sizeof(struct host_rop));
+@@ -428,12 +423,17 @@ void check_host_reset_request(struct aspeed_mmbi_channel *channel)
+ 	 */
+ 	hrop.b2h_wp = 0;
+ 	hrop.h2b_rp = 0;
++	hrop.b_rdy = 1;
++	hrop.b_rst = 0;
++	memset(channel->b2h_cb_vmem, 0, channel->b2h_cb_size);
+ 
+ 	dev_info(channel->priv->dev,
+ 		 "Handle Host reset request on MMBI channel(%d)\n",
+ 		 channel->chan_num);
+ 
+ 	memcpy(channel->hrop_vmem, &hrop, sizeof(hrop));
++
++	return 1;
+ }
+ 
+ void wake_up_device(struct aspeed_mmbi_channel *channel)
+@@ -442,6 +442,29 @@ void wake_up_device(struct aspeed_mmbi_channel *channel)
+ 	u8 type;
+ 	int i;
+ 
++	struct host_rop hrop;
++	u32 h2b_wp, h_rwp0;
++
++	memcpy(&hrop, channel->hrop_vmem, sizeof(struct host_rop));
++	if (hrop.b_rst) {
++		if (read_host_rwp_val(channel, ASPEED_MMBI_HRWP0_INSTANCE0,
++					&h_rwp0)) {
++			dev_err(channel->priv->dev,
++					"Failed to read Host RWP\n");
++			return;
++		}
++
++		h2b_wp = GET_H2B_WRITE_POINTER(h_rwp0);
++
++		if ((h2b_wp == hrop.h2b_rp) && (h2b_wp == 0)) {
++			dev_dbg(channel->priv->dev,
++					"Clearing BMC reset request state\n");
++			hrop.b_rst = 0;
++			hrop.b_rdy = 1;
++			memcpy(channel->hrop_vmem, &hrop, sizeof(hrop));
++		}
++	}
++
+ 	if (0 !=
+ 	    get_mmbi_header(channel, &req_data_len, &type, &unread_data_len)) {
+ 		/* Bail out as we can't read header */
+@@ -562,8 +585,7 @@ static ssize_t mmbi_read(struct file *filp, char *buff, size_t count,
+ 	    channel->h2b_cb_size) {
+ 		rd_offset = hrop.h2b_rp + sizeof(struct mmbi_header);
+ 	} else {
+-		rd_offset = hrop.h2b_rp + sizeof(struct mmbi_header) -
+-			    channel->h2b_cb_size;
++		rd_offset = (hrop.h2b_rp + sizeof(struct mmbi_header)) % channel->h2b_cb_size;
+ 	}
+ 	rd_len = req_data_len;
+ 
+@@ -606,7 +628,6 @@ static ssize_t mmbi_read(struct file *filp, char *buff, size_t count,
+ 			ret = -EFAULT;
+ 			goto err_out;
+ 		}
+-		rd_offset += (rd_len - chunk_len);
+ 	}
+ 	*offp += rd_len;
+ 	ret = rd_len;
+@@ -641,7 +662,6 @@ static ssize_t mmbi_write(struct file *filp, const char *buffer, size_t len,
+ 	ssize_t wt_offset;
+ 	ssize_t avail_buf_len;
+ 	ssize_t chunk_len;
+-	ssize_t end_offset;
+ 	u32 h_rwp0;
+ 
+ 	dev_dbg(priv->dev, "%s: length:%d , type: %d\n", __func__, len,
+@@ -656,7 +676,7 @@ static ssize_t mmbi_write(struct file *filp, const char *buffer, size_t len,
+ 	if (!GET_HOST_READY_BIT(h_rwp0)) {
+ 		dev_dbg(channel->priv->dev,
+ 			"Host not ready, discarding request...\n");
+-		return -EAGAIN;
++		return -EBUSY;
+ 	}
+ 
+ 	if (get_b2h_avail_buf_len(channel, &avail_buf_len)) {
+@@ -667,7 +687,7 @@ static ssize_t mmbi_write(struct file *filp, const char *buffer, size_t len,
+ 	dev_dbg(priv->dev, "B2H buffer empty space: %d\n", avail_buf_len);
+ 
+ 	/* Empty space should be more than write request data size */
+-	if (len + sizeof(header) > avail_buf_len) {
++	if (avail_buf_len <= sizeof(header) || (len > (avail_buf_len - sizeof(header)))) {
+ 		dev_err(priv->dev, "Not enough space(%d) in B2H buffer\n",
+ 			avail_buf_len);
+ 		return -ENOSPC;
+@@ -678,29 +698,28 @@ static ssize_t mmbi_write(struct file *filp, const char *buffer, size_t len,
+ 
+ 	memcpy(&hrop, channel->hrop_vmem, sizeof(struct host_rop));
+ 	wt_offset = hrop.b2h_wp;
+-	end_offset = channel->b2h_cb_size;
+ 
+-	if ((end_offset - wt_offset) >= sizeof(header)) {
++	if ((channel->b2h_cb_size - wt_offset) >= sizeof(header)) {
+ 		memcpy(channel->b2h_cb_vmem + wt_offset, &header,
+ 		       sizeof(header));
+ 		wt_offset += sizeof(header);
+ 	} else {
+-		chunk_len = end_offset - wt_offset;
++		chunk_len = channel->b2h_cb_size - wt_offset;
+ 		memcpy(channel->b2h_cb_vmem + wt_offset, &header, chunk_len);
+-		memcpy(channel->b2h_cb_vmem, &header + chunk_len,
++		memcpy(channel->b2h_cb_vmem, (u8 *)(&header) + chunk_len,
+ 		       (sizeof(header) - chunk_len));
+-		wt_offset = (sizeof(header) - chunk_len);
++		wt_offset = (chunk_len + sizeof(header)) % channel->b2h_cb_size;
+ 	}
+ 
+ 	/* Write the data */
+-	if ((end_offset - wt_offset) >= len) {
++	if ((channel->b2h_cb_size - wt_offset) >= len) {
+ 		if (copy_from_user(&channel->b2h_cb_vmem[wt_offset], buffer,
+ 				   len)) {
+ 			return -EFAULT;
+ 		}
+ 		wt_offset += len;
+ 	} else {
+-		chunk_len = end_offset - wt_offset;
++		chunk_len = channel->b2h_cb_size - wt_offset;
+ 		if (copy_from_user(&channel->b2h_cb_vmem[wt_offset], buffer,
+ 				   chunk_len)) {
+ 			return -EFAULT;
+@@ -1014,6 +1033,7 @@ static irqreturn_t aspeed_espi_mmbi_irq(int irq, void *arg)
+ 	struct aspeed_espi_mmbi *priv = arg;
+ 	u32 status;
+ 	int idx;
++	bool ret = 0;
+ 
+ 	regmap_read(priv->map, ASPEED_MMBI_IRQ_STATUS, &status);
+ 	/* Clear interrupt */
+@@ -1029,9 +1049,14 @@ static irqreturn_t aspeed_espi_mmbi_irq(int irq, void *arg)
+ 		 */
+ 		if (!priv->chan[idx].enabled)
+ 			continue;
++		/*
++		 * Handles both Host Reset and Write pointer update at the
++		 * same time. When buffer reset is triggered we ignore the
++		 * second condition as it doesn't holds good.
++		 */
+ 		if ((status >> (idx * 2)) & HRWP1_READ_MASK)
+-			check_host_reset_request(&priv->chan[idx]);
+-		else
++			ret = check_host_reset_request(&priv->chan[idx]);
++		if (!ret && ((status >> (idx * 2)) & HRWP0_WRITE_MASK))
+ 			wake_up_device(&priv->chan[idx]);
+ 	}
+ 	dev_dbg(priv->dev, "MMBI IRQ Status: %d\n", status);
+-- 
+2.34.1
+

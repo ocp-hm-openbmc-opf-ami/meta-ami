@@ -1,0 +1,62 @@
+From 065528e757ba0e7b8703f90c62c62047189faa13 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Adrian=20Ambro=C5=BCewicz?= <adrian.ambrozewicz@intel.com>
+Date: Wed, 4 Aug 2021 19:52:44 +0200
+Subject: [PATCH] Skip PMT during exposing IPMI sensors
+
+PMT service doesn't comply very well with IPMI sensors:
+- number of sensors is too big (exceeding limit on multi-socket systems)
+- 32-bit counters are not represented well on 1-byte IPMI sensor
+
+This change introduces filter for services for which IPMI sensors should
+not be listed.
+
+Testing:
+- PMT sensors are ignored
+- ipmitool sensor command works fine now
+Upstream-Status: Pending
+---
+ include/sdrutils.hpp | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/include/sdrutils.hpp b/include/sdrutils.hpp
+index 9ec1611..dd54c3a 100644
+--- a/include/sdrutils.hpp
++++ b/include/sdrutils.hpp
+@@ -214,6 +214,26 @@ class IPMIStatsTable
+ // This object is global singleton, used from a variety of places
+ inline IPMIStatsTable sdrStatsTable;
+ 
++inline static void filterSensors(SensorSubTree& subtree)
++{
++    subtree.erase(
++        std::remove_if(subtree.begin(), subtree.end(),
++                       [](SensorSubTree::value_type& kv) {
++                           auto& [_, serviceToIfaces] = kv;
++
++                           static std::array<const char*, 1> serviceFilter = {
++                               "xyz.openbmc_project.Pmt"};
++
++                           for (const char* service : serviceFilter)
++                           {
++                               serviceToIfaces.erase(service);
++                           }
++
++                           return serviceToIfaces.empty();
++                       }),
++        subtree.end());
++}
++
+ inline static uint16_t getSensorSubtree(std::shared_ptr<SensorSubTree>& subtree)
+ {
+     static std::shared_ptr<SensorSubTree> sensorTreePtr;
+@@ -270,6 +290,7 @@ inline static uint16_t getSensorSubtree(std::shared_ptr<SensorSubTree>& subtree)
+         phosphor::logging::log<phosphor::logging::level::ERR>(e.what());
+         return sensorUpdatedIndex;
+     }
++    filterSensors(*sensorTreePtr);
+     subtree = sensorTreePtr;
+     sensorUpdatedIndex++;
+     // The SDR is being regenerated, wipe the old stats
+-- 
+2.34.1
+

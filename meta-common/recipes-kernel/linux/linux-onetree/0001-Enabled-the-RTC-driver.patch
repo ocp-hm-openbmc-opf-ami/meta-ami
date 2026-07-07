@@ -1,0 +1,159 @@
+From 179c51771f0113beb748c49dfcbd60ca4f044dd7 Mon Sep 17 00:00:00 2001
+From: subraja M <subrajam@ami.com>
+Date: Mon, 23 Dec 2024 17:31:52 +0530
+Subject: [PATCH] Enabled the RTC driver
+
+Signed-off-by: subraja M <subrajam@ami.com>
+---
+ drivers/rtc/Kconfig        |  10 ++++
+ drivers/rtc/Makefile       |   1 +
+ drivers/rtc/rtc-pcf85053.c | 109 +++++++++++++++++++++++++++++++++++++
+ 3 files changed, 120 insertions(+)
+ create mode 100644 drivers/rtc/rtc-pcf85053.c
+
+diff --git a/drivers/rtc/Kconfig b/drivers/rtc/Kconfig
+index 92f46a6312c2..132d7423982c 100644
+--- a/drivers/rtc/Kconfig
++++ b/drivers/rtc/Kconfig
+@@ -1985,4 +1985,14 @@ config RTC_DRV_POLARFIRE_SOC
+ 	  This driver can also be built as a module, if so, the module
+ 	  will be called "rtc-mpfs".
+ 
++config RTC_DRV_PCF85053
++        tristate "NXP PCF85053 RTC driver"
++        help
++          If you say yes here you get support for the NXP PCF85053 Bootable CPU
++          RTC.
++
++          This driver can also be built as a module. If so, the module will be
++          called rtc-pcf85053.
++
++
+ endif # RTC_CLASS
+diff --git a/drivers/rtc/Makefile b/drivers/rtc/Makefile
+index fd209883ee2e..fd1bd95b6244 100644
+--- a/drivers/rtc/Makefile
++++ b/drivers/rtc/Makefile
+@@ -184,3 +184,4 @@ obj-$(CONFIG_RTC_DRV_WM8350)	+= rtc-wm8350.o
+ obj-$(CONFIG_RTC_DRV_X1205)	+= rtc-x1205.o
+ obj-$(CONFIG_RTC_DRV_XGENE)	+= rtc-xgene.o
+ obj-$(CONFIG_RTC_DRV_ZYNQMP)	+= rtc-zynqmp.o
++obj-$(CONFIG_RTC_DRV_PCF85053)  += rtc-pcf85053.o
+diff --git a/drivers/rtc/rtc-pcf85053.c b/drivers/rtc/rtc-pcf85053.c
+new file mode 100644
+index 000000000000..6928a3ec72e6
+--- /dev/null
++++ b/drivers/rtc/rtc-pcf85053.c
+@@ -0,0 +1,109 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * RTC driver for PCF85053
++ * Copyright (C) 2021 YADRO
++ * Copyright (c) 2021 Intel Corporation
++ */
++
++#include <linux/bcd.h>
++#include <linux/i2c.h>
++#include <linux/mc146818rtc.h>
++#include <linux/module.h>
++#include <linux/regmap.h>
++#include <linux/rtc.h>
++#include <linux/slab.h>
++
++#define NUM_TIME_REGS   (RTC_YEAR - RTC_SECONDS + 1)
++
++struct pcf85053 {
++	struct rtc_device *rtc;
++	struct regmap *regmap;
++};
++
++static int pcf85053_rtc_read_time(struct device *dev, struct rtc_time *tm)
++{
++	struct i2c_client *client = to_i2c_client(dev);
++	struct pcf85053 *pcf85053 = i2c_get_clientdata(client);
++	unsigned char rtc_data[NUM_TIME_REGS];
++	int rc;
++
++	/*
++	 * This will read a few unnecessary alarm registers, but better to read
++	 * the whole sequence in one go so that carry/overflow conditions are
++	 * avoided.
++	 */
++	rc = regmap_bulk_read(pcf85053->regmap, RTC_SECONDS, rtc_data, NUM_TIME_REGS);
++	if (rc < 0) {
++		dev_err(dev, "Fail to read time reg(%d)\n", rc);
++		return rc;
++	}
++
++	tm->tm_sec	= bcd2bin(rtc_data[0]);
++	tm->tm_min	= bcd2bin(rtc_data[2]);
++	tm->tm_hour	= bcd2bin(rtc_data[4]);
++	tm->tm_wday	= rtc_data[6];
++	tm->tm_mday	= bcd2bin(rtc_data[7]);
++	tm->tm_mon	= bcd2bin(rtc_data[8]) - 1;
++	tm->tm_year	= bcd2bin(rtc_data[9]) + 100;
++
++	return 0;
++}
++
++static const struct rtc_class_ops pcf85053_rtc_ops = {
++	.read_time = pcf85053_rtc_read_time,
++};
++
++static const struct regmap_config pcf85053_rtc_regmap_config = {
++	.reg_bits = 8,
++	.val_bits = 8,
++};
++
++static int pcf85053_rtc_probe(struct i2c_client *client)
++{
++	struct pcf85053 *pcf85053;
++
++	pcf85053 = devm_kzalloc(&client->dev, sizeof(*pcf85053), GFP_KERNEL);
++	if (!pcf85053)
++		return -ENOMEM;
++
++	pcf85053->regmap = devm_regmap_init_i2c(client, &pcf85053_rtc_regmap_config);
++	if (IS_ERR(pcf85053->regmap)) {
++		dev_err(&client->dev, "regmap_init failed\n");
++		return PTR_ERR(pcf85053->regmap);
++	}
++
++	i2c_set_clientdata(client, pcf85053);
++
++	pcf85053->rtc = devm_rtc_device_register(&client->dev, "pcf85053-rtc",
++						 &pcf85053_rtc_ops, THIS_MODULE);
++	if (IS_ERR(pcf85053->rtc))
++		return PTR_ERR(pcf85053->rtc);
++
++	return 0;
++}
++
++static const struct i2c_device_id pcf85053_rtc_id[] = {
++	{ "rtc-pcf85053", 0 },
++	{ }
++};
++MODULE_DEVICE_TABLE(i2c, pcf85053_rtc_id);
++
++static const struct of_device_id pcf85053_rtc_of_match[] = {
++	{ .compatible = "nxp,pcf85053", },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, pcf85053_rtc_of_match);
++
++static struct i2c_driver pcf85053_rtc_driver = {
++	.driver		= {
++		.name	= "rtc-pcf85053",
++		.of_match_table = pcf85053_rtc_of_match,
++	},
++	.probe		= pcf85053_rtc_probe,
++	.id_table	= pcf85053_rtc_id,
++};
++module_i2c_driver(pcf85053_rtc_driver);
++
++MODULE_DESCRIPTION("PCF85053 RTC driver");
++MODULE_AUTHOR("Jonathan Doman <jonathan.doman@intel.com>");
++MODULE_LICENSE("GPL");
+-- 
+2.47.1
+

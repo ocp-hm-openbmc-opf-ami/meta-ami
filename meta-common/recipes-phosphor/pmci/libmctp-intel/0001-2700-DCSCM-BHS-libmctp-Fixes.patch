@@ -1,0 +1,281 @@
+From 7138d27a4f18566c8bc6e5767476510e631a2abf Mon Sep 17 00:00:00 2001
+From: rajamaickems <rajamanickams@ami.com>
+Date: Mon, 21 Jul 2025 19:31:23 +0530
+Subject: [PATCH 310/310] 2700-DCSCM-BHS-Fixes
+
+---
+ CMakeLists.txt    |   3 +-
+ asti3c.c          | 100 +++++++++++++++++++++++++++++++++++++++++++++-
+ astpcie.c         |  13 +++++-
+ astpcie.h         |   1 +
+ libmctp-asti3c.h  |   4 ++
+ libmctp-astpcie.h |   3 ++
+ 6 files changed, 118 insertions(+), 6 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index a112c15..bfe5627 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -5,7 +5,6 @@ project (libmctp)
+ set(CMAKE_C_FLAGS
+     "${CMAKE_C_FLAGS} \
+     -Wall \
+-    -Werror \
+     -Wextra \
+     -Wunused \
+     -Wnull-dereference \
+@@ -95,7 +94,7 @@ target_link_libraries (test_asti3c mctp_intel)
+ add_test (NAME asti3c COMMAND test_asti3c)
+ 
+ install (TARGETS mctp_intel DESTINATION lib)
+-install (FILES libmctp.h libmctp-cmds.h libmctp-encode-request.h libmctp-encode-response.h libmctp-decode-request.h libmctp-decode-response.h libmctp-vdpci.h libmctp-smbus.h libmctp-astpcie.h libmctp-msgtypes.h libmctp-asti3c.h DESTINATION include)
++install (FILES libmctp.h libmctp-cmds.h libmctp-encode-request.h libmctp-encode-response.h libmctp-decode-request.h libmctp-decode-response.h libmctp-vdpci.h libmctp-smbus.h libmctp-astpcie.h libmctp-msgtypes.h libmctp-asti3c.h libmctp-log.h DESTINATION include)
+ 
+ configure_file(
+     ${PROJECT_SOURCE_DIR}/libmctp.pc.in
+diff --git a/asti3c.c b/asti3c.c
+index e1cddc5..a850f2c 100644
+--- a/asti3c.c
++++ b/asti3c.c
+@@ -9,6 +9,30 @@
+ 
+ #undef pr_fmt
+ #define pr_fmt(x) "asti3c: " x
++#define BMC_I3C_SLAVE_ADDR       0x08
++
++struct mctp_asti3c_pkt_private *def_priv_data = NULL;
++
++static uint8_t crc8 (uint8_t crc, const uint8_t *data, uint8_t len)
++{
++        int i, j;
++
++        if (data == NULL)
++                return crc;
++
++        for (i = 0; i < len; ++i) {
++                crc ^= data[i];
++
++                for (j = 0; j < 8; ++j) {
++                        if ((crc & 0x80) != 0)
++                                crc = (uint8_t) ((crc << 1) ^ 0x07);
++                        else
++                                crc <<= 1;
++                }
++        }
++
++        return crc;
++}
+ 
+ static int mctp_asti3c_tx(struct mctp_binding *binding, struct mctp_pktbuf *pkt)
+ {
+@@ -23,14 +47,37 @@ static int mctp_asti3c_tx(struct mctp_binding *binding, struct mctp_pktbuf *pkt)
+ 
+ 	len = mctp_pktbuf_size(pkt);
+ 
+-	/* CRC/PECs are appended in hardware, skipping calculation here */
++        /* /dev/i3c-mctp-dev CRC/PECs are appended in hardware, skipping calculation here.
++        * /sys/bus/i3c/i3c-x/slavemq CRC/PECs are not appended in hardware, manually calculation here */
+ 
+ 	mctp_prdebug("Transmitting packet, len: %zu", len);
+ 	mctp_trace_tx(pkt->data, len);
+ 
+ 	write_len = write(pkt_prv->fd, pkt->data, len);
++
++	if (pkt_prv->append_pec) {
++		uint8_t i3c_addr = (BMC_I3C_SLAVE_ADDR << 1) | 0x01;
++		uint8_t pec;
++		uint8_t *buffer = malloc(len + 1);
++
++		if (pkt_prv->is_target == false) {
++			i3c_addr = BMC_I3C_SLAVE_ADDR << 1;
++		}
++
++		pec = crc8(0, &i3c_addr, 1);
++		pec = crc8(pec, (uint8_t *)pkt->data, len);
++		
++		memcpy(buffer, pkt->data, len);
++		buffer[len] = pec;
++		len+= 1;
++		write_len = write(pkt_prv->fd, buffer, len);
++		mctp_trace_tx(buffer, len);
++		free(buffer);
++	} else {
++		write_len = write(pkt_prv->fd, pkt->data, len);
++	}
+ 	if (write_len != len) {
+-		mctp_prerr("TX error");
++		mctp_prerr("TX error write_len=%d len=%d", write_len, len);
+ 		return -1;
+ 	}
+ 
+@@ -83,6 +130,16 @@ int mctp_asti3c_poll(int fd, int timeout)
+ 	return 0;
+ }
+ 
++void mctp_asti3c_set_def_data(struct mctp_asti3c_pkt_private *def)
++{
++       def_priv_data = def;
++}
++
++struct mctp_asti3c_pkt_private *mctp_asti3c_get_def_data(void)
++{
++       return def_priv_data;
++}
++
+ int mctp_asti3c_rx(struct mctp_binding_asti3c *asti3c, int fd)
+ {
+ 	uint8_t data[MCTP_I3C_BUFFER_SIZE];
+@@ -90,6 +147,7 @@ int mctp_asti3c_rx(struct mctp_binding_asti3c *asti3c, int fd)
+ 	struct mctp_pktbuf *pkt;
+ 	ssize_t read_len;
+ 	int rc;
++	struct mctp_asti3c_pkt_private *def;
+ 
+ 	if (fd < 0) {
+ 		mctp_prerr("Invalid file descriptor");
+@@ -110,9 +168,27 @@ int mctp_asti3c_rx(struct mctp_binding_asti3c *asti3c, int fd)
+ 
+ 	mctp_trace_rx(&data, read_len);
+ 
++	def = mctp_asti3c_get_def_data();
++	if (def)
++		memcpy(&pkt_prv, def, sizeof(struct mctp_asti3c_pkt_private));
++
+ 	/* PEC is verified at hardware level and does not
+ 	propogate to userspace, thus do not deal with PEC byte */
+ 
++	if (pkt_prv.append_pec) {
++		if ((read_len > (MCTP_BTU + MCTP_HEADER_SIZE + 1)) ||
++				(read_len < (MCTP_HEADER_SIZE))) {
++			mctp_prerr("Incorrect packet size: %zd", read_len);
++			return -1;
++		}
++	} else {
++		if ((read_len > (MCTP_BTU + MCTP_HEADER_SIZE)) ||
++				(read_len < (MCTP_HEADER_SIZE))) {
++			mctp_prerr("Incorrect packet size: %zd", read_len);
++			return -1;
++		}
++	}
++
+ 	pkt_prv.fd = fd;
+ 
+ 	pkt = mctp_pktbuf_alloc(&asti3c->binding, 0);
+@@ -121,6 +197,26 @@ int mctp_asti3c_rx(struct mctp_binding_asti3c *asti3c, int fd)
+ 		return -1;
+ 	}
+ 
++	// if hardware doesn't handle the PEC, to check PEC here
++	if (pkt_prv.append_pec) {
++		uint8_t i3c_addr;
++		uint8_t pec;
++		
++		if (pkt_prv.is_target == true)
++			i3c_addr = BMC_I3C_SLAVE_ADDR << 1;
++		else
++			i3c_addr = (BMC_I3C_SLAVE_ADDR << 1) | 0x1;
++		pec = crc8(0, &i3c_addr, 1);
++		pec = crc8(pec, data, read_len - 1);
++		if (pec != data[read_len - 1]) {
++			mctp_prerr("pec is incorrect, expected pec = %x, rcv pec = %x\n", pec, data[read_len - 1]);
++			mctp_pktbuf_free(pkt);
++			return -1;
++		}
++		// to remove pec
++		read_len--;
++	}
++
+ 	rc = mctp_pktbuf_push(pkt, data, read_len);
+ 
+ 	if (rc) {
+diff --git a/astpcie.c b/astpcie.c
+index ddc7012..6fcaab2 100644
+--- a/astpcie.c
++++ b/astpcie.c
+@@ -148,10 +148,10 @@ uint8_t mctp_astpcie_get_medium_id(struct mctp_binding_astpcie *astpcie)
+ 
+ static int mctp_astpcie_open(struct mctp_binding_astpcie *astpcie)
+ {
+-	int fd = open(AST_DRV_FILE, O_RDWR);
++	int fd = open(astpcie->mctp_dev, O_RDWR);
+ 
+ 	if (fd < 0) {
+-		mctp_prerr("Cannot open: %s, errno = %d", AST_DRV_FILE, errno);
++		mctp_prerr("Cannot open: %s, errno = %d", astpcie->mctp_dev, errno);
+ 
+ 		return fd;
+ 	}
+@@ -375,6 +375,7 @@ struct mctp_binding_astpcie *mctp_astpcie_init(void)
+ 	astpcie->binding.tx = mctp_astpcie_tx;
+ 	astpcie->binding.start = mctp_astpcie_start;
+ 	astpcie->binding.pkt_size = MCTP_PACKET_SIZE(MCTP_BTU);
++	strcpy(astpcie->mctp_dev, AST_DRV_FILE);
+ 
+ 	assert(astpcie->binding.pkt_size - sizeof(struct mctp_hdr) <=
+ 	       PCIE_MAX_DATA_LEN);
+@@ -392,6 +393,14 @@ struct mctp_binding_astpcie *mctp_astpcie_init(void)
+ 	return astpcie;
+ }
+ 
++/* Change the file name of MCTP device
++*/
++void mctp_astpcie_mctp_dev_name(struct mctp_binding_astpcie *astpcie, char *name)
++{
++       if (strcmp(name, ""))
++               strcpy(astpcie->mctp_dev, name);
++}
++
+ /*
+  * Closes file descriptor and releases binding memory
+  */
+diff --git a/astpcie.h b/astpcie.h
+index 90a84e7..ff40d59 100644
+--- a/astpcie.h
++++ b/astpcie.h
+@@ -14,6 +14,7 @@ struct mctp_binding_astpcie {
+ 	uint16_t bdf;
+ 	uint8_t medium_id;
+ 	int fd;
++	char mctp_dev[128];
+ };
+ 
+ /* returns pointer to structure holding this generic binding */
+diff --git a/libmctp-asti3c.h b/libmctp-asti3c.h
+index 7ed7c8c..2dacd6b 100644
+--- a/libmctp-asti3c.h
++++ b/libmctp-asti3c.h
+@@ -33,6 +33,8 @@ struct mctp_binding_asti3c {
+ struct mctp_asti3c_pkt_private {
+ 	/* Accept the fd into the binding to carry out I/O operations */
+ 	int fd;
++	bool append_pec;
++	bool is_target;
+ } __attribute__((__packed__));
+ 
+ struct mctp_binding_asti3c *mctp_asti3c_init(void);
+@@ -40,6 +42,8 @@ struct mctp_binding_asti3c *mctp_asti3c_init(void);
+ void mctp_asti3c_free(struct mctp_binding_asti3c *asti3c);
+ int mctp_asti3c_poll(int fd, int timeout);
+ int mctp_asti3c_rx(struct mctp_binding_asti3c *asti3c, int fd);
++void mctp_asti3c_set_def_data(struct mctp_asti3c_pkt_private *def);
++struct mctp_asti3c_pkt_private *mctp_asti3c_get_def_data(void);
+ 
+ #ifdef __cplusplus
+ }
+diff --git a/libmctp-astpcie.h b/libmctp-astpcie.h
+index 63b30d1..9250832 100644
+--- a/libmctp-astpcie.h
++++ b/libmctp-astpcie.h
+@@ -23,6 +23,9 @@ struct mctp_binding_astpcie;
+ 
+ struct mctp_binding_astpcie *mctp_astpcie_init(void);
+ 
++void mctp_astpcie_mctp_dev_name(struct mctp_binding_astpcie *astpcie,
++                               char *name);
++
+ struct mctp_binding *mctp_astpcie_core(struct mctp_binding_astpcie *b);
+ 
+ int mctp_astpcie_poll(struct mctp_binding_astpcie *astpcie, int timeout);
+-- 
+2.25.1
+

@@ -1,0 +1,661 @@
+From b49035d8498fe9c37f65498d859c450543e73719 Mon Sep 17 00:00:00 2001
+From: Lukasz Kazmierczak <lukasz.kazmierczak@intel.com>
+Date: Thu, 23 Mar 2023 16:55:45 +0100
+Subject: [PATCH] cups-service features added
+
+CUPS has been updated to follow new sensors configuration exposed on
+D-Bus. Additionally CUPS sensors id has been modified to follow changes
+implemented in sensors.hpp (utilization_HostMemoryBandwidthUtilization)
+
+Exposed StaticLoadFactors on Redfish, added patch method for updating
+these factors.
+
+OEM schema implemented for cups-service, two redfish nodes added:
+- /redfish/v1/Oem/Intel/CupsService,
+- /redfish/v1/Oem/Intel/CupsService/Sensors,
+alongside proper Oem link in /redfish/v1.
+
+Tested:
+- Patch applies to bmcweb without issues
+- bmcweb service compiles without problems
+- GET requests to uris return expected output:
+  redfish/v1/Chassis/<chassis>/Sensors/utilization_<sensorName>
+- Sent PATCH request to update each property one by one to verify that
+  returns correct responses and values were changes in configuration
+- Sent PATCH request to update all property and verified that REST
+  responses are correct both if properties values are correct and if
+  they are invalid
+- No backend - service state is 'Absent'
+- With backend: values properly reported in CupsService, sensors
+  properly listed in CupsService/Sensors
+- RedfishValidator verifies nodes successfully
+
+Signed-off-by: Alicja Rybak <alicja.rybak@intel.com>
+Signed-off-by: Lukasz Kazmierczak <lukasz.kazmierczak@intel.com>
+Upstream-Status: Pending
+---
+ redfish-core/include/redfish.hpp  |   4 +
+ redfish-core/lib/cups_service.hpp | 570 ++++++++++++++++++++++++++++++
+ redfish-core/lib/service_root.hpp |   7 +
+ 3 files changed, 581 insertions(+)
+ create mode 100644 redfish-core/lib/cups_service.hpp
+
+diff --git a/redfish-core/include/redfish.hpp b/redfish-core/include/redfish.hpp
+index 6cce758f..3b1cde4b 100644
+--- a/redfish-core/include/redfish.hpp
++++ b/redfish-core/include/redfish.hpp
+@@ -21,6 +21,7 @@
+ #include "cable.hpp"
+ #include "certificate_service.hpp"
+ #include "chassis.hpp"
++#include "cups_service.hpp"
+ #include "environment_metrics.hpp"
+ #include "ethernet.hpp"
+ #include "event_service.hpp"
+@@ -245,6 +246,9 @@ class RedfishService
+         requestRoutesSensor(app);
+         requestRoutesSensorPatching(app);
+ 
++        requestRoutesCupsService(app);
++        requestRoutesCupsSensors(app);
++
+         requestRoutesTaskMonitor(app);
+         requestRoutesTaskService(app);
+         requestRoutesTaskCollection(app);
+diff --git a/redfish-core/lib/cups_service.hpp b/redfish-core/lib/cups_service.hpp
+new file mode 100644
+index 00000000..d3191317
+--- /dev/null
++++ b/redfish-core/lib/cups_service.hpp
+@@ -0,0 +1,570 @@
++// Copyright (c) 2020-22 Intel Corporation
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//      http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#pragma once
++
++#include "dbus_utility.hpp"
++#include "utils/time_utils.hpp"
++
++#include <boost/system/error_code.hpp>
++#include <sdbusplus/asio/property.hpp>
++
++#include <string_view>
++#include <system_error>
++#include <type_traits>
++#include <variant>
++
++namespace redfish
++{
++namespace CupsService
++{
++// TODO: Remove after upstream implementation is merged:
++// https://gerrit.openbmc-project.xyz/c/openbmc/bmcweb/+/50720
++inline void addMessageToErrorJson(nlohmann::json& target,
++                                  const nlohmann::json& message)
++{
++    auto& error = target["error"];
++
++    // If this is the first error message, fill in the information from the
++    // first error message to the top level struct
++    if (!error.is_object())
++    {
++        auto messageIdIterator = message.find("MessageId");
++        if (messageIdIterator == message.end())
++        {
++            BMCWEB_LOG_CRITICAL(
++                "Attempt to add error message without MessageId");
++            return;
++        }
++
++        auto messageFieldIterator = message.find("Message");
++        if (messageFieldIterator == message.end())
++        {
++            BMCWEB_LOG_CRITICAL("Attempt to add error message without Message");
++            return;
++        }
++        error = {{"code", *messageIdIterator},
++                 {"message", *messageFieldIterator}};
++    }
++    else
++    {
++        // More than 1 error occurred, so the message has to be generic
++        error["code"] = std::string(messages::messageVersionPrefix) +
++                        "GeneralError";
++        error["message"] = "A general error has occurred. See Resolution for "
++                           "information on how to resolve the error.";
++    }
++
++    // This check could technically be done in in the default construction
++    // branch above, but because we need the pointer to the extended info field
++    // anyway, it's more efficient to do it here.
++    auto& extendedInfo = error[messages::messageAnnotation];
++    if (!extendedInfo.is_array())
++    {
++        extendedInfo = nlohmann::json::array();
++    }
++
++    extendedInfo.push_back(message);
++}
++// TODO: Remove after upstream implementation is merged:
++// https://gerrit.openbmc-project.xyz/c/openbmc/bmcweb/+/50720
++inline void addMessageToJson(nlohmann::json& target,
++                             const nlohmann::json& message,
++                             const std::string& fieldPath)
++{
++    std::string extendedInfo(fieldPath + messages::messageAnnotation);
++
++    if (!target[extendedInfo].is_array())
++    {
++        // Force object to be an array
++        target[extendedInfo] = nlohmann::json::array();
++    }
++
++    // Object exists and it is an array so we can just push in the message
++    target[extendedInfo].push_back(message);
++}
++
++// TODO: Remove after upstream implementation is merged:
++// https://gerrit.openbmc-project.xyz/c/openbmc/bmcweb/+/50720
++inline nlohmann::json propertyValueError(const std::string& arg1)
++{
++    return nlohmann::json{
++        {"@odata.type", "#Message.v1_1_1.Message"},
++        {"MessageId", "Base.1.8.1.PropertyValueError"},
++        {"Message",
++         "The value provided for the property " + arg1 + " is not valid."},
++        {"MessageArgs", {arg1}},
++        {"MessageSeverity", "Warning"},
++        {"Resolution", "Correct the value for the property in the request body "
++                       "and resubmit the request if the operation failed."}};
++}
++
++namespace dbus
++{
++static constexpr const char* service = "xyz.openbmc_project.CupsService";
++static constexpr const char* path = "/xyz/openbmc_project/CupsService";
++static constexpr const char* interface = "xyz.openbmc_project.CupsService";
++
++inline std::string subIface(const std::string& name)
++{
++    return std::string(interface) + "." + name;
++}
++
++inline std::string subPath(const std::string& name)
++{
++    return std::string(path) + "/" + name;
++}
++} // namespace dbus
++
++template <typename T>
++inline std::string toString(const T& value)
++{
++    if constexpr (std::is_convertible_v<T, std::string>)
++    {
++        return value;
++    }
++    else
++    {
++        return std::to_string(value);
++    }
++}
++
++template <typename... T>
++inline std::string toString(const std::tuple<T...>& tuple)
++{
++    return std::apply([](auto&&... args) {
++        std::string value;
++        return ((value += toString(args) + " "), ...);
++    }, tuple);
++}
++
++inline void getCupsServiceConfiguration(
++    const std::shared_ptr<bmcweb::AsyncResp> asyncResp)
++{
++    crow::connections::systemBus->async_method_call(
++        [asyncResp](
++            const boost::system::error_code ec,
++            const boost::container::flat_map<
++                std::string, std::variant<uint64_t, std::string>>& resp) {
++        if (ec)
++        {
++            asyncResp->res.jsonValue["Status"]["State"] = "Absent";
++            return;
++        }
++
++        asyncResp->res.jsonValue["Status"]["State"] = "Enabled";
++
++        for (const auto& property : resp)
++        {
++            if (property.first == "Interval")
++            {
++                if (auto value = std::get_if<uint64_t>(&property.second))
++                {
++                    asyncResp->res.jsonValue["Interval"] =
++                        time_utils::toDurationString(
++                            std::chrono::milliseconds(*value));
++                }
++            }
++            else if (property.first == "AveragingPeriod")
++            {
++                if (auto value = std::get_if<uint64_t>(&property.second))
++                {
++                    asyncResp->res.jsonValue["AveragingPeriod"] =
++                        time_utils::toDurationString(
++                            std::chrono::milliseconds(*value));
++                }
++            }
++            else if (property.first == "LoadFactorConfiguration")
++            {
++                auto value = std::get_if<std::string>(&property.second);
++                if (value != nullptr)
++                {
++                    asyncResp->res.jsonValue["LoadFactorConfiguration"] =
++                        *value;
++                }
++            }
++        }
++    },
++        "xyz.openbmc_project.CupsService", "/xyz/openbmc_project/CupsService",
++        "org.freedesktop.DBus.Properties", "GetAll",
++        "xyz.openbmc_project.CupsService.Configuration");
++}
++
++inline void
++    getLoadFactorsProperty(const std::shared_ptr<bmcweb::AsyncResp> response,
++                           const std::string& loadFactorsType,
++                           const std::string& service, const std::string& path,
++                           const std::string& interface)
++{
++    sdbusplus::asio::getProperty<std::tuple<double, double, double>>(
++        *crow::connections::systemBus, service, path, interface,
++        loadFactorsType,
++        [response, service, path, interface, loadFactorsType](
++            const boost::system::error_code ec,
++            const std::tuple<double, double, double>& loadFactorsValues) {
++        BMCWEB_LOG_DEBUG("Getting property {}.{} in {} with value: {}",
++                         interface, loadFactorsType, path,
++                         toString(loadFactorsValues));
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("DBus response error: {} {} {}", ec, ec.message(),
++                             loadFactorsType);
++            return;
++        }
++
++        const auto& [core, iio, memory] = loadFactorsValues;
++        auto& loadFactors = response->res.jsonValue[loadFactorsType];
++        loadFactors["CoreLoadFactor"] = core;
++        loadFactors["IioLoadFactor"] = iio;
++        loadFactors["MemoryLoadFactor"] = memory;
++    });
++}
++
++inline void
++    getCupsServiceJson(const std::shared_ptr<bmcweb::AsyncResp> asyncResp)
++{
++    asyncResp->res.jsonValue = {
++        {"@odata.type", "#CupsService.v1_0_0.CupsService"},
++        {"@odata.id", "/redfish/v1/Oem/Intel/CupsService"},
++        {"Id", "CupsService"},
++        {"Name", "Cups Service"},
++    };
++
++    asyncResp->res.jsonValue["CupsSensors"]["@odata.id"] =
++        "/redfish/v1/Oem/Intel/CupsService/Sensors";
++
++    CupsService::getCupsServiceConfiguration(asyncResp);
++    CupsService::getLoadFactorsProperty(
++        asyncResp, "DynamicLoadFactors", CupsService::dbus::service,
++        CupsService::dbus::subPath("DynamicLoadFactors"),
++        CupsService::dbus::subIface("DynamicLoadFactors"));
++    CupsService::getLoadFactorsProperty(
++        asyncResp, "StaticLoadFactors", CupsService::dbus::service,
++        CupsService::dbus::subPath("StaticLoadFactors"),
++        CupsService::dbus::subIface("StaticLoadFactors"));
++}
++class PatchAsyncResp
++{
++  public:
++    PatchAsyncResp(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp) :
++        resp{asyncResp}
++    {}
++
++    void propertyChanged(const std::string& property)
++    {
++        updatedProperties.push_back(property);
++    }
++
++    void propertyInvalid(const std::string& property)
++    {
++        invalidProperties.push_back(property);
++    }
++
++    ~PatchAsyncResp()
++    {
++        BMCWEB_LOG_DEBUG(
++            "CUPS PATCH method ended with {} successes and {} errors.",
++            updatedProperties.size(), invalidProperties.size());
++
++        // if all properties are invalid
++        if (updatedProperties.empty() && !invalidProperties.empty())
++        {
++            resp->res.result(boost::beast::http::status::bad_request);
++            // Add Json representation of properties that cannot be updated
++            for (const std::string& property : invalidProperties)
++            {
++                auto message = propertyValueError(property);
++                addMessageToErrorJson(resp->res.jsonValue, message);
++            }
++        }
++        // if one or more property is valid
++        else if (updatedProperties.size())
++        {
++            // Add Json representation of updated properties
++            CupsService::getCupsServiceJson(resp);
++
++            // Add Json representation of properties that cannot be updated
++            for (const std::string& property : invalidProperties)
++            {
++                auto message = propertyValueError(property);
++                addMessageToJson(resp->res.jsonValue, message, property);
++            }
++        }
++    }
++
++  private:
++    std::shared_ptr<bmcweb::AsyncResp> resp;
++    std::vector<std::string> invalidProperties, updatedProperties;
++};
++
++template <typename T>
++inline void setDbusProperty(const std::shared_ptr<PatchAsyncResp> response,
++                            const std::string& service, const std::string& path,
++                            const std::string& interface,
++                            const std::string& property, T& value)
++{
++    sdbusplus::asio::setProperty<T>(*crow::connections::systemBus, service,
++                                    path, interface, property, std::move(value),
++                                    [response, interface, property, value,
++                                     path](boost::system::error_code ec) {
++        BMCWEB_LOG_DEBUG("Updating property {}.{} in {} with value: {}",
++                         interface, property, path, toString(value));
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("DBus response error: {} {}", ec, ec.message());
++
++            response->propertyInvalid(property);
++        }
++        else
++        {
++            response->propertyChanged(property);
++        }
++    });
++}
++
++} // namespace CupsService
++
++inline void requestRoutesCupsService(App& app)
++{
++    BMCWEB_ROUTE(app, "/redfish/v1/Oem/Intel/CupsService/")
++        .privileges({{"Login"}})
++        .methods(boost::beast::http::verb::get)(
++            [](const crow::Request&,
++               const std::shared_ptr<bmcweb::AsyncResp>& asyncResp) {
++        CupsService::getCupsServiceJson(asyncResp);
++    });
++
++    BMCWEB_ROUTE(app, "/redfish/v1/Oem/Intel/CupsService/")
++        .privileges({{"ConfigureComponents"}})
++        .methods(boost::beast::http::verb::patch)(
++            [](const crow::Request& req,
++               const std::shared_ptr<bmcweb::AsyncResp>& asyncResp) {
++        std::optional<std::string> intervalStr;
++        std::optional<std::string> averagingPeriodStr;
++        std::optional<std::string> loadFactorConfiguration;
++        std::optional<nlohmann::json> staticLoadFactorsCollection;
++
++        if (!json_util::readJsonPatch(
++                req, asyncResp->res, "StaticLoadFactors",
++                staticLoadFactorsCollection, "AveragingPeriod",
++                averagingPeriodStr, "Interval", intervalStr,
++                "LoadFactorConfiguration", loadFactorConfiguration))
++        {
++            return;
++        }
++
++        auto patchResp =
++            std::make_shared<CupsService::PatchAsyncResp>(asyncResp);
++
++        if (averagingPeriodStr)
++        {
++            auto averagingPeriodMs =
++                time_utils::fromDurationString(*averagingPeriodStr);
++            if (averagingPeriodMs)
++            {
++                uint64_t averagingPeriod =
++                    static_cast<uint64_t>((*averagingPeriodMs).count());
++
++                CupsService::setDbusProperty(
++                    patchResp, CupsService::dbus::service,
++                    CupsService::dbus::path,
++                    CupsService::dbus::subIface("Configuration"),
++                    "AveragingPeriod", averagingPeriod);
++            }
++            else
++            {
++                patchResp->propertyInvalid("AveragingPeriod");
++            }
++        }
++
++        if (intervalStr)
++        {
++            auto intervalMs = time_utils::fromDurationString(*intervalStr);
++            if (intervalMs)
++            {
++                uint64_t interval =
++                    static_cast<uint64_t>((*intervalMs).count());
++
++                CupsService::setDbusProperty(
++                    patchResp, CupsService::dbus::service,
++                    CupsService::dbus::path,
++                    CupsService::dbus::subIface("Configuration"), "Interval",
++                    interval);
++            }
++            else
++            {
++                patchResp->propertyInvalid("Interval");
++            }
++        }
++
++        if (loadFactorConfiguration)
++        {
++            CupsService::setDbusProperty(
++                patchResp, CupsService::dbus::service, CupsService::dbus::path,
++                CupsService::dbus::subIface("Configuration"),
++                "LoadFactorConfiguration", *loadFactorConfiguration);
++        }
++
++        if (staticLoadFactorsCollection)
++        {
++            double coreLoadFactor;
++            double iioLoadFactor;
++            double memoryLoadFactor;
++            if (!json_util::readJson(
++                    *staticLoadFactorsCollection, asyncResp->res,
++                    "CoreLoadFactor", coreLoadFactor, "IioLoadFactor",
++                    iioLoadFactor, "MemoryLoadFactor", memoryLoadFactor))
++            {
++                return;
++            }
++
++            auto loadFactors = std::make_tuple(coreLoadFactor, iioLoadFactor,
++                                               memoryLoadFactor);
++
++            CupsService::setDbusProperty(
++                patchResp, CupsService::dbus::service,
++                CupsService::dbus::subPath("StaticLoadFactors"),
++                CupsService::dbus::subIface("StaticLoadFactors"),
++                "StaticLoadFactors", loadFactors);
++        }
++    });
++}
++
++namespace CupsSensors
++{
++
++inline bool isSensor(const dbus::utility::DBusInterfacesMap& interfaces)
++{
++    for (const auto& [interface, properties] : interfaces)
++    {
++        if (interface == "xyz.openbmc_project.Sensor.Value")
++        {
++            return true;
++        }
++    }
++    return false;
++}
++
++inline const std::vector<std::tuple<std::string, std::string, std::string>>*
++    getAssociations(const dbus::utility::DBusInterfacesMap& interfaces)
++{
++    for (const auto& [interface, properties] : interfaces)
++    {
++        if (interface == "xyz.openbmc_project.Association.Definitions")
++        {
++            for (const auto& [name, value] : properties)
++            {
++                if (name == "Associations")
++                {
++                    return std::get_if<std::vector<
++                        std::tuple<std::string, std::string, std::string>>>(
++                        &value);
++                }
++            }
++            BMCWEB_LOG_ERROR("No Associations property found");
++            return nullptr;
++        }
++    }
++    BMCWEB_LOG_ERROR("No Association iface found");
++    return nullptr;
++}
++
++inline std::optional<std::string>
++    getName(const sdbusplus::message::object_path& path)
++{
++    std::string name = path.filename();
++    return name.empty() ? std::nullopt : std::make_optional(std::move(name));
++}
++
++inline std::string getSensorId(std::string type, std::string name)
++{
++    type.erase(std::remove(type.begin(), type.end(), '_'), type.end());
++    return std::string{type + "_" + name};
++}
++
++inline void getCupsSensors(const std::shared_ptr<bmcweb::AsyncResp> asyncResp)
++{
++    crow::connections::systemBus->async_method_call(
++        [asyncResp](const boost::system::error_code ec,
++                    const dbus::utility::ManagedObjectType& objects) {
++        if (ec)
++        {
++            BMCWEB_LOG_ERROR("DBus error: {}", ec.message());
++            return;
++        }
++
++        nlohmann::json& members = asyncResp->res.jsonValue["Members"];
++        members = nlohmann::json::array();
++
++        for (const auto& [path, ifaces] : objects)
++        {
++            if (!isSensor(ifaces))
++            {
++                continue;
++            }
++
++            const auto associations = getAssociations(ifaces);
++            if (associations == nullptr)
++            {
++                BMCWEB_LOG_ERROR("Failed to retrieve Associations");
++                continue;
++            }
++
++            for (const auto& [what, type, to] : *associations)
++            {
++                if (what == "chassis" && type == "all_sensors")
++                {
++                    const auto sensorType = getName(path.parent_path());
++                    const auto sensorName = getName(path);
++                    const auto chassisName = getName(to);
++                    if (!sensorType || !sensorName || !chassisName)
++                    {
++                        BMCWEB_LOG_ERROR("Unable to determine path");
++                        messages::internalError(asyncResp->res);
++                        break;
++                    }
++                    members.push_back(
++                        {{"@odata.id",
++                          "/redfish/v1/Chassis/" + *chassisName + "/Sensors/" +
++                              getSensorId(*sensorType, *sensorName)}});
++                }
++            }
++        }
++
++        asyncResp->res.jsonValue["Members@odata.count"] = members.size();
++    },
++        "xyz.openbmc_project.CupsService", "/xyz/openbmc_project/sensors",
++        "org.freedesktop.DBus.ObjectManager", "GetManagedObjects");
++}
++
++} // namespace CupsSensors
++
++inline void requestRoutesCupsSensors(App& app)
++{
++    BMCWEB_ROUTE(app, "/redfish/v1/Oem/Intel/CupsService/Sensors")
++        .privileges({{"Login"}})
++        .methods(boost::beast::http::verb::get)(
++            [](const crow::Request&,
++               const std::shared_ptr<bmcweb::AsyncResp>& asyncResp) {
++        asyncResp->res.jsonValue = {
++            {"@odata.type", "#CupsSensorCollection.CupsSensorCollection"},
++            {"@odata.id", "/redfish/v1/Oem/Intel/CupsService/Sensors"},
++            {"Name", "Cups Sensor Collection"},
++        };
++
++        CupsSensors::getCupsSensors(asyncResp);
++    });
++}
++
++} // namespace redfish
+diff --git a/redfish-core/lib/service_root.hpp b/redfish-core/lib/service_root.hpp
+index d9cdd476..6038c979 100644
+--- a/redfish-core/lib/service_root.hpp
++++ b/redfish-core/lib/service_root.hpp
+@@ -89,6 +89,13 @@ inline void handleServiceRootGetImpl(
+     asyncResp->res.jsonValue["LicenseService"]["@odata.id"] =
+         "/redfish/v1/LicenseService";
+ 
++    asyncResp->res.jsonValue["Oem"]["Intel"]["@odata.type"] =
++        "#OemServiceRoot.v1_0_0.Intel";
++    asyncResp->res.jsonValue["Oem"]["Intel"]["@odata.id"] =
++        "/redfish/v1/#Oem/Intel";
++    asyncResp->res.jsonValue["Oem"]["Intel"]["CupsService"] = {
++        {"@odata.id", "/redfish/v1/Oem/Intel/CupsService"}};
++
+     asyncResp->res.jsonValue["Links"]["ManagerProvidingService"]["@odata.id"] =
+         "/redfish/v1/Managers/bmc";
+ 
+-- 
+2.25.1
+

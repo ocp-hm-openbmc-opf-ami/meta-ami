@@ -1,0 +1,171 @@
+From 3e69ef24f5e431144367714cb9ecc9f3af1f328c Mon Sep 17 00:00:00 2001
+From: AppaRao Puli <apparao.puli@intel.com>
+Date: Mon, 10 May 2021 12:32:30 +0530
+Subject: [PATCH] Log Redfish Events for all subscription actions
+
+Log redfish event for below 3 actions
+ - New subscription
+ - Update existing subscription properties
+ - Delete existing subscription
+
+This will help to log events for platform managebility.
+
+Modified persistent API name to indicate the clear purpose.
+Added updateSubscription method with subscription id param
+to log event for subscription update.
+
+Tested:
+ - Message registry entry appears in the log for the corresponding
+   subscription action.
+
+Change-Id: Ie7065732184f17955b0669a3901ea54fb42cfef4
+Signed-off-by: AppaRao Puli <apparao.puli@intel.com>
+Upstream-Status: Pending
+---
+ .../include/event_service_manager.hpp         | 33 ++++++++++++++---
+ .../registries/openbmc_message_registry.hpp   | 36 +++++++++++++++++++
+ redfish-core/lib/event_service.hpp            |  2 +-
+ 3 files changed, 66 insertions(+), 5 deletions(-)
+
+diff --git a/redfish-core/include/event_service_manager.hpp b/redfish-core/include/event_service_manager.hpp
+index 09528664..cc17af82 100644
+--- a/redfish-core/include/event_service_manager.hpp
++++ b/redfish-core/include/event_service_manager.hpp
+@@ -770,7 +770,7 @@ class EventServiceManager
+         }
+     }
+ 
+-    void updateSubscriptionData() const
++    void persistSubscriptionData() const
+     {
+         persistent_data::EventServiceStore::getInstance()
+             .eventServiceConfig.enabled = serviceEnabled;
+@@ -817,7 +817,7 @@ class EventServiceManager
+ 
+         if (updateConfig)
+         {
+-            updateSubscriptionData();
++            persistSubscriptionData();
+         }
+ 
+         if (updateRetryCfg)
+@@ -928,7 +928,7 @@ class EventServiceManager
+ 
+         if (updateFile)
+         {
+-            updateSubscriptionData();
++            persistSubscriptionData();
+         }
+ 
+ #ifndef BMCWEB_ENABLE_REDFISH_DBUS_LOG_ENTRIES
+@@ -942,6 +942,12 @@ class EventServiceManager
+ 
+         // Set Subscription ID for back trace
+         subValue->setSubscriptionId(id);
++
++        /* Log event for subscription addition */
++        sd_journal_send("MESSAGE=Event subscription added(Id: %s)", id.c_str(),
++                        "PRIORITY=%i", LOG_INFO, "REDFISH_MESSAGE_ID=%s",
++                        "OpenBMC.0.1.EventSubscriptionAdded",
++                        "REDFISH_MESSAGE_ARGS=%s", id.c_str(), NULL);
+         return id;
+     }
+ 
+@@ -962,7 +968,14 @@ class EventServiceManager
+             persistent_data::EventServiceStore::getInstance()
+                 .subscriptionsConfigMap.erase(obj2);
+             updateNoOfSubscribersCount();
+-            updateSubscriptionData();
++            persistSubscriptionData();
++
++            /* Log event for subscription delete. */
++            sd_journal_send("MESSAGE=Event subscription removed.(Id = %s)",
++                            id.c_str(), "PRIORITY=%i", LOG_INFO,
++                            "REDFISH_MESSAGE_ID=%s",
++                            "OpenBMC.0.1.EventSubscriptionRemoved",
++                            "REDFISH_MESSAGE_ARGS=%s", id.c_str(), NULL);
+         }
+     }
+ 
+@@ -982,6 +995,18 @@ class EventServiceManager
+         }
+     }
+ 
++    void updateSubscription(const std::string& id) const
++    {
++        persistSubscriptionData();
++
++        /* Log event for subscription update. */
++        sd_journal_send("MESSAGE=Event subscription updated.(Id = %s)",
++                        id.c_str(), "PRIORITY=%i", LOG_INFO,
++                        "REDFISH_MESSAGE_ID=%s",
++                        "OpenBMC.0.1.EventSubscriptionUpdated",
++                        "REDFISH_MESSAGE_ARGS=%s", id.c_str(), NULL);
++    }
++
+     size_t getNumberOfSubscriptions() const
+     {
+         return subscriptionsMap.size();
+diff --git a/redfish-core/include/registries/openbmc_message_registry.hpp b/redfish-core/include/registries/openbmc_message_registry.hpp
+index 8fee28d2..ca58fbe5 100644
+--- a/redfish-core/include/registries/openbmc_message_registry.hpp
++++ b/redfish-core/include/registries/openbmc_message_registry.hpp
+@@ -477,6 +477,42 @@ constexpr std::array registry =
+             {},
+             "None.",
+         }},
++    MessageEntry{
++        "EventSubscriptionAdded",
++        {
++            "Indicates that an Event subscription with specific id was added.",
++            "Event subscription with id %1 was added.",
++            "OK",
++            1,
++            {
++                "string",
++            },
++            "None.",
++        }},
++    MessageEntry{
++        "EventSubscriptionRemoved",
++        {
++            "Indicates that an Event subscription with specific id was removed.",
++            "Event subscription with id %1 was removed.",
++            "OK",
++            1,
++            {
++                "string",
++            },
++            "None.",
++        }},
++    MessageEntry{
++        "EventSubscriptionUpdated",
++        {
++            "Indicates that an Event subscription with specific id was updated.",
++            "Event subscription with id %1 was updated.",
++            "OK",
++            1,
++            {
++                "string",
++            },
++            "None.",
++        }},
+     MessageEntry{
+         "FanInserted",
+         {
+diff --git a/redfish-core/lib/event_service.hpp b/redfish-core/lib/event_service.hpp
+index 9cffbf58..e18f6cc1 100644
+--- a/redfish-core/lib/event_service.hpp
++++ b/redfish-core/lib/event_service.hpp
+@@ -753,7 +753,7 @@ inline void requestRoutesEventDestination(App& app)
+             subValue->retryPolicy = *retryPolicy;
+         }
+ 
+-        EventServiceManager::getInstance().updateSubscriptionData();
++        EventServiceManager::getInstance().updateSubscription(param);
+     });
+     BMCWEB_ROUTE(app, "/redfish/v1/EventService/Subscriptions/<str>/")
+         // The below privilege is wrong, it should be ConfigureManager OR
+-- 
+2.25.1
+

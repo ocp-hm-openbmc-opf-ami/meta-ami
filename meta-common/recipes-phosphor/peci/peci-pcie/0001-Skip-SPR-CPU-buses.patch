@@ -1,0 +1,99 @@
+From cb20fb9ac0d6feac8da5444b3e6129954dd7b763 Mon Sep 17 00:00:00 2001
+From: "Jason M. Bills" <jason.m.bills@linux.intel.com>
+Date: Fri, 11 Jun 2021 15:35:33 -0700
+Subject: [PATCH] Skip SPR CPU buses
+
+There is a lot of information in the PCIe device list, which
+can make it difficult to determine which devices need to be
+managed by a user.  This filters out the local SPR CPU buses
+to make the PCIe device list more manageable.
+
+Tested:
+Confirmed that devices on the local CPU buses are no longer
+included in the PCIe device list in Redfish.
+
+Change-Id: I4550e9771365466607074bdbf887335d1208e1a9
+Signed-off-by: Jason M. Bills <jason.m.bills@linux.intel.com>
+Upstream-Status: Pending
+---
+ src/peci_pcie.cpp | 64 +++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 64 insertions(+)
+
+diff --git a/src/peci_pcie.cpp b/src/peci_pcie.cpp
+index 32b4e6f..3996d20 100644
+--- a/src/peci_pcie.cpp
++++ b/src/peci_pcie.cpp
+@@ -150,6 +150,70 @@ static resCode getCPUBusMap(std::vector<CPUInfo>& cpuInfo)
+                 }
+                 cpu.skipCpuBuses = true;
+             }
++            case spr:
++            {
++                struct CPUBusNoReg
++                {
++                    uint8_t seg;
++                    uint8_t bus;
++                    uint8_t dev;
++                    uint8_t func;
++                    uint16_t reg;
++                };
++
++                // Get the assigned CPU bus numbers from CPUBUSNO, CPUBUSNO1,
++                // CPUBUSNO2, CPUBUSNO3, CPUBUSNO4, CPUBUSNO5, CPUBUSNO6, and
++                // CPUBUSNO7 (B(8) D3 F0 offsets 190h, 194h, 198h, 19Ch, 1C0h,
++                // 1C4h, 1C8h, 1CCh)
++                constexpr std::array cpuBusNoRegs{
++                    CPUBusNoReg{0, 8, 3, 0, 0x190},
++                    CPUBusNoReg{0, 8, 3, 0, 0x194},
++                    CPUBusNoReg{0, 8, 3, 0, 0x198},
++                    CPUBusNoReg{0, 8, 3, 0, 0x19c},
++                    CPUBusNoReg{0, 8, 3, 0, 0x1c0},
++                    CPUBusNoReg{0, 8, 3, 0, 0x1c4},
++                    CPUBusNoReg{0, 8, 3, 0, 0x1c8},
++                    CPUBusNoReg{0, 8, 3, 0, 0x1cc},
++                };
++
++                std::array<uint32_t, cpuBusNoRegs.size()> cpuBusNums;
++                for (size_t i = 0; i < cpuBusNoRegs.size(); i++)
++                {
++                    if (peci_RdEndPointConfigPciLocal(
++                            cpu.addr, cpuBusNoRegs[i].seg, cpuBusNoRegs[i].bus,
++                            cpuBusNoRegs[i].dev, cpuBusNoRegs[i].func,
++                            cpuBusNoRegs[i].reg, 4, (uint8_t*)&cpuBusNums[i],
++                            &cc) != PECI_CC_SUCCESS)
++                    {
++                        return resCode::resErr;
++                    }
++                }
++                // Get the valid CPU bus numbers from CPUBUSNO_VALID (B(8) D3 F0
++                // offset 1a0h)
++                uint32_t cpuBusValid = 0;
++                if (peci_RdEndPointConfigPciLocal(cpu.addr, 0, 8, 3, 0, 0x1a0,
++                                                  4, (uint8_t*)&cpuBusValid,
++                                                  &cc) != PECI_CC_SUCCESS)
++                {
++                    return resCode::resErr;
++                }
++
++                // Add the valid CPU bus numbers to the set for this CPU
++                for (size_t i = 0; i < sizeof(cpuBusValid) * 8; i++)
++                {
++                    if (!(cpuBusValid & (1 << i)))
++                    {
++                        continue;
++                    }
++                    // Get the CPUBUSNO register for this bus
++                    uint32_t cpuBusNumReg = cpuBusNums[(i / 4)];
++                    // Get the bus number from the register
++                    cpuBusNumReg >>= ((i % 4) * 8);
++                    size_t busNum = cpuBusNumReg & 0xFF;
++                    cpu.cpuBusNums.insert(busNum);
++                }
++                cpu.skipCpuBuses = true;
++            }
+         }
+     }
+     return cpuInfo.empty() ? resCode::resErr : resCode::resOk;
+-- 
+2.25.1
+

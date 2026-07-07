@@ -1,0 +1,155 @@
+From d7068056deaf543d67c9dce84eb78c41145b3369 Mon Sep 17 00:00:00 2001
+From: Iwona Winiarska <iwona.winiarska@intel.com>
+Date: Tue, 13 Jul 2021 15:16:16 +0200
+Subject: [PATCH] CPUSensor: Create CPUConfig for each PECI adapter
+
+Currently CPUSensor is based on configuration that defines CPUs for the
+specific PECI adapter (usually peci-wire). As a consequence, MFD devices
+are created only for the defined adapter.
+
+Since duplicating static CPU records in configuration file for other
+PECI adapters may be confusing to users, let's add CPUConfig for other
+PECI adapters dynamically by detecting if there is more than one PECI
+adapter driver bound in the system.
+
+Please note, that this change is limited to enabling HWMON driver,
+sensors for all adapters will not be exposed on D-Bus.
+
+Tested:
+No changes if only one PECI interface is available, HWMON drivers
+creation will be based on provided configuration.
+When both peci-aspeed (peci-wire) and peci-mctp are bound in the system,
+HWMON drivers are created only for peci-wire as a temporary WA.
+When peci-i3c is bound - hwmons created for each peci interface.
+
+Signed-off-by: Iwona Winiarska <iwona.winiarska@intel.com>
+Signed-off-by: Zhikui Ren <zhikui.ren@intel.com>
+Signed-off-by: Oleksandr Shulzhenko <oleksandr.shulzhenko.viktorovych@intel.com>
+Upstream-Status: Pending
+---
+ src/IntelCPUSensorMain.cpp | 94 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 94 insertions(+)
+
+diff --git a/src/IntelCPUSensorMain.cpp b/src/IntelCPUSensorMain.cpp
+index 6c9711b39f09..680aa90e8278 100644
+--- a/src/IntelCPUSensorMain.cpp
++++ b/src/IntelCPUSensorMain.cpp
+@@ -34,6 +34,7 @@
+ #include <fstream>
+ #include <functional>
+ #include <memory>
++#include <optional>
+ #include <regex>
+ #include <sstream>
+ #include <stdexcept>
+@@ -678,6 +679,95 @@ void detectCpuAsync(
+     }
+ }
+ 
++std::optional<uint64_t> getPeciDeviceNum(const fs::path& peciAdapterNamePath)
++{
++    fs::path::iterator it = peciAdapterNamePath.begin();
++    std::advance(it, 5); // /sys/bus/peci/devices/peci-xxxx
++    std::string peciDeviceName = *it;
++    auto pos = peciDeviceName.find('-');
++    if (pos == std::string::npos)
++    {
++        std::cerr << "Incorrect PECI device name: " << peciDeviceName << "\n";
++        return std::nullopt;
++    }
++
++    try
++    {
++        return std::stoull(peciDeviceName.substr(pos + 1, 1));
++    }
++    catch (std::logic_error&)
++    {
++        return std::nullopt;
++    }
++}
++
++std::optional<std::string>
++    readPeciAdapterNameFromFile(const fs::path& peciAdapterNamePath)
++{
++    std::ifstream nameFile(peciAdapterNamePath);
++    if (!nameFile.good())
++    {
++        std::cerr << "Cannot read: " << peciAdapterNamePath << "\n";
++        return std::nullopt;
++    }
++
++    std::string peciAdapterName;
++    std::getline(nameFile, peciAdapterName);
++    nameFile.close();
++    if (peciAdapterName.empty())
++    {
++        return std::nullopt;
++    }
++
++    auto pos = peciAdapterName.find('-');
++    peciAdapterName = peciAdapterName.substr(pos + 1);
++
++    return peciAdapterName;
++}
++
++void addConfigsForOtherPeciAdapters(
++    boost::container::flat_set<CPUConfig>& cpuConfigs, uint64_t& bus,
++    uint64_t& addr, std::string& name, const State& state)
++{
++    std::vector<fs::path> peciAdapterNamePaths;
++    if (!findFiles(fs::path(peciDevPath), R"(peci-\d+/name$)",
++                   peciAdapterNamePaths, 1))
++    {
++        std::cerr << "No PECI adapters in system\n";
++        return;
++    }
++
++    for (const fs::path& peciAdapterNamePath : peciAdapterNamePaths)
++    {
++        std::optional<uint64_t> peciDeviceNum =
++            getPeciDeviceNum(peciAdapterNamePath);
++        if (!peciDeviceNum || peciDeviceNum == bus)
++        {
++            continue;
++        }
++
++        std::optional<std::string> peciAdapterName =
++            readPeciAdapterNameFromFile(peciAdapterNamePath);
++        if (!peciAdapterName)
++        {
++            continue;
++        }
++
++        // Change result for peci-aspeed
++        if (peciAdapterName->compare("bus") == 0)
++        {
++            peciAdapterName = "wire";
++        }
++
++        //WA:detectCpu uses cpuConfigs to send ping command
++        //peci-mctp does not support ping command,
++        //detectCPU will be refactored to support peci-mctp
++        if (peciAdapterName->compare("mctp") != 0)
++            cpuConfigs.emplace(*peciDeviceNum, addr, name + "_" + *peciAdapterName,
++                               state);
++    }
++}
++
+ bool getCpuConfig(std::shared_ptr<sdbusplus::asio::connection>& systemBus,
+                   boost::container::flat_set<CPUConfig>& cpuConfigs,
+                   ManagedObjectType& sensorConfigs, boost::asio::io_context& io,
+@@ -806,7 +896,11 @@ bool getCpuConfig(std::shared_ptr<sdbusplus::asio::connection>& systemBus,
+                     std::cout << "name: " << name << "\n";
+                     std::cout << "type: " << type << "\n";
+                 }
++
+                 cpuConfigs.emplace(bus, addr, name, State::OFF);
++
++                addConfigsForOtherPeciAdapters(cpuConfigs, bus, addr, name,
++                                               State::OFF);
+             }
+         }
+     }
+-- 
+2.25.1
+

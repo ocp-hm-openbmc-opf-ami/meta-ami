@@ -1,0 +1,228 @@
+From d1fee22a3cf6112398bf2a47efd9dca78c696d0c Mon Sep 17 00:00:00 2001
+From: graguzax <grzegorzx.raguza@intel.com>
+Date: Mon, 26 Jul 2021 10:31:04 +0000
+Subject: [PATCH] Change loading event logs
+
+Event logs endpoint implements paging. We fetch default
+1000 items, so when there are more of them we cannot
+see them in the UI. This has been changed and now
+data are fetch in packages of 1000 items a the
+simultaneously.
+
+Signed-off-by: Grzegorz Raguza <grzegorzx.raguza@intel.com>
+Change-Id: Ibce9ac9014ed1efafcb1a6bacad4d917024771e7
+Upstream-Status: Pending
+---
+ src/store/api.js                        |   3 +
+ src/store/modules/Logs/EventLogStore.js | 125 +++++++++++++++++-------
+ src/views/Logs/EventLogs/EventLogs.vue  |   3 +
+ src/views/Overview/OverviewEvents.vue   |   3 +
+ 4 files changed, 99 insertions(+), 35 deletions(-)
+
+diff --git a/src/store/api.js b/src/store/api.js
+index 9fd900d..864adbd 100644
+--- a/src/store/api.js
++++ b/src/store/api.js
+@@ -55,6 +55,9 @@ export default {
+   spread(callback) {
+     return Axios.spread(callback);
+   },
++  getCancelTokenSource() {
++    return Axios.CancelToken.source();
++  },
+ };
+ 
+ export const getResponseCount = (responses) => {
+diff --git a/src/store/modules/Logs/EventLogStore.js b/src/store/modules/Logs/EventLogStore.js
+index f398007..01a38ab 100644
+--- a/src/store/modules/Logs/EventLogStore.js
++++ b/src/store/modules/Logs/EventLogStore.js
+@@ -1,6 +1,15 @@
+ import api, { getResponseCount } from '@/store/api';
+ import i18n from '@/i18n';
+ 
++const mutations = {
++  setAllEvents: 'setAllEvents',
++  setEventLogsCancelToken: 'setEventLogsCancelToken',
++};
++const eventLogDataLimit = 1000;
++const cancelTokens = {
++  getEvents: [],
++};
++
+ const getHealthStatus = (events, loadedEvents) => {
+   let status = loadedEvents ? 'OK' : '';
+   for (const event of events) {
+@@ -17,6 +26,56 @@ const getHealthStatus = (events, loadedEvents) => {
+   return status;
+ };
+ 
++/**
++ * gets logs data
++ * @param {*} parameters object {$top?: number, $skip?: number}
++ * @returns promise
++ */
++const getLogsData = async (cancelToken, parameters) => {
++  cancelTokens.getEvents.push(cancelToken);
++  const url = '/redfish/v1/Systems/system/LogServices/EventLog/Entries';
++  let config = { cancelToken: cancelToken.token, params: parameters };
++  return await api.get(url, config).then(({ data }) => {
++    const eventLogs = data.Members.map((log) => {
++      const {
++        Id,
++        Severity,
++        Created,
++        EntryType,
++        Message,
++        Name,
++        Modified,
++        Resolved,
++        AdditionalDataURI,
++      } = log;
++      return {
++        id: Id,
++        severity: Severity,
++        date: new Date(Created),
++        type: EntryType,
++        description: Message,
++        name: Name,
++        modifiedDate: new Date(Modified),
++        uri: log['@odata.id'],
++        filterByStatus: Resolved ? 'Resolved' : 'Unresolved',
++        status: Resolved, //true or false
++        additionalDataUri: AdditionalDataURI,
++      };
++    });
++
++    return { eventLogs, total: data['Members@odata.count'] };
++  });
++};
++
++const getEventLogDataParameters = (total, pageCount) => {
++  const result = [];
++  const pages = Math.floor(1 + total / pageCount);
++  for (let i = 0; i < pages; ++i) {
++    result.push({ $top: pageCount, $skip: i * pageCount });
++  }
++  return result;
++};
++
+ // TODO: High priority events should also check if Log
+ // is resolved when the property is available in Redfish
+ const getHighPriorityEvents = (events) =>
+@@ -27,6 +86,9 @@ const EventLogStore = {
+   state: {
+     allEvents: [],
+     loadedEvents: false,
++    cancelTokens: {
++      getEvents: null,
++    },
+   },
+   getters: {
+     allEvents: (state) => state.allEvents,
+@@ -35,46 +97,39 @@ const EventLogStore = {
+       getHealthStatus(state.allEvents, state.loadedEvents),
+   },
+   mutations: {
+-    setAllEvents: (state, allEvents) => (
++    [mutations.setAllEvents]: (state, allEvents) => (
+       (state.allEvents = allEvents), (state.loadedEvents = true)
+     ),
++    [mutations.setEventLogsCancelToken]: (state, token) => {
++      if (state.cancelTokens.getEvents) {
++        state.cancelTokens.getEvents.cancel('Stop getting events');
++      }
++
++      state.cancelTokens.getEvents = token;
++    },
+   },
+   actions: {
++    async clearEventLogData({ commit }) {
++      commit(mutations.setAllEvents, []);
++    },
+     async getEventLogData({ commit }) {
+-      return await api
+-        .get('/redfish/v1/Systems/system/LogServices/EventLog/Entries')
+-        .then(({ data: { Members = [] } = {} }) => {
+-          const eventLogs = Members.map((log) => {
+-            const {
+-              Id,
+-              Severity,
+-              Created,
+-              EntryType,
+-              Message,
+-              Name,
+-              Modified,
+-              Resolved,
+-              AdditionalDataURI,
+-            } = log;
+-            return {
+-              id: Id,
+-              severity: Severity,
+-              date: new Date(Created),
+-              type: EntryType,
+-              description: Message,
+-              name: Name,
+-              modifiedDate: new Date(Modified),
+-              uri: log['@odata.id'],
+-              filterByStatus: Resolved ? 'Resolved' : 'Unresolved',
+-              status: Resolved, //true or false
+-              additionalDataUri: AdditionalDataURI,
+-            };
+-          });
+-          commit('setAllEvents', eventLogs);
+-        })
+-        .catch((error) => {
+-          console.log('Event Log Data:', error);
+-        });
++      let token = api.getCancelTokenSource();
++      commit(mutations.setEventLogsCancelToken, token);
++      const totalData = await getLogsData(token, {
++        $top: 1,
++      });
++      const parameters = getEventLogDataParameters(
++        totalData.total,
++        eventLogDataLimit
++      );
++
++      const promises = parameters.map((p) => getLogsData(token, p));
++      const responses = await api.all(promises);
++      const logs = [];
++      responses.forEach(({ eventLogs }) => logs.push(...eventLogs));
++
++      commit(mutations.setAllEvents, logs);
++      commit(mutations.setEventLogsCancelToken, null);
+     },
+     async deleteAllEventLogs({ dispatch }, data) {
+       return await api
+diff --git a/src/views/Logs/EventLogs/EventLogs.vue b/src/views/Logs/EventLogs/EventLogs.vue
+index ff0473e..21c6a7a 100644
+--- a/src/views/Logs/EventLogs/EventLogs.vue
++++ b/src/views/Logs/EventLogs/EventLogs.vue
+@@ -470,6 +470,9 @@ export default {
+       this.isBusy = false;
+     });
+   },
++  destroyed() {
++    this.$store.dispatch('eventLog/clearEventLogData');
++  },
+   methods: {
+     changelogStatus(row) {
+       this.$store
+diff --git a/src/views/Overview/OverviewEvents.vue b/src/views/Overview/OverviewEvents.vue
+index af7e294..2de09ef 100644
+--- a/src/views/Overview/OverviewEvents.vue
++++ b/src/views/Overview/OverviewEvents.vue
+@@ -81,6 +81,9 @@ export default {
+       return fileName + date;
+     },
+   },
++  destroyed() {
++    this.$store.dispatch('eventLog/clearEventLogData');
++  },
+ };
+ </script>
+ 
+-- 
+2.25.1
+

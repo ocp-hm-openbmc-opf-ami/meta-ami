@@ -1,0 +1,79 @@
+From 607d7f9586db0518571629c131880a7face08f06 Mon Sep 17 00:00:00 2001
+From: Oleksandr Shulzhenko <oleksandr.shulzhenko.viktorovych@intel.com>
+Date: Fri, 16 Jun 2023 14:15:21 +0200
+Subject: [PATCH] IntelCPUSensor: use bus name to communicate with PECI
+ adapter
+
+In somes cases (e.g. PECI o. I3C) there are more than one PECI descriptor
+in /dev. Which means that using /dev/peci-%bus_number% is incorrect -
+in I3C case such descriptor stands for the specific CPU.
+
+Add bus_name field to CpuConfig; Use this field to define the PECI /dev
+descriptor to open.
+
+Tested: peci-clients (and thus hwmons) created properly for wire, PCIe
+and I3C interfaces.
+
+Signed-off-by: Oleksandr Shulzhenko <oleksandr.shulzhenko.viktorovych@intel.com>
+Upstream-Status: Pending
+Signed-off-by: Zhikui Ren <zhikui.ren@intel.com>
+---
+ src/IntelCPUSensorMain.cpp | 16 ++++++----------
+ 1 file changed, 6 insertions(+), 10 deletions(-)
+
+diff --git a/src/IntelCPUSensorMain.cpp b/src/IntelCPUSensorMain.cpp
+index 8223f50..533f624 100644
+--- a/src/IntelCPUSensorMain.cpp
++++ b/src/IntelCPUSensorMain.cpp
+@@ -81,13 +81,14 @@ enum State
+ struct CPUConfig
+ {
+     CPUConfig(const uint64_t& bus, const uint64_t& addr,
+-              const std::string& name, const State& state) :
++              const std::string& name, const std::string& busName, const State& state) :
+         bus(bus),
+-        addr(addr), name(name), state(state)
++        addr(addr), name(name), busName(busName), state(state)
+     {}
+     int bus;
+     int addr;
+     std::string name;
++    std::string busName;
+     State state;
+ 
+     bool operator<(const CPUConfig& rhs) const
+@@ -631,7 +632,7 @@ void detectCpu(boost::asio::steady_timer& pingTimer,
+             continue;
+         }
+ 
+-        std::string peciDevPath = peciDev + std::to_string(config.bus);
++        std::string peciDevPath = peciDev + config.busName;
+ 
+         peci_SetDevName(peciDevPath.data());
+ 
+@@ -876,12 +877,7 @@ void addConfigsForOtherPeciAdapters(
+             peciAdapterName = "wire";
+         }
+ 
+-        //WA:detectCpu uses cpuConfigs to send ping command
+-        //peci-mctp does not support ping command,
+-        //detectCPU will be refactored to support peci-mctp
+-        if (peciAdapterName->compare("mctp") != 0)
+-            cpuConfigs.emplace(*peciDeviceNum, addr, name + "_" + *peciAdapterName,
+-                               state);
++        cpuConfigs.emplace(*peciDeviceNum, addr, name + "_" + *peciAdapterName, *peciAdapterName, state);
+     }
+ }
+ 
+@@ -1014,7 +1010,7 @@ bool getCpuConfig(std::shared_ptr<sdbusplus::asio::connection>& systemBus,
+                     std::cout << "type: " << type << "\n";
+                 }
+ 
+-                cpuConfigs.emplace(bus, addr, name, State::OFF);
++                cpuConfigs.emplace(bus, addr, name, "default", State::OFF);
+ 
+                 addConfigsForOtherPeciAdapters(cpuConfigs, bus, addr, name,
+                                                State::OFF);
+-- 
+2.25.1
+
