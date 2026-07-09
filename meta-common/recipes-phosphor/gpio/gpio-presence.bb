@@ -26,10 +26,10 @@ SYSTEMD_PACKAGES = "${PN}"
 SYSTEMD_SERVICE:${PN} = "gpio-presence.service"
 
 do_install (){
-    install -d ${D}${bindir}
-    install -m 0755 gpio-presence ${D}${bindir}
-    install -d ${D}${systemd_unitdir}/system
-    install -m 0644 ${UNPACKDIR}/services/gpio-presence.service ${D}${systemd_unitdir}/system/
+        install -d ${D}${bindir}
+        install -m 0755 gpio-presence ${D}${bindir}
+        install -d ${D}${systemd_unitdir}/system
+        install -m 0644 ${UNPACKDIR}/services/gpio-presence.service ${D}${systemd_unitdir}/system/
 }
 
 

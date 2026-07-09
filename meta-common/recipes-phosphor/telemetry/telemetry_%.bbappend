@@ -4,4 +4,3 @@ SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/telemetry.git;branch=ma
 SRCREV_FORMAT = "override"
 SRCREV_override = "dbd37956521ee2a484b02a82daeb63b9e89ac249"
 
-

@@ -15,7 +15,7 @@ GROUPADD_PARAM:${PN}:append = ";redfish-hostiface"
 
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/bmcweb;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "d6d282b549694f857279a7297434a0ff70578d45"
+SRCREV_override = "aa5b2d246eff987f6b4482c3fb7f14d3e7afa101"
 
 #EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '-Dintel-pfr=enabled',' ', d)}"
 #EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'meta-mgx','-Dredfish-intel-feature=enabled','', d)}"
@@ -28,11 +28,11 @@ python () {
     feats = d.getVar('EXTRA_IMAGE_FEATURES')
     meson_arg = " -Dextra_image_features='%s'" % feats
     d.setVar('EXTRA_OEMESON', d.getVar('EXTRA_OEMESON') + meson_arg)
-
+    
     platform = d.getVar('BBFILE_COLLECTIONS')
     meson_arg = " -Dbbfile_collections='%s'" % platform
     d.setVar('EXTRA_OEMESON', d.getVar('EXTRA_OEMESON') + meson_arg)
-
+    
     fstypes = d.getVar('IMAGE_FSTYPES')
     meson_arg = " -Dimage_fstypes='%s'" % fstypes
     d.setVar('EXTRA_OEMESON', d.getVar('EXTRA_OEMESON') + meson_arg)

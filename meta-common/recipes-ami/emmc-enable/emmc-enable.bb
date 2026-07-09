@@ -57,9 +57,9 @@ addtask do_convert_json_to_conf after do_compile before do_install
 
 do_install() {
         install -d ${D}${bindir}
-    install -m 0755 ${UNPACKDIR}/enable-emmc.sh ${D}${bindir}/
+        install -m 0755 ${UNPACKDIR}/enable-emmc.sh ${D}${bindir}/
         install -d ${D}${sysconfdir}
-    install -m 0644 ${UNPACKDIR}/sd_partition_info.conf ${D}${sysconfdir}/
+        install -m 0644 ${UNPACKDIR}/sd_partition_info.conf ${D}${sysconfdir}/
 }
 
 SYSTEMD_SERVICE:${PN} = "com.ami.eMMCEnable.service"

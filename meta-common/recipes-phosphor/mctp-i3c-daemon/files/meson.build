@@ -1,6 +1,6 @@
 project('mctp-i3c-daemon', 'cpp',
   version: '1.0',
-  default_options: ['cpp_std=c++20', 'warning_level=3', 'cpp_args=-Wno-unused-variable'])
+  default_options: ['cpp_std=c++23', 'warning_level=3', 'cpp_args=-Wno-unused-variable'])
 
 inc = include_directories('include')
 

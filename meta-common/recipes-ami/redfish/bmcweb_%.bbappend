@@ -3,21 +3,27 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 # The list of source files — local or remote
 SRC_URI_EXT:append= " \
-	file://collection_ext.hpp;subdir=git/ext/include \
-	file://storage_ext.hpp;subdir=git/ext/include \
+        file://common \
 "
 SRC_URI:append = "${@bb.utils.contains_any('IMAGE_FEATURES', 'onetree-msccraid onetree-nvme onetree-nvmebasic onetree-brcmraid onetree-brcmraid8 onetree-rtp', SRC_URI_EXT, '', d)}"
 
-SRC_URI_LOG:append= " \
-        file://log_services_ext.hpp;subdir=git/ext/include \
-"
-SRC_URI:append = "${@bb.utils.contains_any('IMAGE_FEATURES', 'onetree-msccraid onetree-brcmraid onetree-brcmraid8', SRC_URI_LOG, '', d)}"
+do_configure:prepend() {
+  if ${@bb.utils.contains_any('IMAGE_FEATURES',' onetree-msccraid onetree-nvme onetree-nvmebasic onetree-brcmraid onetree-brcmraid8 onetree-rtp','true','false',d)}; then
+    if [ ! -d "${S}/ext" ]; then
+        # Create the folder if it doesn't exist
+       mkdir -p "${S}/ext"
+    fi
+    cp -rin ${UNPACKDIR}/common/* ${S}/ext/
+  fi
+}
 
-EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_INSTALL', 'pciesw-service', ' -Dami-pciesw=enabled','', d)}"
-EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb-ast2600', ' -Dast2600-evb=enabled','', d)}"
-EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb-nuvoton-npcm845', ' -Darbel-nuvoton=enabled','', d)}"
-EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-intelsipack', ' -Dami-nm=enabled', '', d)}"
-EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-2fa', ' -Dami-2fa=enabled','', d)}"
-EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'egs', ' -Dami-egs=enabled','', d)}"
-EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'bhs', ' -Dami-bhs=enabled','', d)}"
-EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'aspeed-sdk-layer', ' -Dast2700-evb=enabled','', d)}"
+# The schema folder path
+SCHEMA_DIR = "${datadir}/www/redfish/v1"
+
+do_install:append() {
+	if [ -d "${S}/ext/schema/oem/ami/" ]; then
+	cp -r ${S}/ext/schema/oem/ami/csdl/* ${D}${SCHEMA_DIR}/schema/
+	cp -r ${S}/ext/schema/oem/ami/json_schema/* ${D}${SCHEMA_DIR}/JsonSchemas/
+	fi
+}
+

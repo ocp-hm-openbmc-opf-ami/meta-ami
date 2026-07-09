@@ -20,11 +20,9 @@ PRE_SRC_URI:append: = " \
                 file://systemd/check_failed_host_boot.sh \
                 file://systemd/perst_udev_event.sh \
    "
-
 SRC_URI:append = " \
     file://0001-add-npcmi3c-and-smbus-binding-test-tool.patch \
     "
-
 SYSTEMD_SERVICE:${PN}:remove:evb-npcm845 = " mctp-spi-ctrl.service "
 SYSTEMD_SERVICE:${PN}:remove:evb-npcm845 = " mctp-spi-demux.service "
 SYSTEMD_SERVICE:${PN}:remove:evb-npcm845 = " mctp-spi-demux.socket "

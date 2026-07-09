@@ -8,6 +8,7 @@
 #include <string.h>
 #include <syslog.h>
 #include <unistd.h>
+#define MAX_USER_NAME_LEN 255
 
 typedef enum nss_status nss_status_t;
 
@@ -155,7 +156,7 @@ nss_status_t _nss_radius_getpwnam_r(char *name, struct passwd *pwd,
     return result;
   }
   init_buf = buffer;
-  strncpy(pwd->pw_name, nss_res.usr.name, strlen(nss_res.usr.name));
+  snprintf(pwd->pw_name, MAX_USER_NAME_LEN, "%s", nss_res.usr.name);
   pwd->pw_uid = nss_res.usr.uid;
   pwd->pw_gid = nss_res.usr.priv;
 
@@ -172,7 +173,6 @@ enum nss_status _nss_radius_getpwuid_r(uid_t uid, struct passwd *pwd,
                                        char *buffer, size_t buflen,
                                        int *errnop) {
   enum nss_status result = NSS_STATUS_SUCCESS;
-  return result;
   int ret = 0;
   char *init_buf = NULL;
   pamusrpkt_t nss_req, nss_res;

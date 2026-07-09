@@ -44,7 +44,7 @@ detect_platform() {
         return 0
     fi
  
-    exit 1
+    return 1
 }
 
 generate_random_mac() {
@@ -149,6 +149,10 @@ create_eth() {
 }
 
 connect_eth() {
+    if [[ -f UDC && -n "$(cat UDC)" ]]; then
+        return 0
+    fi
+
     local port_index="$port_start"
 
     while (( port_index < port_start + port_count )); do
@@ -168,7 +172,7 @@ connect_eth() {
         port_index=$((port_index + 1))
     done
 
-    exit 1
+    return 0
 }
 
 disconnect_eth() {
@@ -180,11 +184,14 @@ disconnect_eth() {
 if [ ! -e "${eth_conf_directory}" ]; then
     create_eth
 else
-    cd "${eth_conf_directory}" || exit 1
+    cd "${eth_conf_directory}" || { echo >&2 "WARNING: Failed to cd into ${eth_conf_directory}, skipping."; exit 0; }
 fi
 
 if [ "$1" = "connect" ]; then
-    detect_platform
+    if ! detect_platform; then
+        echo >&2 "WARNING: Unsupported platform, skipping connect."
+        exit 0
+    fi
     connect_eth
 elif [ "$1" = "disconnect" ]; then
     disconnect_eth

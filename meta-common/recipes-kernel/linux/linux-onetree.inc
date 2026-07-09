@@ -5,11 +5,11 @@ PROVIDES += "virtual/kernel"
 
 PREFERRED_PROVIDER_virtual/kernel = "linux-onetree"
 
-KCONFIG_MODE="--alldefconfig"
-KERNEL_VERSION_SANITY_SKIP="1"
+KCONFIG_MODE = "--alldefconfig"
+KERNEL_VERSION_SANITY_SKIP = "1"
 KERNEL_EXTRA_ARGS = "V=1"
 
-KERNEL_VERSION_SANITY_SKIP="1"
+KERNEL_VERSION_SANITY_SKIP = "1"
 
 inherit kernel
 require recipes-kernel/linux/linux-yocto.inc
@@ -28,6 +28,12 @@ SRC_URI:append:amd-chalupa = " \
 SRC_URI:append:evb-ast2600-rm = " \
              file://defconfig \
 	     "
+SRC_URI:append:evb-ast2600-cdu = " \
+             file://defconfig \
+             "
+SRC_URI:append:evb-ast2600-psm = " \
+             file://defconfig \
+             "
 LINUX_VERSION_EXTENSION ?= "-${SRCREV}"
 KERNEL_LOCALVERSION = "-ami"
 

@@ -8,4 +8,3 @@ python () {
        and d.getVar('MULTI_HOST_DEFAULT_MODE') == '1':
         d.setVar('OBMC_HOST_INSTANCES', '1 2')
 }
-

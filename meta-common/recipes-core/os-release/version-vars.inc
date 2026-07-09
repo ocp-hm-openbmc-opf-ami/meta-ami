@@ -51,7 +51,8 @@ python() {
         gen = 'unknown'
 
     corebase = d.getVar('COREBASE', True)
-    mibase = os.path.join(corebase, 'meta-ami')
+    platform_layer = d.getVar('PLATFORM_VERSION_LAYER', True) or 'meta-ami'
+    mibase = os.path.join(corebase, platform_layer)
 
     obmc_hash = irun_git(d, corebase, 'rev-parse HEAD')
     obmc_vers = irun_git(d, corebase,
@@ -97,10 +98,19 @@ python() {
         d.setVar('VERSION', version)
         d.setVar('IPMI_MAJOR', versionList[1])
         d.setVar('IPMI_MINOR', versionList[2])
-        if versionList[3] == "Dev": 
-            d.setVar('IPMI_AUX13', hex(min(int(versionList[4]), 0xff)))
-        else:
-            d.setVar('IPMI_AUX13', hex(min(int(versionList[3]), 0xff)))
+        
+        # Find build count: the numeric token immediately before the 'g<hash>' field.
+        # This correctly handles 2-part (major.minor), 3-part (major.minor.patch or
+        # major.minor.date), and Dev/Pre-tagged variants regardless of case.
+        aux13 = 0
+        for i in range(3, len(versionList)):
+            if versionList[i].startswith('g') and len(versionList[i]) > 1:
+                try:
+                    aux13 = int(versionList[i - 1]) & 0xff
+                except (ValueError, IndexError):
+                    pass
+                break
+        d.setVar('IPMI_AUX13', hex(aux13))
         d.setVar('IPMI_AUX14', '0x{}'.format(meta_hash[0:2]))
         d.setVar('IPMI_AUX15', '0x{}'.format(meta_hash[2:4]))
         d.setVar('IPMI_AUX16', '0x{}'.format(meta_hash[4:6]))

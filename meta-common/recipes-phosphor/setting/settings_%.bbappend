@@ -1,6 +1,5 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/settings:"
 
-
 SRC_URI += " \
            file://system-guid.sh \
            file://system-guid.service \
@@ -30,7 +29,7 @@ SRC_URI_evb_aspeed:append =  " \
 
 SRC_URI:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb-aspeed', SRC_URI_evb_aspeed, '', d)}"
 
-SRC_URI_NON_PFR = " \
+SRC_URI_NON_PFR = " \ 
            file://0017-Remove-bios_active-and-rot_fw_active-software-settin.patch \
            "
 SRC_URI:append = " ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"

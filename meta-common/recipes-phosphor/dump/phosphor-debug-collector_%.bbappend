@@ -25,9 +25,9 @@ SRC_URI += "file://plugins.d/arpcntlconf \
 	    file://plugins.d/softIRQs  \
 	    file://plugins.d/tmpfilelist  \
 	    file://plugins.d/varfilelist  \
-	    file://service_files/obmc-dump-monitor.service \
-	    file://service_files/ramoops-monitor.service \
-	    file://service_files/xyz.openbmc_project.Dump.Manager.service \
+            file://service_files/obmc-dump-monitor.service \
+            file://service_files/ramoops-monitor.service \
+            file://service_files/xyz.openbmc_project.Dump.Manager.service \
 	   "
 
 do_install:prepend() {
@@ -39,4 +39,3 @@ do_install:append() {
     install -d ${D}${dreport_plugin_dir}
     install -m 0755 ${UNPACKDIR}/plugins.d/* ${D}${dreport_plugin_dir}/
 }
-

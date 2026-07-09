@@ -1,7 +1,7 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI += " \
-           file://phosphor-multi-gpio-monitor.json \
+	    file://phosphor-multi-gpio-monitor.json \
            "
 
 FILES:${PN}-monitor = "${bindir}/phosphor-gpio-monitor"

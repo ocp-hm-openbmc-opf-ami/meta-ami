@@ -14,43 +14,43 @@ PACKAGECONFIG:append = "${@bb.utils.contains('FEATURE_OEM_PRIV', '1', ' oem-priv
 PACKAGECONFIG[oem-privilege] = "-Doem-privilege=enabled,-Doem-privilege=disabled"
 
 SRC_URI += " \
-                     file://0003-Add-Host-Interface-User-Support.patch \
-                     file://0012-passwordpolicy.patch \
-                     file://0015-passwordchangerequired.patch \
-                     file://0017-SSH-Active-User-Delete-Fix.patch \
-                     file://0019-manual-lockout-fix.patch \
-                     file://0016-Restricting-the-asd-user-under-redfish.patch \
-                     file://0018-add-snmp-media-group.patch \
-                     file://0022-Fix-to-add-support-to-include-dot-.-in-username.patch \
-                     file://0227-Added-chaanges-for-Pam-Reorder.patch \
-                     file://0025-OT-14429-Updated-username-validation-check.patch \
-                     file://0199-RadiusUserAccountService.patch \
-                     file://0023-KerberosRelatedUserManagerChanges.patch \
-                     file://0231-Kerberos-Config-User-Manager.patch \
-                     file://0232-IPV6-Feature-enable-related-changes.patch \
-                     file://0203-fixedInvalidPamreorder.patch \
-                     file://0234-Added-Radius-In-Pamorder.patch \
-                     file://0205-Removed-ipmi-Group-Check-Internal-Users.patch \
-                     file://0236-Rename-Sync-Snmp-User.patch \
-                     file://0237-channel-support.patch \
-                     file://0238-Preserved-User-SNMP-Access-FB.patch \
-                     file://0239-ForgotPaswordFeature.patch \
-                     file://0211-Channel-Privilege-Support-VLAN.patch \
-                     file://0241-Fixed-Rename-User.patch \
-                     file://0242-getchannelfromip-loop-index-userinfo-alignment.patch \
-                     file://0242-Login-Failed-if-UserDataFile-not-present-for-first-t.patch \
-                     file://0214-Reduced-Service-Boot-time.patch \
-                     file://0244-Fixed-Rename-User-LF.patch \
-                     file://0245-Exclude-dot-on-username.patch \
-                     file://0215-Added-User-Type.patch \
+              file://0003-Add-Host-Interface-User-Support.patch \
+              file://0012-passwordpolicy.patch \
+              file://0015-passwordchangerequired.patch \
+              file://0017-SSH-Active-User-Delete-Fix.patch \
+              file://0019-manual-lockout-fix.patch \
+              file://0016-Restricting-the-asd-user-under-redfish.patch \
+              file://0018-add-snmp-media-group.patch \
+              file://0022-Fix-to-add-support-to-include-dot-.-in-username.patch \
+              file://0227-Added-chaanges-for-Pam-Reorder.patch \
+              file://0025-OT-14429-Updated-username-validation-check.patch \
+              file://0199-RadiusUserAccountService.patch \
+              file://0023-KerberosRelatedUserManagerChanges.patch \
+              file://0231-Kerberos-Config-User-Manager.patch \
+              file://0232-IPV6-Feature-enable-related-changes.patch \
+              file://0203-fixedInvalidPamreorder.patch \
+              file://0234-Added-Radius-In-Pamorder.patch \
+              file://0205-Removed-ipmi-Group-Check-Internal-Users.patch \
+              file://0236-Rename-Sync-Snmp-User.patch \
+              file://0237-channel-support.patch \
+              file://0238-Preserved-User-SNMP-Access-FB.patch \
+              file://0239-ForgotPaswordFeature.patch \
+              file://0211-Channel-Privilege-Support-VLAN.patch \
+              file://0241-Fixed-Rename-User.patch \
+              file://0242-getchannelfromip-loop-index-userinfo-alignment.patch \
+              file://0242-Login-Failed-if-UserDataFile-not-present-for-first-t.patch \
+              file://0214-Reduced-Service-Boot-time.patch \
+              file://0244-Fixed-Rename-User-LF.patch \
+              file://0245-Exclude-dot-on-username.patch \
+              file://0215-Added-User-Type.patch \
            "
 #OEM Privilege
 SRC_URI_OEM_PRIV:append = "file://upgrade_media_group.sh \
                            file://xyz.openbmc_project.User.Manager-ami.service \
                           "
 do_install:append () {
-      install -m 0644 -D ${S}/phosphor-kerberos-config/phosphor-kerberos-config.service \
-            ${D}${systemd_system_unitdir}/phosphor-kerberos-config.service
+    install -m 0644 -D ${S}/phosphor-kerberos-config/phosphor-kerberos-config.service \
+        ${D}${systemd_system_unitdir}/phosphor-kerberos-config.service
 }
 SRC_URI:append = "${@bb.utils.contains('FEATURE_OEM_PRIV', '1',SRC_URI_OEM_PRIV, ' ', d)}"
 

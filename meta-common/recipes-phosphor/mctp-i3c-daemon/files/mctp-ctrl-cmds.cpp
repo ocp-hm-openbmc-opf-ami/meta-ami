@@ -406,7 +406,7 @@ int getMctpVersion(MctpDevice& device)
  * @param device Reference to MctpDevice
  * @return 0 on success, negative value on failure
  */
-int getEid(MctpDevice& device)
+int getEid(MctpDevice& device, uint8_t eid)
 {
     mctpPrInfo("Sending Get EID cmd");
     uint8_t rxBuf[64];
@@ -423,6 +423,11 @@ int getEid(MctpDevice& device)
     auto rc = mctpCtrlSendRecvExtended(
         reinterpret_cast<uint8_t*>(&getEid), sizeof(getEid), rxBuf, &rxLen,
         device.hwAddr, sizeof(device.hwAddr), device.ifIndex, 5000);
+
+    if (eid == rxBuf[3]) // Check if the EID in response matches requested EID
+    {
+        return 1;        // EID matches, return success
+    }
 
     if (rc < 0)
     {
@@ -1126,7 +1131,7 @@ int getUuidForEid(uint8_t eid)
     memset(rxBuf, 0x0, rxLen);
 
     rc = mctpCtrlSendRecv(reinterpret_cast<uint8_t*>(&getUuid), sizeof(getUuid),
-                          rxBuf, &rxLen, eid, 1000);
+                          rxBuf, &rxLen, eid, 200);
 
     if (rc < 0)
     {
@@ -1612,7 +1617,8 @@ void registerEndpoint(
     epIface->register_property(
         "MediumType",
         std::string{"xyz.openbmc_project.MCTP.Endpoint.MediumType.I3C"});
-    epIface->register_property("NetworkId", MCTP_I3C_NET);
+    epIface->register_property("NetworkId",
+                               static_cast<uint32_t>(MCTP_I3C_NET));
     epIface->register_property("SupportedMessageTypes", msgTypes);
     epIface->initialize();
     ifaces.push_back(epIface);

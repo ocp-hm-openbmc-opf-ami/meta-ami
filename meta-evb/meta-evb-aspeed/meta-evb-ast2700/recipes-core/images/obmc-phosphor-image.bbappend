@@ -2,8 +2,8 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 IMAGE_INSTALL:append = " \
         libmctp \
         "
-#        entity-manager
-#        virtual-media
+#        entity-manager 
+#        virtual-media 
 
 IMAGE_INSTALL:append = " \
         packagegroup-oss-apps \

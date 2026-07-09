@@ -56,12 +56,12 @@ do_install:append:ast2700-default() {
     rm -f ${D}${nonarch_base_libdir}/systemd/system/mctp-spi-demux.socket
     
     if ${@bb.utils.contains('ENABLE_MCTP_KERNEL_MODE', '1', 'true', 'false', d)}; then
-        install -m 0644 ${UNPACKDIR}/mctp_cfg_kernel.cfg ${D}${datadir}/mctp/mctp_cfg_kernel.cfg
-        install -m 0644 ${UNPACKDIR}/systemd/mctp-kernel-ctrl.service  ${D}${nonarch_base_libdir}/systemd/system/    
+	    install -m 0644 ${UNPACKDIR}/mctp_cfg_kernel.cfg ${D}${datadir}/mctp/mctp_cfg_kernel.cfg
+	    install -m 0644 ${UNPACKDIR}/systemd/mctp-kernel-ctrl.service  ${D}${nonarch_base_libdir}/systemd/system/    
     else
-        install -m 0644 ${UNPACKDIR}/mctp_cfg_smbus8.json ${D}${datadir}/mctp/mctp_cfg_smbus8.json
-        install -m 0644 ${UNPACKDIR}/systemd/mctp-i2c8-ctrl.service  ${D}${nonarch_base_libdir}/systemd/system/
-        install -m 0644 ${UNPACKDIR}/systemd/mctp-i2c8-demux.service ${D}${nonarch_base_libdir}/systemd/system/
-        install -m 0644 ${UNPACKDIR}/systemd/mctp-i2c8-demux.socket  ${D}${nonarch_base_libdir}/systemd/system/
+	    install -m 0644 ${UNPACKDIR}/mctp_cfg_smbus8.json ${D}${datadir}/mctp/mctp_cfg_smbus8.json
+	    install -m 0644 ${UNPACKDIR}/systemd/mctp-i2c8-ctrl.service  ${D}${nonarch_base_libdir}/systemd/system/
+	    install -m 0644 ${UNPACKDIR}/systemd/mctp-i2c8-demux.service ${D}${nonarch_base_libdir}/systemd/system/
+	    install -m 0644 ${UNPACKDIR}/systemd/mctp-i2c8-demux.socket  ${D}${nonarch_base_libdir}/systemd/system/
     fi
 }

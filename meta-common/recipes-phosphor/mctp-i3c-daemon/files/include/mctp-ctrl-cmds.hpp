@@ -65,7 +65,7 @@ bool isLocalEidExclude(uint8_t eid, uint8_t exclude_eid);
 int addAddr(uint8_t eid, int ifIndex);
 int sendDiscoveryNotify(MctpDevice& device);
 int getMctpVersion(MctpDevice& device);
-int getEid(MctpDevice& device);
+int getEid(MctpDevice& device, uint8_t eid);
 int setEid(MctpDevice& device, uint8_t eid);
 int getMsgType(MctpDevice& device);
 int getVdmSupport(MctpDevice& device);

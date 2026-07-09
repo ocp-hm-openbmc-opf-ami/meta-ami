@@ -3,7 +3,6 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 EXTRA_OECONF += "--disable-des \
                 --enable-blumenthal-aes \
                 "
-
 SRC_URI += " \
     file://net-snmp-create-v3-user \
     file://0001-SNMP-lock-mode.patch \

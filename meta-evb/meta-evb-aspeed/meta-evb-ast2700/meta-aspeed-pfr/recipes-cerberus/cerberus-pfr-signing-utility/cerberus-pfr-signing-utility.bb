@@ -15,7 +15,6 @@ PV = "v03.00+git"
 SRCREV = "14cc8ba99aea8db8928c810092da3ff28d45be1b"
 BRANCH = "aspeed-master"
 
-S = "${WORKDIR}/git"
 
 inherit python3native setuptools3
 
@@ -29,27 +28,27 @@ do_install() {
     install -d -m 0755 ${D}${datadir}/cerberus/manifest_tools
     install -m 0644 ${S}/tools/manifest_tools/*.* ${D}${datadir}/cerberus/manifest_tools/.
     # install config, xml and key
-    install -m 0644 ${WORKDIR}/keys/*.* ${D}${datadir}/cerberus/manifest_tools/.
-    install -m 0644 ${WORKDIR}/manifest_tools/*.* ${D}${datadir}/cerberus/manifest_tools/.
+    install -m 0644 ${S}/keys/*.* ${D}${datadir}/cerberus/manifest_tools/.
+    install -m 0644 ${S}/manifest_tools/*.* ${D}${datadir}/cerberus/manifest_tools/.
 
     # recovery tools
     install -d -m 0755 ${D}${datadir}/cerberus/recovery_tools
     install -m 0644 ${S}/tools/recovery_tools/*.* ${D}${datadir}/cerberus/recovery_tools/.
     # install config, xml and key
-    install -m 0644 ${WORKDIR}/keys/*.* ${D}${datadir}/cerberus/recovery_tools/.
-    install -m 0644 ${WORKDIR}/recovery_tools/*.* ${D}${datadir}/cerberus/recovery_tools/.
+    install -m 0644 ${S}/keys/*.* ${D}${datadir}/cerberus/recovery_tools/.
+    install -m 0644 ${S}/recovery_tools/*.* ${D}${datadir}/cerberus/recovery_tools/.
 
     # provision tools
     install -d -m 0755 ${D}${datadir}/cerberus/provision_tools
     install -m 0644 ${S}/tools/provision_tools/*.* ${D}${datadir}/cerberus/provision_tools/.
     # install key
-    install -m 0644 ${WORKDIR}/keys/*.* ${D}${datadir}/cerberus/provision_tools/.
+    install -m 0644 ${S}/keys/*.* ${D}${datadir}/cerberus/provision_tools/.
 
     # key management
     install -d -m 0755 ${D}${datadir}/cerberus/key_management_tools
     install -m 0644 ${S}/tools/key_management_tools/*.* ${D}${datadir}/cerberus/key_management_tools/.
     # install key
-    install -m 0644 ${WORKDIR}/keys/*.* ${D}${datadir}/cerberus/key_management_tools/.
+    install -m 0644 ${S}/keys/*.* ${D}${datadir}/cerberus/key_management_tools/.
 }
 
 BBCLASSEXTEND = "native nativesdk"

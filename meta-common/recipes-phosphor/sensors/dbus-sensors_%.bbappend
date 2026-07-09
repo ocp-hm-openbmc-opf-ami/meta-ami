@@ -45,6 +45,7 @@ PACKAGECONFIG:append = " processorstatus \
             external \
 "
 
+
 SYSTEMD_SERVICE:${PN}:append = " ${@bb.utils.contains('PACKAGECONFIG', 'processorstatus', \
                                                'xyz.openbmc_project.processorstatus.service', \
                                                '', d)}"

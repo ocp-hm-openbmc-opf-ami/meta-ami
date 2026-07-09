@@ -29,19 +29,20 @@ SYSTEMD_SERVICE:${PN} += " \
      ${PN}@${ALT_RMCPP_IFACE_ETH3}.socket \
      "
 
+
 PACKAGECONFIG:append ="${@bb.utils.contains('MULTI_SOL_ENABLED', '1', ' multi_sol', ' ', d)}"
 PACKAGECONFIG[multi_sol] = "-Dmulti_sol=enabled,-Dmulti_sol=disabled"
 
 
 do_install:append() {
-     install -m 0644 ${UNPACKDIR}/${BPN}@bond0.service \
-          ${D}${systemd_system_unitdir}/${BPN}@bond0.service
-     install -m 0644 ${UNPACKDIR}/${BPN}@bond0.socket \
-          ${D}${systemd_system_unitdir}/${BPN}@bond0.socket
+    install -m 0644 ${UNPACKDIR}/${BPN}@bond0.service \
+        ${D}${systemd_system_unitdir}/${BPN}@bond0.service
+    install -m 0644 ${UNPACKDIR}/${BPN}@bond0.socket \
+        ${D}${systemd_system_unitdir}/${BPN}@bond0.socket
 }
 
 FILES:${PN} += " \
-                    ${systemd_system_unitdir}/${PN}@bond0.service \
-                    ${systemd_system_unitdir}/${PN}@bond0.socket \
-                  "
+                ${systemd_system_unitdir}/${PN}@bond0.service \
+                ${systemd_system_unitdir}/${PN}@bond0.socket \
+               "
 

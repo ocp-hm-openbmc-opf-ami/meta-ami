@@ -5,7 +5,7 @@ LICENSE = "Apache-2.0"
 LIC_FILES_CHKSUM = "file://${UNPACKDIR}/LICENSE-2.0.txt;md5=3b83ef96387f14655fc854ddc3c6bd57"
 
 S = "${WORKDIR}/sources"
-UNPACKDIR = "${WORKDIR}"
+UNPACKDIR = "${S}"
 
 SRC_URI = "file://gen_emmc_boot_image.py \
            file://gen_uart_booting_image.py \

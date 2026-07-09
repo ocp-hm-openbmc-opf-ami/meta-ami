@@ -15,7 +15,7 @@ PACKAGECONFIG:append = " imjournal openssl"
 do_install:append() {
     install -d ${D}${systemd_system_unitdir}/rsyslog.service.d
     install -m 0644 ${UNPACKDIR}/rsyslog-override.conf \
-	    ${D}${systemd_system_unitdir}/rsyslog.service.d/rsyslog-override.conf
+            ${D}${systemd_system_unitdir}/rsyslog.service.d/rsyslog-override.conf
     install -m 0755 ${UNPACKDIR}/hostconsole.conf ${D}${sysconfdir}/rsyslog.d/hostconsole.conf
     install -m 0755 ${UNPACKDIR}/extlog.conf ${D}${sysconfdir}/rsyslog.d/extlog.conf
     install -m 0755 ${UNPACKDIR}/syslog.conf ${D}${sysconfdir}/rsyslog.d/syslog.conf

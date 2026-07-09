@@ -5,11 +5,11 @@ SRCREV_FORMAT = "override"
 SRCREV_override = "369074698ee4c4726feb6ca171e7aa8e92f3f449"
 
 SRC_URI += "\
-                                file://srvcfg.json \
-                                "
+                file://srvcfg.json \
+                "
 
 PACKAGECONFIG = " \
-        persist-settings-to-file \
+    persist-settings-to-file \
 "
 
 DEPENDS += "nlohmann-json"

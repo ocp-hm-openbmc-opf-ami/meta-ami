@@ -5,8 +5,8 @@
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
 
-const char* aesKeyFile = "/etc/radiusclient-ng/AESKey";
-const char* aesIVFile = "/etc/radiusclient-ng/AESIV";
+const char* aesKeyFile = "/etc/radiusclient/AESKey";
+const char* aesIVFile = "/etc/radiusclient/AESIV";
 
 #define AES_MAX_KEY_LENGTH 32  // 256 bits
 #define AES_MAX_IV_LENGTH 16   // 128 bits
@@ -77,14 +77,19 @@ bool AES_GenerateAndSaveKeys(const char* keyFile, const char* ivFile) {
     char* encodedIV = base64_encode(iv, AES_MAX_IV_LENGTH);
     
     // Save to files
-    FILE* fkey = fopen(keyFile, "wb");
+     FILE* fkey = fopen(keyFile, "wb");
+     if (!fkey) {
+	     free(encodedKey);
+	     free(encodedIV);
+	     return false;
+     }
+
     FILE* fiv = fopen(ivFile, "wb");
-    if (!fkey || !fiv) {
-        free(encodedKey);
-        free(encodedIV);
-        if (fkey) fclose(fkey);
-        if (fiv) fclose(fiv);
-        return false;
+    if (!fiv) {
+	    fclose(fkey);
+	    free(encodedKey);
+	    free(encodedIV);
+	    return false;
     }
     
     fwrite(encodedKey, 1, strlen(encodedKey), fkey);
@@ -196,7 +201,7 @@ std::string encryptString(const std::string& plaintext) {
     ciphertext_len += len;
 
     EVP_CIPHER_CTX_free(ctx);
-    char* b64 = base64_encode(ciphertext.data(), ciphertext_len);
+     char* b64 = base64_encode(ciphertext.data(), ciphertext_len);
     if (!b64)
     {
 	    std::cerr << "Base64 encoding failed" << std::endl;

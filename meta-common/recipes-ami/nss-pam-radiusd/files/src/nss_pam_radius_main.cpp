@@ -10,7 +10,6 @@ extern "C"
 #include <unistd.h>
 
 #include <boost/asio/io_context.hpp>
-#include <boost/asio/io_service.hpp>
 #include <boost/asio/steady_timer.hpp>
 #include <boost/container/flat_map.hpp>
 #include <nlohmann/json.hpp>
@@ -28,9 +27,11 @@ using json = nlohmann::json;
 #define TRUE 1
 #define FALSE 0
 #define NUM_OF_PAM_USERS 16
-#define RADIUSCLIENTCONF "/etc/radiusclient-ng/radiusclient.conf"
-#define RADIUSSERVERCONF "/etc/radiusclient-ng/servers"
+#define RADIUSCLIENTCONF "/etc/radiusclient/radiusclient.conf"
+#define RADIUSSERVERCONF "/etc/radiusclient/servers"
 #define RADIUSJSONCONF "/var/lib/radius-configuration.json"
+#define RADIUS_UPDATE_PASSWORD   0
+#define RADIUS_UPDATE_IP         1
 
 static constexpr const char* radiusService =
     "xyz.openbmc_project.Radius.Config";
@@ -148,10 +149,11 @@ void updateServerFile(const std::string& filename, int IpOrPassword,
         return;
     }
 
-    std::ofstream outfile("/etc/radiusclient-ng/servers.txt");
+    std::ofstream outfile("/etc/radiusclient/servers.txt");
     if (!outfile)
     {
         std::cerr << "Error opening file for writing!" << std::endl;
+	infile.close();
         return;
     }
     while (std::getline(infile, currentLine))
@@ -187,8 +189,8 @@ void updateServerFile(const std::string& filename, int IpOrPassword,
 
     infile.close();
     outfile.close();
-    if (std::rename("/etc/radiusclient-ng/servers.txt",
-                    "/etc/radiusclient-ng/servers") != 0)
+    if (std::rename("/etc/radiusclient/servers.txt",
+                    "/etc/radiusclient/servers") != 0)
     {
         std::cerr << "Error renaming temporary file.\n";
         return;
@@ -246,11 +248,13 @@ void updateJsonField(const std::string& filename, const std::string& section,
         {
             std::cout << "parsePefConf: Error parsing PEF config file"
                       << std::endl;
+	    inFile.close();
             return;
         }
         catch (std::out_of_range& e)
         {
             std::cout << "parsePefConf: Error invalid type" << std::endl;
+	    inFile.close();
             return;
         }
         inFile.close();
@@ -303,7 +307,7 @@ int main()
     pid_t pid = fork();
     if (pid == 0)
     {
-        boost::asio::io_service io;
+        boost::asio::io_context io;
         auto conn = std::make_shared<sdbusplus::asio::connection>(io);
         conn->request_name(radiusService);
         auto server = sdbusplus::asio::object_server(conn);
@@ -446,10 +450,18 @@ int main()
             [&ip, &oldstring,
              &newstring](const std::string& requested, std::string& resp) {
                 newstring = requested;
-                updateConfFile(RADIUSCLIENTCONF, vec, newstring, 0);
-                updateServerFile(RADIUSSERVERCONF, 1, newstring);
+                updateServerFile(RADIUSSERVERCONF, RADIUS_UPDATE_IP, newstring);
                 updateJsonField(RADIUSJSONCONF, "RadiusConfig", "IP",
                                 requested);
+		addrinfo hints{}, *res = nullptr;
+		hints.ai_family = AF_UNSPEC;
+		if (getaddrinfo(newstring.c_str(), nullptr, &hints, &res) == 0)
+		{
+		if (res->ai_family == AF_INET6)
+		newstring = "[" + newstring + "]";
+		freeaddrinfo(res);
+		}
+                updateConfFile(RADIUSCLIENTCONF, vec, newstring, 0);
                 resp = requested;
                 return 1;
             });
@@ -458,7 +470,7 @@ int main()
             [&password, &oldstring,
              &newstring](const std::string& requested, std::string& resp) {
                 newstring = requested;
-                updateServerFile(RADIUSSERVERCONF, 0, newstring);
+                updateServerFile(RADIUSSERVERCONF, RADIUS_UPDATE_PASSWORD, newstring);
                 return 1;
             });
         radIface->register_property(

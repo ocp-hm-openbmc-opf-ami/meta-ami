@@ -23,9 +23,9 @@ SRC_URI += "\
 do_install:append() {
     install -m 0755 -d ${D}${sysconfdir}/${BPN}
 if [ "${MULTI_SOL_ENABLED}" = "1" ]; then
-	install -m 0644 ${UNPACKDIR}/ttyS*.conf ${D}${sysconfdir}/${BPN}/
+    install -m 0644 ${UNPACKDIR}/ttyS*.conf ${D}${sysconfdir}/${BPN}/
 else
-	install -m 0644 ${UNPACKDIR}/ttyS2.conf ${D}${sysconfdir}/${BPN}/
+    install -m 0644 ${UNPACKDIR}/ttyS2.conf ${D}${sysconfdir}/${BPN}/
 fi
 
           # Remove upstream-provided default configuration

@@ -30,10 +30,10 @@ do_generate_full_image_tar() {
     ln -sf "${DEPLOY_DIR_IMAGE}/image-mtd" "image-bmc"
     ln -sf ${B}/MANIFEST .
     # make_signatures image-bmc MANIFEST publickey
-    tar -h -czvf "${DEPLOY_DIR_IMAGE}/${PN}-image-update-full-${MACHINE}-${DATETIME}.tar" image-bmc MANIFEST 
+    tar -h -czvf "${DEPLOY_DIR_IMAGE}/${IMAGE_BASENAME}-image-update-full-${MACHINE}-${DATETIME}.tar" image-bmc MANIFEST 
     # make a symlink
-    ln -sf "${PN}-image-update-full-${MACHINE}-${DATETIME}.tar" "${DEPLOY_DIR_IMAGE}/image-update-full-${MACHINE}"
-    ln -sf "${PN}-image-update-full-${MACHINE}-${DATETIME}.tar" "${DEPLOY_DIR_IMAGE}/OBMC-full-${@ do_get_version(d)}-oob.bin"
+    ln -sf "${IMAGE_BASENAME}-image-update-full-${MACHINE}-${DATETIME}.tar" "${DEPLOY_DIR_IMAGE}/image-update-full-${MACHINE}"
+    ln -sf "${IMAGE_BASENAME}-image-update-full-${MACHINE}-${DATETIME}.tar" "${DEPLOY_DIR_IMAGE}/OBMC-full-${@ do_get_version(d)}-oob.bin"
     ln -sf "image-update-full-${MACHINE}" "${DEPLOY_DIR_IMAGE}/image-update-full"
     ln -sf "image-update-full-${MACHINE}" "${DEPLOY_DIR_IMAGE}/OBMC-full-${@ do_get_version(d)}-inband.bin"
 
@@ -50,9 +50,9 @@ do_generate_full_image_tar[depends] += " \
 do_image_signed_fitimage_rootfs() {
     cd "${B}/img"
     # make_signatures image-kernel image-rofs image-rwfs image-u-boot MANIFEST publickey
-    tar -h -czvf "${DEPLOY_DIR_IMAGE}/${PN}-image-update-${MACHINE}-${DATETIME}.tar" MANIFEST image-u-boot image-runtime image-kernel image-rofs image-rwfs 
-    ln -sf "${PN}-image-update-${MACHINE}-${DATETIME}.tar" "${DEPLOY_DIR_IMAGE}/image-update-${MACHINE}"
-    ln -sf "${PN}-image-update-${MACHINE}-${DATETIME}.tar" "${DEPLOY_DIR_IMAGE}/OBMC-${@ do_get_version(d)}-oob.bin"
+    tar -h -czvf "${DEPLOY_DIR_IMAGE}/${IMAGE_BASENAME}-image-update-${MACHINE}-${DATETIME}.tar" MANIFEST image-u-boot image-runtime image-kernel image-rofs image-rwfs 
+    ln -sf "${IMAGE_BASENAME}-image-update-${MACHINE}-${DATETIME}.tar" "${DEPLOY_DIR_IMAGE}/image-update-${MACHINE}"
+    ln -sf "${IMAGE_BASENAME}-image-update-${MACHINE}-${DATETIME}.tar" "${DEPLOY_DIR_IMAGE}/OBMC-${@ do_get_version(d)}-oob.bin"
     ln -sf "image-update-${MACHINE}" "${DEPLOY_DIR_IMAGE}/image-update"
     ln -sf "image-update-${MACHINE}" "${DEPLOY_DIR_IMAGE}/OBMC-${@ do_get_version(d)}-inband.bin"
 }
@@ -77,6 +77,45 @@ python() {
                 'do_image_signed_fitimage_rootfs',
                 'do_build',
                 ' do_image_fitimage_rootfs ', d)
+}
+
+CLEANFUNCS += "clean_deploy_signed_image_artifacts"
+python clean_deploy_signed_image_artifacts() {
+    import os, glob
+    deploy_dir = d.getVar('DEPLOY_DIR_IMAGE')
+    if not deploy_dir or not os.path.isdir(deploy_dir):
+        return
+
+    machine = d.getVar('MACHINE') or ''
+    image_basename = d.getVar('IMAGE_BASENAME') or d.getVar('PN') or ''
+
+    patterns = [
+        # full image tar files
+        '%s-image-update-full-%s-*.tar' % (image_basename, machine),
+        # signed image-update tar files
+        '%s-image-update-%s-*.tar' % (image_basename, machine),
+        # OBMC full oob/inband symlinks
+        'OBMC-full-*-oob.bin',
+        'OBMC-full-*-inband.bin',
+        'OBMC-*-oob.bin',
+        'OBMC-*-inband.bin',
+    ]
+
+    for pat in patterns:
+        for f in glob.glob(os.path.join(deploy_dir, pat)):
+            try:
+                os.remove(f)
+                bb.note("Removed %s" % f)
+            except OSError:
+                pass
+
+    # Remove specific symlinks
+    for name in ['image-update-full-%s' % machine, 'image-update-full',
+                  'image-update-%s' % machine, 'image-update']:
+        fpath = os.path.join(deploy_dir, name)
+        if os.path.lexists(fpath):
+            os.remove(fpath)
+            bb.note("Removed %s" % fpath)
 }
 
 clean_pubkey() {

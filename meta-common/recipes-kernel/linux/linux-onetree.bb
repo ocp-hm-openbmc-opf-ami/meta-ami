@@ -203,6 +203,7 @@ SRC_URI:append = " file://0009-mctp-pcie-vdm-add-carrier-state-for-PCIe-reset.pa
 SRC_URI:append = " file://0010-aspeed-mctp-handle-PCIe-host-reset.patch "
 SRC_URI:append = " file://0012-Response-null-eid-in-0B-0C-command-code.patch "
 
+
 # ABR mode detection patch for AST2600
 SRC_URI_ABR_PATCH = "file://0001-spi-aspeed-Add-ABR-mode-detection-support-for-AST260.patch"
 

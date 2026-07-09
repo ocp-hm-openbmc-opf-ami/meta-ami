@@ -26,6 +26,7 @@ SRC_URI:append:2700-dcscm-features = " \
 PV = "2.2.0+git"
 SRCREV = "aef708d2016a17722ff9eddb7f312fb5ac8e4f7e"
 
+
 EXTRA_OECMAKE = "-DARCH=arm -DTOOLCHAIN=YOCTO -DTARGET=Debug -DCRYPTO=mbedtls"
 
 DEPENDS += " \

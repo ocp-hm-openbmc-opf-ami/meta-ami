@@ -1,6 +1,7 @@
 SUMMARY = "Default Fru"
 DESCRIPTION = "Installs a default fru file to image"
 
+
 SRC_URI = "file://baseboard.fru.bin"
 
 LICENSE = "CLOSED"

@@ -8,7 +8,7 @@ DEPENDS:append = " libpdkhook "
 RDEPENDS:${PN}:append = " libpdkhook "
 
 SRC_URI = " \
-           file://main.cpp \ 
+           file://main.cpp \
            file://meson.build \
            file://platforminit.service \
           "

@@ -7,8 +7,8 @@ APP_NAME = "adcapp"
 bindir = "/usr/bin"
 
 SRC_URI = "git://github.com/openbmc/openbmc-tools;protocol=https;branch=master \
-		   file://0001-fix_build_adcapp.patch;patchdir=../.. \
-		   "
+           file://0001-fix_build_adcapp.patch;patchdir=../.. \
+           "
 
 
 SRCREV = "8355598fbe7a98ea1d96666157cbbf2459ba8908"

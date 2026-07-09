@@ -30,7 +30,7 @@ RDEPENDS:${PN}-updater:remove = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree
 RDEPENDS:${PN}-updater:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-nvidiasipack', ' pldm', '', d)}"
 
 # NVIDIA's libpldm still uses the original symbol name crc32()
-# libpldm renamed it to pldm_edac_crc32() in 0004 patch via the PACKAGE_HEADER_CRC32 macro.
+# libpldm renamed it to pldm_edac_crc32() in 0004 patch via the PACKAGE_HEADER_CRC32 macro. 
 CXXFLAGS:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-nvidiasipack', ' -Dpldm_edac_crc32=crc32', '', d)}"
 
 SRC_URI:append = " \
@@ -61,7 +61,7 @@ SRC_URI_NON_PFR_DUAL:append = "file://intel-flash-bmc \
                                 file://reset-cs0-aspeed  \
                                 file://synclist \
                                 file://0003-adding-support-for-non-pfr-dual-image-inventory-popu.patch \
-                                "
+                                "                          
 SRC_URI_NON_PFR_DUAL:append:intel-ast2600 = " file://sync-once.sh \
                                              "
 
@@ -71,13 +71,12 @@ SRC_URI_NON_PFR_DUAL:append = " file://obmc-flash-bmc-prepare-for-sync.service.i
                                               "
 
 SRC_URI:append = " ${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', SRC_URI_NON_PFR_DUAL , '', d)}"
-FILES:${PN}-updater:append:intel-ast2600 = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/intel-flash-bmc ', '', d)}"
-FILES:${PN}-updater:append:evb-ast2600 = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/ami-flash-bmc ', '', d)}"
-FILES:${PN}-updater:append:ast2700-default = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/ami-flash-bmc ', '', d)}"
-FILES:${PN}-updater:append:intel-ast2600 = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${systemd_unitdir}/system/obmc-flash-bmc-static-mount-alt.service ', '', d)}"
-FILES:${PN}-updater:append = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/detect-slot-aspeed ', '', d)}"
-FILES:${PN}-updater:append = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/reset-cs0-aspeed ', '', d)}"
-FILES:${PN}-updater:append = "${@bb.utils.contains('PACKAGECONFIG', 'sync_bmc_files', ' ${bindir}/sync-once.sh ', '', d)}"
+FILES:${PN}-updater:append:intel-ast2600 = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/intel-flash-bmc ', '', d)}" 
+FILES:${PN}-updater:append = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/ami-flash-bmc', '', d) if d.getVar('MACHINE') in ['evb-ast2600', 'ast2700-default', 'ast2700-a1-spl'] else ''}"
+FILES:${PN}-updater:append:intel-ast2600 = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${systemd_unitdir}/system/obmc-flash-bmc-static-mount-alt.service ', '', d)}" 
+FILES:${PN}-updater:append = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/detect-slot-aspeed ', '', d)}" 
+FILES:${PN}-updater:append = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/reset-cs0-aspeed ', '', d)}" 
+FILES:${PN}-updater:append = "${@bb.utils.contains('PACKAGECONFIG', 'sync_bmc_files', ' ${bindir}/sync-once.sh ', '', d)}" 
 FILES:${PN}-updater:append = "${@bb.utils.contains('PACKAGECONFIG', 'sync_bmc_files', ' /etc/sync-enable ', '', d)}"
 FILES:${PN}-updater:append = "${@bb.utils.contains('PACKAGECONFIG', 'sync_bmc_files', ' ${systemd_unitdir}/system/xyz.openbmc_project.Software.Sync.service.d/10-conditional.conf ', '', d)}"
 FILES:${PN}-updater:append = "${bindir}/inband-fwupd.sh"
@@ -97,13 +96,13 @@ do_install:append () {
             if ${@bb.utils.contains('PACKAGECONFIG','sync_bmc_files','true','false',d)}; then
                install -m 0755 ${UNPACKDIR}/synclist ${D}/etc/synclist
                install -m 0644 ${UNPACKDIR}/obmc-flash-bmc-prepare-for-sync.service.in  ${D}${systemd_unitdir}/system/obmc-flash-bmc-prepare-for-sync.service
-               install -m 0644 ${UNPACKDIR}/xyz.openbmc_project.Software.Sync.service.in  ${D}${systemd_unitdir}/system/xyz.openbmc_project.Software.Sync.service
+               install -m 0644 ${UNPACKDIR}/xyz.openbmc_project.Software.Sync.service.in  ${D}${systemd_unitdir}/system/xyz.openbmc_project.Software.Sync.service	
                install -d ${D}${systemd_unitdir}/system/xyz.openbmc_project.Software.Sync.service.d
                install -m 0644 ${UNPACKDIR}/xyz.openbmc_project.Software.Sync.service.d/10-conditional.conf ${D}${systemd_unitdir}/system/xyz.openbmc_project.Software.Sync.service.d/10-conditional.conf
                touch ${D}/etc/sync-enable
             fi
-
-         fi
+	
+         fi  
       fi
 }
 
@@ -118,7 +117,7 @@ do_install:append:intel-ast2600 () {
 }
 
 do_install:append() {
-   case "${MACHINE}" in evb-ast2600|ast2700-default)
+   case "${MACHINE}" in evb-ast2600|ast2700-default|ast2700-a1-spl)
       if ${@bb.utils.contains('PACKAGECONFIG','static-dual-image','true','false',d)}; then
          install -m 0644 ${UNPACKDIR}/obmc-flash-bmc-static-mount-alt.service.in  ${D}${systemd_unitdir}/system/obmc-flash-bmc-static-mount-alt.service
          install -m 0755 ${UNPACKDIR}/ami-flash-bmc ${D}${bindir}/ami-flash-bmc

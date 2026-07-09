@@ -17,7 +17,7 @@ S = "${WORKDIR}/git"
 PV = "1.0+git${SRCPV}"
 
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/ot-spdmapplib.git;protocol=https;branch=main"
-SRCREV = "007c14a23058a034dc521abea13763ad7ec2fd80"
+SRCREV = "d45f66518ab1928ee986d304faa42c99d2a6dc1c"
 
 OKS_BRANCH_KEY = "branch"
 OKS_BRANCH_EQUAL = "="
@@ -30,23 +30,10 @@ SRC_URI:append = " \
   file://sample_keys.tgz;subdir=./git \
 "
 
-SRC_URI:append = " \
-    file://spdm-mctp-binding-cfg-ast2600evb.json \
-    file://spdm-mctp-binding-cfg-egs.json \
-    file://spdm-mctp-binding-cfg-bhs.json \
-    file://spdm-mctp-binding-cfg-meta-mgx.json \
-"
-
 DEPENDS:remove = " mctpwplus "
 
 DEPENDS:append = " nlohmann-json cli11"
-RDEPENDS:${PN}:append = " libmctp"
-
-SPDM_BINDING_CFG = ""
-SPDM_BINDING_CFG:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'egs', 'spdm-mctp-binding-cfg-egs.json','',  d)}"
-SPDM_BINDING_CFG:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'bhs', 'spdm-mctp-binding-cfg-bhs.json','',  d)}"
-SPDM_BINDING_CFG:append:evb-ast2600 = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb-ast2600', 'spdm-mctp-binding-cfg-ast2600evb.json','',  d)}"
-SPDM_BINDING_CFG:append = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'meta-mgx', 'spdm-mctp-binding-cfg-meta-mgx.json','',  d)}"
+RDEPENDS:${PN}:append = "${@bb.utils.contains('ENABLE_COMMUNITY_MCTP_KERNEL_MODE', '1', ' mctp', ' libmctp', d)}"
 
 do_install:append() {
     echo "SPDM_BINDING_CFG: ${SPDM_BINDING_CFG}"

@@ -1,14 +1,19 @@
-FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
+FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI += "file://enable-ssh.sh \
-            "
+SRC_URI =+ "file://dropbear.default  \
+            file://dropbear@.service "
+SRC_URI =+ "file://0006-Add-ECC-macro-guard-insecure-cipher-option-and-stric.patch "
 
-do_install:append() {
-    install -m 0755 ${UNPACKDIR}/enable-ssh.sh ${D}${bindir}/
+do_configure:append() {
+        echo "#define DROPBEAR_CURVE25519 0" >> ${B}/localoptions.h
+        echo "#define DROPBEAR_DH_GROUP14_SHA256 0" >> ${B}/localoptions.h
+        echo "#define DROPBEAR_KEXGUESS2 0" >> ${B}/localoptions.h
+        echo "#define DROPBEAR_ED25519 0" >> ${B}/localoptions.h
+        echo "#define DROPBEAR_RSA 0" >> ${B}/localoptions.h
+        echo "#define DROPBEAR_AES128 0" >> ${B}/localoptions.h
+        echo "#define DROPBEAR_SHA2_256_HMAC 0" >> ${B}/localoptions.h
+        echo "#define DROPBEAR_ECC_256 0" >> ${B}/localoptions.h
+        echo "#define OPENSSH_STRICT_KEX 0" >> ${B}/localoptions.h
+        echo "#define DROPBEAR_SNTRUP761_OPENSSL 0" >> ${B}/localoptions.h
+        echo "#define DROPBEAR_ECC 1" >> ${B}/localoptions.h
 }
-
-# Enable dropbear.socket and dropbearkey.service only for allow-root-login
-SYSTEMD_AUTO_ENABLE:${PN} = "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'allow-root-login', 'enable', 'disable', d)}"
-
-# Since not enabling last in busybox, don't use lastlog
-EXTRA_OECONF:append = " --disable-wtmp --disable-utmp --disable-lastlog"

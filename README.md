@@ -1,46 +1,32 @@
-### 1) Prerequisite
+# MegaRAC OneTree
+- MegaRAC OneTree is AMI’s next generation BMC firmware solution following MegaRAC SP-X 13.
+- Based on OpenBMC from linux foundation. All the SDK from SoC and Si vendors are integrated into OneTree as single stack to support multi SoC and multi silicon.
+- Built on pervasive, open-source industry tools, architecture, and standards such as Yocto, BitBake, OpenEmbedded, D-bus etc.. 
+- Enriched with added core feature sets for platform manageability
+- Enhanced by AMI advanced technologies such as Expansion Packs (EP) and Silicon Packs (SiP)
+- Backed by AMI’s premium customer support
 
-See the [Yocto documentation](https://docs.yoctoproject.org/ref-manual/system-requirements.html#required-packages-for-the-build-host)
-for the latest requirements
+### Important Information
+- After Stable release features migrated into the main branch, the tag "OneTree-X.X" is created in the main repositories. The tag is just providing the information "when the milestone New feature/feature enhancement migration Finished" Only. The latest main branch always provides the latest Bug fixed and Feature enhancement. **Please take the latest main Branch for the project development.**
 
-#### Ubuntu
-```
-$ sudo apt install git python3-distutils gcc g++ make file wget \
-    gawk diffstat bzip2 cpio chrpath zstd lz4 bzip2
-```
+### Download & Build Code Instruction 
 
-#### Fedora
-```
-$ sudo dnf install git python3 gcc g++ gawk which bzip2 chrpath cpio
-hostname file diffutils diffstat lz4 wget zstd rpcgen patch
-```
-### 2) Common Repository for All the Build
-```
-- git clone https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
-- git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-core
-- git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
-```
-### 3) AST2600EVB Build Instruction
-```
-- meta-ami/github-gitlab-url.sh
-- Add the other meta layer and features (optional)
-- TEMPLATECONF=meta-ami/meta-evb/meta-evb-aspeed/meta-evb-ast2600/conf/templates/default . openbmc-env
-- bitbake obmc-phosphor-image
-```
-### 4) Nuvoton Arbel Build Instruction
-```
-- meta-ami/github-gitlab-url.sh
-- TEMPLATECONF=meta-ami/meta-evb/meta-evb-nuvoton/meta-evb-npcm845/conf/templates/default . openbmc-env 
-- bitbake obmc-phosphor-image
-```
+    Please take Note: 
 
-### 5) AST2700EVB Build Instruction
-```
-- meta-ami/github-gitlab-url.sh
-- TEMPLATECONF=meta-ami/meta-evb/meta-evb-aspeed/meta-evb-ast2700/meta-ast2700/conf/templates/default . openbmc-env
-- bitbake obmc-phosphor-image
-```
+        1. You have to download and build the source with non-root user. 
+        2. Final image will be available in build/tmp/deploy/images/<platform-name>/ 
+            Example: build/tmp/deploy/images/intel-ast2600/image-mtd 
+        3. In the Build instruction, kindly use correct symbol instead of "META-XXX". you can access BuildWorkspace/meta-core to get more information. 
+            Example: In BHS project, META-XXX should be replaced by "meta-bhs"
+
+#### Agenda
+
+* [Latest Download & Build Instructions](https://git.ami.com/core/ami-bmc/one-tree/core/meta-ami/-/blob/main/README_New.md)
+
+* [Before OneTree Package Groups configuration started 2025/04/16 Download & Build Instructions](https://git.ami.com/core/ami-bmc/one-tree/core/meta-ami/-/blob/main/README_Old.md)
+
 ### Notes
+- Package groups will be used for features and expansion pack configuration, also build script will be given to simplify the build process from OneTree2.1
 - By default root user is disabled in the stack except AST2600EVB
 - uncomment EXTRA_IMAGE_FEATURES += "debug-tweaks" in build/conf/local.conf to enable the root user access
 

@@ -17,11 +17,10 @@ OBMC_HOST_INSTANCES = "${@ '1 2' if ( \
 
 do_install:append() {
     if ${@bb.utils.contains('OBMC_HOST_INSTANCES', '1 2', 'true', 'false', d)}; then
-       rm -f ${D}${datadir}/${PN}/power-config-host0.json
-       install -m 0644 ${UNPACKDIR}/power-config-host1.json ${D}${datadir_native}/x86-power-control/
-       install -m 0644 ${UNPACKDIR}/power-config-host2.json ${D}${datadir_native}/x86-power-control/
+	rm -f ${D}${datadir}/${PN}/power-config-host0.json
+	install -m 0644 ${UNPACKDIR}/power-config-host1.json ${D}${datadir_native}/x86-power-control/
+	install -m 0644 ${UNPACKDIR}/power-config-host2.json ${D}${datadir_native}/x86-power-control/
     else
-       install -m 0644 ${UNPACKDIR}/power-config-host0.json ${D}${datadir_native}/x86-power-control/
+	install -m 0644 ${UNPACKDIR}/power-config-host0.json ${D}${datadir_native}/x86-power-control/
     fi
 }
-

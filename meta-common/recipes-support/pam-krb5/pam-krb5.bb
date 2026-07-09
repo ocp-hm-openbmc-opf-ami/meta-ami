@@ -26,5 +26,4 @@ do_compile:prepend() {
     mkdir -p ${B}/docs
 }
 
-
 FILES:${PN} += "${libdir}/security/pam_krb5.so"
