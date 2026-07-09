@@ -16,6 +16,11 @@ FILES:${PN} += "${datadir}/libpldm"
 SRCREV = "291cd44f00f1ef82590dec7bbf1f000ab2391718"
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/ot-libpldm.git;protocol=https;branch=main;"
 
+# Due to release rule, isolate new git repo to prevent customer from fetch failed.
+# Temporarily use tarball for customer build.
+# TODO: Remove the tarball and use git repo after OneTree-3.1 offical release.
+SRC_URI = "file://ot-libpldm.tar.gz"
+
 S = "${WORKDIR}/git"
 
 inherit meson

@@ -72,7 +72,8 @@ SRC_URI_NON_PFR_DUAL:append = " file://obmc-flash-bmc-prepare-for-sync.service.i
 
 SRC_URI:append = " ${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', SRC_URI_NON_PFR_DUAL , '', d)}"
 FILES:${PN}-updater:append:intel-ast2600 = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/intel-flash-bmc ', '', d)}" 
-FILES:${PN}-updater:append = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/ami-flash-bmc', '', d) if d.getVar('MACHINE') in ['evb-ast2600', 'ast2700-default', 'ast2700-a1-spl'] else ''}"
+FILES:${PN}-updater:append:evb-ast2600 = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/ami-flash-bmc ', '', d)}" 
+FILES:${PN}-updater:append:ast2700-default = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/ami-flash-bmc ', '', d)}"
 FILES:${PN}-updater:append:intel-ast2600 = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${systemd_unitdir}/system/obmc-flash-bmc-static-mount-alt.service ', '', d)}" 
 FILES:${PN}-updater:append = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/detect-slot-aspeed ', '', d)}" 
 FILES:${PN}-updater:append = "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image', ' ${bindir}/reset-cs0-aspeed ', '', d)}" 
@@ -117,7 +118,7 @@ do_install:append:intel-ast2600 () {
 }
 
 do_install:append() {
-   case "${MACHINE}" in evb-ast2600|ast2700-default|ast2700-a1-spl)
+   case "${MACHINE}" in evb-ast2600|ast2700-default)
       if ${@bb.utils.contains('PACKAGECONFIG','static-dual-image','true','false',d)}; then
          install -m 0644 ${UNPACKDIR}/obmc-flash-bmc-static-mount-alt.service.in  ${D}${systemd_unitdir}/system/obmc-flash-bmc-static-mount-alt.service
          install -m 0755 ${UNPACKDIR}/ami-flash-bmc ${D}${bindir}/ami-flash-bmc

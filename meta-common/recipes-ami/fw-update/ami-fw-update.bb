@@ -23,7 +23,8 @@ SRC_URI = " \
     file://flash-pldm.sh \
     file://flash-raid.sh \
     file://fwupd_singlespiabr.json\
-    file://flash-nvme.sh \"
+    file://flash-nvme.sh \
+"
 
 inherit allarch
 inherit systemd

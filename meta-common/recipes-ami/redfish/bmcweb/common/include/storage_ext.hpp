@@ -126,7 +126,7 @@ inline void afterSystemsStorageGetSubtree(
     asyncResp->res.jsonValue["Id"] = storageId;
     asyncResp->res.jsonValue["Status"]["State"] = "Enabled";
 
-    redfish::getDrives(asyncResp, storageId);
+    redfish::getDrives(asyncResp);
     asyncResp->res.jsonValue["Controllers"]["@odata.id"] = boost::urls::format(
         "/redfish/v1/Systems/{}/Storage/{}/Controllers", systemName, storageId);
 }

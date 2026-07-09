@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/intel-ipmi-oem-ext.git;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "382aa8c222a301284b1a3bc183b31f3a7f9fd192"
+SRCREV_override = "20a0f71b01ac4c607de640fef8f41655c0e44002"
 
 EXTRA_OECMAKE +=" if-non-intel-disable=OFF"
 

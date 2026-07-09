@@ -1,0 +1,438 @@
+From a8544e1b2997df9fecd6b270c5ea6bff1cafc5fe Mon Sep 17 00:00:00 2001
+From: Minal Upadhye <minalsunilu@ami.com>
+Date: Wed, 11 Feb 2026 00:08:53 -0500
+Subject: [PATCH] migration journal logs to dbus psu-manager
+
+Signed-off-by: Minal Upadhye <minalsunilu@ami.com>
+---
+ src/cold_redundancy.cpp | 316 ++++++++++++++++++++++++++++++++--------
+ 1 file changed, 258 insertions(+), 58 deletions(-)
+
+diff --git a/src/cold_redundancy.cpp b/src/cold_redundancy.cpp
+index 62547c5..cf83761 100644
+--- a/src/cold_redundancy.cpp
++++ b/src/cold_redundancy.cpp
+@@ -14,23 +14,24 @@
+ // limitations under the License.
+ */
+ 
+-#include <array>
+ #include <boost/algorithm/string/predicate.hpp>
+ #include <boost/algorithm/string/replace.hpp>
+ #include <boost/asio/io_context.hpp>
+ #include <boost/asio/steady_timer.hpp>
+ #include <boost/container/flat_set.hpp>
+ #include <cold_redundancy.hpp>
+-#include <filesystem>
+-#include <fstream>
+-#include <iostream>
+ #include <phosphor-logging/elog-errors.hpp>
+-#include <regex>
+ #include <sdbusplus/asio/connection.hpp>
+ #include <sdbusplus/asio/object_server.hpp>
+ #include <sdbusplus/asio/sd_event.hpp>
+ #include <utility.hpp>
+ 
++#include <array>
++#include <filesystem>
++#include <fstream>
++#include <iostream>
++#include <regex>
++
+ static constexpr const bool debug = false;
+ static constexpr const int retryCount = 3;
+ static constexpr const std::array<const char*, 3> psuInterfaceTypes = {
+@@ -337,10 +338,30 @@ void keepAlive(std::shared_ptr<sdbusplus::asio::connection>& dbusConnection)
+                 newPSUFound = true;
+                 psuPresence.emplace(addr);
+                 std::string psuNumStr = "PSU" + std::to_string(psuNumber);
+-                sd_journal_send(
+-                    "MESSAGE=%s", "New PSU is found", "PRIORITY=%i", LOG_INFO,
+-                    "REDFISH_MESSAGE_ID=%s", "OpenBMC.0.1.PowerSupplyInserted",
+-                    "REDFISH_MESSAGE_ARGS=%s", psuNumStr.c_str(), NULL);
++                std::string severity =
++                    "xyz.openbmc_project.Logging.Entry.Level.Informational";
++                auto bus = sdbusplus::bus::new_default_system();
++                sdbusplus::message::message m = bus.new_method_call(
++                    "xyz.openbmc_project.Logging",
++                    "/xyz/openbmc_project/logging",
++                    "xyz.openbmc_project.Logging.Create", "Create");
++                std::string messageID = "OpenBMC.0.1.PowerSupplyInserted";
++                std::string journalMsg = messageID + "," + psuNumStr;
++
++                std::map<std::string, std::string> additionalData;
++                additionalData["REDFISH_MESSAGE_ID"] = messageID;
++                additionalData["REDFISH_MESSAGE_ARGS"] = psuNumStr;
++                additionalData["Additional_Data"] = "New PSU is found";
++                m.append(journalMsg, severity, additionalData);
++                try
++                {
++                    bus.call(m);
++                }
++                catch (const sdbusplus::exception_t& e)
++                {
++                    lg2::info("Failed to create log entry: {ERROR}", "ERROR",
++                              e.what());
++                }
+             }
+         }
+         else
+@@ -350,10 +371,30 @@ void keepAlive(std::shared_ptr<sdbusplus::asio::connection>& dbusConnection)
+             {
+                 psuPresence.erase(addr);
+                 std::string psuNumStr = "PSU" + std::to_string(psuNumber);
+-                sd_journal_send(
+-                    "MESSAGE=%s", "One PSU is removed", "PRIORITY=%i", LOG_INFO,
+-                    "REDFISH_MESSAGE_ID=%s", "OpenBMC.0.1.PowerSupplyRemoved",
+-                    "REDFISH_MESSAGE_ARGS=%s", psuNumStr.c_str(), NULL);
++                std::string severity =
++                    "xyz.openbmc_project.Logging.Entry.Level.Warning";
++                auto bus = sdbusplus::bus::new_default_system();
++                sdbusplus::message::message m = bus.new_method_call(
++                    "xyz.openbmc_project.Logging",
++                    "/xyz/openbmc_project/logging",
++                    "xyz.openbmc_project.Logging.Create", "Create");
++                std::string messageID = "OpenBMC.0.1.PowerSupplyRemoved";
++                std::string journalMsg = messageID + "," + psuNumStr;
++
++                std::map<std::string, std::string> additionalData;
++                additionalData["REDFISH_MESSAGE_ID"] = messageID;
++                additionalData["REDFISH_MESSAGE_ARGS"] = psuNumStr;
++                additionalData["Additional_Data"] = "One PSU is removed";
++                m.append(journalMsg, severity, additionalData);
++                try
++                {
++                    bus.call(m);
++                }
++                catch (const sdbusplus::exception_t& e)
++                {
++                    lg2::warning("Failed to create log entry: {ERROR}", "ERROR",
++                                 e.what());
++                }
+             }
+         }
+         psuNumber++;
+@@ -401,8 +442,8 @@ void ColdRedundancy::createPSU(
+ {
+     // call mapper to get matched obj paths
+     conn->async_method_call(
+-        [this, &conn](const boost::system::error_code ec,
+-                      GetSubTreeType subtree) {
++        [this,
++         &conn](const boost::system::error_code ec, GetSubTreeType subtree) {
+             if (ec)
+             {
+                 std::cerr << "Exception happened when communicating to "
+@@ -583,8 +624,7 @@ uint8_t ColdRedundancy::psuNumber() const
+ PowerSupply::PowerSupply(
+     std::string& name, uint8_t bus, uint8_t address, uint8_t order,
+     const std::shared_ptr<sdbusplus::asio::connection>& dbusConnection) :
+-    name(name),
+-    bus(bus), address(address), order(order)
++    name(name), bus(bus), address(address), order(order)
+ {
+     getPSUEvent(psuEventInterface, dbusConnection, name, state);
+     if (debug)
+@@ -857,9 +897,7 @@ void ColdRedundancy::putWarmRedundant(void)
+     }
+ }
+ 
+-PowerSupply::~PowerSupply()
+-{
+-}
++PowerSupply::~PowerSupply() {}
+ 
+ void ColdRedundancy::writePmbus(uint8_t bus, uint8_t slaveAddr, uint8_t value)
+ {
+@@ -934,22 +972,62 @@ void ColdRedundancy::checkRedundancyEvent()
+                 if (psuWorkable == numberOfPSU)
+                 {
+                     // When all PSU are work correctly, it is full redundant
+-                    sd_journal_send(
+-                        "MESSAGE=%s", "Power Unit Full Redundancy Regained",
+-                        "PRIORITY=%i", LOG_INFO, "REDFISH_MESSAGE_ID=%s",
+-                        "OpenBMC.0.1.PowerUnitRedundancyRegained", NULL);
++                    std::string severity =
++                        "xyz.openbmc_project.Logging.Entry.Level.Informational";
++                    auto bus = sdbusplus::bus::new_default_system();
++                    sdbusplus::message::message m = bus.new_method_call(
++                        "xyz.openbmc_project.Logging",
++                        "/xyz/openbmc_project/logging",
++                        "xyz.openbmc_project.Logging.Create", "Create");
++                    std::string journalMsg =
++                        "OpenBMC.0.1.PowerUnitRedundancyRegained";
++
++                    std::map<std::string, std::string> additionalData;
++                    additionalData["REDFISH_MESSAGE_ID"] =
++                        "OpenBMC.0.1.PowerUnitRedundancyRegained";
++                    additionalData["Additional_Data"] =
++                        "Power Unit Full Redundancy Regained";
++                    m.append(journalMsg, severity, additionalData);
++                    try
++                    {
++                        bus.call(m);
++                    }
++                    catch (const sdbusplus::exception_t& e)
++                    {
++                        lg2::info("Failed to create log entry: {ERROR}",
++                                  "ERROR", e.what());
++                    }
+                     association->set_property("Associations", associationsOk);
+                 }
+                 else if (psuPreviousWorkable < redundantCount())
+                 {
+                     // Not all PSU can work correctly but system still in
+                     // redundancy mode and previous status is non redundant
+-                    sd_journal_send(
+-                        "MESSAGE=%s",
+-                        "Power Unit Redundancy Regained but not in Full "
+-                        "Redundancy",
+-                        "PRIORITY=%i", LOG_INFO, "REDFISH_MESSAGE_ID=%s",
+-                        "OpenBMC.0.1.PowerUnitDegradedFromNonRedundant", NULL);
++                    std::string severity =
++                        "xyz.openbmc_project.Logging.Entry.Level.Warning";
++                    auto bus = sdbusplus::bus::new_default_system();
++                    sdbusplus::message::message m = bus.new_method_call(
++                        "xyz.openbmc_project.Logging",
++                        "/xyz/openbmc_project/logging",
++                        "xyz.openbmc_project.Logging.Create", "Create");
++                    std::string journalMsg =
++                        "OpenBMC.0.1.PowerUnitDegradedFromNonRedundant";
++
++                    std::map<std::string, std::string> additionalData;
++                    additionalData["REDFISH_MESSAGE_ID"] =
++                        "OpenBMC.0.1.PowerUnitDegradedFromNonRedundant";
++                    additionalData["Additional_Data"] =
++                        "Power Unit Redundancy Regained but not in Full ";
++                    m.append(journalMsg, severity, additionalData);
++                    try
++                    {
++                        bus.call(m);
++                    }
++                    catch (const sdbusplus::exception_t& e)
++                    {
++                        lg2::warning("Failed to create log entry: {ERROR}",
++                                     "ERROR", e.what());
++                    }
+                     association->set_property("Associations",
+                                               associationsWarning);
+                 }
+@@ -959,11 +1037,31 @@ void ColdRedundancy::checkRedundancyEvent()
+                 // Now system is not in redundancy mode but still some PSU are
+                 // workable and previously there is no any workable PSU in the
+                 // system
+-                sd_journal_send(
+-                    "MESSAGE=%s",
+-                    "Power Unit Redundancy Sufficient from insufficient",
+-                    "PRIORITY=%i", LOG_INFO, "REDFISH_MESSAGE_ID=%s",
+-                    "OpenBMC.0.1.PowerUnitNonRedundantFromInsufficient", NULL);
++                std::string severity =
++                    "xyz.openbmc_project.Logging.Entry.Level.Warning";
++                auto bus = sdbusplus::bus::new_default_system();
++                sdbusplus::message::message m = bus.new_method_call(
++                    "xyz.openbmc_project.Logging",
++                    "/xyz/openbmc_project/logging",
++                    "xyz.openbmc_project.Logging.Create", "Create");
++                std::string journalMsg =
++                    "OpenBMC.0.1.PowerUnitNonRedundantFromInsufficient";
++
++                std::map<std::string, std::string> additionalData;
++                additionalData["REDFISH_MESSAGE_ID"] =
++                    "OpenBMC.0.1.PowerUnitNonRedundantFromInsufficient";
++                additionalData["Additional_Data"] =
++                    "Power Unit Redundancy Sufficient from insufficient";
++                m.append(journalMsg, severity, additionalData);
++                try
++                {
++                    bus.call(m);
++                }
++                catch (const sdbusplus::exception_t& e)
++                {
++                    lg2::warning("Failed to create log entry: {ERROR}", "ERROR",
++                                 e.what());
++                }
+                 association->set_property("Associations", associationsNonCrit);
+             }
+         }
+@@ -973,21 +1071,62 @@ void ColdRedundancy::checkRedundancyEvent()
+             {
+                 // One PSU is now not workable, but other workable PSU can still
+                 // support redundancy mode.
+-                sd_journal_send(
+-                    "MESSAGE=%s", "Power Unit Redundancy Degraded",
+-                    "PRIORITY=%i", LOG_WARNING, "REDFISH_MESSAGE_ID=%s",
+-                    "OpenBMC.0.1.PowerUnitRedundancyDegraded", NULL);
++                std::string severity =
++                    "xyz.openbmc_project.Logging.Entry.Level.Warning";
++                auto bus = sdbusplus::bus::new_default_system();
++                sdbusplus::message::message m = bus.new_method_call(
++                    "xyz.openbmc_project.Logging",
++                    "/xyz/openbmc_project/logging",
++                    "xyz.openbmc_project.Logging.Create", "Create");
++                std::string journalMsg =
++                    "OpenBMC.0.1.PowerUnitRedundancyDegraded";
++
++                std::map<std::string, std::string> additionalData;
++                additionalData["REDFISH_MESSAGE_ID"] =
++                    "OpenBMC.0.1.PowerUnitRedundancyDegraded";
++                additionalData["Additional_Data"] =
++                    "Power Unit Redundancy Degraded";
++                m.append(journalMsg, severity, additionalData);
++                try
++                {
++                    bus.call(m);
++                }
++                catch (const sdbusplus::exception_t& e)
++                {
++                    lg2::warning("Failed to create log entry: {ERROR}", "ERROR",
++                                 e.what());
++                }
+                 association->set_property("Associations", associationsWarning);
+ 
+                 if (psuPreviousWorkable == numberOfPSU)
+                 {
+                     // One PSU become not workable and system was in full
+                     // redundancy mode.
+-                    sd_journal_send(
+-                        "MESSAGE=%s",
+-                        "Power Unit Redundancy Degraded from Full Redundant",
+-                        "PRIORITY=%i", LOG_WARNING, "REDFISH_MESSAGE_ID=%s",
+-                        "OpenBMC.0.1.PowerUnitDegradedFromRedundant", NULL);
++                    std::string severity =
++                        "xyz.openbmc_project.Logging.Entry.Level.Warning";
++                    auto bus = sdbusplus::bus::new_default_system();
++                    sdbusplus::message::message m = bus.new_method_call(
++                        "xyz.openbmc_project.Logging",
++                        "/xyz/openbmc_project/logging",
++                        "xyz.openbmc_project.Logging.Create", "Create");
++                    std::string journalMsg =
++                        "OpenBMC.0.1.PowerUnitDegradedFromRedundant";
++
++                    std::map<std::string, std::string> additionalData;
++                    additionalData["REDFISH_MESSAGE_ID"] =
++                        "OpenBMC.0.1.PowerUnitDegradedFromRedundant";
++                    additionalData["Additional_Data"] =
++                        "Power Unit Redundancy Degraded from Full Redundant";
++                    m.append(journalMsg, severity, additionalData);
++                    try
++                    {
++                        bus.call(m);
++                    }
++                    catch (const sdbusplus::exception_t& e)
++                    {
++                        lg2::warning("Failed to create log entry: {ERROR}",
++                                     "ERROR", e.what());
++                    }
+                 }
+             }
+             else
+@@ -996,20 +1135,60 @@ void ColdRedundancy::checkRedundancyEvent()
+                 {
+                     // No enough workable PSU to support redundancy and
+                     // previously system is in redundancy mode.
+-                    sd_journal_send(
+-                        "MESSAGE=%s", "Power Unit Redundancy Lost",
+-                        "PRIORITY=%i", LOG_WARNING, "REDFISH_MESSAGE_ID=%s",
+-                        "OpenBMC.0.1.PowerUnitRedundancyLost", NULL);
++                    std::string severity =
++                        "xyz.openbmc_project.Logging.Entry.Level.Warning";
++                    auto bus = sdbusplus::bus::new_default_system();
++                    sdbusplus::message::message m = bus.new_method_call(
++                        "xyz.openbmc_project.Logging",
++                        "/xyz/openbmc_project/logging",
++                        "xyz.openbmc_project.Logging.Create", "Create");
++                    std::string journalMsg =
++                        "OpenBMC.0.1.PowerUnitRedundancyLost";
++
++                    std::map<std::string, std::string> additionalData;
++                    additionalData["REDFISH_MESSAGE_ID"] =
++                        "OpenBMC.0.1.PowerUnitRedundancyLost";
++                    additionalData["Additional_Data"] =
++                        "Power Unit Redundancy Lost";
++                    m.append(journalMsg, severity, additionalData);
++                    try
++                    {
++                        bus.call(m);
++                    }
++                    catch (const sdbusplus::exception_t& e)
++                    {
++                        lg2::warning("Failed to create log entry: {ERROR}",
++                                     "ERROR", e.what());
++                    }
+                     if (psuWorkable > 0)
+                     {
+                         // There still some workable PSU, but system is not
+                         // in redundancy mode.
+-                        sd_journal_send(
+-                            "MESSAGE=%s",
+-                            "Power Unit Redundancy NonRedundant Sufficient",
+-                            "PRIORITY=%i", LOG_WARNING, "REDFISH_MESSAGE_ID=%s",
+-                            "OpenBMC.0.1.PowerUnitNonRedundantSufficient",
+-                            NULL);
++                        std::string severity =
++                            "xyz.openbmc_project.Logging.Entry.Level.Warning";
++                        auto bus = sdbusplus::bus::new_default_system();
++                        sdbusplus::message::message m = bus.new_method_call(
++                            "xyz.openbmc_project.Logging",
++                            "/xyz/openbmc_project/logging",
++                            "xyz.openbmc_project.Logging.Create", "Create");
++                        std::string journalMsg =
++                            "OpenBMC.0.1.PowerUnitNonRedundantSufficient";
++
++                        std::map<std::string, std::string> additionalData;
++                        additionalData["REDFISH_MESSAGE_ID"] =
++                            "OpenBMC.0.1.PowerUnitNonRedundantSufficient";
++                        additionalData["Additional_Data"] =
++                            "Power Unit Redundancy NonRedundant Sufficient";
++                        m.append(journalMsg, severity, additionalData);
++                        try
++                        {
++                            bus.call(m);
++                        }
++                        catch (const sdbusplus::exception_t& e)
++                        {
++                            lg2::warning("Failed to create log entry: {ERROR}",
++                                         "ERROR", e.what());
++                        }
+                         association->set_property("Associations",
+                                                   associationsWarning);
+                     }
+@@ -1017,10 +1196,31 @@ void ColdRedundancy::checkRedundancyEvent()
+                 if (psuWorkable == 0)
+                 {
+                     // No any workable PSU on the system.
+-                    sd_journal_send(
+-                        "MESSAGE=%s", "Power Unit Redundancy Insufficient",
+-                        "PRIORITY=%i", LOG_ERR, "REDFISH_MESSAGE_ID=%s",
+-                        "OpenBMC.0.1.PowerUnitNonRedundantInsufficient", NULL);
++                    std::string severity =
++                        "xyz.openbmc_project.Logging.Entry.Level.Critical";
++                    auto bus = sdbusplus::bus::new_default_system();
++                    sdbusplus::message::message m = bus.new_method_call(
++                        "xyz.openbmc_project.Logging",
++                        "/xyz/openbmc_project/logging",
++                        "xyz.openbmc_project.Logging.Create", "Create");
++                    std::string journalMsg =
++                        "OpenBMC.0.1.PowerUnitNonRedundantInsufficient";
++
++                    std::map<std::string, std::string> additionalData;
++                    additionalData["REDFISH_MESSAGE_ID"] =
++                        "OpenBMC.0.1.PowerUnitNonRedundantInsufficient";
++                    additionalData["Additional_Data"] =
++                        "Power Unit Redundancy Insufficient";
++                    m.append(journalMsg, severity, additionalData);
++                    try
++                    {
++                        bus.call(m);
++                    }
++                    catch (const sdbusplus::exception_t& e)
++                    {
++                        lg2::error("Failed to create log entry: {ERROR}",
++                                   "ERROR", e.what());
++                    }
+                     association->set_property("Associations", associationsCrit);
+                 }
+             }
+-- 
+2.34.1
+

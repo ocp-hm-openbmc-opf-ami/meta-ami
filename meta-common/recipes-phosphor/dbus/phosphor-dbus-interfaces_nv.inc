@@ -13,8 +13,7 @@ SRC_URI:append = " \
         file://nv/0009-Add-csm-interfaces-for-state-manager.patch \
         file://nv/0010-nvidia-sync-changes-from-gb300nvl-ws-2506-branch.patch \
         file://nv/0011-Add-EMMC-dbus-properties.patch \
-        file://nv/0012-Added-nsmd-related-changes-into-dbus.patch \
-        file://nv/0013-Adding-changes-for-NSM-sync.patch \
+        file://nv/0001-Added-nsmd-related-changes-into-dbus.patch \
 "
 
 do_replace_files() {

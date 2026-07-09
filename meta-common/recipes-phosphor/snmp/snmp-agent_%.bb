@@ -19,7 +19,7 @@ DEPENDS += "net-snmp"
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/snmp-agent.git;branch=main;protocol=https"
 SRC_URI += "file://xyz.openbmc_project.Snmp.Conf.service"
 
-SRCREV = "57ad0173c1a040fc0a2bda5723d10a793acfee75"
+SRCREV = "98353b378cc369c74de08b29a045f73b1cfb46e3"
 
 S = "${WORKDIR}/git"
 

@@ -28,7 +28,7 @@ do_install() {
 do_install:append() {
     if ${@bb.utils.contains('IMAGE_FEATURES', 'onetree-hw-failsafe-boot', 'true', 'false', d)}; then
 #Dual Image for At2700
-       if [ "${MACHINE}" = "ast2700-default" ] || [ "${MACHINE}" = "ast2700-a1-spl" ]; then
+	   if [ "${MACHINE}" = "ast2700-default" ]; then
         	install -m 0755 ${UNPACKDIR}/bmc-alternateboot-check_ast2700.sh ${D}/${bindir}/bmc-alternateboot-check.sh
     	else
         	install -m 0755 ${UNPACKDIR}/bmc-alternateboot-check.sh ${D}/${bindir}/

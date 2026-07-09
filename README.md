@@ -1,10 +1,10 @@
 # MegaRAC OneTree
-- MegaRAC OneTree is AMI’s next generation BMC firmware solution following MegaRAC SP-X 13.
+- MegaRAC OneTree is AMIâ€™s next generation BMC firmware solution following MegaRAC SP-X 13.
 - Based on OpenBMC from linux foundation. All the SDK from SoC and Si vendors are integrated into OneTree as single stack to support multi SoC and multi silicon.
 - Built on pervasive, open-source industry tools, architecture, and standards such as Yocto, BitBake, OpenEmbedded, D-bus etc.. 
 - Enriched with added core feature sets for platform manageability
 - Enhanced by AMI advanced technologies such as Expansion Packs (EP) and Silicon Packs (SiP)
-- Backed by AMI’s premium customer support
+- Backed by AMIâ€™s premium customer support
 
 ### Important Information
 - After Stable release features migrated into the main branch, the tag "OneTree-X.X" is created in the main repositories. The tag is just providing the information "when the milestone New feature/feature enhancement migration Finished" Only. The latest main branch always provides the latest Bug fixed and Feature enhancement. **Please take the latest main Branch for the project development.**

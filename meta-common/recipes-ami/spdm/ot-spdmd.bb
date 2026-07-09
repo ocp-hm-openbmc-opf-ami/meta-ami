@@ -17,7 +17,7 @@ DEPENDS += " \
         "
 
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/ot-spdmd.git;protocol=https;branch=main"
-SRCREV = "9ce6f9a969a18e6a7d085142750f42fbe34abcf4"
+SRCREV = "83a9ceb069ce1e242ea7b1446b193bfb4c848cd4"
 
 S = "${WORKDIR}/git"
 PV = "1.0+git${SRCPV}"

@@ -9,7 +9,6 @@ SRC_URI += " \
             file://0001-recreated-phosphor-power-psu-monitor.patch \
             file://0002-recreated-Coverity-fix.patch \
             file://0003-Multi-PSU-Runtime-support.patch \
-	    file://0004-High-Coverity-fixes.patch \
             "
 SRCREV = "6c9e3cb88a909a514df76088ff869d413b33ea19"
 

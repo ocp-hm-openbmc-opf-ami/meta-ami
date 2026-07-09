@@ -23,15 +23,12 @@ if [ "$1" == "deregister" ]; then
         if [ "$UseTSIG" == "true" ]; then
             TSIG_KEY_FILE=$TSIG_KEY_DIR"tsig_"$IFACE"_prev.private"
             if [ -f "$TSIG_KEY_FILE" ]; then
-                unset TSIG_KEY_NAME TSIG_KEY_METHOD TSIG_KEY_SECRET
-
                 eval $(awk -F": " '
-                            /filename:/ {split($2,a,"+"); val = substr(a[1],2,length(a[1])-2); print "TSIG_KEY_NAME=\"" val "\""}
-                            /Algorithm/ {split($2, a, " "); val = substr(a[2],2,length(a[2])-2); print "val="a[2]; gsub("_","-",val); val = tolower(val); print "TSIG_KEY_METHOD=\"" val "\""}
-                            /Key/ {print "TSIG_KEY_SECRET=\"" $2 "\""}
-                        ' $TSIG_KEY_FILE
+                        /filename:/ {split($2,a,"+"); val = substr(a[1],2,length(a[1])-2); print "TSIG_KEY_NAME=\"" val "\""}
+                        /Algorithm/ {split($2, a, " "); val = substr(a[2],2,length(a[2])-2); print "val="a[2]; gsub("_","-",val); val = tolower(val); print "TSIG_KEY_METHOD=\"" val "\""}
+                        /Key/ {print "TSIG_KEY_SECRET=\"" $2 "\""}
+                    ' $TSIG_KEY_FILE
                 )
-
                 if [ -z "$TSIG_KEY_METHOD" ]; then
                     eval $(
                         awk '
@@ -85,19 +82,20 @@ elif [ "$1" == "register" ]; then
                 $0 == "[" iface "]" {inblock=1; next}
                 inblock && /^\[.*\]/ {inblock=0}
                 inblock && /UseTSIG/ {split($0,a,"="); print a[2]} 
-            ' /etc/dns.d/dns.conf)
+            ' /etc/dns.d/dns.conf.bak)
             echo "UseTSIG: $UseTSIG"
             if [ "$UseTSIG" == "true" ]; then
                 TSIG_KEY_FILE=$TSIG_KEY_DIR"tsig_$IFACE.private"
                 if [ -f "$TSIG_KEY_FILE" ]; then
-                    unset TSIG_KEY_NAME TSIG_KEY_METHOD TSIG_KEY_SECRET
-
                     eval $(awk -F": " '
                             /filename:/ {split($2,a,"+"); val = substr(a[1],2,length(a[1])-2); print "TSIG_KEY_NAME=\"" val "\""}
                             /Algorithm/ {split($2, a, " "); val = substr(a[2],2,length(a[2])-2); print "val="a[2]; gsub("_","-",val); val = tolower(val); print "TSIG_KEY_METHOD=\"" val "\""}
                             /Key/ {print "TSIG_KEY_SECRET=\"" $2 "\""}
                         ' $TSIG_KEY_FILE
                     )
+                    echo TSIG_KEY_NAME=$TSIG_KEY_NAME
+                    echo TSIG_KEY_METHOD=$TSIG_KEY_METHOD
+                    echo TSIG_KEY_SECRET=$TSIG_KEY_SECRET
                     if [ -z "$TSIG_KEY_METHOD" ]; then
                         eval $(
                             awk '
