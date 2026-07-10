@@ -3,7 +3,9 @@ SOL_PATH = "${@'${THISDIR}/${PN}/multi-sol' if d.getVar('MULTI_SOL_ENABLED') == 
 FILESEXTRAPATHS:prepend := "${SOL_PATH}:"
 RDEPENDS:${PN} += "bash"
 
-SRCREV = "448388450a9430a31a831f152181960a8719334f"
+SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/obmc-console.git;branch=master;protocol=https;name=override;"
+SRCREV_FORMAT = "override"
+SRCREV_override = "448388450a9430a31a831f152181960a8719334f"
 
 Single_SOL_SRC_URI = "file://single_sol_conf.ttyS2.conf \
 		     "

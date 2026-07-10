@@ -1,4 +1,9 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
+
+SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-health-monitor.git;branch=master;protocol=https;name=override;"
+SRCREV_FORMAT = "override"
+SRCREV_override = "72aa3ed034e66013a3fb9d53c0a2c17abb38385e"
+
 SRC_URI:append = " file://bmc_health_config.json \
                    file://memorycritical.service \
                    file://memorycritical.target \

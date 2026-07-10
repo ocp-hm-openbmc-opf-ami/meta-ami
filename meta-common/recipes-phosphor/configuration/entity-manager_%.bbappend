@@ -1,14 +1,8 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-DEPENDS = "boost \
-           dbus \
-           nlohmann-json \
-           phosphor-logging \
-           sdbusplus \
-           valijson \
-           phosphor-dbus-interfaces \
-"
-
+SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/entity-manager.git;branch=master;protocol=https;name=override;"
+SRCREV_FORMAT = "override"
+SRCREV_override = "1ec09dfd5d23c0db0617b9ba118442a10e618892"
 
 SRC_URI:append = " \
     file://cpld.json \
@@ -20,7 +14,7 @@ SRC_URI:append = " \
     file://artesyn_psu.json \
     "
 
-SRCREV = "1ec09dfd5d23c0db0617b9ba118442a10e618892"
+PACKAGECONFIG ??= "ipmi-fru"
 
 EXTRA_OEMESON:append = " -Dfru-device-resizefru=true"
 

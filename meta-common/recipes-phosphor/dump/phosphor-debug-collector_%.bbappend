@@ -1,6 +1,8 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRCREV = "2f793d1b618406db870834619fbe7911f5dd972e7"
+SRC_URI  += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-debug-collector.git;branch=master;protocol=https;name=override; "
+SRCREV_FORMAT = "override"
+SRCREV_override = "f793d1b618406db870834619fbe7911f5dd972e7"
 
 SRC_URI += "file://plugins.d/arpcntlconf \
 	    file://plugins.d/arptableinfo  \

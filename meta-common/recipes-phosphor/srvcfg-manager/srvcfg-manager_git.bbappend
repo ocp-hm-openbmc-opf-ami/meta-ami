@@ -1,14 +1,16 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI:append = " file://0001-Added-Virtualmedia-PmtService-ipmb-to-Service-Config.patch \
-		   file://0002-Added-changes-to-add-MaxSess-and-SessTimeOut-dbus-pr.patch \
-		   file://0003-Create-D-Bus-object-path-after-managed-jobs-complete.patch \
-		   file://0004-To-resolve-conflict-between-the-Managed-service-and-.patch \
-		   file://0005-Synchronize-states-at-boot-and-fix-persistence.patch \
-                   file://srvcfg.json                                                     \
-                 "
+SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/service-config-manager.git;branch=master;protocol=https;name=override;"
+SRCREV_FORMAT = "override"
+SRCREV_override = "369074698ee4c4726feb6ca171e7aa8e92f3f449"
 
-SRCREV = "369074698ee4c4726feb6ca171e7aa8e92f3f449"
+SRC_URI += "\
+                file://srvcfg.json \
+                "
+
+PACKAGECONFIG = " \
+    persist-settings-to-file \
+"
 
 DEPENDS += "nlohmann-json"
 
