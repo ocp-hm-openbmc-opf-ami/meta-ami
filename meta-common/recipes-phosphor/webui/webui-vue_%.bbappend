@@ -16,6 +16,7 @@ SRCREV_FORMAT = "webui_webuilib"
 SRC_URI += " \
     file://login-company-logo.svg \
     file://logo-header.svg \
+    git://git.ami.com/core/ami-bmc/one-tree/core/webui-libraries.git;branch=main;protocol=https;destsuffix=webui-libs;name=webuilib \
     "
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 do_compile:prepend() {

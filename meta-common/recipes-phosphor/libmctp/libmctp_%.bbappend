@@ -1,6 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/libmctp.git;protocol=https;branch=main \
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/libmctp.git;protocol=https;branch=main \
            file://default"
 SRCREV = "823b18fbf9d9802a40e1a2800a9f14986209d5cc"
 

@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRCREV_override = "9a26a4f66347de9de82f967b20f9825fb465289f"
 
-SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-net-ipmid.git;branch=master;protocol=https;name=override;"
+SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/phosphor-net-ipmid.git;branch=master;protocol=https;name=override;"
 
 SRCREV_FORMAT = "override"
 CXXFLAGS += "-DENABLE_RMCP_RMCPP_IN_IPV6"
