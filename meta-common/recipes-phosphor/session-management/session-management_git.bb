@@ -2,12 +2,18 @@ SUMMARY = "AMI Session Management Backend implementation"
 DESCRIPTION = "Session Management application"
 LICENSE = "CLOSED"
 
-
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/session-manager.git;protocol=https;branch=main"
-SRCREV = "e108da202c9dc09ff47935442ff57089a09637c4"
+SRC_URI = " \
+           file://session_management.cpp \ 
+           file://session_management.hpp \ 
+           file://meson.build \
+           file://xyz.openbmc_project.SessionManager.service \
+           file://dropbear_manager.cpp \
+           file://dropbear-session-manager.service \
+          "
 
 S = "${UNPACKDIR}/git"
 PV = "1.0+git${SRCPV}"
+
 inherit pkgconfig meson systemd
 inherit obmc-phosphor-systemd
 

@@ -1,9 +1,7 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 PROJECT_SRC_DIR := "${THISDIR}/${PN}"
 
-SRCREV_override = "59a245b0c717361fb02e0e0e95e2b1d0cae8d732"
-SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-sel-logger.git;branch=master;protocol=https;name=override;"
-SRCREV_FORMAT = "override"
+SRCREV="59a245b0c717361fb02e0e0e95e2b1d0cae8d732"
 
 EXTRA_OEMESON +=  "-Dsel-extended=true"
 DEPENDS += "intel-ipmi-oem-ext"

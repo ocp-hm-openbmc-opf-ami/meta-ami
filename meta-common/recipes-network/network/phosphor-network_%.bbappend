@@ -1,6 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-networkd;branch=main;protocol=https;name=override;"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/phosphor-networkd;protocol=https;branch=main;name=override;"
 SRCREV_FORMAT = "override"
 SRCREV_override = "dd395e4ba93308de4f905841457c5a613031f99b"
 

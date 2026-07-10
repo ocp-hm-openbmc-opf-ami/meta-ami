@@ -1,6 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/firmware.bmc.openbmc.applications.virtual-media;branch=main;protocol=https"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/virtual-media.git;protocol=https;branch=main"
 
 
 SRCREV = "b92d139a3e90d3eed04368c0af14cdcc97367954"

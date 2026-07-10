@@ -5,7 +5,7 @@
 # SRCREV = "f763cd2e39ffce9b10191402243e8704794f08ff"
 
 # AMI own repository for webui-vue with main branch
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/webui-vue.git;branch=main;protocol=https;name=webui"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/webui-vue;protocol=https;branch=main"
 
 # Use AUTOREV to get the latest revision from the repository
 # SRCREV = "${AUTOREV}"
@@ -16,7 +16,6 @@ SRCREV_FORMAT = "webui_webuilib"
 SRC_URI += " \
     file://login-company-logo.svg \
     file://logo-header.svg \
-    git://git.ami.com/core/ami-bmc/one-tree/core/webui-libraries.git;branch=main;protocol=https;destsuffix=webui-libs;name=webuilib \
     "
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 do_compile:prepend() {

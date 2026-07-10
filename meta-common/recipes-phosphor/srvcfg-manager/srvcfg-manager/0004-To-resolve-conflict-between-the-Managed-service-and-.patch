@@ -1,0 +1,95 @@
+From 24be3aeb47197f86a9b9a927275982e50a54411c Mon Sep 17 00:00:00 2001
+From: pandiarajt <pandiarajt@ami.com>
+Date: Mon, 24 Nov 2025 18:30:33 +0530
+Subject: [PATCH 76/76] To resolve conflict between the Managed service and
+ service manager
+
+---
+ src/main.cpp           | 56 ++++++++++++++++++++++++++++++++++++++++++
+ srvcfg-manager.service |  1 +
+ 2 files changed, 49 insertions(+)
+
+diff --git a/src/main.cpp b/src/main.cpp
+index 1e72dae..34aa189 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -595,8 +595,64 @@ void checkAndInit(sdbusplus::asio::object_server& server,
+     }
+ }
+ 
++bool isServiceActive(const std::string& serviceName) {
++    std::string cmd = "systemctl is-active --quiet " + serviceName;
++    int result = std::system(cmd.c_str());
++    // systemctl returns 0 if the service is active
++    return result == 0;
++}
++
++bool isServiceEnabled(const std::string& serviceName) {
++    return std::system(("systemctl is-enabled --quiet " + serviceName).c_str()) == 0;
++}
++
++bool checkBmcWebServicesActive() {
++     
++    std::vector<std::string> services = {
++        "bmcweb.service",
++        "bmcweb.socket"
++    };
++
++    const int maxRetries = 6;
++    const int sleepSeconds = 30;
++
++    if (!isServiceEnabled("bmcweb.socket")) {
++            return true;
++    }
++
++    for (int i = 0; i < maxRetries; ++i) {
++        bool allActive = true;
++        for (const auto& service : services) {
++            if (!isServiceActive(service)) {
++                allActive = false;
++                break;
++            }
++        }
++
++        if (allActive) {
++            return true;
++        }
++
++        if (i < maxRetries - 1) {
++            std::cout << "Check " << (i + 1) << ": Not all services active, retrying in "
++                      << sleepSeconds << " seconds..." << std::endl;
++            std::this_thread::sleep_for(std::chrono::seconds(sleepSeconds));
++        }
++    }
++
++    std::cout << "bmcweb services are not active after " << maxRetries << " retries. so, exiting service-config-manager" << std::endl;
++    return false;
++}
++
++
+ int main()
+ {
++    
++    if(!checkBmcWebServicesActive())
++    {
++        return 1;
++    }
++
+     updateGlobalDataFromFile();
+     boost::asio::io_context io;
+     auto conn = std::make_shared<sdbusplus::asio::connection>(io);
+diff --git a/srvcfg-manager.service b/srvcfg-manager.service
+index b7b22df..232f4b4 100644
+--- a/srvcfg-manager.service
++++ b/srvcfg-manager.service
+@@ -3,6 +3,7 @@ Description=Daemon to control service configuration
+ 
+ [Service]
+ Restart=always
++ExecStartPre=/bin/sleep 60
+ ExecStart=/usr/bin/phosphor-srvcfg-manager
+ SyslogIdentifier=srvcfg-manager
+ Type=dbus
+-- 
+2.34.1
+

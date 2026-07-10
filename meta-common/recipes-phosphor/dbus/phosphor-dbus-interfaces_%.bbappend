@@ -1,7 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-dbus-interfaces.git;branch=main;protocol=https;name=override;"
-
+SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/phosphor-dbus-interfaces;protocol=https;branch=main;name=override;"
 SRCREV_FORMAT = "override"
 SRCREV_override = "05f774bed9316c45c1295e4ad46cb80b62185a46"
 
