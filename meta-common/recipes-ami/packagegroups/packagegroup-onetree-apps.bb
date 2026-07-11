@@ -430,18 +430,6 @@ RDEPENDS:${PN}-radius-client = " radiusclient-ng \
 SUPPORTED_VENDOR:${PN}-radius-client = "ALL"
 #-----------------------------------#
 
-SUMMARY:${PN}-host-error = "AMI Core Features:"
-DESCRIPTION:${PN}-host-error = ""
-RDEPENDS:${PN}-host-error = " host-error-monitor"
-SUPPORTED_VENDOR:${PN}-host-error = "ALL"
-#-----------------------------------#
-
-SUMMARY:${PN}-thermal-mgnt = "AMI Core Features: Thermal Management"
-DESCRIPTION:${PN}-thermal-mgnt = " Used to monitor and regulate the temperature of components"
-RDEPENDS:${PN}-thermal-mgnt = " phosphor-pid-control"
-SUPPORTED_VENDOR:${PN}-thermal-mgnt = "ALL"
-#-----------------------------------#
-
 SUMMARY:${PN}-ntp = "AMI Core Features: Network Time Manager"
 DESCRIPTION:${PN}-ntp = " Synchronizes the system time with remote time \
 				servers to ensure accurate timekeeping"
