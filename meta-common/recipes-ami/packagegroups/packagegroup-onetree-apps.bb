@@ -430,22 +430,6 @@ RDEPENDS:${PN}-radius-client = " radiusclient-ng \
 SUPPORTED_VENDOR:${PN}-radius-client = "ALL"
 #-----------------------------------#
 
-SUMMARY:${PN}-license = "AMI Core Features: License control"
-DESCRIPTION:${PN}-license = " The License Control overseeing licensable services, \
-                              enforcing license validity, and facilitating key \
-                              management service."
-RDEPENDS:${PN}-license = " license-control"
-SUPPORTED_VENDOR:${PN}-license = "ALL"
-#-----------------------------------#
-
-SUMMARY:${PN}-backup-restore = "AMI Core Features: Backup/Restore BMC configurations"
-DESCRIPTION:${PN}-backup-restore = " Backup-Restore BMC Configurations Support provides \
-                                     way to backup running BMC configuration and to apply \
-                                     the BMC configuration to multiple running BMC's."
-RDEPENDS:${PN}-backup-restore = " backuprestore"
-SUPPORTED_VENDOR:${PN}-backup-restore = "ALL"
-#-----------------------------------#
-
 SUMMARY:${PN}-host-error = "AMI Core Features:"
 DESCRIPTION:${PN}-host-error = ""
 RDEPENDS:${PN}-host-error = " host-error-monitor"
