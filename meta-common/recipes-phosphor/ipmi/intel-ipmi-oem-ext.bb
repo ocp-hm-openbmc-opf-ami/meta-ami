@@ -24,6 +24,14 @@ FILES:${PN}:append = " ${libdir}/host-ipmid/lib*${SOLIBS}"
 FILES:${PN}:append = " ${libdir}/net-ipmid/lib*${SOLIBS}"
 FILES:${PN}-dev:append = " ${libdir}/ipmid-providers/lib*${SOLIBSDEV}"
 
+# intel-ipmi-oem-ext is a drop-in replacement for the stock intel-ipmi-oem and
+# ships the same libzinteloemcmds.so. Declare the replacement so the two are never
+# installed together (which broke do_rootfs with an RPM file conflict) while still
+# satisfying anything that RDEPENDS on intel-ipmi-oem (e.g. packagegroup-intel-apps).
+RPROVIDES:${PN} += "intel-ipmi-oem"
+RREPLACES:${PN} += "intel-ipmi-oem"
+RCONFLICTS:${PN} += "intel-ipmi-oem"
+
 do_install:append(){
    install -d ${D}${includedir}/intel-ipmi-oem
    install -m 0644 -D ${S}/include/*.hpp ${D}${includedir}/intel-ipmi-oem
