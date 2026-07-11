@@ -5,7 +5,7 @@
 # SRCREV = "f763cd2e39ffce9b10191402243e8704794f08ff"
 
 # AMI own repository for webui-vue with main branch
-SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/webui-vue;protocol=https;branch=master"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/webui-vue;protocol=https;branch=main"
 
 # Use AUTOREV to get the latest revision from the repository
 # SRCREV = "${AUTOREV}"
