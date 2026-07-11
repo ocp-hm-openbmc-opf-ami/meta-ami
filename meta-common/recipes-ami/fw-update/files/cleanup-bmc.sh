@@ -31,8 +31,9 @@ cleanup_overlay_with_blacklist_and_rsync() {
     debug_log "Entered cleanup_overlay_with_blacklist_and_rsync() (blacklist/rsync mode)"
 
     if [ "$PERSISTENT" = "0" ]; then
-    touch /etc/sync-enable || true
-    touch /etc/nv-sync-enable || true
+        touch /etc/sync-enable || true
+        touch /etc/nv-sync-enable || true
+        touch /etc/ami-sync-enable || true
         # Mount RWFS manually if not mounted
         if ! mountpoint -q "$RWFS_MOUNT"; then
             debug_log "$RWFS_MOUNT not mounted, attempting manual mount."
@@ -58,7 +59,7 @@ cleanup_overlay_with_blacklist_and_rsync() {
                 esac
 
                 rel_path="${whitelist_entry#/}"
-		rel_path="${rel_path%/}"
+		        rel_path="${rel_path%/}"
                 [ -n "$rel_path" ] || continue
 
                 parent="$rel_path"
@@ -265,6 +266,7 @@ main() {
     if [ "$PERSISTENT" = "0" ]; then
         touch /etc/sync-enable || true
         touch /etc/nv-sync-enable || true
+        touch /etc/ami-sync-enable || true
         _start_if_inactive xyz.openbmc_project.Software.Sync.service || true
     fi
     command -v wait_for_log_sync >/dev/null 2>&1 && wait_for_log_sync || true

@@ -1,0 +1,51 @@
+#!/bin/bash
+
+NVMP=/tmp/.rwfs
+SOMP=/var/sofs
+
+cleanup_volatile_tmp_dir() {
+    rm -rf $NVMP/.overlay/var/volatile/tmp/* || :
+}
+
+sync_overlay_to_nv_storage() {
+    # Ensure the file responsible for monotonicity between boots is
+    # refreshed. Firmware updates are completed by assertion of the
+    # BMC reset input. This prevents timesyncd from gracefully
+    # updating this file.
+    touch /var/lib/systemd/timesync/clock
+
+    rsync -a --inplace --partial --delete \
+    --include='/var/log/nm_events/' \
+    --include='/var/log/phosphor-post-code-manager/***' \
+    --include='/var/log/obmc-console/***' \
+    --exclude='/var/log/**' \
+    --exclude='**/var/volatile/tmp/**' \
+    /tmp/.overlay/ $NVMP/.overlay
+
+    sync $NVMP/.overlay
+}
+
+finalize_sync_and_remount_readonly() {
+    history -a
+    sync_overlay_to_nv_storage
+    mount -o remount,ro $NVMP
+    mount -o remount,ro $SOMP
+    exit 0
+}
+
+# register cleanup function
+trap finalize_sync_and_remount_readonly SIGINT
+trap finalize_sync_and_remount_readonly SIGTERM
+trap finalize_sync_and_remount_readonly EXIT
+
+# make sure the mount points are RW
+mount -o remount,rw $NVMP
+mount -o remount,rw $SOMP
+
+cleanup_volatile_tmp_dir
+
+# Run rsync periodically to sync the overlay to NV storage
+while true; do
+    sync_overlay_to_nv_storage
+    sleep 10
+done
