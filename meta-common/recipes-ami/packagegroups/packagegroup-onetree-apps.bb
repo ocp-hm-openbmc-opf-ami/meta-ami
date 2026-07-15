@@ -45,7 +45,6 @@ PACKAGES = "\
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-sol', '${PN}-sol', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-session', '${PN}-session', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-radius-client', '${PN}-radius-client', '', d)} \
-		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-license', '${PN}-license', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-backup-restore', '${PN}-backup-restore', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-host-error', '${PN}-host-error', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-thermal-mgnt', '${PN}-thermal-mgnt', '', d)} \
