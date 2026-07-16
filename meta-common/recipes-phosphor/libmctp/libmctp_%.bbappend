@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/libmctp.git;protocol=https;branch=main \
            file://default"
-SRCREV = "bdb05b6e23232b5148df256004150ff2ea50fd87"
+SRCREV = "7263074629e002df954efea5ac43c862978ffeca"
 
 PACKAGECONFIG ??= ""
 PACKAGECONFIG[libmctp-kernel-mode] = " -Dmctp-in-kernel-enable=enabled "
