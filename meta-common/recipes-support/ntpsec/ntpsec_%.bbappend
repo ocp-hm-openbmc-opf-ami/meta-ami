@@ -25,8 +25,8 @@ do_install:append(){
   install -d ${D}/etc
   install -d ${D}/etc/ntpsec
 
-  install -m 0644 -D ${WORKDIR}/ntpsec.conf ${D}/etc/ntp.conf
-  install -m 0644 -D ${WORKDIR}/ntpsec-ca-certificates.crt ${D}/etc/ntpsec/ntpsec-ca-certificates.crt
+  install -m 0644 -D ${UNPACKDIR}/ntpsec.conf ${D}/etc/ntp.conf
+  install -m 0644 -D ${UNPACKDIR}/ntpsec-ca-certificates.crt ${D}/etc/ntpsec/ntpsec-ca-certificates.crt
 
   rm -f ${D}${bindir}/ntpviz
   rm -f ${D}${bindir}/ntplogtemp

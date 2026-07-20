@@ -7,6 +7,6 @@ SRC_URI:append = " \
 
 do_install:append() {
     install -d ${D}${bindir}
-    install -m 0755 ${WORKDIR}/mac-check  ${D}${bindir}
+    install -m 0755 ${UNPACKDIR}/mac-check  ${D}${bindir}
 }
 

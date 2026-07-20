@@ -1,0 +1,322 @@
+From 0ae1cdad1300e7ac7216085b91bdd069f431435e Mon Sep 17 00:00:00 2001
+From: owenkuo <owenkuo@ami.com>
+Date: Fri, 12 Jun 2026 14:47:47 +0800
+Subject: [PATCH] Add AMI USB Gadget features
+
+---
+ drivers/usb/gadget/Makefile                  |  2 +-
+ drivers/usb/gadget/configfs.c                | 17 +++++++++++-
+ drivers/usb/gadget/function/f_ecm.c          |  7 +++++
+ drivers/usb/gadget/function/f_mass_storage.c | 12 ++++++++
+ drivers/usb/gadget/function/f_rndis.c        | 14 ++++++++++
+ drivers/usb/gadget/function/rndis.c          |  4 +--
+ drivers/usb/gadget/function/storage_common.c | 15 ++++++----
+ drivers/usb/gadget/function/storage_common.h | 29 ++++++++++++++++++++
+ drivers/usb/gadget/function/u_ether.c        | 12 +++++---
+ 9 files changed, 98 insertions(+), 14 deletions(-)
+
+diff --git a/drivers/usb/gadget/Makefile b/drivers/usb/gadget/Makefile
+index 33f1ef91b046..f8699db0c680 100644
+--- a/drivers/usb/gadget/Makefile
++++ b/drivers/usb/gadget/Makefile
+@@ -7,6 +7,6 @@ subdir-ccflags-$(CONFIG_USB_GADGET_VERBOSE)	+= -DVERBOSE_DEBUG
+ 
+ obj-$(CONFIG_USB_LIBCOMPOSITE)	+= libcomposite.o
+ libcomposite-y			:= usbstring.o config.o epautoconf.o
+-libcomposite-y			+= composite.o functions.o configfs.o u_f.o
++libcomposite-y			+= composite.o functions.o configfs.o configfs_ami.o u_f.o
+ 
+ obj-$(CONFIG_USB_GADGET)	+= udc/ function/ legacy/
+diff --git a/drivers/usb/gadget/configfs.c b/drivers/usb/gadget/configfs.c
+index 60a1abfc5654..81dbee2c9eb6 100644
+--- a/drivers/usb/gadget/configfs.c
++++ b/drivers/usb/gadget/configfs.c
+@@ -12,6 +12,10 @@
+ #include "u_f.h"
+ #include "u_os_desc.h"
+ 
++/* External AMI-specific function from configfs_ami.c */
++extern void ami_bind_ecm_rndis_shared(struct usb_gadget *gadget,
++				      struct list_head *available_func);
++
+ int check_user_usb_string(const char *name,
+ 		struct usb_gadget_strings *stringtab_dev)
+ {
+@@ -824,11 +828,15 @@ static ssize_t gadget_string_s_store(struct config_item *item, const char *page,
+ {
+ 	struct gadget_string *string = to_gadget_string(item);
+ 	int size = min(sizeof(string->string), len + 1);
++	ssize_t cpy_len;
+ 
+ 	if (len > USB_MAX_STRING_LEN)
+ 		return -EINVAL;
+ 
+-	return strscpy(string->string, page, size);
++	cpy_len = strscpy(string->string, page, size);
++	if (cpy_len > 0 && string->string[cpy_len - 1] == '\n')
++		string->string[cpy_len - 1] = 0;
++	return len;
+ }
+ CONFIGFS_ATTR(gadget_string_, s);
+ 
+@@ -1058,6 +1066,8 @@ static ssize_t webusb_landingPage_store(struct config_item *item, const char *pa
+ 	unsigned int bytes_to_strip = 0;
+ 	int l = len;
+ 
++	if (!len)
++		return len;
+ 	if (page[l - 1] == '\n') {
+ 		--l;
+ 		++bytes_to_strip;
+@@ -1181,6 +1191,8 @@ static ssize_t os_desc_qw_sign_store(struct config_item *item, const char *page,
+ 	struct gadget_info *gi = os_desc_item_to_gadget_info(item);
+ 	int res, l;
+ 
++	if (!len)
++		return len;
+ 	l = min((int)len, OS_STRING_QW_SIGN_LEN >> 1);
+ 	if (page[l - 1] == '\n')
+ 		--l;
+@@ -1754,6 +1766,9 @@ static int configfs_composite_bind(struct usb_gadget *gadget,
+ 		otg_desc[1] = NULL;
+ 	}
+ 
++	/* Setup ECM/RNDIS network device sharing before binding functions */
++	ami_bind_ecm_rndis_shared(cdev->gadget, &gi->available_func);
++
+ 	/* Go through all configs, attach all functions */
+ 	list_for_each_entry(c, &gi->cdev.configs, list) {
+ 		struct config_usb_cfg *cfg;
+diff --git a/drivers/usb/gadget/function/f_ecm.c b/drivers/usb/gadget/function/f_ecm.c
+index f55f60639e42..2afc30de54ce 100644
+--- a/drivers/usb/gadget/function/f_ecm.c
++++ b/drivers/usb/gadget/function/f_ecm.c
+@@ -892,6 +892,12 @@ static void ecm_resume(struct usb_function *f)
+ 	gether_resume(&ecm->port);
+ }
+ 
++static int ecm_get_status(struct usb_function *f)
++{
++	return (f->func_wakeup_armed ? USB_INTRF_STAT_FUNC_RW : 0) |
++		USB_INTRF_STAT_FUNC_RW_CAP;
++}
++
+ static void ecm_free(struct usb_function *f)
+ {
+ 	struct f_ecm *ecm;
+@@ -960,6 +966,7 @@ static struct usb_function *ecm_alloc(struct usb_function_instance *fi)
+ 	ecm->port.func.disable = ecm_disable;
+ 	ecm->port.func.free_func = ecm_free;
+ 	ecm->port.func.suspend = ecm_suspend;
++	ecm->port.func.get_status = ecm_get_status;
+ 	ecm->port.func.resume = ecm_resume;
+ 
+ 	return &ecm->port.func;
+diff --git a/drivers/usb/gadget/function/f_mass_storage.c b/drivers/usb/gadget/function/f_mass_storage.c
+index c265a1f62fc1..1e36003d74f7 100644
+--- a/drivers/usb/gadget/function/f_mass_storage.c
++++ b/drivers/usb/gadget/function/f_mass_storage.c
+@@ -700,6 +700,8 @@ static int do_read(struct fsg_common *common)
+ 		amount_left  -= nread;
+ 		common->residue -= nread;
+ 
++		fsg_stats_rd_attempt(&curlun->stats, nread);
++
+ 		/*
+ 		 * Except at the end of the transfer, nread will be
+ 		 * equal to the buffer size, which is divisible by the
+@@ -900,6 +902,8 @@ static int do_write(struct fsg_common *common)
+ 		amount_left_to_write -= nwritten;
+ 		common->residue -= nwritten;
+ 
++		fsg_stats_wr_attempt(&curlun->stats, nwritten);
++
+ 		/* If an error occurred, report it and its position */
+ 		if (nwritten < amount) {
+ 			curlun->sense_data = SS_WRITE_ERROR;
+@@ -3263,6 +3267,13 @@ static ssize_t fsg_lun_opts_forced_eject_store(struct config_item *item,
+ 
+ CONFIGFS_ATTR_WO(fsg_lun_opts_, forced_eject);
+ 
++static ssize_t fsg_lun_opts_stats_show(struct config_item *item, char *page)
++{
++	return fsg_show_stats(to_fsg_lun_opts(item)->lun, page);
++}
++
++CONFIGFS_ATTR_RO(fsg_lun_opts_, stats);
++
+ static struct configfs_attribute *fsg_lun_attrs[] = {
+ 	&fsg_lun_opts_attr_file,
+ 	&fsg_lun_opts_attr_ro,
+@@ -3271,6 +3282,7 @@ static struct configfs_attribute *fsg_lun_attrs[] = {
+ 	&fsg_lun_opts_attr_nofua,
+ 	&fsg_lun_opts_attr_inquiry_string,
+ 	&fsg_lun_opts_attr_forced_eject,
++	&fsg_lun_opts_attr_stats,
+ 	NULL,
+ };
+ 
+diff --git a/drivers/usb/gadget/function/f_rndis.c b/drivers/usb/gadget/function/f_rndis.c
+index b47f99d17ee9..55aa3aac08dd 100644
+--- a/drivers/usb/gadget/function/f_rndis.c
++++ b/drivers/usb/gadget/function/f_rndis.c
+@@ -681,6 +681,20 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
+ 	rndis_iad_descriptor.bFunctionSubClass = rndis_opts->subclass;
+ 	rndis_iad_descriptor.bFunctionProtocol = rndis_opts->protocol;
+ 
++	/*
++	 * In drivers/usb/gadget/configfs.c:configfs_composite_bind()
++	 * During the RNDIS to ECM network linking process, the original
++	 * RNDIS netdev is cleared. To ensure proper functionality, the
++	 * RNDIS netdev must now be reassigned.
++	 */
++	if (rndis_opts->borrowed_net && rndis_opts->bound) {
++		/* Retrieve the host MAC address and assign it to the RNDIS structure */
++		gether_get_host_addr_u8(rndis_opts->net, rndis->ethaddr);
++
++		/* Update the RNDIS port's I/O port with the new netdev private data */
++		rndis->port.ioport = netdev_priv(rndis_opts->net);
++	}
++
+ 	/*
+ 	 * in drivers/usb/gadget/configfs.c:configfs_composite_bind()
+ 	 * configurations are bound in sequence with list_for_each_entry,
+diff --git a/drivers/usb/gadget/function/rndis.c b/drivers/usb/gadget/function/rndis.c
+index 12c5d9cf450c..e0f19d6daa8f 100644
+--- a/drivers/usb/gadget/function/rndis.c
++++ b/drivers/usb/gadget/function/rndis.c
+@@ -819,11 +819,11 @@ int rndis_msg_parser(struct rndis_params *params, u8 *buf)
+ 	case RNDIS_MSG_HALT:
+ 		pr_debug("%s: RNDIS_MSG_HALT\n",
+ 			__func__);
+-		params->state = RNDIS_UNINITIALIZED;
++		/*params->state = RNDIS_UNINITIALIZED;
+ 		if (params->dev) {
+ 			netif_carrier_off(params->dev);
+ 			netif_stop_queue(params->dev);
+-		}
++		}*/
+ 		return 0;
+ 
+ 	case RNDIS_MSG_QUERY:
+diff --git a/drivers/usb/gadget/function/storage_common.c b/drivers/usb/gadget/function/storage_common.c
+index 2a4163b0f6fe..d397253885c7 100644
+--- a/drivers/usb/gadget/function/storage_common.c
++++ b/drivers/usb/gadget/function/storage_common.c
+@@ -244,12 +244,6 @@ int fsg_lun_open(struct fsg_lun *curlun, const char *filename)
+ 	min_sectors = 1;
+ 	if (curlun->cdrom) {
+ 		min_sectors = 300;	/* Smallest track is 300 frames */
+-		if (num_sectors >= 256*60*75) {
+-			num_sectors = 256*60*75 - 1;
+-			LINFO(curlun, "file too big: %s\n", filename);
+-			LINFO(curlun, "using only first %d blocks\n",
+-					(int) num_sectors);
+-		}
+ 	}
+ 	if (num_sectors < min_sectors) {
+ 		LINFO(curlun, "file too small: %s\n", filename);
+@@ -374,6 +368,15 @@ ssize_t fsg_show_inquiry_string(struct fsg_lun *curlun, char *buf)
+ }
+ EXPORT_SYMBOL_GPL(fsg_show_inquiry_string);
+ 
++ssize_t fsg_show_stats(struct fsg_lun *curlun, char *buf)
++{
++	return sprintf(buf, "read cnt: %u\n" "read sum: %llu\n"
++		       "write cnt: %u\n" "write sum: %llu\n",
++		       curlun->stats.read.count, curlun->stats.read.bytes,
++		       curlun->stats.write.count, curlun->stats.write.bytes);
++}
++EXPORT_SYMBOL_GPL(fsg_show_stats);
++
+ /*
+  * The caller must hold fsg->filesem for reading when calling this function.
+  */
+diff --git a/drivers/usb/gadget/function/storage_common.h b/drivers/usb/gadget/function/storage_common.h
+index 0a544a82cbf8..fd8fe65cf11e 100644
+--- a/drivers/usb/gadget/function/storage_common.h
++++ b/drivers/usb/gadget/function/storage_common.h
+@@ -95,6 +95,32 @@ do {									\
+  */
+ #define INQUIRY_STRING_LEN ((size_t) (8 + 16 + 4 + 1))
+ 
++struct fsg_stats_cnt {
++	u64 bytes;
++	u32 count;
++};
++
++struct fsg_stats {
++	struct fsg_stats_cnt read;
++	struct fsg_stats_cnt write;
++};
++
++static inline void fsg_stats_update(struct fsg_stats_cnt *cnt, u64 diff)
++{
++	cnt->count++;
++	cnt->bytes += diff;
++}
++
++static inline void fsg_stats_wr_attempt(struct fsg_stats *stats, u64 b_written)
++{
++	fsg_stats_update(&stats->write, b_written);
++}
++
++static inline void fsg_stats_rd_attempt(struct fsg_stats *stats, u64 b_read)
++{
++	fsg_stats_update(&stats->read, b_read);
++}
++
+ struct fsg_lun {
+ 	struct file	*filp;
+ 	loff_t		file_length;
+@@ -120,6 +146,8 @@ struct fsg_lun {
+ 	const char	*name;		/* "lun.name" */
+ 	const char	**name_pfx;	/* "function.name" */
+ 	char		inquiry_string[INQUIRY_STRING_LEN];
++
++	struct fsg_stats	stats;
+ };
+ 
+ static inline bool fsg_lun_is_open(struct fsg_lun *curlun)
+@@ -208,6 +236,7 @@ ssize_t fsg_show_file(struct fsg_lun *curlun, struct rw_semaphore *filesem,
+ ssize_t fsg_show_inquiry_string(struct fsg_lun *curlun, char *buf);
+ ssize_t fsg_show_cdrom(struct fsg_lun *curlun, char *buf);
+ ssize_t fsg_show_removable(struct fsg_lun *curlun, char *buf);
++ssize_t fsg_show_stats(struct fsg_lun *curlun, char *buf);
+ ssize_t fsg_store_ro(struct fsg_lun *curlun, struct rw_semaphore *filesem,
+ 		     const char *buf, size_t count);
+ ssize_t fsg_store_nofua(struct fsg_lun *curlun, const char *buf, size_t count);
+diff --git a/drivers/usb/gadget/function/u_ether.c b/drivers/usb/gadget/function/u_ether.c
+index 4bb0553da658..d89d182e092e 100644
+--- a/drivers/usb/gadget/function/u_ether.c
++++ b/drivers/usb/gadget/function/u_ether.c
+@@ -1015,7 +1015,7 @@ int gether_set_ifname(struct net_device *net, const char *name, int len)
+ {
+ 	struct eth_dev *dev = netdev_priv(net);
+ 	char tmp[IFNAMSIZ];
+-	const char *p;
++	//const char *p;
+ 
+ 	if (name[len - 1] == '\n')
+ 		len--;
+@@ -1027,10 +1027,14 @@ int gether_set_ifname(struct net_device *net, const char *name, int len)
+ 	if (!dev_valid_name(tmp))
+ 		return -EINVAL;
+ 
++	/*
++	 * Allow manual specification of exact interface name instead of
++	 * requiring kernel auto-generation with %d format.
++	 */
+ 	/* Require exactly one %d, so binding will not fail with EEXIST. */
+-	p = strchr(name, '%');
+-	if (!p || p[1] != 'd' || strchr(p + 2, '%'))
+-		return -EINVAL;
++	// p = strchr(name, '%');
++	// if (!p || p[1] != 'd' || strchr(p + 2, '%'))
++	// 	return -EINVAL;
+ 
+ 	strncpy(net->name, tmp, sizeof(net->name));
+ 	dev->ifname_set = true;
+-- 
+2.43.0
+

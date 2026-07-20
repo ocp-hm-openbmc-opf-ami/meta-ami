@@ -1,7 +1,7 @@
 SUMMARY = "mail alert management application"
 
 SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/email-alert-manager.git;protocol=https;branch=main"
-SRCREV = "f67abbc8a19d14868c07f574f268d5f2334b8e0a"
+SRCREV = "fac352786d750fec46acf538f5f653bec1fef38c"
 
 SRC_URI += " \
 	    file://primary_smtp_config.json \
@@ -29,6 +29,6 @@ SYSTEMD_SERVICE:${PN} = "mail-alert-manager.service"
 
 do_install:append() {
     install -d ${D}/var/lib/alert
-    install -m 0644 ${WORKDIR}/primary_smtp_config.json ${D}/var/lib/alert
-    install -m 0644 ${WORKDIR}/secondary_smtp_config.json ${D}/var/lib/alert
+    install -m 0644 ${UNPACKDIR}/primary_smtp_config.json ${D}/var/lib/alert
+    install -m 0644 ${UNPACKDIR}/secondary_smtp_config.json ${D}/var/lib/alert
 }

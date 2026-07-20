@@ -22,16 +22,16 @@ RDEPENDS:${PN} = "bash"
 SYSTEMD_PACKAGES = "${PN}"
 do_install() {
     install -d ${D}/${bindir}
-    install -m 0755 ${WORKDIR}/bmc-boot-check.sh ${D}/${bindir}/
+    install -m 0755 ${UNPACKDIR}/bmc-boot-check.sh ${D}/${bindir}/
 }
 
 do_install:append() {
     if ${@bb.utils.contains('IMAGE_FEATURES', 'onetree-hw-failsafe-boot', 'true', 'false', d)}; then
 #Dual Image for At2700
 	   if [ "${MACHINE}" = "ast2700-default" ]; then
-        	install -m 0755 ${WORKDIR}/bmc-alternateboot-check_ast2700.sh ${D}/${bindir}/bmc-alternateboot-check.sh
+        	install -m 0755 ${UNPACKDIR}/bmc-alternateboot-check_ast2700.sh ${D}/${bindir}/bmc-alternateboot-check.sh
     	else
-        	install -m 0755 ${WORKDIR}/bmc-alternateboot-check.sh ${D}/${bindir}/
+        	install -m 0755 ${UNPACKDIR}/bmc-alternateboot-check.sh ${D}/${bindir}/
     	fi
 
     fi

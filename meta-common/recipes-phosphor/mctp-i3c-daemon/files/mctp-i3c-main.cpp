@@ -96,6 +96,8 @@ bool skipIteration = false;
 
 uint8_t startEid = 0x08; // Default starting EID
 uint8_t eidPoolStartEid;
+uint8_t eidPoolsize = 0;
+uint8_t PstartEid = 0;
 
 int mode;
 
@@ -155,11 +157,15 @@ int initEndpointDiscovery(MctpDevice& device, uint8_t eid)
         return rc;
     }
 
-    rc = getEid(device);
+    rc = getEid(device, eid);
     if (rc < 0)
     {
         mctpPrErr("%s: get_eid fn failed ", __func__);
         return rc;
+    }
+    else if (rc) // EID matches, device already has the expected EID
+    {
+        return 1;
     }
 
     if (!isEidValid(device.staticEid))
@@ -181,20 +187,6 @@ int initEndpointDiscovery(MctpDevice& device, uint8_t eid)
             return rc;
         }
         device.eid = device.staticEid;
-    }
-
-    rc = getMsgType(device);
-    if (rc < 0)
-    {
-        mctpPrErr("%s: getMsgType fn failed ", __func__);
-        return rc;
-    }
-
-    rc = getVdmSupport(device);
-    if (rc < 0)
-    {
-        mctpPrErr("%s: get_vdm_support fn failed ", __func__);
-        return rc;
     }
 
     if (device.isMctpBridge)
@@ -685,6 +677,8 @@ void handleMctpControlCommand(const boost::system::error_code& ec)
                 }
                 /// @brief Handle allocate EID pool message
                 eidPoolStartEid = rxbuf[4];
+                PstartEid = eidPoolStartEid;
+                eidPoolsize = rxbuf[3];
                 eidPoolAssigned = true;
                 mctpPrInfo("EID pool assigned: 0x%02X", eidPoolStartEid);
 
@@ -917,16 +911,37 @@ void handleMctpControlCommand(const boost::system::error_code& ec)
                             continue;
                         }
 
-                        uint8_t set_eid = eidPoolStartEid++;
+                        uint8_t set_eid = eidPoolStartEid;
                         /// Post timer work to io_context so device
                         /// discovery will run in background
-                        post(io, [&device, set_eid] {
-                            if (initEndpointDiscovery(device, set_eid) == 0)
-                            {
-                                eidPoolAssigned = false;
-                                registerRoutingTableEndpoints();
-                            }
-                        });
+                        if (set_eid < (PstartEid + eidPoolsize))
+                        {
+                            post(io, [&device, set_eid] {
+                                int rc = 0;
+                                if ((rc = initEndpointDiscovery(device,
+                                                                set_eid)) >= 0)
+                                {
+                                    eidPoolAssigned = false;
+                                    if (!rc)
+                                    {
+                                        registerRoutingTableEndpoints();
+                                        eidPoolStartEid++;
+                                    }
+                                    else
+                                    {
+                                        mctpPrInfo(
+                                            "%s: EID: 0x%02X is already in use by endpoint ",
+                                            __func__, set_eid);
+                                    }
+                                }
+                            });
+                        }
+                        else
+                        {
+                            mctpPrDebug(
+                                "set_eid is not with in the range of eidpoolsize");
+                            eidPoolAssigned = false;
+                        }
                     }
                 }
             }
@@ -1583,6 +1598,11 @@ int main(int argc, char* argv[])
     /// @brief Setup power reset handler
     setupPwrResetHandler();
 
+    /// @brief Initialize debug file monitoring
+    if (initDebugMonitor(io) < 0)
+    {
+        mctpPrWarn("Failed to initialize debug file monitor");
+    }
     /// @brief Run io context
     io.run();
 

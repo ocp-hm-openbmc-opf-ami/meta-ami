@@ -1,0 +1,142 @@
+From 0f3fad88461b91159252c62b5979bf543435bbf1 Mon Sep 17 00:00:00 2001
+From: sonan <sonan@ami.com>
+Date: Wed, 13 May 2026 17:16:24 +0800
+Subject: [PATCH] Fixed the timeSync preserve settings when NTP is disabled
+
+Signed-off-by: sonan <sonan@ami.com>
+---
+ src/timedate/timedated.c | 90 ++++++++++++++++++++++++++++++++--------
+ 1 file changed, 72 insertions(+), 18 deletions(-)
+
+diff --git a/src/timedate/timedated.c b/src/timedate/timedated.c
+index f22b32c27a..5e096bd288 100644
+--- a/src/timedate/timedated.c
++++ b/src/timedate/timedated.c
+@@ -570,6 +570,12 @@ static bool ntp_synced(void) {
+         if (adjtimex(&txc) < 0)
+                 return false;
+ 
++	/* If timesyncd has not synchronized the clock,
++        * consider system clock unsynchronized.
++        */
++        if (access("/run/systemd/timesync/synchronized", F_OK) < 0)
++             return false;
++
+         /* Consider the system clock synchronized if the reported maximum error is smaller than the maximum
+          * value (16 seconds). Ignore the STA_UNSYNC flag as it may have been set to prevent the kernel from
+          * touching the RTC. */
+@@ -649,8 +655,6 @@ static int property_get_ntp(
+ 
+         Context *c = ASSERT_PTR(userdata);
+         int r;
+-        int ret = 0;
+-        _cleanup_free_ char *sync = NULL;
+ 
+         assert(bus);
+         assert(property);
+@@ -665,22 +669,7 @@ static int property_get_ntp(
+         if (r < 0)
+                 return r;
+ 
+-        /* Try to read sync method file directly - simpler than checking existence first */
+-        const char *sync_method_file = "/var/lib/phosphor-settings-manager/settings/xyz/openbmc_project/time/sync_method_";
+-        ret = read_full_file(sync_method_file, &sync, NULL);
+-        bool ntp_active = context_ntp_service_is_active(c) > 0;
+-        if (ret >= 0 && sync) {
+-                if (strstr(sync, "NTP") != NULL  && ntp_active) {
+-                        return sd_bus_message_append(reply, "b", true);
+-                }
+-                else if (strstr(sync, "Manual") != NULL  && !ntp_active) {
+-                        return sd_bus_message_append(reply, "b", false);
+-                } else {
+-                        return sd_bus_message_append(reply, "b", false);
+-                }
+-        } else {
+-                return sd_bus_message_append(reply, "b", ntp_active);
+-        }
++	return sd_bus_message_append(reply, "b", context_ntp_service_is_active(c) > 0);
+ }
+ 
+ static int method_set_timezone(sd_bus_message *m, void *userdata, sd_bus_error *error) {
+@@ -1175,6 +1164,66 @@ static bool context_check_idle(void *userdata) {
+         return hashmap_isempty(c->polkit_registry);
+ }
+ 
++static int restore_ntp_state(Context* c, sd_bus* bus)
++{
++    _cleanup_free_ char* sync = NULL;
++    _cleanup_(sd_bus_error_free) sd_bus_error error = SD_BUS_ERROR_NULL;
++
++    const char* sync_method_file =
++        "/var/lib/phosphor-settings-manager/settings/xyz/openbmc_project/time/sync_method_";
++
++    int r, q;
++
++    assert(c);
++    assert(bus);
++    r = read_full_file(sync_method_file, &sync, NULL);
++    if (r < 0 || !sync)
++    {
++        log_debug("No persisted sync method found.");
++         return 0;
++    }
++    log_info("Restoring persisted sync method: %s", sync);
++    r = context_update_ntp_status(c, bus, NULL);
++    if (r < 0)
++    {
++        log_error_errno(r, "Failed to update NTP status: %m");
++        return r;
++    }
++    if (strstr(sync, "Manual") != NULL)
++    {
++        log_info("Persisted mode is Manual. Disabling/stopping NTP services.");
++        LIST_FOREACH(units, u, c->units)
++        {
++            if (!streq(u->load_state, "loaded"))
++                continue;
++
++            q = unit_start_or_stop(u, bus, &error, false);
++            if (q < 0){
++                log_unit_warning_errno(u, q, "Failed to stop NTP unit: %s",
++                                       bus_error_message(&error, q));
++	    }
++        }
++    }
++    else if (strstr(sync, "NTP") != NULL)
++    {
++        log_info("Persisted mode is NTP. Enabling/starting NTP services.");
++        LIST_FOREACH(units, u, c->units)
++        {
++            if (!streq(u->load_state, "loaded"))
++                continue;
++            q = unit_start_or_stop(u, bus, &error, true);
++            if (q < 0){
++                log_unit_warning_errno(u, q, "Failed to start NTP unit: %s",
++                                       bus_error_message(&error, q));
++	    }
++        }
++    }
++    else
++    {
++        log_warning("Unknown sync method content: %s", sync);
++    }
++    return 0;
++ }
+ static int run(int argc, char *argv[]) {
+         _cleanup_(context_clear) Context context = {};
+         _cleanup_(sd_event_unrefp) sd_event *event = NULL;
+@@ -1216,6 +1265,11 @@ static int run(int argc, char *argv[]) {
+         r = context_parse_ntp_services(&context);
+         if (r < 0)
+                 return r;
++        
++	r = restore_ntp_state(&context, bus);
++	if (r < 0){
++	    log_warning_errno(r, "Failed to restore persisted NTP state: %m");
++	}
+ 
+         r = sd_notify(false, NOTIFY_READY);
+         if (r < 0)
+-- 
+2.43.0
+

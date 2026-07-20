@@ -11,7 +11,7 @@ SRC_URI += " \
 
 inherit meson systemd pkgconfig
 
-S = "${WORKDIR}"
+S = "${UNPACKDIR}"
 
 DEPENDS += " \
     sdbusplus \
@@ -29,7 +29,7 @@ do_install (){
         install -d ${D}${bindir}
         install -m 0755 gpio-presence ${D}${bindir}
         install -d ${D}${systemd_unitdir}/system
-        install -m 0644 ${WORKDIR}/services/gpio-presence.service ${D}${systemd_unitdir}/system/
+        install -m 0644 ${UNPACKDIR}/services/gpio-presence.service ${D}${systemd_unitdir}/system/
 }
 
 

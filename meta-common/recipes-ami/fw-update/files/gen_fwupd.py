@@ -10,7 +10,11 @@ Features:
 - exec.prepost: "per-target" (default) or "global"
 - exec.parallel: true|false (per-target loops)
 - exec.targetMode: "per-target" (default) or "batched"
-- Tokens: @IMAGE@ @DIR@ @TARGET@ @TARGETS@ @TARGETSFILE@ @IMAGEPATH@
+- PLDM bundle orchestration: extract non-PLDM payloads with pldm-bundle-extraction-tool,
+  dispatch them through their existing component flows, then flash the reduced
+  pure-PLDM bundle.
+- fwupd.json component key: bundleExtractFormat = raw|pldm
+- Tokens: @IMAGE@ @IMAGEFD@ @DIR@ @TARGET@ @TARGETS@ @TARGETSFILE@ @IMAGEPATH@
 """
 
 import argparse, json, os, shlex, sys
@@ -20,6 +24,7 @@ def q(s): return shlex.quote(str(s))
 def replace_shell_tokens(cmd: str) -> str:
     return (cmd
             .replace('@IMAGE@', '$IMAGE_PATH')
+            .replace('@IMAGEFD@', '$IMAGE_FD')
             .replace('@DIR@', '$IMAGE_DIR')
             .replace('@TARGET@', '$TARGET')
             .replace('@IMAGEPATH@', '$CUSTOM_IMAGE_PATH')
@@ -29,6 +34,7 @@ def replace_shell_tokens(cmd: str) -> str:
 def tpl_arg(arg: str) -> str:
     return {
         '@IMAGE@': '$IMAGE_PATH',
+        '@IMAGEFD@': '$IMAGE_FD',
         '@DIR@': '$IMAGE_DIR',
         '@TARGET@': '$TARGET',
         '@IMAGEPATH@': '$CUSTOM_IMAGE_PATH',
@@ -36,7 +42,8 @@ def tpl_arg(arg: str) -> str:
         '@TARGETSFILE@': '$TARGETS_FILE',
     }.get(arg, q(arg))
 
-def header(common_path: str, log_path: str, image_root: str) -> str:
+def header(common_path: str, log_path: str, image_root: str,
+           runtime_json_path: str, bundle_tool_path: str) -> str:
     L = []
     L += [
         "#!/bin/sh",
@@ -62,8 +69,10 @@ def header(common_path: str, log_path: str, image_root: str) -> str:
         "}",
         "",
         "_fwupd_cleanup_tmp() {",
+        '  _fwupd_progress_ticker_stop || true',
         '  [ -n "${TARGETS_FILE:-}" ] && [ -f "$TARGETS_FILE" ] && rm -f "$TARGETS_FILE" || :',
-        '  clear_pushuri_target_and_busy_status || true',
+        '  [ -n "${PLDM_EXTRACT_DIR:-}" ] && [ -d "$PLDM_EXTRACT_DIR" ] && rm -rf "$PLDM_EXTRACT_DIR" || :',
+        '  # clear_pushuri_target_and_busy_status || true',
         "}",
         "trap '_fwupd_abort_trap' ERR",
         "trap '_fwupd_cleanup_tmp' EXIT",
@@ -72,14 +81,96 @@ def header(common_path: str, log_path: str, image_root: str) -> str:
         'IMAGE_KEY="$1"',
         "",
         'IMAGE_ROOT="' + image_root.replace('"','\\"') + '"',
+        'FWUPD_JSON=' + q(runtime_json_path),
+        'PLDM_BUNDLE_TOOL=' + q(bundle_tool_path),
+        'FWUPD_REBOOT_REQUIRED_DIR="/run/fwupd-reboot-required"',
+        'FWUPD_REBOOT_REQUIRED_FILE="$FWUPD_REBOOT_REQUIRED_DIR/$IMAGE_KEY"',
+        'FWUPD_PROGRESS_OFFSET=0',
+        'FWUPD_PROGRESS_SCALE=100',
+        'FWUPD_PROGRESS_TICKER_PID=""',
+        'FWUPD_PROGRESS_LAST=0',
+        'export FWUPD_PROGRESS_OFFSET FWUPD_PROGRESS_SCALE FWUPD_PROGRESS_TICKER_PID FWUPD_PROGRESS_LAST FWUPD_REBOOT_REQUIRED_DIR FWUPD_REBOOT_REQUIRED_FILE',
         'IMAGE_DIR="$IMAGE_ROOT/$IMAGE_KEY"',
         'dir="${IMAGE_DIR%/}"',
+        '',
+        '_fwupd_mark_bmc_reboot_required() {',
+        '  mkdir -p "$FWUPD_REBOOT_REQUIRED_DIR"',
+        '  : > "$FWUPD_REBOOT_REQUIRED_FILE"',
+        '}',
+        '',
+        '_fwupd_clear_bmc_reboot_required() {',
+        '  rm -f "$FWUPD_REBOOT_REQUIRED_FILE" 2>/dev/null || true',
+        '}',
+        '',
+        '_fwupd_clear_bmc_reboot_required || true',
         "",
+        '_fwupd_progress_ticker_stop() {',
+        '  if [ -n "${FWUPD_PROGRESS_TICKER_PID:-}" ]; then',
+        '    kill "$FWUPD_PROGRESS_TICKER_PID" 2>/dev/null || true',
+        '    wait "$FWUPD_PROGRESS_TICKER_PID" 2>/dev/null || true',
+        '    FWUPD_PROGRESS_TICKER_PID=""',
+        '    export FWUPD_PROGRESS_TICKER_PID',
+        '  fi',
+        '}',
+        '',
+        '_fwupd_progress_ticker_start() {',
+        '  _ticker_from="${1:-0}"',
+        '  _ticker_to="${2:-95}"',
+        '  _ticker_sleep="${3:-3}"',
+        '  _fwupd_progress_ticker_stop',
+        '  [ "${FWUPD_PROGRESS_SCALE:-100}" -gt 0 ] 2>/dev/null || return 0',
+        '  (',
+        '    _ticker_val="$_ticker_from"',
+        '    while :; do',
+        '      sleep "$_ticker_sleep" || exit 0',
+        '      [ "$_ticker_val" -lt "$_ticker_to" ] || continue',
+        '      _ticker_val=$((_ticker_val+1))',
+        '      [ "$_ticker_val" -le "$_ticker_to" ] || _ticker_val="$_ticker_to"',
+        '      set_progress "$_ticker_val" || true',
+        '    done',
+        '  ) &',
+        '  FWUPD_PROGRESS_TICKER_PID="$!"',
+        '  export FWUPD_PROGRESS_TICKER_PID',
+        '}',
+        '',
+        '_fwupd_run_with_progress() {',
+        '  _progress_from="${1:-0}"',
+        '  _progress_to="${2:-100}"',
+        '  shift 2',
+        '  set_progress "$_progress_from" || true',
+        '  _ticker_limit="$_progress_to"',
+        '  [ "$_ticker_limit" -gt "$_progress_from" ] && _ticker_limit=$((_ticker_limit-1)) || true',
+        '  _fwupd_progress_ticker_start "$_progress_from" "$_ticker_limit"',
+        '  "$@"',
+        '  _rc=$?',
+        '  _fwupd_progress_ticker_stop',
+        '  [ "$_rc" -ne 0 ] || set_progress "$_progress_to" || true',
+        '  return "$_rc"',
+        '}',
+        '',
+        '_fwupd_with_progress_slice() {',
+        '  _slice_offset="${1:-0}"',
+        '  _slice_scale="${2:-100}"',
+        '  shift 2',
+        '  _saved_offset="${FWUPD_PROGRESS_OFFSET:-0}"',
+        '  _saved_scale="${FWUPD_PROGRESS_SCALE:-100}"',
+        '  FWUPD_PROGRESS_OFFSET=$((_saved_offset + _saved_scale * _slice_offset / 100))',
+        '  FWUPD_PROGRESS_SCALE=$((_saved_scale * _slice_scale / 100))',
+        '  export FWUPD_PROGRESS_OFFSET FWUPD_PROGRESS_SCALE',
+        '  "$@"',
+        '  _rc=$?',
+        '  FWUPD_PROGRESS_OFFSET="$_saved_offset"',
+        '  FWUPD_PROGRESS_SCALE="$_saved_scale"',
+        '  export FWUPD_PROGRESS_OFFSET FWUPD_PROGRESS_SCALE',
+        '  return "$_rc"',
+        '}',
+        '',
         'IMG_BASENAME="$(basename "$IMAGE_KEY")"',
         'set_img_obj "$IMG_BASENAME"',
         "",
         'FOUND_COMP=""',
         'IMAGE_PATH=""',
+        'IMAGE_FD=""',
         'PURPOSE="$(detect_manifest_purpose "$dir")"',
         "",
         "# Parse FWVER (fallback to IMG_BASENAME)",
@@ -91,6 +182,88 @@ def header(common_path: str, log_path: str, image_root: str) -> str:
         "export FWVER",
         "",
         'log "Manifest purpose: ${PURPOSE:-<unknown>}"',
+        '',
+        '_fwupd_dispatch_with_image() {',
+        '  _comp="$1"',
+        '  _image_dir="$2"',
+        '  _image_path="$3"',
+        '  _skip_extract="${4:-0}"',
+        '  _image_mode="${5:-image}"',
+        '  _old_image_dir="$IMAGE_DIR"',
+        '  _old_dir="${dir:-$IMAGE_DIR}"',
+        '  _old_image_path="$IMAGE_PATH"',
+        '  _old_image_fd="${IMAGE_FD:-}"',
+        '  _old_purpose="${PURPOSE:-}"',
+        '  _old_found_comp="${FOUND_COMP:-}"',
+        '  _old_skip="${PLDM_BUNDLE_ALREADY_EXTRACTED:-0}"',
+        '  IMAGE_DIR="$_image_dir"',
+        '  dir="${IMAGE_DIR%/}"',
+        '  IMAGE_PATH="$_image_path"',
+        '  _fwupd_open_image_fd "$IMAGE_PATH" "$_image_mode"',
+        '  PURPOSE="$(detect_manifest_purpose "$dir")"',
+        '  FOUND_COMP="$_comp"',
+        '  PLDM_BUNDLE_ALREADY_EXTRACTED="$_skip_extract"',
+        '  export IMAGE_DIR IMAGE_PATH IMAGE_FD PURPOSE FOUND_COMP PLDM_BUNDLE_ALREADY_EXTRACTED',
+        '  eval "dispatch_${_comp}"',
+        '  _fwupd_close_image_fd',
+        '  IMAGE_DIR="$_old_image_dir"',
+        '  dir="$_old_dir"',
+        '  IMAGE_PATH="$_old_image_path"',
+        '  IMAGE_FD="$_old_image_fd"',
+        '  PURPOSE="$_old_purpose"',
+        '  FOUND_COMP="$_old_found_comp"',
+        '  PLDM_BUNDLE_ALREADY_EXTRACTED="$_old_skip"',
+        '  export IMAGE_DIR IMAGE_PATH IMAGE_FD PURPOSE FOUND_COMP PLDM_BUNDLE_ALREADY_EXTRACTED',
+        '}',
+        '',
+
+        '_fwupd_open_image_fd() {',
+        '  _fd_image="${1:-}"',
+        '  _fd_mode="${2:-image}"',
+        '  _fwupd_close_image_fd',
+        '  IMAGE_FD=""',
+        '  case "$_fd_mode" in image|unixfd) ;; *) log "ERROR: invalid image fd mode: $_fd_mode"; return 1 ;; esac',
+        '  [ "$_fd_mode" = "unixfd" ] || { export IMAGE_FD; return 0; }',
+        '  [ -r "$_fd_image" ] || { log "ERROR: unixfd image not readable: $_fd_image"; return 1; }',
+        '  if ! exec 9<"$_fd_image"; then',
+        '    log "ERROR: failed to open unixfd for image: $_fd_image"',
+        '    return 1',
+        '  fi',
+        '  IMAGE_FD=9',
+        '  export IMAGE_FD',
+        '}',
+        '',
+
+        '_fwupd_close_image_fd() {',
+        '  case "${IMAGE_FD:-}" in',
+        '    9) exec 9<&- 2>/dev/null || true ;;',
+        '    "") : ;;',
+        '    *) log "WARN: unexpected IMAGE_FD=${IMAGE_FD}; forcing close on fd 9"; exec 9<&- 2>/dev/null || true ;;',
+        '  esac',
+        '  IMAGE_FD=""',
+        '  export IMAGE_FD',
+        '}',
+        '',
+
+        '_fwupd_extract_pldm_bundle() {',
+        '  [ -x "$PLDM_BUNDLE_TOOL" ] || { log "ERROR: pldm-bundle-extraction-tool not found: $PLDM_BUNDLE_TOOL"; return 1; }',
+        '  [ -f "$FWUPD_JSON" ] || { log "ERROR: fwupd config not found: $FWUPD_JSON"; return 1; }',
+        '  if command -v mktemp >/dev/null 2>&1; then',
+        '    PLDM_EXTRACT_DIR="$(mktemp -d "${IMAGE_DIR%/}/pldm-bundle.XXXXXX")"',
+        '  else',
+        '    PLDM_EXTRACT_DIR="${IMAGE_DIR%/}/pldm-bundle.$$"',
+        '    mkdir -p "$PLDM_EXTRACT_DIR"',
+        '  fi',
+        '  export PLDM_EXTRACT_DIR',
+        '  log "Extracting PLDM bundle into $PLDM_EXTRACT_DIR"',
+        '  _pldm_dbg_arg=""',
+        '  _fwupd_debug_active && _pldm_dbg_arg="--debug-parser" || true',
+        '  run_tool "$PLDM_BUNDLE_TOOL" "$IMAGE_PATH" "$FWUPD_JSON" "$PLDM_EXTRACT_DIR" ${_pldm_dbg_arg:+$_pldm_dbg_arg}',
+        '  # Accept the bundle as long as at least one image-* file was extracted.',
+        '  # A BMC-only PLDM bundle produces image-bmc-* but no image-pldm.',
+        '  _pldm_ext_count=$(find "$PLDM_EXTRACT_DIR" -maxdepth 1 -name "image-*" 2>/dev/null | wc -l)',
+        '  [ "$_pldm_ext_count" -gt 0 ] || { log "ERROR: no image-* files extracted from PLDM bundle in $PLDM_EXTRACT_DIR"; return 1; }',
+        '}',
         "",
     ]
     return "\n".join(L) + "\n"
@@ -114,29 +287,55 @@ def emit_detector(name: str, patterns):
     L.append('')
     return "\n".join(L) + "\n"
 
-def emit_step(step: dict) -> str:
+def emit_step(step: dict, progress_start=None, progress_end=None) -> str:
     a = (step.get('action') or '').lower()
     if a == 'shell':
         cmd = step.get('cmd')
         if not cmd: raise ValueError("shell step requires 'cmd'")
-        return '  run_shell "' + replace_shell_tokens(cmd).replace('"','\\"') + '"\n'
+        line = 'run_shell "' + replace_shell_tokens(cmd).replace('"','\\"') + '"'
+        if progress_start is None or progress_end is None:
+            return '  ' + line + '\n'
+        return '  _fwupd_run_with_progress ' + str(progress_start) + ' ' + str(progress_end) + ' ' + line + '\n'
     if a in ('script','tool'):
         path = step.get('path')
         if not path: raise ValueError(a + " step requires 'path'")
         fun = 'run_script' if a == 'script' else 'run_tool'
         argline = ' '.join(tpl_arg(x) for x in step.get('args', []))
-        return '  ' + fun + ' ' + q(path) + ' ' + argline + '\n'
+        line = fun + ' ' + q(path) + (' ' + argline if argline else '')
+        if progress_start is None or progress_end is None:
+            return '  ' + line + '\n'
+        return '  _fwupd_run_with_progress ' + str(progress_start) + ' ' + str(progress_end) + ' ' + line + '\n'
     if a == 'dbus':
         dest=step.get('dest'); obj=step.get('obj'); iface=step.get('iface'); meth=step.get('method')
         if not all([dest,obj,iface,meth]): raise ValueError("dbus step requires dest/obj/iface/method")
         sig = step.get('signature',''); argline = ' '.join(tpl_arg(x) for x in step.get('args', []))
-        return '  run_dbus ' + q(dest) + ' ' + q(obj) + ' ' + q(iface) + ' ' + q(meth) + ' ' + q(sig) + ' ' + argline + '\n'
+        line = 'run_dbus ' + q(dest) + ' ' + q(obj) + ' ' + q(iface) + ' ' + q(meth) + ' ' + q(sig) + (' ' + argline if argline else '')
+        if progress_start is None or progress_end is None:
+            return '  ' + line + '\n'
+        return '  _fwupd_run_with_progress ' + str(progress_start) + ' ' + str(progress_end) + ' ' + line + '\n'
     if a == 'function':
         name = step.get('name')
         if not name: raise ValueError("function step requires 'name'")
         argline = ' '.join(tpl_arg(x) for x in step.get('args', []))
-        return '  ' + name + ' ' + argline + '\n'
+        line = name + (' ' + argline if argline else '')
+        if progress_start is None or progress_end is None:
+            return '  ' + line + '\n'
+        return '  _fwupd_run_with_progress ' + str(progress_start) + ' ' + str(progress_end) + ' ' + line + '\n'
     raise ValueError("Unsupported action: " + a)
+
+def emit_progress_wrapped_steps(steps, start: int, end: int):
+    out = []
+    if not steps:
+        return out
+    span = max(1, end - start)
+    total = len(steps)
+    for idx, st in enumerate(steps):
+        step_start = start + (span * idx) // total
+        step_end = start + (span * (idx + 1)) // total
+        if step_end <= step_start:
+            step_end = min(100, step_start + 1)
+        out.append(emit_step(st, step_start, step_end).rstrip())
+    return out
 
 def _exec_opts(comp: dict):
     ex = comp.get('exec') or {}
@@ -146,6 +345,20 @@ def _exec_opts(comp: dict):
     filter_by_purpose = bool(ex.get('filterByPurpose', True))  # default: true
     maxp = ex.get('maxParallel')  # reserved; not enforced here
     return prepost, parallel, target_mode, filter_by_purpose, maxp
+
+def _image_arg_mode(comp: dict) -> str:
+    """Infer image argument mode from flash step tokens.
+
+    If a flash step uses @IMAGEFD@, pass unix fd. Otherwise pass image path.
+    """
+    for st in (comp.get('flash') or []):
+        for arg in (st.get('args') or []):
+            if isinstance(arg, str) and '@IMAGEFD@' in arg:
+                return 'unixfd'
+        cmd = st.get('cmd')
+        if isinstance(cmd, str) and '@IMAGEFD@' in cmd:
+            return 'unixfd'
+    return 'image'
 
 def emit_component_functions(comp: dict) -> str:
     name = comp['name']
@@ -160,8 +373,7 @@ def emit_component_functions(comp: dict) -> str:
     out += ['do_' + name + '_prepare() {']
     if pre:
         out += ['  section "' + name.upper() + ' prepare"']
-        for st in pre:
-            out.append(emit_step(st).rstrip())
+        out += emit_progress_wrapped_steps(pre, 5, 100)
     else:
         out += ['  :']
     out += ['}', '']
@@ -169,12 +381,13 @@ def emit_component_functions(comp: dict) -> str:
     # flash_only()
     out += ['do_' + name + '_flash_only() {',
             '  section "' + name.upper() + ' update"',
-            '  set_task_status Starting; set_progress 40',
+            '  set_task_status Starting; set_progress 5',
             '  redfish_log_fw_evt start || true',
-            '  set_task_status Running; set_progress 60']
-    for st in flash:
-        out.append(emit_step(st).rstrip())
-    out += ['  redfish_log_fw_evt staged || true',
+            '  set_task_status Running; set_progress 10',
+            '  (']
+    out += emit_progress_wrapped_steps(flash, 15, 94)
+    out += ['  ) || return $?',
+            '  redfish_log_fw_evt staged || true',
             '  set_progress 95',
             '  set_task_status Completed; set_progress 100',
             '  redfish_log_fw_evt success || true',
@@ -185,8 +398,7 @@ def emit_component_functions(comp: dict) -> str:
     out += ['do_' + name + '_cleanup() {']
     if post:
         out += ['  section "' + name.upper() + ' cleanup"']
-        for st in post:
-            out.append(emit_step(st).rstrip())
+        out += emit_progress_wrapped_steps(post, 5, 100)
     else:
         out += ['  :']
     out += ['}', '']
@@ -202,17 +414,278 @@ def emit_component_functions(comp: dict) -> str:
 
     return "\n".join(out) + "\n"
 
+def emit_component_dispatch_logic(comp: dict) -> str:
+    name = comp['name']
+    prepost, parallel, target_mode, _filter_by_purpose, _maxp = _exec_opts(comp)
+    out = [emit_target_init_block_for_component(comp).rstrip()]
+
+    if target_mode == 'batched':
+        out += [
+            '  _fwupd_with_progress_slice 0 10 do_' + name + '_prepare',
+            '  _fwupd_with_progress_slice 10 80 do_' + name + '_flash_only',
+            '  _fwupd_with_progress_slice 90 10 do_' + name + '_cleanup',
+        ]
+        return "\n".join(out) + "\n"
+
+    def _parallel_fan_out(fn_name: str) -> list:
+        """Emit a parallel target loop with sliced progress for each worker.
+        Each worker gets its own progress slice, allowing gradual updates within
+        the worker while the parent doesn't need separate step tracking."""
+        return [
+            '    # Count targets for progress slicing',
+            '    _par_n=0',
+            '    for _t in $RESOLVED_TARGETS; do _par_n=$((_par_n+1)); done',
+            '    [ "$_par_n" -gt 0 ] || _par_n=1',
+            '    _par_launch_i=0',
+            '    _par_base_offset="${FWUPD_PROGRESS_OFFSET:-0}"',
+            '    _par_base_scale="${FWUPD_PROGRESS_SCALE:-100}"',
+            '    PIDS=""',
+            '    statuses=0',
+            '    for TARGET in $RESOLVED_TARGETS; do',
+            '      (',
+            '        export TARGET',
+            '        # Assign sliced progress range to this worker (e.g., 0-50, 50-100 for 2 workers)',
+            '        FWUPD_PROGRESS_OFFSET=$(( _par_base_offset + _par_launch_i * _par_base_scale / _par_n ))',
+            '        FWUPD_PROGRESS_SCALE=$(( _par_base_scale / _par_n ))',
+            '        export FWUPD_PROGRESS_OFFSET FWUPD_PROGRESS_SCALE',
+            '        ' + fn_name,
+            '      ) & PIDS="$PIDS $!"',
+            '      _par_launch_i=$((_par_launch_i+1))',
+            '    done',
+            '    # Wait for all workers to complete',
+            '    for p in $PIDS; do',
+            '      wait "$p" || statuses=$((statuses+1))',
+            '    done',
+            '    # Restore parent progress context',
+            '    FWUPD_PROGRESS_OFFSET="$_par_base_offset"',
+            '    FWUPD_PROGRESS_SCALE="$_par_base_scale"',
+            '    export FWUPD_PROGRESS_OFFSET FWUPD_PROGRESS_SCALE',
+            '    set_progress 100 || true',
+            '    [ "$statuses" -eq 0 ] || exit 1',
+        ]
+
+    if prepost == 'global':
+        out += [
+            '  _fwupd_with_progress_slice 0 10 do_' + name + '_prepare',
+            '  if [ -n "$RESOLVED_TARGETS" ]; then',
+        ]
+        if parallel:
+            out += [
+                '    _phase_saved_offset="${FWUPD_PROGRESS_OFFSET:-0}"',
+                '    _phase_saved_scale="${FWUPD_PROGRESS_SCALE:-100}"',
+                '    FWUPD_PROGRESS_OFFSET=$((_phase_saved_offset + _phase_saved_scale * 10 / 100))',
+                '    FWUPD_PROGRESS_SCALE=$((_phase_saved_scale * 80 / 100))',
+                '    export FWUPD_PROGRESS_OFFSET FWUPD_PROGRESS_SCALE',
+            ]
+            out += _parallel_fan_out('do_' + name + '_flash_only')
+            out += [
+                '    FWUPD_PROGRESS_OFFSET="$_phase_saved_offset"',
+                '    FWUPD_PROGRESS_SCALE="$_phase_saved_scale"',
+                '    export FWUPD_PROGRESS_OFFSET FWUPD_PROGRESS_SCALE',
+            ]
+        else:
+            out += [
+                '    _seq_n=0',
+                '    for _t in $RESOLVED_TARGETS; do _seq_n=$((_seq_n+1)); done',
+                '    [ "$_seq_n" -gt 0 ] || _seq_n=1',
+                '    _seq_i=0',
+                '    _seq_rc=0',
+                '    for TARGET in $RESOLVED_TARGETS; do',
+                '      export TARGET',
+                '      _seq_saved_offset="${FWUPD_PROGRESS_OFFSET:-0}"',
+                '      _seq_saved_scale="${FWUPD_PROGRESS_SCALE:-100}"',
+                '      FWUPD_PROGRESS_OFFSET=$((_seq_saved_offset + _seq_saved_scale * (10 + 80 * _seq_i / _seq_n) / 100))',
+                '      FWUPD_PROGRESS_SCALE=$((_seq_saved_scale * 80 / 100 / _seq_n))',
+                '      export FWUPD_PROGRESS_OFFSET FWUPD_PROGRESS_SCALE',
+                '      ( do_' + name + '_flash_only ) || _seq_rc=$((_seq_rc+1))',
+                '      FWUPD_PROGRESS_OFFSET="$_seq_saved_offset"',
+                '      FWUPD_PROGRESS_SCALE="$_seq_saved_scale"',
+                '      export FWUPD_PROGRESS_OFFSET FWUPD_PROGRESS_SCALE',
+                '      _seq_i=$((_seq_i+1))',
+                '    done',
+                '    [ "$_seq_rc" -eq 0 ] || exit 1',
+            ]
+        out += [
+            '  else',
+            '    TARGET=""',
+            '    _fwupd_with_progress_slice 10 80 do_' + name + '_flash_only',
+            '  fi',
+            '  _fwupd_with_progress_slice 90 10 do_' + name + '_cleanup',
+        ]
+        return "\n".join(out) + "\n"
+
+    out += [
+        '  if [ -n "$RESOLVED_TARGETS" ]; then',
+    ]
+    if parallel:
+        out += _parallel_fan_out('do_' + name)
+    else:
+        out += [
+            '    _seq_n=0',
+            '    for _t in $RESOLVED_TARGETS; do _seq_n=$((_seq_n+1)); done',
+            '    [ "$_seq_n" -gt 0 ] || _seq_n=1',
+            '    _seq_i=0',
+            '    _seq_rc=0',
+            '    for TARGET in $RESOLVED_TARGETS; do',
+            '      export TARGET',
+            '      _seq_saved_offset="${FWUPD_PROGRESS_OFFSET:-0}"',
+            '      _seq_saved_scale="${FWUPD_PROGRESS_SCALE:-100}"',
+            '      FWUPD_PROGRESS_OFFSET=$((_seq_saved_offset + _seq_saved_scale * _seq_i / _seq_n))',
+            '      FWUPD_PROGRESS_SCALE=$((_seq_saved_scale / _seq_n))',
+            '      export FWUPD_PROGRESS_OFFSET FWUPD_PROGRESS_SCALE',
+            '      ( do_' + name + ' ) || _seq_rc=$((_seq_rc+1))',
+            '      FWUPD_PROGRESS_OFFSET="$_seq_saved_offset"',
+            '      FWUPD_PROGRESS_SCALE="$_seq_saved_scale"',
+            '      export FWUPD_PROGRESS_OFFSET FWUPD_PROGRESS_SCALE',
+            '      _seq_i=$((_seq_i+1))',
+            '    done',
+            '    [ "$_seq_rc" -eq 0 ] || exit 1',
+        ]
+    out += [
+        '  else',
+        '    TARGET=""',
+        '    _fwupd_with_progress_slice 0 100 do_' + name,
+        '  fi',
+    ]
+    return "\n".join(out) + "\n"
+
+def emit_component_dispatcher(comp: dict, all_components) -> str:
+    name = comp['name']
+    out = ['dispatch_' + name + '() {']
+    image_mode = _image_arg_mode(comp)
+
+    if name == 'pldm':
+        other_names = [c['name'] for c in all_components if c['name'] != 'pldm']
+        other_mode = {c['name']: _image_arg_mode(c) for c in all_components if c['name'] != 'pldm'}
+        pldm_parallel = comp.get('exec', {}).get('parallel', False)
+        # Build the counting loop: start at 1 for the PLDM component itself
+        count_lines = [
+            '  if [ "${PLDM_BUNDLE_ALREADY_EXTRACTED:-0}" != "1" ] && [ "$(basename "$IMAGE_PATH")" = "image-pldm" ]; then',
+        ]
+        if other_names:
+            count_lines += [
+                '    _fwupd_with_progress_slice 0 10 _fwupd_extract_pldm_bundle',
+                '    # Count total components for proportional progress slicing',
+                '    _pldm_total=1',
+            ]
+        else:
+            count_lines += [
+                '    # Pure PLDM bundle: no non-PLDM payloads to unpack, so keep the',
+                '    # original image-pldm in place and skip the extraction helper.',
+                '    PLDM_EXTRACT_DIR="$IMAGE_DIR"',
+                '    export PLDM_EXTRACT_DIR',
+                '    _pldm_total=1',
+            ]
+        for n in other_names:
+            count_lines += [
+                '    for _img in "$PLDM_EXTRACT_DIR/image-' + n + '" "$PLDM_EXTRACT_DIR/image-' + n + '-"* "$PLDM_EXTRACT_DIR/image-pldm-' + n + '" "$PLDM_EXTRACT_DIR/image-pldm-' + n + '-"*; do',
+                '      [ -e "$_img" ] || continue',
+                '      _pldm_total=$((_pldm_total+1))',
+                '    done',
+            ]
+        count_lines += ['    _pldm_idx=0', '    _pldm_failed=0']
+        if pldm_parallel:
+            count_lines += ['    _pldm_bg_pids=""']
+        
+        # Build dispatch loop with slice-aware progress for each non-PLDM component
+        dispatch_lines = []
+        for n in other_names:
+            dispatch_lines += [
+                '    for _img in "$PLDM_EXTRACT_DIR/image-' + n + '" "$PLDM_EXTRACT_DIR/image-' + n + '-"* "$PLDM_EXTRACT_DIR/image-pldm-' + n + '" "$PLDM_EXTRACT_DIR/image-pldm-' + n + '-"*; do',
+                '      [ -e "$_img" ] || continue',
+                '      FWUPD_PROGRESS_OFFSET=$((10 + 90 * _pldm_idx / _pldm_total))',
+                '      FWUPD_PROGRESS_SCALE=$((90 / _pldm_total))',
+                '      export FWUPD_PROGRESS_OFFSET FWUPD_PROGRESS_SCALE',
+                '      _img_base="$(basename "$_img")"',
+                '      case "$_img_base" in image-pldm-*) _img_fmt="pldm" ;; *) _img_fmt="raw" ;; esac',
+                '      log "Bundle component ' + n + ': format=$_img_fmt image=$_img slice offset=$FWUPD_PROGRESS_OFFSET scale=$FWUPD_PROGRESS_SCALE"',
+            ]
+            if pldm_parallel:
+                dispatch_lines += [
+                    '      ( _fwupd_dispatch_with_image ' + n + ' "$PLDM_EXTRACT_DIR" "$_img" 0 ' + other_mode[n] + ' ) &',
+                    '      _pldm_bg_pids="$_pldm_bg_pids $!"',
+                ]
+            else:
+                dispatch_lines += [
+                    '      ( _fwupd_dispatch_with_image ' + n + ' "$PLDM_EXTRACT_DIR" "$_img" 0 ' + other_mode[n] + ' ) || _pldm_failed=$((_pldm_failed+1))',
+                ]
+            dispatch_lines += [
+                '      _pldm_idx=$((_pldm_idx+1))',
+                '    done',
+            ]
+        # Dispatch the pure-PLDM bundle last (only if image-pldm was extracted)
+        dispatch_lines += [
+            '    if [ -f "$PLDM_EXTRACT_DIR/image-pldm" ]; then',
+            '    FWUPD_PROGRESS_OFFSET=$((10 + 90 * _pldm_idx / _pldm_total))',
+            '    FWUPD_PROGRESS_SCALE=$((90 / _pldm_total))',
+            '    export FWUPD_PROGRESS_OFFSET FWUPD_PROGRESS_SCALE',
+            '    log "Bundle component pldm: format=pldm image=$PLDM_EXTRACT_DIR/image-pldm slice offset=$FWUPD_PROGRESS_OFFSET scale=$FWUPD_PROGRESS_SCALE"',
+        ]
+        if pldm_parallel:
+            dispatch_lines += [
+                '    ( _fwupd_dispatch_with_image pldm "$PLDM_EXTRACT_DIR" "$PLDM_EXTRACT_DIR/image-pldm" 1 ' + image_mode + ' ) &',
+                '    _pldm_bg_pids="$_pldm_bg_pids $!"',
+            ]
+        else:
+            dispatch_lines += [
+                '    ( _fwupd_dispatch_with_image pldm "$PLDM_EXTRACT_DIR" "$PLDM_EXTRACT_DIR/image-pldm" 1 ' + image_mode + ' ) || _pldm_failed=$((_pldm_failed+1))',
+            ]
+        dispatch_lines += [
+            '    fi  # end image-pldm guard',
+        ]
+        if pldm_parallel:
+            dispatch_lines += [
+                '    # Wait for all background jobs (bmc/bios/cpld/raid and optional pldm)',
+                '    for _pid in $_pldm_bg_pids; do',
+                '      if wait $_pid; then',
+                '        :',
+                '      else',
+                '        _pldm_failed=$((_pldm_failed+1))',
+                '      fi',
+                '    done',
+            ]
+        dispatch_lines += [
+            '    FWUPD_PROGRESS_OFFSET=0; FWUPD_PROGRESS_SCALE=100',
+            '    export FWUPD_PROGRESS_OFFSET FWUPD_PROGRESS_SCALE',
+            '    [ "$_pldm_failed" -eq 0 ] || return 1',
+            '    return 0',
+            '  fi',
+        ]
+        out += count_lines + dispatch_lines
+
+    out += [
+        '  _fwupd_open_image_fd "$IMAGE_PATH" ' + q(image_mode),
+    ]
+
+    out.append(emit_component_dispatch_logic(comp).rstrip())
+    out += [
+        '  _fwupd_close_image_fd',
+    ]
+    if bool(comp.get('bmcreboot', False)):
+        out.append('  _fwupd_mark_bmc_reboot_required')
+    out += ['}', '']
+    return "\n".join(out) + "\n"
+
+def _component_uses_targets(comp: dict) -> bool:
+    """Return True if any flash action in this component references @TARGETS@ or @TARGET@."""
+    for step in comp.get('flash', []):
+        args = step.get('args', [])
+        if any('@TARGETS@' in a or '@TARGET@' in a for a in args):
+            return True
+    return False
+
 def emit_target_init_block_for_component(comp: dict) -> str:
     default_targets = comp.get('defaultTargets', [])
     default_targets_str = ' '.join(default_targets) if default_targets else ''
     ex = comp.get('exec') or {}
     filter_by_purpose = bool(ex.get('filterByPurpose', True))
-    
+    uses_targets = _component_uses_targets(comp)
+
     L = []
     L.append('  # --- Discover Push-URI targets ---')
     L.append('  ALL_TARGETS="$(get_pushuri_targets)"')
     L.append('  log "Push-URI targets (received): ${ALL_TARGETS:-<none>}"')
-    
+
     if filter_by_purpose:
         L.append('  # Filter targets by manifest purpose')
         L.append('  RESOLVED_TARGETS="$(filter_targets_by_manifest_purpose "$ALL_TARGETS")"')
@@ -223,6 +696,9 @@ def emit_target_init_block_for_component(comp: dict) -> str:
             L.append('    log "WARN: No valid targets for Purpose=${PURPOSE:-}, using default targets"')
             L.append('    RESOLVED_TARGETS="' + default_targets_str + '"')
             L.append('    log "Default targets: $RESOLVED_TARGETS"')
+        elif not uses_targets:
+            L.append('    log "INFO: No Push-URI targets; component does not require targets, continuing"')
+            L.append('    RESOLVED_TARGETS=""')
         else:
             L.append('    log "ERROR: No valid targets for Purpose=${PURPOSE:-} and no default targets specified"')
             L.append('    set_task_status Exception || true')
@@ -238,6 +714,9 @@ def emit_target_init_block_for_component(comp: dict) -> str:
             L.append('    log "WARN: No Push-URI targets, using default targets"')
             L.append('    RESOLVED_TARGETS="' + default_targets_str + '"')
             L.append('    log "Default targets: $RESOLVED_TARGETS"')
+        elif not uses_targets:
+            L.append('    log "INFO: No Push-URI targets; component does not require targets, continuing"')
+            L.append('    RESOLVED_TARGETS=""')
         else:
             L.append('    log "ERROR: No Push-URI targets and no default targets specified"')
             L.append('    set_task_status Exception || true')
@@ -255,69 +734,12 @@ def emit_target_init_block_for_component(comp: dict) -> str:
 def trailer_dispatch(components) -> str:
     arms = []
     for c in components:
-        n=c['name']
-        prepost, parallel, target_mode, filter_by_purpose, _maxp = _exec_opts(c)
-        arm = ' ' + n + ')\n' + emit_target_init_block_for_component(c)
-
-        if target_mode == 'batched':
-            arm += (
-                '  do_' + n + '_prepare\n'
-                '  do_' + n + '_flash_only\n'
-                '  do_' + n + '_cleanup\n'
-                '  ;;\n'
-            )
-        else:
-            if prepost == 'global':
-                arm += (
-                    '  do_' + n + '_prepare\n'
-                    '  if [ -n "$RESOLVED_TARGETS" ]; then\n'
-                )
-                if parallel:
-                    arm += (
-                        '    PIDS=""\n'
-                        '    for TARGET in $RESOLVED_TARGETS; do\n'
-                        '      (\n'
-                        '        export TARGET\n'
-                        '        do_' + n + '_flash_only\n'
-                        '      ) & PIDS="$PIDS $!"\n'
-                        '    done\n'
-                        '    statuses=0\n'
-                        '    for p in $PIDS; do\n'
-                        '      wait "$p" || statuses=$((statuses+1))\n'
-                        '    done\n'
-                        '    if [ "$statuses" -ne 0 ]; then\n'
-                        '      exit 1\n'
-                        '    fi\n'
-                    )
-                else:
-                    arm += (
-                        '    for TARGET in $RESOLVED_TARGETS; do\n'
-                        '      export TARGET\n'
-                        '      do_' + n + '_flash_only\n'
-                        '    done\n'
-                    )
-                arm += (
-                    '  else\n'
-                    '    TARGET=""\n'
-                    '    do_' + n + '_flash_only\n'
-                    '  fi\n'
-                    '  do_' + n + '_cleanup\n'
-                    '  ;;\n'
-                )
-            else:
-                arm += (
-                    '  if [ -n "$RESOLVED_TARGETS" ]; then\n'
-                    '    for TARGET in $RESOLVED_TARGETS; do\n'
-                    '      export TARGET\n'
-                    '      do_' + n + '\n'
-                    '    done\n'
-                    '  else\n'
-                    '    TARGET=""\n'
-                    '    do_' + n + '\n'
-                    '  fi\n'
-                    '  ;;\n'
-                )
-        arms.append(arm)
+        n = c['name']
+        arms.append(
+            '  ' + n + ')\n'
+            '    dispatch_' + n + '\n'
+            '    ;;\n'
+        )
 
     return (
         '[ -n "$FOUND_COMP" ] || { log "ERROR: no known image found in $IMAGE_DIR"; exit 1; }\n'
@@ -333,9 +755,9 @@ def trailer_dispatch(components) -> str:
         '  *)    FWTYPE="$(printf "%s" "$FOUND_COMP" | tr \'[:lower:]\' \'[:upper:]\')" ;;\n'
         'esac\n'
         'export FWTYPE FWVER\n\n'
-        'log "Check firmware update priority"\n'
-        'verify_multifirmware_rules $dir\n'
-        'if [[ "$?" = "${RET_FAILED}" ]];then log "Multiple firmware updates failed - priority error"; exit 2;fi\n\n'
+        '# log "Check firmware update priority"\n'
+        '# verify_multifirmware_rules $dir\n'
+        '# if [[ "$?" = "${RET_FAILED}" ]];then log "Multiple firmware updates failed - priority error"; exit 2;fi\n\n'
         'case "$FOUND_COMP" in\n'
         + ''.join(arms) +
         '  *)\n'
@@ -349,6 +771,11 @@ def main():
     ap.add_argument('--out', required=True, help='Output fwupd.sh path')
     ap.add_argument('--common', default='/usr/libexec/fwupd/common.sh',
                     help='Path to common.sh sourced at runtime')
+    ap.add_argument('--runtime-json', default='/etc/fwupd.json',
+                    help='Runtime path to installed fwupd.json')
+    ap.add_argument('--bundle-tool',
+                    default='/usr/libexec/phosphor-code-mgmt/pldm-bundle-extraction-tool',
+                    help='Runtime path to pldm-bundle-extraction-tool')
     args = ap.parse_args()
 
     try:
@@ -365,7 +792,8 @@ def main():
         print("ERROR: JSON must contain a non-empty 'components' array", file=sys.stderr)
         sys.exit(2)
 
-    parts = [ header(args.common, log_path, image_root) ]
+    parts = [ header(args.common, log_path, image_root,
+                     args.runtime_json, args.bundle_tool) ]
     for comp in components:
         name = comp.get('name')
         if not name:
@@ -375,6 +803,9 @@ def main():
 
     for comp in components:
         parts.append(emit_component_functions(comp))
+
+    for comp in components:
+        parts.append(emit_component_dispatcher(comp, components))
 
     parts.append(trailer_dispatch(components))
 

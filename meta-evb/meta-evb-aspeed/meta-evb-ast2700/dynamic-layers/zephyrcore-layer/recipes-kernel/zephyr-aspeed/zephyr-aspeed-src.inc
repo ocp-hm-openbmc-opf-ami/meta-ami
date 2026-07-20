@@ -1,8 +1,10 @@
 # Refer to meta-zephyr/meta-zephyr-core/recipes-kernel/zephyr-kernel/zephyr-kernel-src-x.x.x.inc
 # creating this file
 
-ZEPHYR_BRANCH = "aspeed-dev-v3.7.0"
-SRCREV_zephyr = "${AUTOREV}"
+# Tag for v00.03.06
+SRCREV_zephyr = "e2f01b0581f8ea62b68b93924ef35c48031d5f7e"
+ZEPHYR_BRANCH = "aspeed-main-v3.7.0"
+
 SRCREV_mbedtls = "a78176c6ff0733ba08018cba4447bd3f20de7978"
 SRCREV_cmsis = "4b96cbb174678dcd3ca86e11e1f24bc5f8726da0"
 

@@ -18,19 +18,21 @@ SRC_URI:append = " file://iproute2.cfg "
 SRC_URI:append = " file://iproute.cfg "
 SRC_URI:append = " file://bond.cfg "
 SRC_URI:append = " file://aspeed-g7/ "
+SRC_URI:append = " file://0001-Fix-spi-driver-issue.patch " 
 
 SRC_URI_AST2700_DUAL_IMAGE = "\
                                 file://0001-Added-the-sysfs-file-for-Dual-Image-support-2700.patch \
                                 file://0001-spi-aspeed-smc-add-ast2700-fmc-forward-declaration.patch \
 				file://0001-Fixed-the-dula-image-booting-issue.patch \
 				file://0001-spi-aspeed-smc-Add-ABR-boot-mode-detection-via-SCU-f.patch \
+				file://0068-Fix-for-dual-image-hardware-failsafe-in-ast2700evb.patch \
 "
 
 SRC_URI:append:ast2700-default = " ${@bb.utils.contains('IMAGE_FEATURES', 'onetree-dual-image', d.getVar('SRC_URI_AST2700_DUAL_IMAGE'), '', d)}"
 
 do_kernel_configme:prepend() {
     install -d ${S}/arch/arm64/configs
-    cp ${WORKDIR}/aspeed-g7/aspeed_g7_defconfig ${S}/arch/arm64/configs/
+    cp ${UNPACKDIR}/aspeed-g7/aspeed_g7_defconfig ${S}/arch/arm64/configs/
 }
 
 python do_set_local_version() {

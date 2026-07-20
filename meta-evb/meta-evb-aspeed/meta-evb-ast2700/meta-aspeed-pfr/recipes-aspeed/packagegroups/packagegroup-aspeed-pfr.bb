@@ -21,3 +21,4 @@ RDEPENDS:${PN}-apps = " \
     pfr-i3ctool \
     "
 RDEPENDS:${PN}-apps:remove:oks-ast2700 = " spdm-emu"
+RDEPENDS:${PN}-apps:remove:intel-ast2700 = " aspeed-pfr-tool spdm-emu"

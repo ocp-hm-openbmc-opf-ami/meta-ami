@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/phosphor-dbus-interfaces;protocol=https;branch=main;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "6e55b4e4ff56b2df19172b01678f52e54a073663"
+SRCREV_override = "05f774bed9316c45c1295e4ad46cb80b62185a46"
 
 include ${@bb.utils.contains('BBFILE_COLLECTIONS', 'nvidia-layer', 'phosphor-dbus-interfaces_nv.inc', '', d)}
 

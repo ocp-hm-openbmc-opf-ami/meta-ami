@@ -20,7 +20,7 @@ clear_caches() {
     # echo 1 > /proc/sys/vm/drop_caches
 
     # Clear swap cache
-    swapoff -a && swapon -a
+    # swapoff -a && swapon -a
 }
 
 # Loop through the list of top memory-consuming processes

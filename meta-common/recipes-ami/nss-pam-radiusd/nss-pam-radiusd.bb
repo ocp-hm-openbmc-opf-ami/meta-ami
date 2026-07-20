@@ -9,10 +9,11 @@ SRC_URI = "\
             file://include/ \
 	    file://src/ \
 	    file://nss-pam-radiusd.service \
-            file://0003-Added-Radius-In-Pamorder.patch \	
           "
 
-S = "${WORKDIR}"
+# For local file:// sources, files are unpacked to UNPACKDIR/WORKDIR
+S = "${UNPACKDIR}"
+
 inherit cmake systemd pkgconfig
 EXTRA_OECMAKE = " "
 
@@ -30,7 +31,7 @@ DEPENDS += " \
 
 do_install() {
   install -d ${D}/${systemd_unitdir}/system
-  install -m 0644 ${WORKDIR}/nss-pam-radiusd.service ${D}/${systemd_unitdir}/system
+  install -m 0644 ${UNPACKDIR}/nss-pam-radiusd.service ${D}/${systemd_unitdir}/system
   
   install -d ${D}${bindir}
   install -m 0755 ${B}/nss_pam_radius ${D}${bindir}

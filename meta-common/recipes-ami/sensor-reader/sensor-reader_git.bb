@@ -5,16 +5,17 @@ LICENSE = "Proprietary"
 LIC_FILES_CHKSUM = "file://${AMIBASE}/COPYING.AMI;md5=65a69a674f34a9f30737c9f0abd4fc5c"
 
 SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/sensor-history-reader.git;protocol=https;branch=master"
-SRCREV = "ae0782c7b817a338dca803f0c40f82babe26019d"
+SRCREV = "0d921746622f9cebf18c87fa17a02511dd039a1b"
 
 PV = "0.0+git${SRCPV}"
 
-S = "${WORKDIR}/git"
+S = "${UNPACKDIR}/git"
 
-inherit cmake
 inherit meson pkgconfig
 inherit python3native
 inherit systemd
+
+EXTRA_OEMESON += "-Dcpp_std=c++23"
 
 FILES:${PN} += "${systemd_system_unitdir}/xyz.openbmc_project.SensorReader.service"
 SYSTEMD_SERVICE:${PN} = "xyz.openbmc_project.SensorReader.service"
@@ -32,6 +33,6 @@ DEPENDS += " \
 
 do_install:append() {
 
-        install -d ${D}/etc/sensor-reader-conf
-        install -m 0644 ${S}/configuredsensors ${D}/etc/sensor-reader-conf/
+         install -d ${D}/etc/sensor-reader-conf
+         install -m 0644 ${S}/configuredsensors ${D}/etc/sensor-reader-conf/
 }

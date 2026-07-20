@@ -4,12 +4,33 @@
 #include <sdbusplus/asio/object_server.hpp>
 
 #include <iostream>
-
+#define GROUPNAME_SPACE 5
 using DbusUserPropVariant =
     std::variant<int, std::vector<std::string>, std::string, bool>;
 
 extern "C"
 {
+int IsvalidGroupName(char *Grpname,char *Groupcheck)
+{
+       char *delimit="'";
+       unsigned int IsGrpfound = 1;
+       char *token=strtok(Grpname,delimit);
+       while(token!=NULL)
+       {
+               if(strcmp(token,Groupcheck)==0)
+               {
+                       IsGrpfound = 1;
+                       return IsGrpfound;
+               }
+               if(IsGrpfound > GROUPNAME_SPACE)
+               {
+                       break;
+               }
+               token=strtok(NULL,delimit);
+               IsGrpfound++;
+       }
+       return -1;
+}
 int getDbusProperty(char* groupName, char* priv)
 {
     std::string service = "xyz.openbmc_project.Radius.Config";
@@ -19,7 +40,6 @@ int getDbusProperty(char* groupName, char* priv)
     std::string privlage;
     std::string sGroupName;
     DbusUserPropVariant variant;
-    std::string cToCpp(groupName);
 
     // Setting starting append name for radius property
     int i = 1;
@@ -38,8 +58,9 @@ int getDbusProperty(char* groupName, char* priv)
             auto reply = bus.call(method);
             reply.read(variant);
             sGroupName = std::get<std::string>(variant);
-            if ((sGroupName.length() > 2) &&
-                (std::strstr(cToCpp.c_str(), sGroupName.c_str()) != nullptr))
+	    std::string cToCpp(groupName);
+	    int ret = IsvalidGroupName((char *)cToCpp.c_str(),(char *)sGroupName.c_str());
+            if ((sGroupName.length() > 2) && (ret == 1))
             {
                 auto method = bus.new_method_call(
                     service.c_str(), objPath.c_str(),
@@ -69,7 +90,6 @@ int getDbusProperty(char* groupName, char* priv)
         syslog(LOG_WARNING,
                "server's responseprivilage read notfournd next sear");
         fprintf(stderr, "server's responseprivilage read notfournd next sear");
-        memset(groupName, 0, strlen(groupName));
     }
     return -1;
 }

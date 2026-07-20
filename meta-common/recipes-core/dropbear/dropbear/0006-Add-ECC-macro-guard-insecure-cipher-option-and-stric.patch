@@ -1,0 +1,139 @@
+From 4eefbc76ded1da3537aede509f43c447c5551b37 Mon Sep 17 00:00:00 2001
+From: pandiarajt <pandiarajt@ami.com>
+Date: Wed, 18 Mar 2026 10:52:01 +0530
+Subject: [PATCH] Add ECC macro guard, insecure cipher option and strict kex
+ disable support
+
+* Fix for macro DROPBEAR_ECC_* override issue by adding #ifndef guards.
+* Add option to remove insecure cipher by gating sntrup761 openssh entry
+behind DROPBEAR_SNTRUP761_OPENSSL. 
+* Added support to disable openssl strict kex algorithm via 
+OPENSSH_STRICT_KEX macro.
+---
+ src/cli-session.c | 2 ++
+ src/common-algo.c | 8 +++++---
+ src/common-kex.c  | 2 ++
+ src/ssh.h         | 2 ++
+ src/svr-session.c | 2 ++
+ src/sysoptions.h  | 8 ++++++++
+ 6 files changed, 21 insertions(+), 3 deletions(-)
+
+diff --git a/src/cli-session.c b/src/cli-session.c
+index 6cbbf5b..067ca5a 100644
+--- a/src/cli-session.c
++++ b/src/cli-session.c
+@@ -492,8 +492,10 @@ void cli_dropbear_log(int priority, const char* format, va_list param) {
+ static void cli_algos_initialise(void) {
+ 	algo_type *algo;
+ 	for (algo = sshkex; algo->name; algo++) {
++#if OPENSSH_STRICT_KEX
+ 		if (strcmp(algo->name, SSH_STRICT_KEX_S) == 0) {
+ 			algo->usable = 0;
+ 		}
++#endif
+ 	}
+ }
+
+diff --git a/src/common-algo.c b/src/common-algo.c
+index c68eafb..7daa7b3 100644
+--- a/src/common-algo.c
++++ b/src/common-algo.c
+@@ -307,7 +307,9 @@ volatile int64_t crypto_int64_optblocker = 0;
+ algo_type sshkex[] = {
+ #if DROPBEAR_SNTRUP761
+ 	{"sntrup761x25519-sha512", 0, &kex_sntrup761, 1, NULL},
+-	{"sntrup761x25519-sha512@openssh.com", 0, &kex_sntrup761, 1, NULL},
++#if DROPBEAR_SNTRUP761_OPENSSL
++        {"sntrup761x25519-sha512@openssh.com", 0, &kex_sntrup761, 1, NULL},
++#endif
+ #endif
+ #if DROPBEAR_MLKEM768
+ 	{"mlkem768x25519-sha256", 0, &kex_mlkem768, 1, NULL},
+@@ -348,10 +350,10 @@ algo_type sshkex[] = {
+ 	{SSH_EXT_INFO_C, 0, NULL, 1, NULL},
+ #endif
+ #endif
+-#if DROPBEAR_CLIENT
++#if DROPBEAR_CLIENT && OPENSSH_STRICT_KEX
+ 	{SSH_STRICT_KEX_C, 0, NULL, 1, NULL},
+ #endif
+-#if DROPBEAR_SERVER
++#if DROPBEAR_SERVER && OPENSSH_STRICT_KEX
+ 	{SSH_STRICT_KEX_S, 0, NULL, 1, NULL},
+ #endif
+ 	{NULL, 0, NULL, 0, NULL}
+diff --git a/src/common-kex.c b/src/common-kex.c
+index b8e04eb..c5b259a 100644
+--- a/src/common-kex.c
++++ b/src/common-kex.c
+@@ -653,6 +653,7 @@ static void read_kex_algos() {
+ 	}
+ #endif
+ 
++#if OPENSSH_STRICT_KEX
+ 	if (!ses.kexstate.donefirstkex) {
+ 		const char* strict_name;
+ 		if (IS_DROPBEAR_CLIENT) {
+@@ -664,6 +665,7 @@ static void read_kex_algos() {
+ 			ses.kexstate.strict_kex = 1;
+ 		}
+ 	}
++#endif
+ 
+ 	algo = buf_match_algo(ses.payload, sshkex, kexguess2, &goodguess);
+ 	allgood &= goodguess;
+diff --git a/src/ssh.h b/src/ssh.h
+index ef3efdc..4239817 100644
+--- a/src/ssh.h
++++ b/src/ssh.h
+@@ -101,8 +101,10 @@
+ #define SSH_SERVER_SIG_ALGS "server-sig-algs"
+ 
+ /* OpenSSH strict KEX feature */
++#if OPENSSH_STRICT_KEX
+ #define SSH_STRICT_KEX_S "kex-strict-s-v00@openssh.com"
+ #define SSH_STRICT_KEX_C "kex-strict-c-v00@openssh.com"
++#endif
+ 
+ /* service types */
+ #define SSH_SERVICE_USERAUTH "ssh-userauth"
+diff --git a/src/svr-session.c b/src/svr-session.c
+index a838cf5..98b50ef 100644
+--- a/src/svr-session.c
++++ b/src/svr-session.c
+@@ -373,9 +373,11 @@ static void svr_algos_initialise(void) {
+ 			algo->usable = 0;
+ 		}
+ #endif
++#if OPENSSH_STRICT_KEX
+ 		if (strcmp(algo->name, SSH_STRICT_KEX_C) == 0) {
+ 			algo->usable = 0;
+ 		}
++#endif
+ 	}
+ }
+
+diff --git a/src/sysoptions.h b/src/sysoptions.h
+index 2f3e64e..fba55cc 100644
+--- a/src/sysoptions.h
++++ b/src/sysoptions.h
+@@ -161,9 +161,17 @@
+ #define LTM_DESC
+ #endif
+ 
++#ifdef DROPBEAR_ECC
++#ifndef DROPBEAR_ECC_256
+ #define DROPBEAR_ECC_256 (DROPBEAR_ECC)
++#endif
++#ifndef DROPBEAR_ECC_384
+ #define DROPBEAR_ECC_384 (DROPBEAR_ECC)
++#endif
++#ifndef DROPBEAR_ECC_521
+ #define DROPBEAR_ECC_521 (DROPBEAR_ECC)
++#endif
++#endif
+ 
+ /* Only include necessary ECC curves building libtomcrypt */
+ #define LTC_NO_CURVES
+-- 
+2.34.1

@@ -54,7 +54,7 @@ typedef struct {
 
 #define PAMH_CREATE_Q(QUEUE)                                                   \
   umask(0020);                                                                 \
-  if (-1 == mkfifo(QUEUE, 0777) && (errno != EEXIST)) {                        \
+  if (-1 == mkfifo(QUEUE, 0775) && (errno != EEXIST)) {                        \
     printf(" %s : error creating queue %s\n", __FILE__, QUEUE);                \
   }
 

@@ -9,7 +9,6 @@ SRC_URI = "git://github.com/eddiejames/xdma-test.git;protocol=https;branch=maste
 
 PV = "1.0+git"
 SRCREV = "caab5a2f47364e95e6da96526a6af6787dc2198c"
-
 S = "${WORKDIR}/git"
 B = "${S}"
 

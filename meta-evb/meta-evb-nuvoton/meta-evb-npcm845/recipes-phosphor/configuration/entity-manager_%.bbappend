@@ -5,6 +5,6 @@ SRC_URI:append = " \
     "
 
 do_install:append () {
-    install -m 0644 -D ${WORKDIR}/EVB-NUVOTON/Nuvoton-thermal.json ${D}/usr/share/entity-manager/configurations
+    install -m 0644 -D ${UNPACKDIR}/EVB-NUVOTON/Nuvoton-thermal.json ${D}/usr/share/entity-manager/configurations
 }
 

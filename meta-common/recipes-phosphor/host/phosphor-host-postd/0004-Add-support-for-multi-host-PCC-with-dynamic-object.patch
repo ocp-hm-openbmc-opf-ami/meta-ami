@@ -1,0 +1,198 @@
+From 2db6be71217ab24565a85b6054729ce57bff3025 Mon Sep 17 00:00:00 2001
+From: maniv <manikandanv@ami.com> 
+Date: Wed, 10 Jun 2026 06:52:29 +0000
+Subject: [PATCH 93/93] Add support for multi-host PCC with dynamic object 
+ paths and listener matching
+
+Allow specifying host instance to create unique D-Bus object paths
+for each PCC device in multi-host configurations.
+
+Adds -i <instance> option to specify host instance number, which
+creates D-Bus paths like:
+     - /xyz/openbmc_project/state/boot/raw1 (host 0)
+     - /xyz/openbmc_project/state/boot/raw2 (host 1)
+
+Also make listener-side signal subscription and bus-name filtering
+instance-aware so non-zero host instances subscribe to their matching
+RawN producer instead of always filtering Raw0.
+---
+ lpcsnoop/snoop.hpp        |  4 ++--
+ lpcsnoop/snoop_listen.hpp | 25 ++++++++++++++----------
+ main.cpp                  | 41 +++++++++++++++++++++++++++++++++++----
+ 3 files changed, 54 insertions(+), 16 deletions(-)
+
+diff --git a/lpcsnoop/snoop.hpp b/lpcsnoop/snoop.hpp
+index 2d43251..580020d 100644
+--- a/lpcsnoop/snoop.hpp
++++ b/lpcsnoop/snoop.hpp
+@@ -5,9 +5,9 @@
+ #include <xyz/openbmc_project/State/Boot/Raw/server.hpp>
+ 
+ /* The LPC snoop on port 80h is mapped to this dbus path. */
+-constexpr char snoopObject[] = "/xyz/openbmc_project/state/boot/raw0";
++const std::string snoopObjectPrefix = "/xyz/openbmc_project/state/boot/raw";
+ /* The LPC snoop on port 80h is mapped to this dbus service. */
+-constexpr char snoopDbus[] = "xyz.openbmc_project.State.Boot.Raw";
++const std::string snoopDbusPrefix = "xyz.openbmc_project.State.Boot.Raw";
+ 
+ template <typename... T>
+ using ServerObject = typename sdbusplus::server::object_t<T...>;
+diff --git a/lpcsnoop/snoop_listen.hpp b/lpcsnoop/snoop_listen.hpp
+index 241ee4f..390bcf8 100644
+--- a/lpcsnoop/snoop_listen.hpp
++++ b/lpcsnoop/snoop_listen.hpp
+@@ -25,12 +25,13 @@ namespace lpcsnoop
+ using std::get;
+ 
+ /* Returns matching string for what signal to listen on Dbus */
+-static const std::string GetMatchRule()
++static const std::string GetMatchRule(int hostInstance = 0)
+ {
+     using namespace sdbusplus::bus::match::rules;
+ 
+     return type::signal() + interface("org.freedesktop.DBus.Properties") +
+-           member("PropertiesChanged") + path(snoopObject);
++	    member("PropertiesChanged") +
++            path(snoopObjectPrefix + std::to_string(hostInstance));
+ }
+ 
+ class SnoopListen
+@@ -39,18 +40,21 @@ class SnoopListen
+     using postcode_handler_t = std::function<void(FILE*, postcode_t)>;
+ 
+   public:
+-    SnoopListen(sdbusplus::bus_t& busIn, sd_bus_message_handler_t handler) :
+-        signal(busIn, GetMatchRule().c_str(), handler, this)
++    SnoopListen(sdbusplus::bus_t& busIn, sd_bus_message_handler_t handler,
++                int hostInstance = 0) :
++        signal(busIn, GetMatchRule(hostInstance).c_str(), handler, this)
+     {}
+ 
+-    SnoopListen(sdbusplus::bus_t& busIn, message_handler_t handler) :
+-        signal(busIn, GetMatchRule(), handler)
++    SnoopListen(sdbusplus::bus_t& busIn, message_handler_t handler,
++                int hostInstance = 0) :
++        signal(busIn, GetMatchRule(hostInstance), handler)
+     {}
+ 
+     SnoopListen(sdbusplus::bus_t& busIn, postcode_handler_t handler,
+-                FILE* f = nullptr) :
++                FILE* f = nullptr, int hostInstance = 0) :
+         SnoopListen(busIn, std::bind(defaultMessageHandler, handler, f,
+-                                     std::placeholders::_1))
++				hostInstance, std::placeholders::_1),
++                    hostInstance)
+     {}
+ 
+     SnoopListen() = delete; // no default constructor
+@@ -67,7 +71,8 @@ class SnoopListen
+      * Default message handler which listens to published messages on snoop
+      * DBus path, and calls the given postcode_handler on each value received.
+      */
+-    static void defaultMessageHandler(postcode_handler_t& handler, FILE* f,
++    static void defaultMessageHandler(postcode_handler_t& handler,
++		    		      FILE* f, int hostInstance,
+                                       sdbusplus::message_t& m)
+     {
+         std::string messageBusName;
+@@ -76,7 +81,7 @@ class SnoopListen
+ 
+         m.read(messageBusName, messageData);
+ 
+-        if (messageBusName == snoopDbus &&
++        if (messageBusName == snoopDbusPrefix + std::to_string(hostInstance) &&
+             messageData.find(propertyKey) != messageData.end())
+         {
+             handler(f, get<postcode_t>(messageData[propertyKey]));
+diff --git a/main.cpp b/main.cpp
+index 27aa6cf..92633bd 100644
+--- a/main.cpp
++++ b/main.cpp
+@@ -99,6 +99,8 @@ static void usage(const char* name)
+             "device per second.\n"
+             "  -b, --bytes <SIZE>     set POST code length to <SIZE> bytes. "
+             "Default is 1\n"
++	    "  -i, --instance <N>     Host instance number for D-Bus paths. "
++            "Default is 0\n"
+ #endif
+             "  -v, --verbose  Prints verbose information while running\n\n",
+             name);
+@@ -579,6 +581,7 @@ int main(int argc, char* argv[])
+     int postFd = -1;
+     unsigned int rateLimit = 0;
+ 
++    int hostInstance = 0;
+     int opt;
+ 
+     std::vector<std::string> host;
+@@ -590,6 +593,7 @@ int main(int argc, char* argv[])
+ #else
+         {"device", optional_argument, nullptr, 'd'},
+         {"rate-limit", optional_argument, nullptr, 'r'},
++	{"instance", required_argument, nullptr, 'i'},
+         {"bytes",  required_argument, nullptr, 'b'},
+ #endif
+         {"verbose", no_argument, nullptr, 'v'},
+@@ -601,7 +605,7 @@ int main(int argc, char* argv[])
+ #ifdef ENABLE_IPMI_SNOOP
+         "h:"
+ #else
+-        "d:r:b:"
++        "d:r:b:i:"
+ #endif
+         "v";
+ 
+@@ -649,6 +653,18 @@ int main(int argc, char* argv[])
+                 }
+                 break;
+             }
++	    case 'i':
++            {
++                int argVal = std::stoi(optarg);
++                if (argVal < 0)
++                {
++                    fprintf(stderr, "Invalid host instance '%s'. Must be >= 0.\n",
++                            optarg);
++                    return EXIT_FAILURE;
++                }
++                hostInstance = argVal;
++                break;
++            }
+             case 'd':
+                 if (std::string(optarg).starts_with("/dev/aspeed-lpc-pcc"))
+                 {
+@@ -724,12 +740,29 @@ int main(int argc, char* argv[])
+ 
+     bool deferSignals = true;
+ 
++    // Create instance-specific object path and service name
++    std::string snoopObject = snoopObjectPrefix + std::to_string(hostInstance);
++    std::string snoopDbus = snoopDbusPrefix + std::to_string(hostInstance);
++
+     // Add systemd object manager.
+-    sdbusplus::server::manager_t snoopdManager(bus, snoopObject);
++    sdbusplus::server::manager_t snoopdManager(bus, snoopObject.c_str());
+ 
+-    PostReporter reporter(bus, snoopObject, deferSignals);
++    PostReporter reporter(bus, snoopObject.c_str(), deferSignals);
+     reporter.emit_object_added();
+-    bus.request_name(snoopDbus);
++    bus.request_name(snoopDbus.c_str());
++
++    if (verbose)
++    {
++        fprintf(stderr, "Starting snoopd for host %d:\n", hostInstance);
++        fprintf(stderr, "  D-Bus Object: %s\n", snoopObject.c_str());
++        fprintf(stderr, "  D-Bus Service: %s\n", snoopDbus.c_str());
++        if (postFd > 0)
++        {
++            fprintf(stderr, "  Reading from device fd: %d\n", postFd);
++            fprintf(stderr, "  Post code bytes: %zu\n", codeSize);
++            fprintf(stderr, "  Rate limit: %u/sec\n", rateLimit);
++        }
++    }
+ 
+     // Create sdevent and add IO source
+     try
+-- 
+2.43.0

@@ -11,7 +11,7 @@ SRC_URI = " \
 SRC_URI += "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-multi-host-support', \
     'file://create_usbeth1.sh file://host-interface1.service', '', d)}"
 
-S = "${WORKDIR}"
+S = "${WORKDIR}/git"
 
 inherit allarch systemd
 
@@ -21,13 +21,12 @@ SYSTEMD_SERVICE:${PN} += "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-
 
 do_install() {
     install -d ${D}${bindir}
-    install -m 0755 ${WORKDIR}/create_usbeth.sh ${D}${bindir}
-
+    install -m 0755 ${UNPACKDIR}/create_usbeth.sh  ${D}${bindir}
     install -d ${D}${base_libdir}/systemd/system
-    install -m 0644 ${S}/host-interface.service ${D}${base_libdir}/systemd/system
+    install -m 0644 ${UNPACKDIR}/host-interface.service ${D}${base_libdir}/systemd/system
 
     if ${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-multi-host-support', 'true', 'false', d)}; then
-        install -m 0755 ${WORKDIR}/create_usbeth1.sh ${D}${bindir}
-        install -m 0644 ${S}/host-interface1.service ${D}${base_libdir}/systemd/system
+        install -m 0755 ${UNPACKDIR}/create_usbeth1.sh ${D}${bindir}
+        install -m 0644 ${UNPACKDIR}/host-interface1.service ${D}${base_libdir}/systemd/system
     fi
 }

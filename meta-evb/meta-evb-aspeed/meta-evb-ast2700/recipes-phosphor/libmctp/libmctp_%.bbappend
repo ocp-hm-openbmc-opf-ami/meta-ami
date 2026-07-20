@@ -20,7 +20,7 @@ SRC_URI:append: = " \
    "
    
 SRC_URI:append = "${@bb.utils.contains('ENABLE_MCTP_KERNEL_MODE', '1', 'file://mctp_cfg_kernel.cfg ', 'file://mctp_cfg_smbus8.json ', d)}"
-SRC_URI:append = "${@bb.utils.contains('ENABLE_MCTP_KERNEL_MODE', '1', 'file://systemd/mctp-kernel-ctrl.service ', 'file://systemd/mctp-i2c8-ctrl.service file://systemd/mctp-i2c8-demux.service file://systemd/mctp-i2c8-demux.socket ', d)}"
+SRC_URI:append = "${@bb.utils.contains('ENABLE_MCTP_KERNEL_MODE', '1', 'file://systemd/mctp-kernel-ctrl.service', 'file://systemd/mctp-i2c8-ctrl.service file://systemd/mctp-i2c8-demux.service file://systemd/mctp-i2c8-demux.socket ', d)}"
 
 SYSTEMD_SERVICE:${PN}:remove:ast2700-default = " mctp-spi-ctrl.service "
 SYSTEMD_SERVICE:${PN}:remove:ast2700-default = " mctp-spi-demux.service "
@@ -46,22 +46,22 @@ do_install:append:ast2700-default() {
 
     # We are not starting the daemon directly, but through a script so the service
     # can restart the mctp controller 
-    # install -m 0755 ${WORKDIR}/systemd/start_mctp.sh ${D}${bindir}/
-    # install -m 0755 ${WORKDIR}/systemd/cpu-boot-complete.sh ${D}${bindir}/
-    # install -m 0755 ${WORKDIR}/systemd/check_failed_host_boot.sh ${D}${bindir}/
-    # install -m 0755 ${WORKDIR}/systemd/perst_udev_event.sh ${D}${bindir}/
+    # install -m 0755 ${S}/systemd/start_mctp.sh ${D}${bindir}/
+    # install -m 0755 ${S}/systemd/cpu-boot-complete.sh ${D}${bindir}/
+    # install -m 0755 ${S}/systemd/check_failed_host_boot.sh ${D}${bindir}/
+    # install -m 0755 ${S}/systemd/perst_udev_event.sh ${D}${bindir}/
 
     rm -f ${D}${nonarch_base_libdir}/systemd/system/mctp-spi-ctrl.service
     rm -f ${D}${nonarch_base_libdir}/systemd/system/mctp-spi-demux.service
     rm -f ${D}${nonarch_base_libdir}/systemd/system/mctp-spi-demux.socket
     
     if ${@bb.utils.contains('ENABLE_MCTP_KERNEL_MODE', '1', 'true', 'false', d)}; then
-	    install -m 0644 ${WORKDIR}/mctp_cfg_kernel.cfg ${D}${datadir}/mctp/mctp_cfg_kernel.cfg
-	    install -m 0644 ${WORKDIR}/systemd/mctp-kernel-ctrl.service  ${D}${nonarch_base_libdir}/systemd/system/    
+	    install -m 0644 ${UNPACKDIR}/mctp_cfg_kernel.cfg ${D}${datadir}/mctp/mctp_cfg_kernel.cfg
+	    install -m 0644 ${UNPACKDIR}/systemd/mctp-kernel-ctrl.service  ${D}${nonarch_base_libdir}/systemd/system/    
     else
-	    install -m 0644 ${WORKDIR}/mctp_cfg_smbus8.json ${D}${datadir}/mctp/mctp_cfg_smbus8.json
-	    install -m 0644 ${WORKDIR}/systemd/mctp-i2c8-ctrl.service  ${D}${nonarch_base_libdir}/systemd/system/
-	    install -m 0644 ${WORKDIR}/systemd/mctp-i2c8-demux.service ${D}${nonarch_base_libdir}/systemd/system/
-	    install -m 0644 ${WORKDIR}/systemd/mctp-i2c8-demux.socket  ${D}${nonarch_base_libdir}/systemd/system/
+	    install -m 0644 ${UNPACKDIR}/mctp_cfg_smbus8.json ${D}${datadir}/mctp/mctp_cfg_smbus8.json
+	    install -m 0644 ${UNPACKDIR}/systemd/mctp-i2c8-ctrl.service  ${D}${nonarch_base_libdir}/systemd/system/
+	    install -m 0644 ${UNPACKDIR}/systemd/mctp-i2c8-demux.service ${D}${nonarch_base_libdir}/systemd/system/
+	    install -m 0644 ${UNPACKDIR}/systemd/mctp-i2c8-demux.socket  ${D}${nonarch_base_libdir}/systemd/system/
     fi
 }

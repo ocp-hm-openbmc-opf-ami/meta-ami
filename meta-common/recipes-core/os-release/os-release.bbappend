@@ -11,9 +11,10 @@ python do_compile:append () {
     import glob
     with open(d.expand('${B}/os-release'), 'a') as f:
         corebase = d.getVar('COREBASE', True)
+        platform_layer = d.getVar('PLATFORM_VERSION_LAYER', True) or 'meta-ami'
         f.write('\n# Build Configuration Details\n')
         repo_status(d, f, corebase, '')
-        repo_status(d, f, os.path.join(corebase, 'meta-ami'), '--tags')
+        repo_status(d, f, os.path.join(corebase, platform_layer), '--tags')
         appends_dir = os.path.join(d.getVar('TOPDIR', True), 'workspace', 'appends')
 
         for fn in glob.glob(os.path.join(appends_dir, '*.bbappend')):

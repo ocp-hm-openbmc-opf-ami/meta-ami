@@ -1,0 +1,1396 @@
+From: Hemanth Kumar M <hemanthkumarm@ami.com>
+Date: Thu, 15 May 2026 00:00:00 +0000
+Subject: [PATCH] bmc: PLDM bundle tool, raw PLDM upload support, and activation improvements
+
+Combines the following changes:
+ - Add pldm-bundle-extraction-tool (C++ helper for PLDM bundle extraction)
+ - image_manager: support raw PLDM package upload (detect, stage, version)
+ - image_manager: bypass untar for raw PLDM uploads
+ - activation: skip signature verification for raw PLDM uploads
+ - item_updater: allow all valid (non-Unknown) purposes for activation
+ - activation: decide reboot from fwupd marker only after flash completes
+ - package_parser: use libpldm crc32 fallback for OT-PLDM compatibility
+
+Upstream-Status: Inappropriate [AMI-specific fwupd integration]
+
+Signed-off-by: Hemanth Kumar M <hemanthkumarm@ami.com>
+---
+ bmc/activation.cpp             |  65 +++++++---
+ bmc/image_manager.cpp          | 160 ++++++++++++++++++++++++++
+ bmc/item_updater.cpp           |   7 +-
+ bmc/meson.build                |  12 ++
+ bmc/pldm_bundle_tool.cpp       | 751 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ common/pldm/package_parser.cpp | 128 ++++++++++++++++++++++++++++++++
+ 6 files changed, 1022 insertions(+), 13 deletions(-) create mode 100644 bmc/pldm_bundle_tool.cpp
+
+diff --git a/bmc/meson.build b/bmc/meson.build
+index 08fb757..24a8db2 100644
+--- a/bmc/meson.build
++++ b/bmc/meson.build
+@@ -192,6 +192,17 @@ executable(
+     install_dir: get_option('libexecdir') / 'phosphor-code-mgmt',
+ )
+ 
++executable(
++    'pldm-bundle-extraction-tool',
++    'pldm_bundle_tool.cpp',
++    '../common/pldm/package_parser.cpp',
++    '../common/pldm/pldm_package_util.cpp',
++    include_directories: common_include,
++    dependencies: [deps, dependency('libpldm')],
++    install: true,
++    install_dir: get_option('libexecdir') / 'phosphor-code-mgmt',
++)
++
+ software_common_sources = files('software_utils.cpp')
+ 
+ if get_option('software-update-dbus-interface').allowed()
+diff --git a/bmc/image_manager.cpp b/bmc/image_manager.cpp
+index aaaaaaa..bbbbbbb 100644
+--- a/bmc/image_manager.cpp
++++ b/bmc/image_manager.cpp
+@@ -21,6 +21,9 @@
+ #include <algorithm>
++#include <cctype>
+ #include <cstring>
+ #include <ctime>
++#include <fstream>
+ #include <filesystem>
++#include <optional>
+ #include <random>
+ #include <string>
+@@ -81,6 +84,130 @@
+ 
+ } // namespace
+ 
++std::optional<std::string> getRawPLDMPackageVersion(const fs::path& inputPath)
++{
++    // Read package_version_string from PLDM package header.
++    // Layout (DSP0267 v1):
++    //  uuid[16], formatRev[1], hdrSize[2], releaseDateTime[13],
++    //  componentBitmapBitLength[2], pkgVersionType[1], pkgVersionLen[1],
++    //  pkgVersion[pkgVersionLen]
++    constexpr size_t fixedHdrBytes = 36;
++    constexpr size_t pkgVersionLenOffset = 35;
++
++    std::ifstream in(inputPath, std::ios::binary);
++    if (!in.good())
++    {
++        return std::nullopt;
++    }
++
++    uint8_t hdr[fixedHdrBytes] = {};
++    in.read(reinterpret_cast<char*>(hdr), sizeof(hdr));
++    if (in.gcount() < static_cast<std::streamsize>(sizeof(hdr)))
++    {
++        return std::nullopt;
++    }
++
++    const uint16_t pkgHeaderSize =
++        static_cast<uint16_t>(hdr[17]) |
++        (static_cast<uint16_t>(hdr[18]) << 8);
++    const uint8_t pkgVersionLen = hdr[pkgVersionLenOffset];
++
++    if (pkgVersionLen == 0)
++    {
++        return std::nullopt;
++    }
++
++    if (pkgHeaderSize < (fixedHdrBytes + pkgVersionLen))
++    {
++        return std::nullopt;
++    }
++
++    std::string pkgVersion(pkgVersionLen, '\0');
++    in.read(pkgVersion.data(), pkgVersionLen);
++    if (in.gcount() != static_cast<std::streamsize>(pkgVersionLen))
++    {
++        return std::nullopt;
++    }
++
++    while (!pkgVersion.empty() &&
++           (pkgVersion.back() == '\0' ||
++            std::isspace(static_cast<unsigned char>(pkgVersion.back()))))
++    {
++        pkgVersion.pop_back();
++    }
++
++    if (pkgVersion.empty())
++    {
++        return std::nullopt;
++    }
++
++    return pkgVersion;
++}
++
++bool isRawPLDMUpload(const fs::path& inputPath)
++{
++    std::error_code ec;
++    if (!fs::is_regular_file(inputPath, ec))
++    {
++        return false;
++    }
++
++    // PLDM package header UUID per DSP0267 v1 package format.
++    static constexpr uint8_t pldmPkgHeaderUuid[16] = {
++        0xF0, 0x18, 0x87, 0x8C, 0xCB, 0x7D, 0x49, 0x43,
++        0x98, 0x00, 0xA0, 0x2F, 0x05, 0x9A, 0xCA, 0x02};
++
++    std::ifstream in(inputPath, std::ios::binary);
++    if (!in.good())
++    {
++        return false;
++    }
++
++    uint8_t hdr[17] = {};
++    in.read(reinterpret_cast<char*>(hdr), sizeof(hdr));
++    if (in.gcount() < static_cast<std::streamsize>(sizeof(hdr)))
++    {
++        return false;
++    }
++
++    // Byte 16 is package header format version for UUID-identified header.
++    return std::equal(std::begin(pldmPkgHeaderUuid),
++                      std::end(pldmPkgHeaderUuid), std::begin(hdr)) &&
++           hdr[16] == 0x01;
++}
++
++bool stageRawPLDMUpload(const fs::path& srcPath, const fs::path& tmpDirPath,
++                        const std::string& machine)
++{
++    std::error_code ec;
++    const fs::path dstImage = tmpDirPath / "image-pldm";
++    fs::copy_file(srcPath, dstImage, fs::copy_options::overwrite_existing, ec);
++    if (ec)
++    {
++        error("Failed to stage raw PLDM image {SRC}: {ERROR_MSG}", "SRC",
++              srcPath.string(), "ERROR_MSG", ec.message());
++        return false;
++    }
++
++    const fs::path manifestPath = tmpDirPath / MANIFEST_FILE_NAME;
++    std::ofstream manifest(manifestPath);
++    if (!manifest.good())
++    {
++        error("Failed to create MANIFEST for raw PLDM upload at {PATH}",
++              "PATH", manifestPath.string());
++        return false;
++    }
++
++    const auto packageVersion =
++        getRawPLDMPackageVersion(srcPath).value_or(srcPath.stem().string());
++    manifest << "version=" << packageVersion << "\n";
++    manifest
++        << "purpose=xyz.openbmc_project.Software.Version.VersionPurpose.PLDM\n";
++    manifest << "MachineName=" << machine << "\n";
++    manifest << "OriginalUploadFormat=raw\n";
++    return manifest.good();
++}
++
+ int Manager::processImage(const std::string& tarFilePath)
+ {
+     std::error_code ec;
+@@ -236,12 +362,36 @@
+     fs::path manifestPath = tmpDirPath;
+     manifestPath /= MANIFEST_FILE_NAME;
+ 
+-    // Untar tarball into the tmp dir
+-    auto rc = unTar(tarFilePath, tmpDirPath.string());
+-    if (rc < 0)
++    const fs::path uploadPath{tarFilePath};
++    const bool rawPldmUpload = isRawPLDMUpload(uploadPath);
++
++    if (rawPldmUpload)
++    {
++        std::string currMachine = Version::getBMCMachine(OS_RELEASE_FILE);
++        if (currMachine.empty())
++        {
++            auto path = OS_RELEASE_FILE;
++            error("Failed to read machine name from osRelease: {PATH}", "PATH", path);
++            report<ImageFailure>(ImageFail::FAIL("Failed to read machine name"),
++                                 ImageFail::PATH(path));
++            return -1;
++        }
++
++        if (!stageRawPLDMUpload(uploadPath, tmpDirPath, currMachine))
++        {
++            error("Error occurred while staging raw PLDM upload {PATH}", "PATH", tarFilePath);
++            return -1;
++        }
++    }
++    else
+     {
+-        error("Error ({RC}) occurred during untar", "RC", rc);
+-        return -1;
++        // Untar tarball into the tmp dir
++        auto rc = unTar(tarFilePath, tmpDirPath.string());
++        if (rc < 0)
++        {
++            error("Error ({RC}) occurred during untar", "RC", rc);
++            return -1;
++        }
+     }
+ 
+     std::vector<std::string> FWImageUpdateList = phosphor::software::image::FWImages;
+diff --git a/bmc/activation.cpp b/bmc/activation.cpp
+index ccccccc..ddddddd 100644
+--- a/bmc/activation.cpp
++++ b/bmc/activation.cpp
+@@ -14,6 +14,8 @@
+ #include <xyz/openbmc_project/Common/error.hpp>
+ #include <xyz/openbmc_project/Software/Version/error.hpp>
+ 
++#include <cstdlib>
++
+ #ifdef WANT_SIGNATURE_VERIFY
+ #include "image_verify.hpp"
+ #endif
+@@ -99,25 +101,31 @@
+                 std::make_unique<ActivationProgress>(bus, path);
+ 
+ #ifdef WANT_SIGNATURE_VERIFY
+-            fs::path uploadDir(IMG_UPLOAD_DIR);
+-            if (!verifySignature(uploadDir / versionId, SIGNED_IMAGE_CONF_PATH))
+             {
+-                using InvalidSignatureErr = sdbusplus::xyz::openbmc_project::
+-                    Software::Version::Error::InvalidSignature;
+-                report<InvalidSignatureErr>();
+-                // Stop the activation process, if fieldMode is enabled.
+-                if (parent.control::FieldMode::fieldModeEnabled())
++                fs::path uploadDir(IMG_UPLOAD_DIR);
++                const fs::path manifestPath = uploadDir / versionId / MANIFEST_FILE_NAME;
++                const auto uploadFmt = phosphor::software::manager::Version::getValue(manifestPath.string(), "OriginalUploadFormat");
++                const bool skipSigVerify = (uploadFmt == "raw");
++                if (!skipSigVerify &&
++                    !verifySignature(uploadDir / versionId, SIGNED_IMAGE_CONF_PATH))
+                 {
+-                    info("Verification failed so cleaning up the uploaded image - {IMAGE}",
+-                          "IMAGE",  (uploadDir / versionId).c_str());;
+-                    parent
+-                        .activeUpdatesCount++; // incrementing active update so
+-                                               // that the decrement done in
+-                                               // onFlashWriteFailure doesn't
+-                                               // effect total update count.
+-                    onFlashWriteFailure();
+-                    return softwareServer::Activation::activation(
+-                        softwareServer::Activation::Activations::Failed);
++                    using InvalidSignatureErr = sdbusplus::xyz::openbmc_project::
++                        Software::Version::Error::InvalidSignature;
++                    report<InvalidSignatureErr>();
++                    // Stop the activation process, if fieldMode is enabled.
++                    if (parent.control::FieldMode::fieldModeEnabled())
++                    {
++                        info("Verification failed so cleaning up the uploaded image - {IMAGE}",
++                              "IMAGE",  (uploadDir / versionId).c_str());;
++                        parent
++                            .activeUpdatesCount++; // incrementing active update so
++                                                   // that the decrement done in
++                                                   // onFlashWriteFailure doesn't
++                                                   // effect total update count.
++                        onFlashWriteFailure();
++                        return softwareServer::Activation::activation(
++                            softwareServer::Activation::Activations::Failed);
++                    }
+                 }
+             }
+ #endif
+@@ -139,12 +147,6 @@
+                         std::make_unique<ActivationBlocksTransition>(bus, path);
+                 }
+                 parent.activeUpdatesCount++;
+-                auto purpose =
+-                    parent.versions.find(versionId)->second->purpose();
+-                if (purpose == VersionPurpose::BMC)
+-                {
+-                    parent.performReboot = true;
+-                }
+                 flashWrite();
+             }
+             else
+@@ -301,6 +313,19 @@
+     if (!parent.activeUpdatesCount)
+     {
+         activationBlocksTransition->disableRebootGuard();
++        // Re-check marker only when all concurrent updates are done.
++        // This covers bundle/tar cases where marker is written during
++        // flash and was not present at activation start.
++        if (!parent.performReboot)
++        {
++            std::string rebootDecisionCmd =
++                "/usr/bin/fwupd-reboot-decision.sh " + versionId +
++                " >/dev/null 2>&1";
++            if (std::system(rebootDecisionCmd.c_str()) == 0)
++            {
++                parent.performReboot = true;
++            }
++        }
+         if(parent.performReboot)
+         {
+             Activation::rebootBmc();
+@@ -327,6 +352,19 @@
+         parent.activeUpdatesCount--;
+         if (!parent.activeUpdatesCount)
+         {
++            // Re-check marker only when all concurrent updates are done.
++            // This covers bundle/tar cases where marker is written during
++            // flash and was not present at activation start.
++            if (!parent.performReboot)
++            {
++                std::string rebootDecisionCmd =
++                    "/usr/bin/fwupd-reboot-decision.sh " + versionId +
++                    " >/dev/null 2>&1";
++                if (std::system(rebootDecisionCmd.c_str()) == 0)
++                {
++                    parent.performReboot = true;
++                }
++            }
+             if (activationBlocksTransition)
+                 activationBlocksTransition->disableRebootGuard();
+             if(parent.performReboot)
+diff --git a/bmc/item_updater.cpp b/bmc/item_updater.cpp
+index 1111111..2222222 100644
+--- a/bmc/item_updater.cpp
++++ b/bmc/item_updater.cpp
+@@ -67,12 +67,7 @@
+                 {
+                     auto value = SVersion::convertVersionPurposeFromString(
+                         std::get<std::string>(property.second));
+-                    if (value == VersionPurpose::BMC ||
+-#ifdef HOST_BIOS_UPGRADE
+-                        value == VersionPurpose::Host ||
+-#endif
+-                        value == VersionPurpose::System ||
+-                        value == VersionPurpose::Other)
++                    if (value != VersionPurpose::Unknown)
+                     {
+                         purpose = value;
+                     }
+diff --git a/bmc/pldm_bundle_tool.cpp b/bmc/pldm_bundle_tool.cpp
+new file mode 100644
+index 0000000..f0e45a1
+--- /dev/null
++++ b/bmc/pldm_bundle_tool.cpp
+@@ -0,0 +1,773 @@
++// pldm_bundle_tool.cpp
++// Extracts component images from a PLDM firmware bundle into an output
++// directory. No flash dispatch is performed.
++//
++// Usage: pldm-bundle-extraction-tool PLDM_IMAGE JSON_CONFIG OUTPUT_DIR
++//        [--component-format raw|pldm]
++//        [--pkg-creator PATH] [--debug-parser]
++
++#include "common/pldm/pldm_package_util.hpp"
++
++#include <libpldm/firmware_update.h>
++
++#include <algorithm>
++#include <chrono>
++#include <cctype>
++#include <cstdint>
++#include <filesystem>
++#include <fstream>
++#include <iostream>
++#include <memory>
++#include <optional>
++#include <regex>
++#include <set>
++#include <stdexcept>
++#include <string>
++#include <ctime>
++#include <iomanip>
++#include <sstream>
++#include <cstdlib>
++#include <vector>
++
++using namespace pldm::fw_update;
++namespace fs = std::filesystem;
++
++namespace
++{
++
++struct Component
++{
++    std::string name;
++    std::vector<std::string> compatibles;
++    std::string bundleExtractFormat;
++};
++
++struct ExtractMatch
++{
++    size_t compIndex;
++    const FirmwareDeviceIDRecord* record;
++};
++
++std::string readAll(const fs::path& path)
++{
++    std::ifstream in(path);
++    if (!in.good())
++    {
++        throw std::runtime_error("failed to open: " + path.string());
++    }
++    return std::string((std::istreambuf_iterator<char>(in)),
++                       std::istreambuf_iterator<char>());
++}
++
++std::optional<std::string> extractFirst(const std::string& src,
++                                        const std::regex& pattern)
++{
++    std::smatch m;
++    if (std::regex_search(src, m, pattern) && m.size() > 1)
++    {
++        return m[1].str();
++    }
++    return std::nullopt;
++}
++
++std::string normalizeFormat(std::string fmt)
++{
++    std::transform(fmt.begin(), fmt.end(), fmt.begin(),
++                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
++    return fmt;
++}
++
++std::vector<Component> parseComponentsFromFwupdJson(const std::string& json)
++{
++    std::vector<Component> out;
++
++    const auto componentsPos = json.find("\"components\"");
++    if (componentsPos == std::string::npos)
++    {
++        return out;
++    }
++
++    const auto arrStart = json.find('[', componentsPos);
++    if (arrStart == std::string::npos)
++    {
++        return out;
++    }
++
++    size_t i = arrStart + 1;
++    int depth = 0;
++    size_t objStart = std::string::npos;
++
++    for (; i < json.size(); ++i)
++    {
++        const char c = json[i];
++        if (c == '{')
++        {
++            if (depth == 0)
++            {
++                objStart = i;
++            }
++            ++depth;
++        }
++        else if (c == '}')
++        {
++            --depth;
++            if (depth == 0 && objStart != std::string::npos)
++            {
++                const auto obj = json.substr(objStart, i - objStart + 1);
++
++                Component comp;
++                auto name = extractFirst(
++                    obj,
++                    std::regex("\\\"name\\\"\\s*:\\s*\\\"([^\\\"]+)\\\""));
++                if (!name.has_value())
++                {
++                    objStart = std::string::npos;
++                    continue;
++                }
++                comp.name = name.value();
++
++                auto hwBlock = extractFirst(
++                    obj, std::regex(
++                             "\\\"CompatibleHardware\\\"\\s*:\\s*\\[(.*?)\\]",
++                             std::regex::ECMAScript));
++                if (hwBlock.has_value())
++                {
++                    const std::regex item("\\\"([^\\\"]+)\\\"");
++                    for (auto it = std::sregex_iterator(hwBlock->begin(),
++                                                        hwBlock->end(), item);
++                         it != std::sregex_iterator(); ++it)
++                    {
++                        comp.compatibles.emplace_back((*it)[1].str());
++                    }
++                }
++
++                auto fmt = extractFirst(
++                    obj,
++                    std::regex("\\\"bundleExtractFormat\\\"\\s*:\\s*\\\"([^\\\"]+)\\\""));
++                if (fmt.has_value())
++                {
++                    comp.bundleExtractFormat = normalizeFormat(fmt.value());
++                }
++
++                out.emplace_back(std::move(comp));
++                objStart = std::string::npos;
++            }
++        }
++        else if (c == ']' && depth == 0)
++        {
++            break;
++        }
++    }
++
++    return out;
++}
++
++bool matchesCompatible(const FirmwareDeviceIDRecord& record,
++                       const std::string& compatible)
++{
++    const auto& desc = std::get<3>(record);
++    if (desc.empty() || !desc.contains(PLDM_FWUP_VENDOR_DEFINED))
++    {
++        return false;
++    }
++
++    const auto& vendorDesc = desc.at(PLDM_FWUP_VENDOR_DEFINED);
++    if (!std::holds_alternative<VendorDefinedDescriptorInfo>(vendorDesc))
++    {
++        return false;
++    }
++
++    const auto& vendor = std::get<VendorDefinedDescriptorInfo>(vendorDesc);
++    return std::get<VendorDefinedDescriptorTitle>(vendor) == compatible;
++}
++
++bool extractByIndex(const std::vector<uint8_t>& pkg,
++                    const ComponentImageInfos& comps, size_t compIndex,
++                    const fs::path& outPath)
++{
++    if (compIndex >= comps.size())
++    {
++        return false;
++    }
++
++    const auto& c = comps[compIndex];
++    const size_t offset = static_cast<size_t>(
++        std::get<static_cast<size_t>(ComponentImageInfoPos::CompLocationOffsetPos)>(c));
++    const size_t size = static_cast<size_t>(
++        std::get<static_cast<size_t>(ComponentImageInfoPos::CompSizePos)>(c));
++
++    if (offset + size > pkg.size())
++    {
++        return false;
++    }
++
++    std::ofstream out(outPath, std::ios::binary | std::ios::trunc);
++    if (!out.good())
++    {
++        return false;
++    }
++
++    out.write(reinterpret_cast<const char*>(pkg.data() + offset),
++              static_cast<std::streamsize>(size));
++    return out.good();
++}
++
++std::optional<ExtractMatch> extractByCompatible(
++    const std::vector<uint8_t>& pkg,
++    const std::shared_ptr<PackageParser>& parsed,
++    const std::string& compatible, const fs::path& outPath)
++{
++    const auto& records = parsed->getFwDeviceIDRecords();
++    const auto& comps = parsed->getComponentImageInfos();
++
++    for (const auto& record : records)
++    {
++        if (!matchesCompatible(record, compatible))
++        {
++            continue;
++        }
++
++        const auto& applicable = std::get<1>(record);
++        if (applicable.empty())
++        {
++            continue;
++        }
++
++        const size_t compIndex = applicable[0];
++        if (!extractByIndex(pkg, comps, compIndex, outPath))
++        {
++            continue;
++        }
++
++        return ExtractMatch{compIndex, &record};
++    }
++
++    return std::nullopt;
++}
++
++std::string sanitize(const std::string& s)
++{
++    return std::regex_replace(s, std::regex("[^A-Za-z0-9._-]"), "_");
++}
++
++std::string jsonEscape(const std::string& s)
++{
++    std::string out;
++    out.reserve(s.size());
++    for (const char ch : s)
++    {
++        switch (ch)
++        {
++            case '\\':
++                out += "\\\\";
++                break;
++            case '"':
++                out += "\\\"";
++                break;
++            case '\n':
++                out += "\\n";
++                break;
++            case '\r':
++                out += "\\r";
++                break;
++            case '\t':
++                out += "\\t";
++                break;
++            default:
++                out += ch;
++                break;
++        }
++    }
++    return out;
++}
++
++std::string bytesToHex(const std::vector<uint8_t>& data)
++{
++    std::ostringstream oss;
++    oss << std::uppercase << std::hex << std::setfill('0');
++    for (const auto b : data)
++    {
++        oss << std::setw(2) << static_cast<unsigned>(b);
++    }
++    return oss.str();
++}
++
++template <size_t N>
++std::vector<int> bitsetIndices(const std::bitset<N>& bits)
++{
++    std::vector<int> out;
++    for (size_t i = 0; i < N; ++i)
++    {
++        if (bits.test(i))
++        {
++            out.emplace_back(static_cast<int>(i));
++        }
++    }
++    return out;
++}
++
++std::string joinInts(const std::vector<int>& values)
++{
++    std::ostringstream oss;
++    for (size_t i = 0; i < values.size(); ++i)
++    {
++        if (i != 0)
++        {
++            oss << ", ";
++        }
++        oss << values[i];
++    }
++    return oss.str();
++}
++
++std::string shellQuote(const std::string& s)
++{
++    std::string out = "'";
++    for (const char ch : s)
++    {
++        if (ch == '\'')
++        {
++            out += "'\\''";
++        }
++        else
++        {
++            out += ch;
++        }
++    }
++    out += "'";
++    return out;
++}
++
++std::string nowIso8601()
++{
++    const auto now = std::chrono::system_clock::now();
++    const std::time_t tt = std::chrono::system_clock::to_time_t(now);
++    std::tm tm{};
++    gmtime_r(&tt, &tm);
++    char buf[32]{};
++    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm);
++    return std::string(buf);
++}
++
++void writeSingleComponentMetadata(
++    const fs::path& metadataPath, const PackageVersion& packageVersion,
++    const FirmwareDeviceIDRecord& record, const ComponentImageInfo& compInfo)
++{
++    constexpr const char* packageHeaderId =
++        "F018878CCB7D49439800A02F059ACA02";
++
++    const auto& devFlags = std::get<0>(record);
++    const auto& compSetVersion = std::get<2>(record);
++    const auto& descriptors = std::get<3>(record);
++
++    const auto compClass = std::get<static_cast<size_t>(
++        ComponentImageInfoPos::CompClassificationPos)>(compInfo);
++    const auto compId = std::get<static_cast<size_t>(
++        ComponentImageInfoPos::CompIdentifierPos)>(compInfo);
++    const auto compCmp = std::get<static_cast<size_t>(
++        ComponentImageInfoPos::CompComparisonStampPos)>(compInfo);
++    const auto compOpts = std::get<static_cast<size_t>(
++        ComponentImageInfoPos::CompOptionsPos)>(compInfo);
++    const auto reqActs = std::get<static_cast<size_t>(
++        ComponentImageInfoPos::ReqCompActivationMethodPos)>(compInfo);
++    const auto compVer = std::get<static_cast<size_t>(
++        ComponentImageInfoPos::CompVersionPos)>(compInfo);
++
++    std::ofstream out(metadataPath, std::ios::trunc);
++    if (!out.good())
++    {
++        throw std::runtime_error("failed to write metadata: " +
++                                 metadataPath.string());
++    }
++
++    out << "{\n";
++    out << "  \"PackageHeaderInformation\": {\n";
++    out << "    \"PackageHeaderIdentifier\": \"" << packageHeaderId
++        << "\",\n";
++    out << "    \"PackageHeaderFormatVersion\": 1,\n";
++    out << "    \"PackageVersionString\": \"" << jsonEscape(packageVersion)
++        << "\",\n";
++    out << "    \"PackageReleaseDateTime\": \"" << nowIso8601()
++        << "\"\n";
++    out << "  },\n";
++
++    out << "  \"FirmwareDeviceIdentificationArea\": [\n";
++    out << "    {\n";
++    out << "      \"DeviceUpdateOptionFlags\": ["
++        << joinInts(bitsetIndices(devFlags)) << "],\n";
++    out << "      \"ComponentImageSetVersionString\": \""
++        << jsonEscape(compSetVersion) << "\",\n";
++    out << "      \"ApplicableComponents\": [0],\n";
++    out << "      \"Descriptors\": [\n";
++
++    bool first = true;
++    for (const auto& [descType, descValue] : descriptors)
++    {
++        if (!first)
++        {
++            out << ",\n";
++        }
++        first = false;
++
++        out << "        {\n";
++        out << "          \"DescriptorType\": " << descType;
++        if (std::holds_alternative<DescriptorData>(descValue))
++        {
++            out << ",\n          \"DescriptorData\": \""
++                << bytesToHex(std::get<DescriptorData>(descValue)) << "\"\n";
++        }
++        else
++        {
++            const auto& vendor = std::get<VendorDefinedDescriptorInfo>(descValue);
++            out << ",\n          \"VendorDefinedDescriptorTitleString\": \""
++                << jsonEscape(std::get<VendorDefinedDescriptorTitle>(vendor))
++                << "\",\n";
++            out << "          \"VendorDefinedDescriptorData\": \""
++                << bytesToHex(std::get<VendorDefinedDescriptorData>(vendor))
++                << "\"\n";
++        }
++        out << "        }";
++    }
++    out << "\n      ]\n";
++    out << "    }\n";
++    out << "  ],\n";
++
++    out << "  \"ComponentImageInformationArea\": [\n";
++    out << "    {\n";
++    out << "      \"ComponentClassification\": " << compClass << ",\n";
++    out << "      \"ComponentIdentifier\": " << compId << ",\n";
++    out << "      \"ComponentOptions\": [" << joinInts(bitsetIndices(compOpts))
++        << "],\n";
++    if (compOpts.test(1))
++    {
++        std::ostringstream cmp;
++        cmp << "0x" << std::uppercase << std::hex << std::setw(8)
++            << std::setfill('0') << compCmp;
++        out << "      \"ComponentComparisonStamp\": \"" << cmp.str()
++            << "\",\n";
++    }
++    out << "      \"RequestedComponentActivationMethod\": ["
++        << joinInts(bitsetIndices(reqActs)) << "],\n";
++    out << "      \"ComponentVersionString\": \"" << jsonEscape(compVer)
++        << "\"\n";
++    out << "    }\n";
++    out << "  ]\n";
++    out << "}\n";
++}
++
++void buildSingleComponentPldm(const fs::path& outputImage,
++                              const fs::path& metadataPath,
++                              const fs::path& rawImage,
++                              const std::string& pkgCreator)
++{
++    const std::string cmd =
++        shellQuote(pkgCreator) + " " + shellQuote(outputImage.string()) +
++        " " + shellQuote(metadataPath.string()) + " " +
++        shellQuote(rawImage.string());
++
++    const int rc = std::system(cmd.c_str());
++    if (rc != 0)
++    {
++        throw std::runtime_error(
++            "failed to create PLDM package for component (rc=" +
++            std::to_string(rc) + ") using " + pkgCreator);
++    }
++}
++
++void printUsage(const char* argv0)
++{
++    std::cout << "Usage: " << argv0
++              << " PLDM_IMAGE JSON_CONFIG OUTPUT_DIR [--component-format raw|pldm]"
++              << " [--pkg-creator PATH] [--debug-parser]\n"
++              << "\n"
++              << "PLDM bundle extraction tool.\n"
++              << "  --component-format raw|pldm  raw: extract payload bytes\n"
++              << "                                 pldm: build single-component PLDM package\n"
++              << "  --pkg-creator PATH           executable for PLDM package creation\n"
++              << "  --debug-parser               enable verbose parser diagnostics\n"
++              << "  fwupd.json per component:    bundleExtractFormat=raw|pldm\n";
++}
++
++} // namespace
++
++int main(int argc, char** argv)
++{
++    if (argc == 2)
++    {
++        const std::string arg = argv[1];
++        if (arg == "-h" || arg == "--help")
++        {
++            printUsage(argv[0]);
++            return 0;
++        }
++    }
++
++    if (argc < 4)
++    {
++        printUsage(argv[0]);
++        return 2;
++    }
++
++    std::string componentFormat = "raw";
++    std::string pkgCreator = "pldm_fwup_pkg_creator.py";
++    bool parserDebug = false;
++    for (int i = 4; i < argc; ++i)
++    {
++        const std::string arg = argv[i];
++        if (arg.rfind("--component-format=", 0) == 0)
++        {
++            componentFormat = arg.substr(std::string("--component-format=").size());
++            continue;
++        }
++
++        if (arg == "--component-format")
++        {
++            if (i + 1 >= argc)
++            {
++                std::cerr << "pldm_bundle_extraction_tool: missing value for --component-format\n";
++                printUsage(argv[0]);
++                return 2;
++            }
++            componentFormat = argv[++i];
++            continue;
++        }
++
++        if (arg.rfind("--pkg-creator=", 0) == 0)
++        {
++            pkgCreator = arg.substr(std::string("--pkg-creator=").size());
++            continue;
++        }
++
++        if (arg == "--pkg-creator")
++        {
++            if (i + 1 >= argc)
++            {
++                std::cerr << "pldm_bundle_extraction_tool: missing value for --pkg-creator\n";
++                printUsage(argv[0]);
++                return 2;
++            }
++            pkgCreator = argv[++i];
++            continue;
++        }
++
++        if (arg == "--debug-parser")
++        {
++            parserDebug = true;
++            continue;
++        }
++
++        std::cerr << "pldm_bundle_extraction_tool: unknown argument: " << arg << "\n";
++        printUsage(argv[0]);
++        return 2;
++    }
++
++    if (componentFormat != "raw" && componentFormat != "pldm")
++    {
++        std::cerr << "pldm_bundle_extraction_tool: invalid --component-format: "
++                  << componentFormat << "\n";
++        printUsage(argv[0]);
++        return 2;
++    }
++
++    if (parserDebug)
++    {
++        setenv("PLDM_PARSER_DEBUG", "1", 1);
++    }
++
++    const fs::path pldmImage = argv[1];
++    const fs::path jsonPath = argv[2];
++    const fs::path outputDir = argv[3];
++
++    if (!fs::exists(pldmImage))
++    {
++        std::cerr << "pldm_bundle_extraction_tool: image not found: " << pldmImage << "\n";
++        return 1;
++    }
++    if (!fs::exists(jsonPath))
++    {
++        std::cerr << "pldm_bundle_extraction_tool: config not found: " << jsonPath << "\n";
++        return 1;
++    }
++
++    int rc = 0;
++    try
++    {
++        fs::create_directories(outputDir);
++
++        // Load and parse PLDM package
++        const std::string json = readAll(jsonPath);
++        const std::vector<Component> components =
++            parseComponentsFromFwupdJson(json);
++
++        std::vector<uint8_t> pkg;
++        {
++            std::ifstream in(pldmImage, std::ios::binary);
++            if (!in.good())
++            {
++                throw std::runtime_error("failed to open PLDM image");
++            }
++            pkg.assign(std::istreambuf_iterator<char>(in),
++                       std::istreambuf_iterator<char>());
++        }
++
++        auto parsed =
++            pldm_package_util::parsePLDMPackage(pkg.data(), pkg.size());
++        if (!parsed)
++        {
++            throw std::runtime_error("failed to parse PLDM package");
++        }
++
++        size_t extracted = 0;
++        std::set<size_t> extractedIndices;
++
++        // First pass: extract all non-PLDM components resolved via fwupd
++        // compatible-hardware mapping.
++
++        for (const auto& comp : components)
++        {
++            if (comp.name == "pldm" || comp.compatibles.empty())
++            {
++                continue;
++            }
++
++            const std::string compFormat =
++                comp.bundleExtractFormat.empty() ? componentFormat :
++                                                 comp.bundleExtractFormat;
++            if (compFormat != "raw" && compFormat != "pldm")
++            {
++                throw std::runtime_error(
++                    "invalid bundleExtractFormat for component '" +
++                    comp.name + "': " + compFormat);
++            }
++            const bool emitCompAsPldm = (compFormat == "pldm");
++
++            for (const auto& compatible : comp.compatibles)
++            {
++                const std::string safeHw = sanitize(compatible);
++                const std::string prefix = emitCompAsPldm ? "image-pldm-" : "image-";
++                const fs::path outImage = outputDir / (prefix + comp.name + "-" + safeHw);
++                const fs::path rawImage = emitCompAsPldm
++                    ? (outputDir / ("image-raw-" + comp.name + "-" + safeHw + ".bin"))
++                    : outImage;
++
++                auto match =
++                    extractByCompatible(pkg, parsed, compatible, rawImage);
++                if (!match.has_value())
++                {
++                    continue;
++                }
++
++                extractedIndices.insert(match->compIndex);
++
++                if (emitCompAsPldm)
++                {
++                    const auto& compInfo =
++                        parsed->getComponentImageInfos().at(match->compIndex);
++                    const fs::path metadataPath =
++                        outputDir / ("meta-" + comp.name + "-" + safeHw + ".json");
++                    writeSingleComponentMetadata(metadataPath, parsed->pkgVersion,
++                                                 *match->record, compInfo);
++                    buildSingleComponentPldm(outImage, metadataPath, rawImage,
++                                             pkgCreator);
++                }
++                ++extracted;
++                std::cout << "pldm_bundle_extraction_tool: extracted " << comp.name
++                          << " for " << compatible << " -> " << outImage
++                          << "\n";
++            }
++        }
++
++        // Second pass: create reduced PLDM-only output (smaller than the
++        // original combined bundle). Prefer explicit PLDM compatible match.
++        bool wrotePldm = false;
++        const fs::path pldmOut = outputDir / "image-pldm";
++
++        // If the pldm component explicitly requests "pldm" extract format with
++        // no compatibles list, copy the whole package directly (no extraction).
++        for (const auto& comp : components)
++        {
++            if (comp.name != "pldm" || !comp.compatibles.empty())
++            {
++                continue;
++            }
++            if (comp.bundleExtractFormat != "pldm")
++            {
++                continue;
++            }
++            std::ofstream out(pldmOut, std::ios::binary | std::ios::trunc);
++            if (out.good())
++            {
++                out.write(reinterpret_cast<const char*>(pkg.data()),
++                          static_cast<std::streamsize>(pkg.size()));
++                if (out.good())
++                {
++                    ++extracted;
++                    wrotePldm = true;
++                    std::cout << "pldm_bundle_extraction_tool: bundleExtractFormat=pldm:"
++                              << " copied full package as image-pldm -> " << pldmOut << "\n";
++                }
++            }
++            break;
++        }
++
++        for (const auto& comp : components)
++        {
++            if (comp.name != "pldm" || comp.compatibles.empty())
++            {
++                continue;
++            }
++
++            for (const auto& compatible : comp.compatibles)
++            {
++                auto match =
++                    extractByCompatible(pkg, parsed, compatible, pldmOut);
++                if (!match.has_value())
++                {
++                    continue;
++                }
++
++                extractedIndices.insert(match->compIndex);
++                ++extracted;
++                wrotePldm = true;
++                std::cout << "pldm_bundle_extraction_tool: extracted pldm for "
++                          << compatible << " -> " << pldmOut << "\n";
++                break;
++            }
++
++            if (wrotePldm)
++            {
++                break;
++            }
++        }
++
++        // Fallback: no compatible-string match found for the pldm component.
++        // Copy the entire PLDM package as image-pldm so pldmd receives a
++        // well-formed package it can parse (not a raw extracted payload).
++        if (!wrotePldm)
++        {
++            std::ofstream out(pldmOut, std::ios::binary | std::ios::trunc);
++            if (out.good())
++            {
++                out.write(reinterpret_cast<const char*>(pkg.data()),
++                          static_cast<std::streamsize>(pkg.size()));
++                if (out.good())
++                {
++                    ++extracted;
++                    wrotePldm = true;
++                    std::cout << "pldm_bundle_extraction_tool: copied full package"
++                              << " as image-pldm -> " << pldmOut << "\n";
++                }
++            }
++        }
++
++        std::cout << "pldm_bundle_extraction_tool: extracted=" << extracted << "\n";
++        std::cout << "pldm_bundle_extraction_tool: output dir: " << outputDir << "\n";
++    }
++    catch (const std::exception& e)
++    {
++        std::cerr << "pldm_bundle_extraction_tool: " << e.what() << "\n";
++        rc = 1;
++    }
++
++    return rc;
++}
+diff --git a/common/pldm/package_parser.cpp b/common/pldm/package_parser.cpp
+index 7269d42f..eeddf417 100644
+--- a/common/pldm/package_parser.cpp
++++ b/common/pldm/package_parser.cpp
+@@ -2,10 +2,13 @@
+ 
+ #include <libpldm/firmware_update.h>
+ #include <libpldm/utils.h>
++#define PACKAGE_HEADER_CRC32 pldm_edac_crc32
+ 
+ #include <phosphor-logging/lg2.hpp>
+ #include <xyz/openbmc_project/Common/error.hpp>
+ 
++#include <cstdlib>
++#include <iostream>
+ #include <memory>
+ 
+ using namespace std;
+@@ -36,6 +39,17 @@ std::string toString(const struct variable_field& var)
+ namespace fw_update
+ {
+ 
++namespace
++{
++
++bool parserDebugEnabled()
++{
++    const char* v = std::getenv("PLDM_PARSER_DEBUG");
++    return (v != nullptr) && (v[0] != '\0') && (v[0] != '0');
++}
++
++} // namespace
++
+ using InternalFailure =
+     sdbusplus::xyz::openbmc_project::Common::Error::InternalFailure;
+ 
+@@ -56,12 +67,18 @@ size_t PackageParser::parseFDIdentificationArea(
+         auto rc = decode_firmware_device_id_record(
+             pkgHdr.data() + offset, pkgHdrRemainingSize,
+             componentBitmapBitLength, &deviceIdRecHeader, &applicableComponents,
+-            &compImageSetVersionStr, &recordDescriptors, &fwDevicePkgData);
++            &compImageSetVersionStr, &recordDescriptors, &fwDevicePkgData,
++            pkgHeaderFormatRevision);
+         if (rc)
+         {
+             error(
+                 "Failed to decode firmware device ID record, response code '{RC}'",
+                 "RC", rc);
++            if (parserDebugEnabled()) std::cerr
++                << "pldm_parser: decode_firmware_device_id_record failed"
++                << " rc=" << static_cast<int>(rc)
++                << " offset=" << offset
++                << " remaining=" << pkgHdrRemainingSize << "\n";
+             throw InternalFailure();
+         }
+ 
+@@ -81,6 +100,12 @@ size_t PackageParser::parseFDIdentificationArea(
+                     "Failed to decode descriptor type value of type '{TYPE}' and  length '{LENGTH}', response code '{RC}'",
+                     "TYPE", descriptorType, "LENGTH", recordDescriptors.length,
+                     "RC", rc);
++                if (parserDebugEnabled()) std::cerr
++                    << "pldm_parser: decode_descriptor_type_length_value failed"
++                    << " rc=" << static_cast<int>(rc)
++                    << " descriptor_type=" << descriptorType
++                    << " descriptor_bytes_remaining="
++                    << recordDescriptors.length << "\n";
+                 throw InternalFailure();
+             }
+ 
+@@ -106,6 +131,12 @@ size_t PackageParser::parseFDIdentificationArea(
+                         "Failed to decode vendor-defined descriptor value of type '{TYPE}' and  length '{LENGTH}', response code '{RC}'",
+                         "TYPE", descriptorType, "LENGTH",
+                         recordDescriptors.length, "RC", rc);
++                    if (parserDebugEnabled()) std::cerr
++                        << "pldm_parser: decode_vendor_defined_descriptor_value failed"
++                        << " rc=" << static_cast<int>(rc)
++                        << " descriptor_type=" << descriptorType
++                        << " descriptor_bytes_remaining="
++                        << recordDescriptors.length << "\n";
+                     throw InternalFailure();
+                 }
+ 
+@@ -177,6 +208,13 @@ size_t PackageParser::parseCompImageInfoArea(ComponentImageCount compImageCount,
+             error(
+                 "Failed to decode component image information, response code '{RC}'",
+                 "RC", rc);
++            if (parserDebugEnabled())
++            {
++                std::cerr << "pldm_parser: decode_pldm_comp_image_info failed"
++                          << " rc=" << static_cast<int>(rc)
++                          << " offset=" << offset
++                          << " remaining=" << pkgHdrRemainingSize << "\n";
++            }
+             throw InternalFailure();
+         }
+ 
+@@ -224,6 +262,13 @@ void PackageParser::validatePkgTotalSize(uintmax_t pkgSize)
+                 "Failed to validate the component location offset '{OFFSET}' for version '{COMPONENT_VERSION}' and package size '{SIZE}'",
+                 "OFFSET", compLocOffset, "COMPONENT_VERSION", cmpVersion,
+                 "SIZE", calcPkgSize);
++            if (parserDebugEnabled())
++            {
++                std::cerr << "pldm_parser: component offset mismatch"
++                          << " expected_offset=" << calcPkgSize
++                          << " actual_offset=" << compLocOffset
++                          << " component_version=" << cmpVersion << "\n";
++            }
+             throw InternalFailure();
+         }
+ 
+@@ -232,9 +280,26 @@ void PackageParser::validatePkgTotalSize(uintmax_t pkgSize)
+ 
+-    if (calcPkgSize != pkgSize)
+-    {
+-        error(
+-            "Failed to match package size '{PKG_SIZE}' to calculated package size '{CALCULATED_PACKAGE_SIZE}'.",
+-            "PKG_SIZE", pkgSize, "CALCULATED_PACKAGE_SIZE", calcPkgSize);
+-        throw InternalFailure();
+-    }
++    if (calcPkgSize > pkgSize)
++    {
++        error(
++            "PLDM package file too small: declared '{CALCULATED_PACKAGE_SIZE}' bytes but file is only '{PKG_SIZE}' bytes.",
++            "PKG_SIZE", pkgSize, "CALCULATED_PACKAGE_SIZE", calcPkgSize);
++        if (parserDebugEnabled())
++        {
++            std::cerr << "pldm_parser: package too small"
++                      << " expected_total_size=" << calcPkgSize
++                      << " actual_file_size=" << pkgSize << "\n";
++        }
++        throw InternalFailure();
++    }
++    if (calcPkgSize != pkgSize)
++    {
++        // File has trailing bytes beyond PLDM content (e.g. appended signature/padding).
++        // The declared content is fully present -- log and continue.
++        if (parserDebugEnabled())
++        {
++            std::cerr << "pldm_parser: package has "
++                      << (pkgSize - calcPkgSize)
++                      << " trailing bytes beyond PLDM content (ignored)\n";
++        }
++    }
+ }
+@@ -246,6 +297,12 @@ void PackageParserV1::parse(const std::vector<uint8_t>& pkgHdr,
+     {
+         error("Invalid package header size '{PKG_HDR_SIZE}' ", "PKG_HDR_SIZE",
+               pkgHeaderSize);
++        if (parserDebugEnabled())
++        {
++            std::cerr << "pldm_parser: invalid package header size"
++                      << " header_size=" << pkgHeaderSize
++                      << " file_size=" << pkgHdr.size() << "\n";
++        }
+         throw InternalFailure();
+     }
+ 
+@@ -254,6 +311,12 @@ void PackageParserV1::parse(const std::vector<uint8_t>& pkgHdr,
+     {
+         error("Failed to parse package header of size '{PKG_HDR_SIZE}'",
+               "PKG_HDR_SIZE", pkgHeaderSize);
++        if (parserDebugEnabled())
++        {
++            std::cerr << "pldm_parser: package header too small for device record count"
++                      << " header_size=" << pkgHeaderSize
++                      << " offset=" << offset << "\n";
++        }
+         throw InternalFailure();
+     }
+ 
+@@ -265,12 +328,24 @@ void PackageParserV1::parse(const std::vector<uint8_t>& pkgHdr,
+     {
+         error("Failed to find DeviceIDRecordCount {DREC_CNT} entries",
+               "DREC_CNT", deviceIdRecCount);
++        if (parserDebugEnabled())
++        {
++            std::cerr << "pldm_parser: device record count mismatch"
++                      << " header_count=" << static_cast<int>(deviceIdRecCount)
++                      << " parsed_count=" << fwDeviceIDRecords.size() << "\n";
++        }
+         throw InternalFailure();
+     }
+     if (offset + sizeof(ComponentImageCount) >= pkgHeaderSize)
+     {
+         error("Failed to parsing package header of size '{PKG_HDR_SIZE}'",
+               "PKG_HDR_SIZE", pkgHeaderSize);
++        if (parserDebugEnabled())
++        {
++            std::cerr << "pldm_parser: package header too small for component image count"
++                      << " header_size=" << pkgHeaderSize
++                      << " offset=" << offset << "\n";
++        }
+         throw InternalFailure();
+     }
+ 
+@@ -283,6 +358,12 @@ void PackageParserV1::parse(const std::vector<uint8_t>& pkgHdr,
+     {
+         error("Failed to find ComponentImageCount '{COMP_IMG_CNT}' entries",
+               "COMP_IMG_CNT", compImageCount);
++        if (parserDebugEnabled())
++        {
++            std::cerr << "pldm_parser: component image count mismatch"
++                      << " header_count=" << compImageCount
++                      << " parsed_count=" << componentImageInfos.size() << "\n";
++        }
+         throw InternalFailure();
+     }
+ 
+@@ -290,10 +371,16 @@ void PackageParserV1::parse(const std::vector<uint8_t>& pkgHdr,
+     {
+         error("Failed to parse package header of size '{PKG_HDR_SIZE}'",
+               "PKG_HDR_SIZE", pkgHeaderSize);
++        if (parserDebugEnabled())
++        {
++            std::cerr << "pldm_parser: package header layout mismatch before checksum"
++                      << " expected_checksum_offset=" << offset
++                      << " header_size=" << pkgHeaderSize << "\n";
++        }
+         throw InternalFailure();
+     }
+ 
+-    auto calcChecksum = pldm_edac_crc32(pkgHdr.data(), offset);
++    auto calcChecksum = PACKAGE_HEADER_CRC32(pkgHdr.data(), offset);
+     auto checksum = static_cast<PackageHeaderChecksum>(
+         le32toh(pkgHdr[offset] | (pkgHdr[offset + 1] << 8) |
+                 (pkgHdr[offset + 2] << 16) | (pkgHdr[offset + 3] << 24)));
+@@ -303,6 +390,12 @@ void PackageParserV1::parse(const std::vector<uint8_t>& pkgHdr,
+             "Failed to parse package header for calculated checksum '{CALCULATED_CHECKSUM}' and header checksum '{PACKAGE_HEADER_CHECKSUM}'",
+             "CALCULATED_CHECKSUM", calcChecksum, "PACKAGE_HEADER_CHECKSUM",
+             checksum);
++        if (parserDebugEnabled())
++        {
++            std::cerr << "pldm_parser: package header checksum mismatch"
++                      << " calculated_checksum=" << calcChecksum
++                      << " header_checksum=" << checksum << "\n";
++        }
+         throw InternalFailure();
+     }
+ 
+
+diff --git a/common/pldm/package_parser.hpp b/common/pldm/package_parser.hpp
+--- a/common/pldm/package_parser.hpp
++++ b/common/pldm/package_parser.hpp
+@@ -139,3 +139,6 @@
+      */
+     const ComponentBitmapBitLength componentBitmapBitLength;
++
++    /** @brief Package header format revision */
++    size_t pkgHeaderFormatRevision{1};
+ };

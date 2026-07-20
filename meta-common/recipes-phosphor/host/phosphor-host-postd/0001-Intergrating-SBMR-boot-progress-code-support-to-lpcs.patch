@@ -1,17 +1,18 @@
-From ffbdbdb00f5e9b4be9b62f8606f30c10280c3f42 Mon Sep 17 00:00:00 2001
-From: balajirg <balajirg@ami.com>
-Date: Mon, 18 Mar 2024 18:20:49 +0530
+From 1d548614ed1735a91d85ac8a2180bd0d1301cb42 Mon Sep 17 00:00:00 2001
+From: dineshsv <dineshsv@ami.com>
+Date: Tue, 2 Jun 2026 10:51:05 +0000
 Subject: [PATCH] Intergrating SBMR boot progress code support to
  lpcsnoop.service provided by phosphor-host-postd.
 
+Signed-off-by: dineshsv <dineshsv@ami.com>
 ---
  lpcsnoop.service.in                           |   2 +-
- main.cpp                                      |  61 +++-
+ main.cpp                                      |  65 ++++-
  meson.build                                   |   6 +
- meson.options                                 |  14 +
+ meson.options                                 |  12 +
  sbmrbootprogress/sbmr_boot_progress.hpp       | 261 ++++++++++++++++++
  sbmrbootprogress/sbmr_boot_progress_code.json |  27 ++
- 6 files changed, 359 insertions(+), 12 deletions(-)
+ 6 files changed, 360 insertions(+), 13 deletions(-)
  create mode 100644 sbmrbootprogress/sbmr_boot_progress.hpp
  create mode 100755 sbmrbootprogress/sbmr_boot_progress_code.json
 
@@ -28,7 +29,7 @@ index 6ace17e..e6abeec 100644
  [Service]
  Restart=always
 diff --git a/main.cpp b/main.cpp
-index e977ce0..0451645 100644
+index d4f4063..6e61bd7 100644
 --- a/main.cpp
 +++ b/main.cpp
 @@ -42,6 +42,12 @@
@@ -43,75 +44,90 @@ index e977ce0..0451645 100644
 +
  static size_t codeSize = 1; /* Size of each POST code in bytes */
  static bool verbose = false;
- 
-@@ -130,23 +136,46 @@ void PostCodeEventHandler(PostReporter* reporter, sdeventplus::source::IO& s,
+ static std::function<bool(std::vector<uint8_t>&, ssize_t)> procPostCode;
+@@ -200,35 +206,60 @@ void PostCodeEventHandler(PostReporter* reporter, sdeventplus::source::IO& s,
  {
-     uint64_t code = 0;
+     std::vector<uint8_t> code(codeSize, 0);
      ssize_t readb;
 +    uint8_t postCodeBuffer[POST_CODE_MAX] = {0};
 +    secondary_post_code_t secondary_code = {};
  
--    while ((readb = read(postFd, &code, codeSize)) > 0)
+-    while ((readb = read(postFd, code.data(), codeSize)) > 0)
 +    while ((readb = read(postFd, postCodeBuffer, codeSize)) > 0)
      {
--        code = le64toh(code);
--        if (verbose)
--        {
--            fprintf(stderr, "Code: 0x%" PRIx64 "\n", code);
+-        if (procPostCode && procPostCode(code, readb) == false)
++        if (codeSize <= sizeof(uint64_t))
+         {
+-            return;
 -        }
-+	if(codeSize <= sizeof(code))
-+	{
-+	    memcpy(&code, &postCodeBuffer[0], codeSize);
-+	    code = le64toh(code);
-+	    if (verbose)
-+	    {
-+		fprintf(stderr, "Code: 0x%" PRIx64 "\n", code);
-+	    }
-+	} 
-+	else
-+	{
-+	    code = 0;
-+	    for(uint8_t i = 0; i < codeSize; i++)
-+	    {
-+		secondary_code.push_back(postCodeBuffer[i]);
-+		if(verbose)
-+		{
-+		    fprintf(stderr, "Secondary code: 0x%x\n", postCodeBuffer[i]);
-+		}
-+	    }
-+	}
++            memcpy(code.data(), &postCodeBuffer[0], codeSize);
++            if (procPostCode && procPostCode(code, readb) == false)
++            {
++                return;
++            }
+ 
+-        if (verbose)
++            if (verbose)
++            {
++                fprintf(stderr, "Code: 0x");
++                for (const auto& byte : code)
++                {
++                    fprintf(stderr, "%02x", byte);
++                }
++                fprintf(stderr, "\n");
++            }
++        }
++        else
+         {
+-            fprintf(stderr, "Code: 0x");
+-            for (const auto& byte : code)
++            code.clear();
++            code.resize(sizeof(uint64_t), 0);
++            for (uint8_t i = 0; i < codeSize; i++)
+             {
+-                fprintf(stderr, "%02x", byte);
++                secondary_code.push_back(postCodeBuffer[i]);
++                if (verbose)
++                {
++                    fprintf(stderr, "Secondary code: 0x%x\n", postCodeBuffer[i]);
++                }
+             }
+-            fprintf(stderr, "\n");
+         }
          // HACK: Always send property changed signal even for the same code
          // since we are single threaded, external users will never see the
          // first value.
--        reporter->value(std::make_tuple(~code, secondary_post_code_t{}), true);
+         code[0] = ~code[0];
+-        reporter->value(std::make_tuple(code, secondary_post_code_t{}), true);
++        reporter->value(std::make_tuple(code, secondary_code), true);
+         code[0] = ~code[0];
 -        reporter->value(std::make_tuple(code, secondary_post_code_t{}));
--
-+        reporter->value(std::make_tuple(~code, secondary_code), true);
 +        reporter->value(std::make_tuple(code, secondary_code));
-+	postcode_t post_code{code, secondary_code};
++        postcode_t post_code{code, secondary_code};
 +#ifdef REPORT_SBMR
-+	SbmrBootProgress sbmr;
++        SbmrBootProgress sbmr;
 +        sbmr.updateBootProgressProperties(post_code, 0);
 +#endif //REPORT_SBMR
-         // read depends on old data being cleared since it doens't always read
+ 
+         // read depends on old data being cleared since it doesn't always read
          // the full code size
-         code = 0;
-+	secondary_code.clear();
+         code.resize(codeSize);
+         std::fill(code.begin(), code.end(), 0);
++        secondary_code.clear();
  
          if (rateLimit(*reporter, s))
          {
-@@ -231,13 +260,23 @@ int main(int argc, char* argv[])
+@@ -314,13 +345,23 @@ int main(int argc, char* argv[])
              case 'b':
              {
                  codeSize = atoi(optarg);
 -
 +#ifdef REPORT_SBMR
-+		if(codeSize < 1 || codeSize > 9)
++                if (codeSize < 1 || codeSize > 9)
 +#else
                  if (codeSize < 1 || codeSize > 8)
--                {
 +#endif //REPORT_SBMR
-+		{
+                 {
 +#ifdef REPORT_SBMR
 +                    fprintf(stderr,
 +                            "Invalid POST code size '%s'. Must be "
@@ -127,10 +143,10 @@ index e977ce0..0451645 100644
                  }
                  break;
 diff --git a/meson.build b/meson.build
-index 715045c..9ed773d 100644
+index c4b16c8..e58b81b 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -24,6 +24,12 @@ libgpiodcxx = dependency('libgpiodcxx')
+@@ -20,6 +20,12 @@ libgpiodcxx = dependency('libgpiodcxx')
  conf_data = configuration_data()
  conf_data.set('bindir', get_option('prefix') / get_option('bindir'))
  conf_data.set('SYSTEMD_TARGET', get_option('systemd-target'))
@@ -144,14 +160,13 @@ index 715045c..9ed773d 100644
  snoopd_src = ['main.cpp']
  snoopd_args = ''
 diff --git a/meson.options b/meson.options
-index 9e0ef64..e5cd273 100644
+index 4f37868..6de1f5e 100644
 --- a/meson.options
 +++ b/meson.options
-@@ -40,3 +40,17 @@ option(
+@@ -35,3 +35,15 @@ option(
      min: 0,
-     value: 1000
+     value: 1000,
  )
-+
 +option(
 +    'sbmr-boot-progress', 
 +    type: 'feature', 
@@ -164,7 +179,6 @@ index 9e0ef64..e5cd273 100644
 +    description: 'Service after which lpc will start',
 +    type: 'string'
 +)
-+
 diff --git a/sbmrbootprogress/sbmr_boot_progress.hpp b/sbmrbootprogress/sbmr_boot_progress.hpp
 new file mode 100644
 index 0000000..3902b80
@@ -465,3 +479,6 @@ index 0000000..6a3d683
 +    "0x02000000040003c1":"EFI_NV_FW_UEFI_EC_M2_PARTITION_NOT_FAT",
 +    "0x02000000050003c1":"EFI_NV_FW_UEFI_EC_M2_NOT_NVME"
 +}
+-- 
+2.43.0
+

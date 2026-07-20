@@ -1,0 +1,115 @@
+From d31c47e9a17c2d03def132ad6b4fa349374b3ab6 Mon Sep 17 00:00:00 2001
+From: Vijaysankar R <vijaysankarr@ami.com>
+Date: Wed, 24 Dec 2025 16:32:46 +0530
+Subject: [PATCH 38/38] ipmi_pass-File-Validation
+
+---
+ src/pam_ipmisave/pam_ipmisave.c | 57 +++++++++++++++++++++++++++++++--
+ 1 file changed, 55 insertions(+), 2 deletions(-)
+
+diff --git a/src/pam_ipmisave/pam_ipmisave.c b/src/pam_ipmisave/pam_ipmisave.c
+index 9e7d33c..f381429 100644
+--- a/src/pam_ipmisave/pam_ipmisave.c
++++ b/src/pam_ipmisave/pam_ipmisave.c
+@@ -41,6 +41,8 @@
+ #define MAX_KEY_SIZE		 8
+ #define DEFAULT_SPEC_PASS_FILE	 "/etc/ipmi_pass"
+ #define META_PASSWD_SIG		 "=OPENBMC="
++#define FILE_VALIDATION_SUCCESS	     0
++#define PASS_FILE_VALIDATION_FAILURE -1
+ 
+ /*
+  * Meta data struct for storing the encrypted password file
+@@ -255,6 +257,48 @@ FILE *get_temp_file_handle(const pam_handle_t *pamh, char *const tempfilename)
+ 	return tempfile;
+ }
+ 
++/** @brief  returns valid status of /etc/ipmi_pass file.
++*
++* @param[in] fileSize of the /etc/ipmi_pass file
++* @param[in] sturcture which holds /etc/ipmi_pass file data
++* @return 0 for vaild and negative value on failure.
++*/
++int isValidipmiPassFile(int fileSize, metapassstruct *metaData)
++{
++	size_t totalSize = sizeof(metapassstruct);
++	size_t metaDataSizes = metaData->hashsize + metaData->ivsize;
++	if (metaDataSizes < metaData->hashsize) {
++		return PASS_FILE_VALIDATION_FAILURE;
++	}
++	metaDataSizes += metaData->datasize;
++	if (metaDataSizes < metaData->datasize) {
++		return PASS_FILE_VALIDATION_FAILURE;
++	}
++	metaDataSizes += metaData->padsize;
++	if (metaDataSizes < metaData->padsize) {
++		return PASS_FILE_VALIDATION_FAILURE;
++	}
++	metaDataSizes += metaData->macsize;
++	if (metaDataSizes < metaData->macsize) {
++		return PASS_FILE_VALIDATION_FAILURE;
++	}
++	totalSize += metaDataSizes;
++	if (totalSize < metaDataSizes) {
++		return PASS_FILE_VALIDATION_FAILURE;
++	}
++	if (!(fileSize == (int)totalSize)) {
++		return PASS_FILE_VALIDATION_FAILURE;
++	}
++
++	if (fileSize == (int)(sizeof(metapassstruct) + metaData->hashsize +
++			      metaData->ivsize + metaData->datasize +
++			      metaData->padsize + metaData->macsize)) {
++		return FILE_VALIDATION_SUCCESS;
++	} else {
++		return PASS_FILE_VALIDATION_FAILURE;
++	}
++}
++
+ /**
+  * @brief updates special password file
+  * Function to update the special password file. Stores the password against
+@@ -273,7 +317,7 @@ int update_pass_special_file(const pam_handle_t *pamh, const char *keyfilename,
+ {
+ 	struct stat st;
+ 	FILE *pwfile = NULL, *opwfile = NULL, *keyfile = NULL;
+-	int err = 0, wroteentry = 0;
++	int err = 0, wroteentry = 0, retval = PAM_SUCCESS;
+ 	char tempfilename[1024];
+ 	size_t forwholen = strlen(forwho);
+ 	size_t towhatlen = strlen(towhat);
+@@ -387,6 +431,14 @@ int update_pass_special_file(const pam_handle_t *pamh, const char *keyfilename,
+ 				err = 1;
+ 				goto done;
+ 			}
++			if (isValidipmiPassFile(opwfilesize, opwmp) < 0) {
++				free(opwfilebuff);
++				fclose(opwfile);
++				fclose(pwfile);
++				err = 1;
++				retval = PAM_AUTHTOK_RECOVERY_ERR;
++				goto done;
++			}
+ 			// User & password pairs are mapped as <user
+ 			// name>:<password>\n. Add +3 for special chars ':',
+ 			// '\n' and '\0'.
+@@ -597,6 +649,7 @@ done:
+ 				   forwho);
+ 		} else {
+ 			err = 1;
++			retval = PAM_AUTHTOK_ERR;
+ 		}
+ 	}
+ 
+@@ -607,7 +660,7 @@ done:
+ 		return PAM_SUCCESS;
+ 	} else {
+ 		unlink(tempfilename);
+-		return PAM_AUTHTOK_ERR;
++		return retval;
+ 	}
+ }
+ 
+-- 
+2.43.0
+

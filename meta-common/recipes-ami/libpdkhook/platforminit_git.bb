@@ -8,12 +8,12 @@ DEPENDS:append = " libpdkhook "
 RDEPENDS:${PN}:append = " libpdkhook "
 
 SRC_URI = " \
-           file://main.cpp \ 
+           file://main.cpp \
            file://meson.build \
            file://platforminit.service \
           "
 
-S = "${WORKDIR}"
+S = "${UNPACKDIR}"
 
 inherit pkgconfig meson systemd
 inherit obmc-phosphor-systemd

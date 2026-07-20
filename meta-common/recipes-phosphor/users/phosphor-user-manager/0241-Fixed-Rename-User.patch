@@ -1,0 +1,261 @@
+From e3fb84ee87b353c873d3a78495afa150e3802079 Mon Sep 17 00:00:00 2001
+From: madhankumars <madhankumars@ami.com>
+Date: Wed, 4 Mar 2026 17:32:07 +0530
+Subject: [PATCH 241/241] Fixed Rename User
+
+---
+ user_mgr.cpp | 157 +++++++++++++++++++++++++--------------------------
+ user_mgr.hpp |   3 +-
+ 2 files changed, 79 insertions(+), 81 deletions(-)
+
+diff --git a/user_mgr.cpp b/user_mgr.cpp
+index 6a96b06..96e1da8 100644
+--- a/user_mgr.cpp
++++ b/user_mgr.cpp
+@@ -404,8 +404,8 @@ void setupTimer(boost::asio::io_context& io)
+ bool compareStringWithBytes(const std::string& str,
+                             const unsigned char val[otpFixedLen])
+ {
+-    // Ensure the string has at least 8 characters
+-    if (str.size() < otpFixedLen)
++    // Enforce exact OTP length match
++    if (str.size() != otpFixedLen)
+     {
+         return false;
+     }
+@@ -628,54 +628,6 @@ void UserMgr::throwForInvalidGroups(const std::vector<std::string>& groupNames)
+ }
+ void UserMgr::throwForInvalidMailID(const std::string& smtpMailID)
+ {
+-    const char* primaryMailIfc = "xyz.openbmc_project.mail.alert.primary";
+-    const char* secondaryMailIfc = "xyz.openbmc_project.mail.alert.secondary";
+-
+-    bool primaryEnable = false;
+-    bool secondaryEnable = false;
+-
+-    // Check primary mail service
+-    try
+-    {
+-        auto primaryProxy = bus.new_method_call(
+-            mailService, mailObjpath, "org.freedesktop.DBus.Properties", "Get");
+-        primaryProxy.append(primaryMailIfc, "Enable");
+-        auto reply = bus.call(primaryProxy);
+-        std::variant<bool> value;
+-        reply.read(value);
+-        primaryEnable = std::get<bool>(value);
+-    }
+-    catch (const sdbusplus::exception::exception& e)
+-    {
+-        lg2::error("Failed to get primary mail enable status: {ERR}", "ERR",
+-                   e.what());
+-    }
+-
+-    // Check secondary mail service
+-    try
+-    {
+-        auto secondaryProxy = bus.new_method_call(
+-            mailService, mailObjpath, "org.freedesktop.DBus.Properties", "Get");
+-        secondaryProxy.append(secondaryMailIfc, "Enable");
+-        auto reply = bus.call(secondaryProxy);
+-        std::variant<bool> value;
+-        reply.read(value);
+-        secondaryEnable = std::get<bool>(value);
+-    }
+-    catch (const sdbusplus::exception::exception& e)
+-    {
+-        lg2::error("Failed to get secondary mail enable status: {ERR}", "ERR",
+-                   e.what());
+-    }
+-
+-    // If neither is enabled, throw NotEnabled
+-    if (!(primaryEnable || secondaryEnable))
+-    {
+-        lg2::error("Cannot set SMTP Mail ID, mail service is not enabled");
+-        elog<NotAllowed>(
+-            Reason("Cannot set SMTP Mail ID, mail service is not enabled"));
+-    }
+-
+     const std::regex pattern(
+         R"(^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$)");
+     if ((!std::regex_match(smtpMailID, pattern)) || (smtpMailID.empty()))
+@@ -934,7 +886,8 @@ bool objectExists(sdbusplus::bus::bus& bus, const std::string& service,
+ }
+ 
+ void UserMgr::renameSnmpUser(const std::string& userName,
+-                             const std::string& newUserName)
++                             const std::string& newUserName,
++                             bool snmpAccessEnableStatus)
+ {
+     constexpr const char* snmpBasePath =
+         "/xyz/openbmc_project/snmp/UserManager/";
+@@ -946,11 +899,10 @@ void UserMgr::renameSnmpUser(const std::string& userName,
+         "xyz.openbmc_project.Snmp.UserManager.Create";
+     constexpr const char* managerObjPath =
+         "/xyz/openbmc_project/snmp/UserManager";
+-    constexpr const char* userServiceName = "xyz.openbmc_project.User.Manager";
+-    constexpr const char* userInterface = "xyz.openbmc_project.User.Attributes";
+-    constexpr const char* SnmpPropertyName = "SNMPAccessEnableStatus";
+     constexpr const char* userObjPath = "/xyz/openbmc_project/user/";
+     std::string newuserObjPath = std::string(userObjPath) + newUserName;
++    bool isSnmpAccessStatusDisable = false;
++    phosphor::user::Users* newUserRef = nullptr;
+ 
+     if (!objectExists(bus, service, objPathOld))
+     {
+@@ -991,24 +943,16 @@ void UserMgr::renameSnmpUser(const std::string& userName,
+                        reply.get_error()->message);
+             return;
+         }
+-
+-        /*Set SNMPAccessEnableStatus to true before creating a snmp user*/
+-        systemBus->async_method_call(
+-            [newUserName](const boost::system::error_code& ec) {
+-                if (ec)
+-                {
+-                    lg2::error(
+-                        "Failed to set SNMPAccessEnableStatus for '{USER}': {ERROR}",
+-                        "USER", newUserName, "ERROR", ec.message());
+-                    elog<InternalFailure>();
+-                    return;
+-                }
+-
+-                lg2::info("SNMPAccessEnableStatus set for user '{USER}'",
+-                          "USER", newUserName);
+-            },
+-            userServiceName, newuserObjPath, "org.freedesktop.DBus.Properties",
+-            "Set", userInterface, SnmpPropertyName, std::variant<bool>{true});
++        if (!snmpAccessEnableStatus)
++        {
++            isSnmpAccessStatusDisable = true;
++            auto it = usersList.find(newUserName);
++            if (it != usersList.end() && it->second)
++            {
++                newUserRef = it->second.get();
++                newUserRef->snmpAccessEnableStatus(true);
++            }
++        }
+ 
+         /* Create new SNMP user object */
+         std::string password = std::get<std::string>(propertyMap["Password"]);
+@@ -1017,18 +961,24 @@ void UserMgr::renameSnmpUser(const std::string& userName,
+         std::string algorithm = std::get<std::string>(propertyMap["Algorithm"]);
+         std::string rwPermission =
+             std::get<std::string>(propertyMap["ReadWritePermission"]);
+-
+         systemBus->async_method_call(
+-            [newUserName](const boost::system::error_code& ec) {
++            [newUserName, isSnmpAccessStatusDisable,
++             newUserRef](const boost::system::error_code& ec) {
+                 if (ec)
+                 {
+                     lg2::error("SNMP user creation failed: {ERROR}", "ERROR",
+                                ec.message());
+-                    elog<InternalFailure>();
+-                    return;
+                 }
+-                lg2::info("SNMP user '{USER}' successfully created.", "USER",
+-                          newUserName);
++                else
++                {
++                    lg2::info("SNMP user '{USER}' successfully created.",
++                              "USER", newUserName);
++                }
++
++                if (isSnmpAccessStatusDisable && newUserRef)
++                {
++                    newUserRef->snmpAccessEnableStatus(false);
++                }
+             },
+             service, managerObjPath, createInterface, "Client", newUserName,
+             password, encryption, algorithm, rwPermission);
+@@ -1088,10 +1038,13 @@ void UserMgr::renameUser(std::string userName, std::string newUserName)
+ 
+     auto& newUserRef = usersList.at(newUserName);
+     newUserRef->snmpAccessEnableStatus(snmpAccessEnableStatus);
+-    newUserRef->smtpMailID(mailid);
++    if (!mailid.empty())
++    {
++	    newUserRef->smtpMailID(mailid);
++    }
+     /* If the user is named and identified as an SNMP user, it also needs to be
+      * renamed */
+-    renameSnmpUser(userName, newUserName);
++    renameSnmpUser(userName, newUserName,snmpAccessEnableStatus);
+     return;
+ }
+ 
+@@ -1297,6 +1250,10 @@ bool UserMgr::otpGeneration(std::string userName)
+ {
+     unsigned char randomNumber = 0;
+     constexpr char numbers[numberCount] = "0123456789";
++    const char* primaryMailIfc = "xyz.openbmc_project.mail.alert.primary";
++    const char* secondaryMailIfc = "xyz.openbmc_project.mail.alert.secondary";
++    bool primaryEnable = false;
++    bool secondaryEnable = false;
+     std::string Subject = "The OTP for " + userName;
+     std::string Message;
+     uint16_t sendMailRetVal = 0;
+@@ -1308,6 +1265,46 @@ bool UserMgr::otpGeneration(std::string userName)
+         log<level::ERR>("User name is empty");
+         return false;
+     }
++    // Check primary mail service
++    try
++    {
++        auto primaryProxy = bus.new_method_call(
++            mailService, mailObjpath, "org.freedesktop.DBus.Properties", "Get");
++        primaryProxy.append(primaryMailIfc, "Enable");
++        auto reply = bus.call(primaryProxy);
++        std::variant<bool> value;
++        reply.read(value);
++        primaryEnable = std::get<bool>(value);
++    }
++    catch (const sdbusplus::exception::exception& e)
++    {
++        lg2::error("Failed to get primary mail enable status: {ERR}", "ERR",
++                   e.what());
++    }
++
++    // Check secondary mail service
++    try
++    {
++        auto secondaryProxy = bus.new_method_call(
++            mailService, mailObjpath, "org.freedesktop.DBus.Properties", "Get");
++        secondaryProxy.append(secondaryMailIfc, "Enable");
++        auto reply = bus.call(secondaryProxy);
++        std::variant<bool> value;
++        reply.read(value);
++        secondaryEnable = std::get<bool>(value);
++    }
++    catch (const sdbusplus::exception::exception& e)
++    {
++        lg2::error("Failed to get secondary mail enable status: {ERR}", "ERR",
++                   e.what());
++    }
++
++    // If neither is enabled, Cannot send OTP to Mail ID, return false
++    if (!(primaryEnable || secondaryEnable))
++    {
++        lg2::error("Cannot send OTP to Mail ID, mail service is not enabled");
++        return false;
++    }
+     const auto& user = usersList[userName];
+     std::string mailid = user.get()->smtpMailID();
+ 
+diff --git a/user_mgr.hpp b/user_mgr.hpp
+index e7ccb9e..8241082 100644
+--- a/user_mgr.hpp
++++ b/user_mgr.hpp
+@@ -355,7 +355,8 @@ class UserMgr : public Ifaces
+      * renamed.
+      */
+     void renameSnmpUser(const std::string& userName,
+-                        const std::string& newUserName);
++                        const std::string& newUserName,
++                        bool snmpAccessEnableStatus);
+ 
+     /** @brief rename user method.
+      *  This method renames the user as requested
+-- 
+2.34.1
+

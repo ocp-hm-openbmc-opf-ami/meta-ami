@@ -12,7 +12,6 @@ PV = "1.0+git"
 
 # Tag for v01.01
 SRCREV = "90632cf34bd32905151bee8ee0b7c1ad9d09552b"
-
 S = "${WORKDIR}/git"
 
 DEPENDS = "openssl"

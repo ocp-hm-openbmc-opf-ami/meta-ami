@@ -62,6 +62,8 @@ FEATURE_PACKAGES_onetree-bmc-services-ready ?= "packagegroup-onetree-apps-bmc-se
 FEATURE_PACKAGES_onetree-pdk ?= "packagegroup-onetree-apps-pdk"
 FEATURE_PACKAGES_onetree-telemetry ?= "packagegroup-onetree-apps-telemetry"
 FEATURE_PACKAGES_onetree-ipmb ?= "packagegroup-onetree-apps-ipmb"
+FEATURE_PACKAGES_onetree-cxl-mgmt ?= "packagegroup-onetree-apps-cxl-mgmt"
+FEATURE_PACKAGES_onetree-phosphor-health-monitor ?= "packagegroup-onetree-apps-phosphor-health-monitor" 
 
 # NVIDIA Features
 FEATURE_PACKAGES_onetree-nvidiasipack ?= "packagegroup-onetree-apps-nvidiasipack"
@@ -92,6 +94,7 @@ FEATURE_PACKAGES_onetree-fwupdate-cpld-update ?= "packagegroup-onetree-apps-fwup
 FEATURE_PACKAGES_onetree-image-sign ?= "packagegroup-onetree-apps-image-sign"
 FEATURE_PACKAGES_onetree-dual-image ?= "packagegroup-onetree-apps-dual-image"
 FEATURE_PACKAGES_onetree-hw-failsafe-boot ?= "packagegroup-onetree-apps-hw-failsafe-boot"
+FEATURE_PACKAGES_onetree-mac-eeprom-support ?= "packagegroup-onetree-apps-onetree-mac-eeprom-support"
 FEATURE_PACKAGES_onetree-single-spi-abr ?= "packagegroup-onetree-apps-single-spi-abr"
 FEATURE_PACKAGES_onetree-sync-conf ?= "packagegroup-onetree-apps-sync-conf"
 FEATURE_PACKAGES_onetree-phosphor-ipmi-flash ?= "packagegroup-onetree-apps-phosphor-ipmi-flash"
@@ -107,3 +110,4 @@ FEATURE_PACKAGES_onetree-multi-host-support ?= "packagegroup-onetree-apps-multi-
 # Rack Manager and Power Shelf features
 FEATURE_PACKAGES_onetree-rm ?= "packagegroup-onetree-apps-rm"
 FEATURE_PACKAGES_onetree-psm ?= "packagegroup-onetree-apps-psm"
+FEATURE_PACKAGES_onetree-rpc ?= "packagegroup-onetree-apps-rpc"

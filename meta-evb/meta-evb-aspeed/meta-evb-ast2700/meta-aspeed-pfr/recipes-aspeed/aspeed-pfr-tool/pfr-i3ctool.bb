@@ -5,7 +5,9 @@ LIC_FILES_CHKSUM = "file://${COREBASE}/meta/files/common-licenses/GPL-2.0-or-lat
 
 inherit pkgconfig meson
 
-SRC_URI = " file://main.c;subdir=${S} \
-            file://meson.build;subdir=${S} \
+SRC_URI = " file://main.c \
+            file://meson.build \
           "
+
+S = "${UNPACKDIR}"
 

@@ -5,10 +5,10 @@ LIC_FILES_CHKSUM = "file://${COREBASE}/meta/files/common-licenses/MIT;md5=0835ad
 
 inherit pkgconfig meson
 
-SRC_URI = " file://main.c;subdir=${S} \
-            file://meson.build;subdir=${S} \
-            file://pfr-mctp-i3c.service;subdir=${S} \
-            file://mctp-i3c-starter.sh;subdir=${S} \
+SRC_URI = " file://main.c;subdir=${BP} \
+            file://meson.build;subdir=${BP} \
+            file://pfr-mctp-i3c.service;subdir=${BP} \
+            file://mctp-i3c-starter.sh;subdir=${BP} \
           "
 
 inherit obmc-phosphor-systemd

@@ -24,7 +24,7 @@ SRC_URI = "file://mctp-i3c-main.cpp \
            file://mctpctrl-cli-sock-test.cpp \
            file://mctp-i3c-daemon.service "
 
-S = "${WORKDIR}"
+S = "${UNPACKDIR}"
 
 CXXFLAGS:append = " -Os -ffunction-sections -fdata-sections -flto"
 
@@ -54,5 +54,5 @@ do_install() {
 
     # Install the systemd service file
     install -d ${D}${systemd_system_unitdir}
-    install -m 0644 ${WORKDIR}/mctp-i3c-daemon.service ${D}${systemd_system_unitdir}/mctp-i3c-daemon.service
+    install -m 0644 ${UNPACKDIR}/mctp-i3c-daemon.service ${D}${systemd_system_unitdir}/mctp-i3c-daemon.service
 }

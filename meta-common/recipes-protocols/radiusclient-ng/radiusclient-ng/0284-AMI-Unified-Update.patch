@@ -1,0 +1,5509 @@
+From 076f4ff50a75499294ef5826dd358abcaac9d2f2 Mon Sep 17 00:00:00 2001
+From: Vijaysankar R <vijaysankarr@ami.com>
+Date: Fri, 12 Dec 2025 17:05:01 +0530
+Subject: [PATCH 284/284] AMI-Unified-Update
+
+---
+ etc/dictionary              |    2 +
+ etc/radiusclient.conf.in    |    2 +
+ include/freeradius-client.h |  730 +++++++++----------
+ lib/buildreq.c              |  963 ++++++++++++++++++++-----
+ lib/config.c                |  252 ++++---
+ lib/ip_util.c               |   50 +-
+ lib/md5.c                   |  434 +++++++-----
+ lib/options.h               |   71 +-
+ lib/sendserver.c            | 1341 ++++++++++++++++++++---------------
+ lib/util.h                  |    1 +
+ src/radiusclient.c          | 1052 +++++++++++++++++++++++++--
+ 11 files changed, 3388 insertions(+), 1510 deletions(-)
+
+diff --git a/etc/dictionary b/etc/dictionary
+index c7e1bd7..456faf0 100644
+--- a/etc/dictionary
++++ b/etc/dictionary
+@@ -124,6 +124,8 @@ ATTRIBUTE	Framed-IPv6-Route	99	string
+ ATTRIBUTE	Framed-IPv6-Pool	100	string
+ ATTRIBUTE	Error-Cause		101	integer
+ ATTRIBUTE	EAP-Key-Name		102	string
++ATTRIBUTE       EAP-Message             79      string
++ATTRIBUTE       Custom-Attribute-80     80      string
+ 
+ #
+ #	RFC6911 IPv6 attributes
+diff --git a/etc/radiusclient.conf.in b/etc/radiusclient.conf.in
+index a0f95a4..bf50d3b 100644
+--- a/etc/radiusclient.conf.in
++++ b/etc/radiusclient.conf.in
+@@ -83,6 +83,8 @@ radius_deadtime	0
+ # local address from which radius packets have to be sent
+ bindaddr *
+ 
++message_authenticator_required 1
++
+ # LOCAL settings
+ 
+ # program to execute for local login
+diff --git a/include/freeradius-client.h b/include/freeradius-client.h
+index 96279b6..0e7641e 100644
+--- a/include/freeradius-client.h
++++ b/include/freeradius-client.h
+@@ -18,428 +18,441 @@
+ #define FREERADIUS_CLIENT_H
+ 
+ #ifdef CP_DEBUG
+-#define		DEBUG(args, ...)	rc_log(## args)
++#define DEBUG(args, ...) rc_log(##args)
+ #else
+-#define		DEBUG(args, ...)	;
++#define DEBUG(args, ...) ;
+ #endif
+ 
+-#include	<sys/types.h>
++#include <sys/types.h>
+ /*
+  * Include for C99 uintX_t defines is stdint.h on most systems.  Solaris uses
+  * inttypes.h instead.  Comment out the stdint include if you get an error,
+  * and uncomment the inttypes.h include.
+  */
+-#include	<stdint.h>
++#include <stdint.h>
+ /* #include	<inttypes.h> */
+-#include	<stdio.h>
+-#include	<time.h>
+-
++#include <stdio.h>
++#include <time.h>
+ 
+ /* for struct addrinfo and sockaddr_storage */
+-#include <sys/socket.h>
+ #include <netdb.h>
++#include <sys/socket.h>
+ 
+ #undef __BEGIN_DECLS
+ #undef __END_DECLS
+ #ifdef __cplusplus
+-# define __BEGIN_DECLS extern "C" {
+-# define __END_DECLS }
++#define __BEGIN_DECLS                                                          \
++    extern "C"                                                                 \
++    {
++#define __END_DECLS }
+ #else
+-# define __BEGIN_DECLS /* empty */
+-# define __END_DECLS /* empty */
++#define __BEGIN_DECLS /* empty */
++#define __END_DECLS   /* empty */
+ #endif
+ 
+-#define AUTH_VECTOR_LEN		16
+-#define AUTH_PASS_LEN		(7 * 16) /* multiple of 16 */
+-#define AUTH_ID_LEN		64
+-#define AUTH_STRING_LEN		253	 /* maximum of 253 */
++typedef uint32_t UINT4;
+ 
+-#define BUFFER_LEN		8192
++#define AUTH_VECTOR_LEN 16
++#define AUTH_PASS_LEN (7 * 16) /* multiple of 16 */
++#define AUTH_ID_LEN 64
++#define AUTH_STRING_LEN 253    /* maximum of 253 */
+ 
+-#define NAME_LENGTH		32
++#define BUFFER_LEN 8192
+ 
+-#define MAX_SECRET_LENGTH	(3 * 16) /* MUST be multiple of 16 */
++#define NAME_LENGTH 32
+ 
+-#define PW_MAX_MSG_SIZE		4096
++#define MAX_SECRET_LENGTH (3 * 16) /* MUST be multiple of 16 */
++
++#define PW_MAX_MSG_SIZE 4096
+ 
+ /* codes for radius_buildreq, radius_getport, etc. */
+-#define AUTH			0
+-#define ACCT			1
++#define AUTH 0
++#define ACCT 1
+ 
+ /* defines for config.c */
+ 
+ #define SERVER_MAX 8
+ 
+-#define AUTH_LOCAL_FST	(1<<0)
+-#define AUTH_RADIUS_FST	(1<<1)
+-#define AUTH_LOCAL_SND	(1<<2)
+-#define AUTH_RADIUS_SND	(1<<3)
+-
+-typedef struct server {
+-	int max;
+-	char *name[SERVER_MAX];
+-	uint16_t port[SERVER_MAX];
+-	char *secret[SERVER_MAX];
+-	double deadtime_ends[SERVER_MAX];
++#define AUTH_LOCAL_FST (1 << 0)
++#define AUTH_RADIUS_FST (1 << 1)
++#define AUTH_LOCAL_SND (1 << 2)
++#define AUTH_RADIUS_SND (1 << 3)
++
++typedef struct server
++{
++    int max;
++    char* name[SERVER_MAX];
++    uint16_t port[SERVER_MAX];
++    char* secret[SERVER_MAX];
++    double deadtime_ends[SERVER_MAX];
+ } SERVER;
+ 
+ typedef struct pw_auth_hdr
+ {
+-	uint8_t		code;
+-	uint8_t		id;
+-	uint16_t	length;
+-	uint8_t		vector[AUTH_VECTOR_LEN];
+-	uint8_t		data[2];
++    uint8_t code;
++    uint8_t id;
++    uint16_t length;
++    uint8_t vector[AUTH_VECTOR_LEN];
++    uint8_t data[2];
+ } AUTH_HDR;
+ 
+ struct rc_conf
+ {
+-	struct _option		*config_options;
+-	struct sockaddr_storage	own_bind_addr;
+-	unsigned		own_bind_addr_set;
+-
+-	struct map2id_s		*map2id_list;
+-	struct dict_attr	*dictionary_attributes;
+-	struct dict_value	*dictionary_values;
+-	struct dict_vendor	*dictionary_vendors;
+-	char			buf[256];
+-	char			buf1[14];
+-	char			ifname[512];
++    struct _option* config_options;
++    struct sockaddr_storage own_bind_addr;
++    unsigned own_bind_addr_set;
++
++    struct map2id_s* map2id_list;
++    struct dict_attr* dictionary_attributes;
++    struct dict_value* dictionary_values;
++    struct dict_vendor* dictionary_vendors;
++    char buf[256];
++    char buf1[14];
++    char ifname[512];
+ };
+ 
+ typedef struct rc_conf rc_handle;
+ 
+-#define AUTH_HDR_LEN			20
+-#define CHAP_VALUE_LENGTH		16
++#define AUTH_HDR_LEN 20
++#define CHAP_VALUE_LENGTH 16
+ 
+-#define PW_AUTH_UDP_PORT		1645
+-#define PW_ACCT_UDP_PORT		1646
++#define PW_AUTH_UDP_PORT 1645
++#define PW_ACCT_UDP_PORT 1646
+ 
+-#define PW_TYPE_STRING			0
+-#define PW_TYPE_INTEGER			1
+-#define PW_TYPE_IPADDR			2
+-#define PW_TYPE_DATE			3
+-#define PW_TYPE_IPV6ADDR		4
+-#define PW_TYPE_IPV6PREFIX		5
++#define PW_TYPE_STRING 0
++#define PW_TYPE_INTEGER 1
++#define PW_TYPE_IPADDR 2
++#define PW_TYPE_DATE 3
++#define PW_TYPE_IPV6ADDR 4
++#define PW_TYPE_IPV6PREFIX 5
+ 
+-/* standard RADIUS codes */
++#define EAP_IDENTITY 1
++#define EAP_RESPONSE 2
++#define PW_EAP_TLS 13
++#define RADIUS_CLIENT_CERTIFICATE "/etc/ssl/certs/radius_client.pem"
++#define RADIUS_CLIENT_KEY "/etc/ssl/certs/radius_key.pem"
++#define RADIUS_CA_CERT "/etc/ssl/certs/radius_ca.pem"
+ 
+-#define PW_ACCESS_REQUEST		1
+-#define PW_ACCESS_ACCEPT		2
+-#define PW_ACCESS_REJECT		3
+-#define PW_ACCOUNTING_REQUEST		4
+-#define PW_ACCOUNTING_RESPONSE		5
+-#define PW_ACCOUNTING_STATUS		6
+-#define PW_PASSWORD_REQUEST		7
+-#define PW_PASSWORD_ACK			8
+-#define PW_PASSWORD_REJECT		9
+-#define PW_ACCOUNTING_MESSAGE		10
+-#define PW_ACCESS_CHALLENGE		11
+-#define PW_STATUS_SERVER		12
+-#define PW_STATUS_CLIENT		13
++/* standard RADIUS codes */
+ 
++#define PW_ACCESS_REQUEST 1
++#define PW_ACCESS_ACCEPT 2
++#define PW_ACCESS_REJECT 3
++#define PW_ACCOUNTING_REQUEST 4
++#define PW_ACCOUNTING_RESPONSE 5
++#define PW_ACCOUNTING_STATUS 6
++#define PW_PASSWORD_REQUEST 7
++#define PW_PASSWORD_ACK 8
++#define PW_PASSWORD_REJECT 9
++#define PW_ACCOUNTING_MESSAGE 10
++#define PW_ACCESS_CHALLENGE 11
++#define PW_STATUS_SERVER 12
++#define PW_STATUS_CLIENT 13
+ 
+ /* standard RADIUS attribute-value pairs */
+ 
+-#define PW_USER_NAME			1	//!< string.
+-#define PW_USER_PASSWORD		2	//!< string.
+-#define PW_CHAP_PASSWORD		3	//!< string.
+-#define PW_NAS_IP_ADDRESS		4	//!< ipaddr.
+-#define PW_NAS_PORT			5	//!< integer.
+-#define PW_SERVICE_TYPE			6	//!< integer.
+-#define PW_FRAMED_PROTOCOL		7	//!< integer.
+-#define PW_FRAMED_IP_ADDRESS		8	//!< ipaddr.
+-#define PW_FRAMED_IP_NETMASK		9	//!< ipaddr.
+-#define PW_FRAMED_ROUTING		10	//!< integer.
+-#define PW_FILTER_ID			11	//!< string.
+-#define PW_FRAMED_MTU			12	//!< integer.
+-#define PW_FRAMED_COMPRESSION		13	//!< integer.
+-#define PW_LOGIN_IP_HOST		14	//!< ipaddr.
+-#define PW_LOGIN_SERVICE		15	//!< integer.
+-#define PW_LOGIN_PORT			16	//!< integer.
+-#define PW_OLD_PASSWORD			17	//!< string */ /* deprecated.
+-#define PW_REPLY_MESSAGE		18	//!< string.
+-#define PW_LOGIN_CALLBACK_NUMBER	19	//!< string.
+-#define PW_FRAMED_CALLBACK_ID		20	//!< string.
+-#define PW_EXPIRATION			21	//!< date */ /* deprecated.
+-#define PW_FRAMED_ROUTE			22	//!< string.
+-#define PW_FRAMED_IPX_NETWORK		23	//!< integer.
+-#define PW_STATE			24	//!< string.
+-#define PW_CLASS			25	//!< string.
+-#define PW_VENDOR_SPECIFIC		26	//!< string.
+-#define PW_SESSION_TIMEOUT		27	//!< integer.
+-#define PW_IDLE_TIMEOUT			28	//!< integer.
+-#define PW_TERMINATION_ACTION		29	//!< integer.
+-#define PW_CALLED_STATION_ID		30	//!< string.
+-#define PW_CALLING_STATION_ID		31	//!< string.
+-#define PW_NAS_IDENTIFIER		32	//!< string.
+-#define PW_PROXY_STATE			33	//!< string.
+-#define PW_LOGIN_LAT_SERVICE		34	//!< string.
+-#define PW_LOGIN_LAT_NODE		35	//!< string.
+-#define PW_LOGIN_LAT_GROUP		36	//!< string.
+-#define PW_FRAMED_APPLETALK_LINK	37	//!< integer.
+-#define PW_FRAMED_APPLETALK_NETWORK	38	//!< integer.
+-#define PW_FRAMED_APPLETALK_ZONE	39	//!< string.
+-#define PW_ACCT_STATUS_TYPE		40	//!< integer.
+-#define PW_ACCT_DELAY_TIME		41	//!< integer.
+-#define PW_ACCT_INPUT_OCTETS		42	//!< integer.
+-#define PW_ACCT_OUTPUT_OCTETS		43	//!< integer.
+-#define PW_ACCT_SESSION_ID		44	//!< string.
+-#define PW_ACCT_AUTHENTIC		45	//!< integer.
+-#define PW_ACCT_SESSION_TIME		46	//!< integer.
+-#define PW_ACCT_INPUT_PACKETS		47	//!< integer.
+-#define PW_ACCT_OUTPUT_PACKETS		48	//!< integer.
+-#define PW_ACCT_TERMINATE_CAUSE		49	//!< integer.
+-#define PW_ACCT_MULTI_SESSION_ID	50	//!< string.
+-#define PW_ACCT_LINK_COUNT		51	//!< integer.
+-#define PW_ACCT_INPUT_GIGAWORDS		52	//!< integer.
+-#define PW_ACCT_OUTPUT_GIGAWORDS	53	//!< integer.
+-#define PW_EVENT_TIMESTAMP		55	//!< integer.
+-#define PW_EGRESS_VLANID		56	//!< string.
+-#define PW_INGRESS_FILTERS		57	//!< integer.
+-#define PW_EGRESS_VLAN_NAME		58	//!< string.
+-#define PW_USER_PRIORITY_TABLE		59	//!< string.
+-#define PW_CHAP_CHALLENGE		60	//!< string.
+-#define PW_NAS_PORT_TYPE		61	//!< integer.
+-#define PW_PORT_LIMIT			62	//!< integer.
+-#define PW_LOGIN_LAT_PORT		63	//!< string.
+-#define PW_TUNNEL_TYPE			64	//!< string.
+-#define PW_TUNNEL_MEDIUM_TYPE		65	//!< integer.
+-#define PW_TUNNEL_CLIENT_ENDPOINT	66	//!< string.
+-#define PW_TUNNEL_SERVER_ENDPOINT	67	//!< string.
+-#define PW_ACCT_TUNNEL_CONNECTION	68	//!< string.
+-#define PW_TUNNEL_PASSWORD		69	//!< string.
+-#define PW_ARAP_PASSWORD		70	//!< string.
+-#define PW_ARAP_FEATURES		71	//!< string.
+-#define PW_ARAP_ZONE_ACCESS		72	//!< integer.
+-#define PW_ARAP_SECURITY		73	//!< integer.
+-#define PW_ARAP_SECURITY_DATA		74	//!< string.
+-#define PW_PASSWORD_RETRY		75	//!< integer.
+-#define PW_PROMPT			76	//!< integer.
+-#define PW_CONNECT_INFO			77	//!< string.
+-#define PW_CONFIGURATION_TOKEN		78	//!< string.
+-#define PW_EAP_MESSAGE			79	//!< string.
+-#define PW_MESSAGE_AUTHENTICATOR	80	//!< string.
+-#define PW_TUNNEL_PRIVATE_GROUP_ID	81	//!< string.
+-#define PW_TUNNEL_ASSIGNMENT_ID		82	//!< string.
+-#define PW_TUNNEL_PREFERENCE		83	//!< string.
+-#define PW_ARAP_CHALLENGE_RESPONSE	84	//!< string.
+-#define PW_ACCT_INTERIM_INTERVAL	85	//!< integer.
+-#define PW_ACCT_TUNNEL_PACKETS_LOST	86	//!< integer.
+-#define PW_NAS_PORT_ID_STRING		87	//!< string.
+-#define PW_FRAMED_POOL			88	//!< string.
+-#define PW_CHARGEABLE_USER_IDENTITY	89	//!< string.
+-#define PW_CUI				89	//!< string.
+-#define PW_TUNNEL_CLIENT_AUTH_ID	90	//!< string.
+-#define PW_TUNNEL_SERVER_AUTH_ID	91	//!< string.
+-#define PW_NAS_FILTER_RULE		92	//!< string.
+-#define PW_ORIGINATING_LINE_INFO	94	//!< string.
+-#define PW_NAS_IPV6_ADDRESS		95	//!< string.
+-#define PW_FRAMED_INTERFACE_ID		96	//!< string.
+-#define PW_FRAMED_IPV6_PREFIX		97	//!< string.
+-#define PW_LOGIN_IPV6_HOST		98	//!< string.
+-#define PW_FRAMED_IPV6_ROUTE		99	//!< string.
+-#define PW_FRAMED_IPV6_POOL		100	//!< string.
+-#define PW_ERROR_CAUSE			101	//!< integer.
+-#define PW_EAP_KEY_NAME			102	//!< string.
+-
+-#define PW_FRAMED_IPV6_ADDRESS		168	//!< ipaddr6.
+-#define PW_DNS_SERVER_IPV6_ADDRESS	169	//!< ipaddr6.
+-#define PW_ROUTE_IPV6_INFORMATION	170	//!< ipv6prefix.
+-
++#define PW_USER_NAME 1                 //!< string.
++#define PW_USER_PASSWORD 2             //!< string.
++#define PW_CHAP_PASSWORD 3             //!< string.
++#define PW_NAS_IP_ADDRESS 4            //!< ipaddr.
++#define PW_NAS_PORT 5                  //!< integer.
++#define PW_SERVICE_TYPE 6              //!< integer.
++#define PW_FRAMED_PROTOCOL 7           //!< integer.
++#define PW_FRAMED_IP_ADDRESS 8         //!< ipaddr.
++#define PW_FRAMED_IP_NETMASK 9         //!< ipaddr.
++#define PW_FRAMED_ROUTING 10           //!< integer.
++#define PW_FILTER_ID 11                //!< string.
++#define PW_FRAMED_MTU 12               //!< integer.
++#define PW_FRAMED_COMPRESSION 13       //!< integer.
++#define PW_LOGIN_IP_HOST 14            //!< ipaddr.
++#define PW_LOGIN_SERVICE 15            //!< integer.
++#define PW_LOGIN_PORT 16               //!< integer.
++#define PW_OLD_PASSWORD 17             //!< string */ /* deprecated.
++#define PW_REPLY_MESSAGE 18            //!< string.
++#define PW_LOGIN_CALLBACK_NUMBER 19    //!< string.
++#define PW_FRAMED_CALLBACK_ID 20       //!< string.
++#define PW_EXPIRATION 21               //!< date */ /* deprecated.
++#define PW_FRAMED_ROUTE 22             //!< string.
++#define PW_FRAMED_IPX_NETWORK 23       //!< integer.
++#define PW_STATE 24                    //!< string.
++#define PW_CLASS 25                    //!< string.
++#define PW_VENDOR_SPECIFIC 26          //!< string.
++#define PW_SESSION_TIMEOUT 27          //!< integer.
++#define PW_IDLE_TIMEOUT 28             //!< integer.
++#define PW_TERMINATION_ACTION 29       //!< integer.
++#define PW_CALLED_STATION_ID 30        //!< string.
++#define PW_CALLING_STATION_ID 31       //!< string.
++#define PW_NAS_IDENTIFIER 32           //!< string.
++#define PW_PROXY_STATE 33              //!< string.
++#define PW_LOGIN_LAT_SERVICE 34        //!< string.
++#define PW_LOGIN_LAT_NODE 35           //!< string.
++#define PW_LOGIN_LAT_GROUP 36          //!< string.
++#define PW_FRAMED_APPLETALK_LINK 37    //!< integer.
++#define PW_FRAMED_APPLETALK_NETWORK 38 //!< integer.
++#define PW_FRAMED_APPLETALK_ZONE 39    //!< string.
++#define PW_ACCT_STATUS_TYPE 40         //!< integer.
++#define PW_ACCT_DELAY_TIME 41          //!< integer.
++#define PW_ACCT_INPUT_OCTETS 42        //!< integer.
++#define PW_ACCT_OUTPUT_OCTETS 43       //!< integer.
++#define PW_ACCT_SESSION_ID 44          //!< string.
++#define PW_ACCT_AUTHENTIC 45           //!< integer.
++#define PW_ACCT_SESSION_TIME 46        //!< integer.
++#define PW_ACCT_INPUT_PACKETS 47       //!< integer.
++#define PW_ACCT_OUTPUT_PACKETS 48      //!< integer.
++#define PW_ACCT_TERMINATE_CAUSE 49     //!< integer.
++#define PW_ACCT_MULTI_SESSION_ID 50    //!< string.
++#define PW_ACCT_LINK_COUNT 51          //!< integer.
++#define PW_ACCT_INPUT_GIGAWORDS 52     //!< integer.
++#define PW_ACCT_OUTPUT_GIGAWORDS 53    //!< integer.
++#define PW_EVENT_TIMESTAMP 55          //!< integer.
++#define PW_EGRESS_VLANID 56            //!< string.
++#define PW_INGRESS_FILTERS 57          //!< integer.
++#define PW_EGRESS_VLAN_NAME 58         //!< string.
++#define PW_USER_PRIORITY_TABLE 59      //!< string.
++#define PW_CHAP_CHALLENGE 60           //!< string.
++#define PW_NAS_PORT_TYPE 61            //!< integer.
++#define PW_PORT_LIMIT 62               //!< integer.
++#define PW_LOGIN_LAT_PORT 63           //!< string.
++#define PW_TUNNEL_TYPE 64              //!< string.
++#define PW_TUNNEL_MEDIUM_TYPE 65       //!< integer.
++#define PW_TUNNEL_CLIENT_ENDPOINT 66   //!< string.
++#define PW_TUNNEL_SERVER_ENDPOINT 67   //!< string.
++#define PW_ACCT_TUNNEL_CONNECTION 68   //!< string.
++#define PW_TUNNEL_PASSWORD 69          //!< string.
++#define PW_ARAP_PASSWORD 70            //!< string.
++#define PW_ARAP_FEATURES 71            //!< string.
++#define PW_ARAP_ZONE_ACCESS 72         //!< integer.
++#define PW_ARAP_SECURITY 73            //!< integer.
++#define PW_ARAP_SECURITY_DATA 74       //!< string.
++#define PW_PASSWORD_RETRY 75           //!< integer.
++#define PW_PROMPT 76                   //!< integer.
++#define PW_CONNECT_INFO 77             //!< string.
++#define PW_CONFIGURATION_TOKEN 78      //!< string.
++#define PW_EAP_MESSAGE 79              //!< string.
++#define PW_MESSAGE_AUTHENTICATOR 80    //!< string.
++#define PW_TUNNEL_PRIVATE_GROUP_ID 81  //!< string.
++#define PW_TUNNEL_ASSIGNMENT_ID 82     //!< string.
++#define PW_TUNNEL_PREFERENCE 83        //!< string.
++#define PW_ARAP_CHALLENGE_RESPONSE 84  //!< string.
++#define PW_ACCT_INTERIM_INTERVAL 85    //!< integer.
++#define PW_ACCT_TUNNEL_PACKETS_LOST 86 //!< integer.
++#define PW_NAS_PORT_ID_STRING 87       //!< string.
++#define PW_FRAMED_POOL 88              //!< string.
++#define PW_CHARGEABLE_USER_IDENTITY 89 //!< string.
++#define PW_CUI 89                      //!< string.
++#define PW_TUNNEL_CLIENT_AUTH_ID 90    //!< string.
++#define PW_TUNNEL_SERVER_AUTH_ID 91    //!< string.
++#define PW_NAS_FILTER_RULE 92          //!< string.
++#define PW_ORIGINATING_LINE_INFO 94    //!< string.
++#define PW_NAS_IPV6_ADDRESS 95         //!< string.
++#define PW_FRAMED_INTERFACE_ID 96      //!< string.
++#define PW_FRAMED_IPV6_PREFIX 97       //!< string.
++#define PW_LOGIN_IPV6_HOST 98          //!< string.
++#define PW_FRAMED_IPV6_ROUTE 99        //!< string.
++#define PW_FRAMED_IPV6_POOL 100        //!< string.
++#define PW_ERROR_CAUSE 101             //!< integer.
++#define PW_EAP_KEY_NAME 102            //!< string.
++
++#define PW_FRAMED_IPV6_ADDRESS 168     //!< ipaddr6.
++#define PW_DNS_SERVER_IPV6_ADDRESS 169 //!< ipaddr6.
++#define PW_ROUTE_IPV6_INFORMATION 170  //!< ipv6prefix.
++
++#define PW_EAP_MESSAGE 79              /* int    */
++#define PW_MESSAGE_AUTHENTICATOR 80    /* int */
+ /* Experimental SIP-specific attributes (draft-sterman-aaa-sip-00.txt etc) */
+ 
+-#define PW_DIGEST_RESPONSE		206	//!< string.
+-#define PW_DIGEST_ATTRIBUTES		207	//!< string.
+-#define PW_DIGEST_REALM			1063	//!< string.
+-#define PW_DIGEST_NONCE			1064	//!< string.
+-#define PW_DIGEST_METHOD		1065	//!< string.
+-#define PW_DIGEST_URI			1066	//!< string.
+-#define PW_DIGEST_QOP			1067	//!< string.
+-#define PW_DIGEST_ALGORITHM		1068	//!< string.
+-#define PW_DIGEST_BODY_DIGEST		1069	//!< string.
+-#define PW_DIGEST_CNONCE		1070	//!< string.
+-#define PW_DIGEST_NONCE_COUNT		1071	//!< string.
+-#define PW_DIGEST_USER_NAME		1072	//!< string.
++#define PW_DIGEST_RESPONSE 206     //!< string.
++#define PW_DIGEST_ATTRIBUTES 207   //!< string.
++#define PW_DIGEST_REALM 1063       //!< string.
++#define PW_DIGEST_NONCE 1064       //!< string.
++#define PW_DIGEST_METHOD 1065      //!< string.
++#define PW_DIGEST_URI 1066         //!< string.
++#define PW_DIGEST_QOP 1067         //!< string.
++#define PW_DIGEST_ALGORITHM 1068   //!< string.
++#define PW_DIGEST_BODY_DIGEST 1069 //!< string.
++#define PW_DIGEST_CNONCE 1070      //!< string.
++#define PW_DIGEST_NONCE_COUNT 1071 //!< string.
++#define PW_DIGEST_USER_NAME 1072   //!< string.
+ 
+ /* Integer Translations */
+ 
+ /* SERVICE TYPES */
+ 
+-#define PW_LOGIN			1
+-#define PW_FRAMED			2
+-#define PW_CALLBACK_LOGIN		3
+-#define PW_CALLBACK_FRAMED		4
+-#define PW_OUTBOUND			5
+-#define PW_ADMINISTRATIVE		6
+-#define PW_NAS_PROMPT			7
+-#define PW_AUTHENTICATE_ONLY		8
+-#define PW_CALLBACK_NAS_PROMPT		9
++#define PW_LOGIN 1
++#define PW_FRAMED 2
++#define PW_CALLBACK_LOGIN 3
++#define PW_CALLBACK_FRAMED 4
++#define PW_OUTBOUND 5
++#define PW_ADMINISTRATIVE 6
++#define PW_NAS_PROMPT 7
++#define PW_AUTHENTICATE_ONLY 8
++#define PW_CALLBACK_NAS_PROMPT 9
+ 
+ /* FRAMED PROTOCOLS */
+ 
+-#define PW_PPP				1
+-#define PW_SLIP				2
+-#define PW_ARA				3
+-#define PW_GANDALF			4
+-#define PW_XYLOGICS			5
++#define PW_PPP 1
++#define PW_SLIP 2
++#define PW_ARA 3
++#define PW_GANDALF 4
++#define PW_XYLOGICS 5
+ 
+ /* FRAMED ROUTING VALUES */
+ 
+-#define PW_NONE				0
+-#define PW_BROADCAST			1
+-#define PW_LISTEN			2
+-#define PW_BROADCAST_LISTEN		3
++#define PW_NONE 0
++#define PW_BROADCAST 1
++#define PW_LISTEN 2
++#define PW_BROADCAST_LISTEN 3
+ 
+ /* FRAMED COMPRESSION TYPES */
+ 
+-#define PW_VAN_JACOBSON_TCP_IP		1
+-#define PW_IPX_HEADER_COMPRESSION	2
++#define PW_VAN_JACOBSON_TCP_IP 1
++#define PW_IPX_HEADER_COMPRESSION 2
+ 
+ /* LOGIN SERVICES */
+ 
+-#define PW_TELNET			0
+-#define PW_RLOGIN			1
+-#define PW_TCP_CLEAR			2
+-#define PW_PORTMASTER			3
+-#define PW_LAT				4
+-#define PW_X25_PAD			5
+-#define PW_X25_T3POS			6
++#define PW_TELNET 0
++#define PW_RLOGIN 1
++#define PW_TCP_CLEAR 2
++#define PW_PORTMASTER 3
++#define PW_LAT 4
++#define PW_X25_PAD 5
++#define PW_X25_T3POS 6
+ 
+ /* TERMINATION ACTIONS */
+ 
+-#define PW_DEFAULT			0
+-#define PW_RADIUS_REQUEST		1
++#define PW_DEFAULT 0
++#define PW_RADIUS_REQUEST 1
+ 
+ /* PROHIBIT PROTOCOL */
+ 
+-#define PW_DUMB			0	//!< 1 and 2 are defined in FRAMED PROTOCOLS.
+-#define PW_AUTH_ONLY		3
+-#define PW_ALL			255
++#define PW_DUMB 0 //!< 1 and 2 are defined in FRAMED PROTOCOLS.
++#define PW_AUTH_ONLY 3
++#define PW_ALL 255
+ 
+ /* ACCOUNTING STATUS TYPES */
+ 
+-#define PW_STATUS_START		1
+-#define PW_STATUS_STOP		2
+-#define PW_STATUS_ALIVE		3
+-#define PW_STATUS_MODEM_START	4
+-#define PW_STATUS_MODEM_STOP	5
+-#define PW_STATUS_CANCEL	6
+-#define PW_ACCOUNTING_ON	7
+-#define PW_ACCOUNTING_OFF	8
++#define PW_STATUS_START 1
++#define PW_STATUS_STOP 2
++#define PW_STATUS_ALIVE 3
++#define PW_STATUS_MODEM_START 4
++#define PW_STATUS_MODEM_STOP 5
++#define PW_STATUS_CANCEL 6
++#define PW_ACCOUNTING_ON 7
++#define PW_ACCOUNTING_OFF 8
+ 
+ /* ACCOUNTING TERMINATION CAUSES */
+ 
+-#define PW_USER_REQUEST		1
+-#define PW_LOST_CARRIER		2
+-#define PW_LOST_SERVICE		3
+-#define PW_ACCT_IDLE_TIMEOUT	4
+-#define PW_ACCT_SESSION_TIMEOUT	5
+-#define PW_ADMIN_RESET		6
+-#define PW_ADMIN_REBOOT		7
+-#define PW_PORT_ERROR		8
+-#define PW_NAS_ERROR		9
+-#define PW_NAS_REQUEST		10
+-#define PW_NAS_REBOOT		11
+-#define PW_PORT_UNNEEDED	12
+-#define PW_PORT_PREEMPTED	13
+-#define PW_PORT_SUSPENDED	14
+-#define PW_SERVICE_UNAVAILABLE	15
+-#define PW_CALLBACK		16
+-#define PW_USER_ERROR		17
+-#define PW_HOST_REQUEST		18
++#define PW_USER_REQUEST 1
++#define PW_LOST_CARRIER 2
++#define PW_LOST_SERVICE 3
++#define PW_ACCT_IDLE_TIMEOUT 4
++#define PW_ACCT_SESSION_TIMEOUT 5
++#define PW_ADMIN_RESET 6
++#define PW_ADMIN_REBOOT 7
++#define PW_PORT_ERROR 8
++#define PW_NAS_ERROR 9
++#define PW_NAS_REQUEST 10
++#define PW_NAS_REBOOT 11
++#define PW_PORT_UNNEEDED 12
++#define PW_PORT_PREEMPTED 13
++#define PW_PORT_SUSPENDED 14
++#define PW_SERVICE_UNAVAILABLE 15
++#define PW_CALLBACK 16
++#define PW_USER_ERROR 17
++#define PW_HOST_REQUEST 18
+ 
+ /* NAS PORT TYPES */
+ 
+-#define PW_ASYNC		0
+-#define PW_SYNC			1
+-#define PW_ISDN_SYNC		2
+-#define PW_ISDN_SYNC_V120	3
+-#define PW_ISDN_SYNC_V110	4
+-#define PW_VIRTUAL		5
++#define PW_ASYNC 0
++#define PW_SYNC 1
++#define PW_ISDN_SYNC 2
++#define PW_ISDN_SYNC_V120 3
++#define PW_ISDN_SYNC_V110 4
++#define PW_VIRTUAL 5
+ 
+ /* AUTHENTIC TYPES */
+ 
+-#define PW_RADIUS	1
+-#define PW_LOCAL	2
+-#define PW_REMOTE	3
++#define PW_RADIUS 1
++#define PW_LOCAL 2
++#define PW_REMOTE 3
+ 
+ /* Server data structures */
+ 
+ typedef struct dict_attr
+ {
+-	char              name[NAME_LENGTH + 1];	//!< attribute name.
+-	uint32_t          vendor;			//!< vendor number
+-	uint32_t          value;			//!< attribute index.
+-	int               type;				//!< string, int, etc..
+-	struct dict_attr *next;
++    char name[NAME_LENGTH + 1]; //!< attribute name.
++    uint32_t vendor;            //!< vendor number
++    uint32_t value;             //!< attribute index.
++    int type;                   //!< string, int, etc..
++    struct dict_attr* next;
+ } DICT_ATTR;
+ 
+ typedef struct dict_value
+ {
+-	char               attrname[NAME_LENGTH +1];
+-	char               name[NAME_LENGTH + 1];
+-	int32_t            value;
+-	struct dict_value *next;
++    char attrname[NAME_LENGTH + 1];
++    char name[NAME_LENGTH + 1];
++    int32_t value;
++    struct dict_value* next;
+ } DICT_VALUE;
+ 
+ typedef struct dict_vendor
+ {
+-	char               vendorname[NAME_LENGTH +1];
+-	uint32_t           vendorpec;
+-	struct dict_vendor *next;
++    char vendorname[NAME_LENGTH + 1];
++    uint32_t vendorpec;
++    struct dict_vendor* next;
+ } DICT_VENDOR;
+ 
+ typedef struct value_pair
+ {
+-	char               name[NAME_LENGTH + 1];
+-	uint32_t	   vendor;
+-	uint32_t           attribute;
+-	int                type;
+-	uint32_t           lvalue;
+-	char               strvalue[AUTH_STRING_LEN + 1];
+-	struct value_pair *next;
++    char name[NAME_LENGTH + 1];
++    uint32_t vendor;
++    uint32_t attribute;
++    int type;
++    uint32_t lvalue;
++    char strvalue[AUTH_STRING_LEN + 1];
++    struct value_pair* next;
+ } VALUE_PAIR;
+ 
+ /* Define return codes from "SendServer" utility */
+ 
+-#define BADRESP_RC	-2
+-#define ERROR_RC	-1
+-#define OK_RC		0
+-#define TIMEOUT_RC	1
+-#define REJECT_RC	2
++#define BADRESP_RC -2
++#define ERROR_RC -1
++#define OK_RC 0
++#define TIMEOUT_RC 1
++#define REJECT_RC 2
+ 
+ typedef struct send_data /* Used to pass information to sendserver() function */
+ {
+-	uint8_t        code;		//!< RADIUS packet code.
+-	uint8_t        seq_nbr;		//!< Packet sequence number.
+-	char           *server;		//!< Name/addrress of RADIUS server.
+-	int            svc_port;	//!< RADIUS protocol destination port.
+-	char           *secret;		//!< Shared secret of RADIUS server.
+-	int            timeout;		//!< Session timeout in seconds.
+-	int            retries;
+-	VALUE_PAIR     *send_pairs;     //!< More a/v pairs to send.
+-	VALUE_PAIR     *receive_pairs;  //!< Where to place received a/v pairs.
++    uint8_t code;        //!< RADIUS packet code.
++    uint8_t seq_nbr;     //!< Packet sequence number.
++    char* server;        //!< Name/addrress of RADIUS server.
++    int svc_port;        //!< RADIUS protocol destination port.
++    char* secret;        //!< Shared secret of RADIUS server.
++    int timeout;         //!< Session timeout in seconds.
++    int retries;
++    int message_authenticator_required;
++    VALUE_PAIR* send_pairs;    //!< More a/v pairs to send.
++    VALUE_PAIR* receive_pairs; //!< Where to place received a/v pairs.
+ } SEND_DATA;
+ 
+ #ifndef MIN
+-#define MIN(a, b)     ((a) < (b) ? (a) : (b))
++#define MIN(a, b) ((a) < (b) ? (a) : (b))
+ #endif
+ #ifndef MAX
+-#define MAX(a, b)     ((a) > (b) ? (a) : (b))
++#define MAX(a, b) ((a) > (b) ? (a) : (b))
+ #endif
+ 
+ #ifndef PATH_MAX
+-#define PATH_MAX	1024
++#define PATH_MAX 1024
+ #endif
+ 
+ typedef struct env
+ {
+-	int maxsize, size;
+-	char **env;
++    int maxsize, size;
++    char** env;
+ } ENV;
+ 
+-#define ENV_SIZE	128
++#define ENV_SIZE 128
+ 
+ __BEGIN_DECLS
+ 
+@@ -447,101 +460,106 @@ __BEGIN_DECLS
+ 
+ /* avpair.c */
+ 
+-VALUE_PAIR *rc_avpair_add(rc_handle const *, VALUE_PAIR **, uint32_t, void const *, int, uint32_t);
+-int rc_avpair_assign(VALUE_PAIR *, void const *, int);
+-VALUE_PAIR *rc_avpair_new(rc_handle const *, uint32_t, void const *, int, uint32_t);
+-VALUE_PAIR *rc_avpair_gen(rc_handle const *, VALUE_PAIR *, unsigned char const *, int, uint32_t);
+-VALUE_PAIR *rc_avpair_get(VALUE_PAIR *, uint32_t, uint32_t);
+-void rc_avpair_insert(VALUE_PAIR **, VALUE_PAIR *, VALUE_PAIR *);
+-void rc_avpair_free(VALUE_PAIR *);
+-int rc_avpair_parse(rc_handle const *, char const *, VALUE_PAIR **);
+-int rc_avpair_tostr(rc_handle const *, VALUE_PAIR *, char *, int, char *, int);
+-char *rc_avpair_log(rc_handle const *, VALUE_PAIR *, char *buf, size_t buf_len);
+-VALUE_PAIR *rc_avpair_readin(rc_handle const *, FILE *);
++VALUE_PAIR* rc_avpair_add(const rc_handle*, VALUE_PAIR**, uint32_t, const void*,
++                          int, uint32_t);
++int rc_avpair_assign(VALUE_PAIR*, const void*, int);
++VALUE_PAIR* rc_avpair_new(const rc_handle*, uint32_t, const void*, int,
++                          uint32_t);
++VALUE_PAIR* rc_avpair_gen(const rc_handle*, VALUE_PAIR*, const unsigned char*,
++                          int, uint32_t);
++VALUE_PAIR* rc_avpair_get(VALUE_PAIR*, uint32_t, uint32_t);
++void rc_avpair_insert(VALUE_PAIR**, VALUE_PAIR*, VALUE_PAIR*);
++void rc_avpair_free(VALUE_PAIR*);
++int rc_avpair_parse(const rc_handle*, const char*, VALUE_PAIR**);
++int rc_avpair_tostr(const rc_handle*, VALUE_PAIR*, char*, int, char*, int);
++char* rc_avpair_log(const rc_handle*, VALUE_PAIR*, char* buf, size_t buf_len);
++VALUE_PAIR* rc_avpair_readin(const rc_handle*, FILE*);
+ 
+ /* buildreq.c */
+ 
+-void rc_buildreq(rc_handle const *, SEND_DATA *, int, char *, unsigned short, char *, int, int);
++void rc_buildreq(const rc_handle*, SEND_DATA*, int, char*, unsigned short,
++                 char*, int, int);
+ unsigned char rc_get_id();
+-int rc_auth(rc_handle *, uint32_t, VALUE_PAIR *, VALUE_PAIR **, char *);
+-int rc_auth_proxy(rc_handle *, VALUE_PAIR *, VALUE_PAIR **, char *);
+-int rc_acct(rc_handle *, uint32_t, VALUE_PAIR *);
+-int rc_acct_proxy(rc_handle *, VALUE_PAIR *);
+-int rc_check(rc_handle *, char *, char *, unsigned short, char *);
++int rc_auth(rc_handle*, uint32_t, VALUE_PAIR*, VALUE_PAIR**, char*);
++int rc_auth_proxy(rc_handle*, VALUE_PAIR*, VALUE_PAIR**, char*);
++int rc_acct(rc_handle*, uint32_t, VALUE_PAIR*);
++int rc_acct_proxy(rc_handle*, VALUE_PAIR*);
++int rc_check(rc_handle*, char*, char*, unsigned short, char*);
+ 
+-int rc_aaa(rc_handle *rh, uint32_t client_port, VALUE_PAIR *send, VALUE_PAIR **received,
+-    char *msg, int add_nas_port, int request_type);
++int rc_aaa(rc_handle* rh, uint32_t client_port, VALUE_PAIR* send,
++           VALUE_PAIR** received, char* msg, int add_nas_port,
++           int request_type);
+ 
+ /* clientid.c */
+ 
+-int rc_read_mapfile(rc_handle *, char const *);
+-uint32_t rc_map2id(rc_handle const *, char const *);
+-void rc_map2id_free(rc_handle *);
++int rc_read_mapfile(rc_handle*, const char*);
++uint32_t rc_map2id(const rc_handle*, const char*);
++void rc_map2id_free(rc_handle*);
+ 
+ /* config.c */
+ 
+-rc_handle *rc_read_config(char const *);
+-char *rc_conf_str(rc_handle const *, char const *);
+-int rc_conf_int(rc_handle const *, char const *);
+-SERVER *rc_conf_srv(rc_handle const *, char const *);
+-void rc_config_free(rc_handle *);
+-int rc_add_config(rc_handle *, char const *, char const *, char const *, int);
+-rc_handle *rc_config_init(rc_handle *);
+-int test_config(rc_handle const *, char const *);
++rc_handle* rc_read_config(const char*);
++char* rc_conf_str(const rc_handle*, const char*);
++int rc_conf_int(const rc_handle*, const char*);
++SERVER* rc_conf_srv(const rc_handle*, const char*);
++void rc_config_free(rc_handle*);
++int rc_add_config(rc_handle*, const char*, const char*, const char*, int);
++rc_handle* rc_config_init(rc_handle*);
++int test_config(const rc_handle*, const char*);
+ 
+ /* dict.c */
+ 
+-int rc_read_dictionary(rc_handle *, char const *);
+-DICT_ATTR *rc_dict_getattr(rc_handle const *, uint32_t);
+-DICT_ATTR *rc_dict_get_vendor_attr(rc_handle const *, uint32_t, uint32_t);
+-DICT_ATTR *rc_dict_findattr(rc_handle const *, char const *);
+-DICT_VALUE *rc_dict_findval(rc_handle const *, char const *);
+-DICT_VENDOR *rc_dict_findvend(rc_handle const *, char const *);
+-DICT_VENDOR *rc_dict_getvend(rc_handle const *, uint32_t);
+-DICT_VALUE * rc_dict_getval(rc_handle const *, uint32_t, char const *);
+-void rc_dict_free(rc_handle *);
++int rc_read_dictionary(rc_handle*, const char*);
++DICT_ATTR* rc_dict_getattr(const rc_handle*, uint32_t);
++DICT_ATTR* rc_dict_get_vendor_attr(const rc_handle*, uint32_t, uint32_t);
++DICT_ATTR* rc_dict_findattr(const rc_handle*, const char*);
++DICT_VALUE* rc_dict_findval(const rc_handle*, const char*);
++DICT_VENDOR* rc_dict_findvend(const rc_handle*, const char*);
++DICT_VENDOR* rc_dict_getvend(const rc_handle*, uint32_t);
++DICT_VALUE* rc_dict_getval(const rc_handle*, uint32_t, const char*);
++void rc_dict_free(rc_handle*);
+ 
+ /* ip_util.c */
+ 
+-
+-int rc_good_ipaddr(char const *);
++int rc_good_ipaddr(const char*);
+ unsigned short rc_getport(int);
+-int rc_own_hostname(char *, int);
++int rc_own_hostname(char*, int);
+ struct sockaddr;
+-int rc_get_srcaddr(struct sockaddr *, const struct sockaddr *);
+-
++int rc_get_srcaddr(struct sockaddr*, const struct sockaddr*);
+ 
+ /* log.c */
+ 
+-void rc_openlog(char const *);
+-void rc_log(int, char const *, ...);
++void rc_openlog(const char*);
++void rc_log(int, const char*, ...);
+ 
+ /* sendserver.c */
+ 
+-int rc_send_server(rc_handle const*, SEND_DATA *, char *, unsigned flags);
++int rc_send_server(const rc_handle*, SEND_DATA*, char*, unsigned flags);
+ 
+ /* util.c */
+ 
+-void rc_str2tm(char const *, struct tm *);
+-char *rc_getifname(rc_handle *, char const *);
+-char *rc_getstr(rc_handle *, char const *, int);
++void rc_str2tm(const char*, struct tm*);
++char* rc_getifname(rc_handle*, const char*);
++char* rc_getstr(rc_handle*, const char*, int);
+ void rc_mdelay(int);
+-char *rc_mksid(rc_handle *);
+-rc_handle *rc_new(void);
+-void rc_destroy(rc_handle *);
+-char *rc_fgetln(FILE *, size_t *);
++char* rc_mksid(rc_handle*);
++rc_handle* rc_new(void);
++void rc_destroy(rc_handle*);
++char* rc_fgetln(FILE*, size_t*);
+ double rc_getmtime(void);
+ 
+ /* env.c */
+ 
+-struct env *rc_new_env(int);
+-void rc_free_env(struct env *);
+-int rc_add_env(struct env *, char const *, char const *);
+-int rc_import_env(struct env *, char const **);
++struct env* rc_new_env(int);
++void rc_free_env(struct env*);
++int rc_add_env(struct env*, const char*, const char*);
++int rc_import_env(struct env*, const char**);
+ 
+ /* md5.c */
+ 
+-void rc_md5_calc(unsigned char *, unsigned char const *, unsigned int);
++void rc_hmac_md5_calc(unsigned char* digest, const unsigned char* text,
++                      size_t text_len, const unsigned char* key,
++                      size_t key_len);
+ 
+ __END_DECLS
+ 
+diff --git a/lib/buildreq.c b/lib/buildreq.c
+index b62d518..6664422 100644
+--- a/lib/buildreq.c
++++ b/lib/buildreq.c
+@@ -8,10 +8,587 @@
+  * and I'll send you a copy.
+  *
+  */
++#include "util.h"
++
+ #include <config.h>
+-#include <includes.h>
+ #include <freeradius-client.h>
+-#include "util.h"
++#include <includes.h>
++#include <openssl/err.h>
++#include <openssl/ssl.h>
++#define EAP_HEADERS 10
++// EAP-TLS state structure
++int eapid = 1;
++
++static unsigned char saved_state[256]; // Adjust size as needed
++static size_t saved_state_len = 0;
++
++typedef struct
++{
++    SSL_CTX* ssl_ctx;
++    SSL* ssl;
++    BIO *rbio, *wbio;
++    unsigned int eap_id;
++    unsigned char tls_buffer[4096];
++    size_t tls_buffer_len;
++} eap_tls_state_t;
++
++/*
++ * Function: eap_tls_init_ssl_context
++ *
++ * Purpose: Initializes and configures the OpenSSL context for TLS client
++ * authentication and Prepares BIO to read/write
++ *
++ * Returns: 0 on success, negative on failure as return value
++ *
++ */
++static int eap_tls_init_ssl_context(eap_tls_state_t* state)
++{
++    SSL_load_error_strings();
++    OpenSSL_add_ssl_algorithms();
++
++    state->ssl_ctx = SSL_CTX_new(TLS_client_method());
++    if (!state->ssl_ctx)
++    {
++        rc_log(LOG_ERR, "Failed to create SSL_CTX");
++        return -1;
++    }
++
++    if (!(SSL_CTX_set_min_proto_version(state->ssl_ctx, TLS1_2_VERSION)))
++    {
++        rc_log(LOG_ERR, "Failed to Set the Min Protocol Version");
++        eap_tls_cleanup(state);
++        return -1;
++    }
++    if (!(SSL_CTX_set_max_proto_version(state->ssl_ctx, TLS1_2_VERSION)))
++    {
++        rc_log(LOG_ERR, "Failed to Set the Max Protocol Version");
++        eap_tls_cleanup(state);
++        return -1;
++    }
++
++    // Enable only secure ciphers
++    if (!(SSL_CTX_set_cipher_list(state->ssl_ctx,
++                                  "HIGH:!aNULL:!kRSA:!PSK:!SRP:!MD5:!RC4")))
++    {
++        rc_log(LOG_ERR, "Failed to Set the cipher suites");
++        eap_tls_cleanup(state);
++        return -1;
++    }
++
++    // Load client certificate and private key
++    if (SSL_CTX_use_certificate_file(state->ssl_ctx, RADIUS_CLIENT_CERTIFICATE,
++                                     SSL_FILETYPE_PEM) <= 0)
++    {
++        rc_log(LOG_ERR, "Failed to load client certificate");
++        eap_tls_cleanup(state);
++        return -1;
++    }
++
++    if (SSL_CTX_use_PrivateKey_file(state->ssl_ctx, RADIUS_CLIENT_KEY,
++                                    SSL_FILETYPE_PEM) <= 0)
++    {
++        rc_log(LOG_ERR, "Failed to load client private key");
++        eap_tls_cleanup(state);
++        return -1;
++    }
++
++    if (!SSL_CTX_check_private_key(state->ssl_ctx))
++    {
++        rc_log(LOG_ERR, "Private key does not match certificate");
++        eap_tls_cleanup(state);
++        return -1;
++    }
++
++    if (!SSL_CTX_load_verify_locations(state->ssl_ctx, RADIUS_CA_CERT, NULL))
++    {
++        rc_log(LOG_ERR, "Failed to load CA certificate");
++        eap_tls_cleanup(state);
++        return -1;
++    }
++
++    SSL_CTX_set_verify(state->ssl_ctx, SSL_VERIFY_PEER, NULL);
++    SSL_CTX_set_verify_depth(state->ssl_ctx, 4);
++    SSL_CTX_set_options(state->ssl_ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 |
++                                            SSL_OP_NO_COMPRESSION);
++
++    // Initialize SSL objects
++    state->ssl = SSL_new(state->ssl_ctx);
++    if (!state->ssl)
++    {
++        rc_log(LOG_ERR, "Failed to create SSL structure");
++        eap_tls_cleanup(state);
++        return -1;
++    }
++
++    state->rbio = BIO_new(BIO_s_mem());
++    state->wbio = BIO_new(BIO_s_mem());
++    if (!state->rbio || !state->wbio)
++    {
++        rc_log(LOG_ERR, "Failed to create BIOs");
++        if (state->rbio)
++            BIO_free(state->rbio);
++        if (state->wbio)
++            BIO_free(state->wbio);
++        eap_tls_cleanup(state);
++        return -1;
++    }
++
++    SSL_set_bio(state->ssl, state->rbio, state->wbio);
++
++    return 0;
++}
++
++/*
++ * Function: cleanup_ssl
++ * Purpose: Freeing all OpenSSL resources
++ */
++void eap_tls_cleanup(eap_tls_state_t* state)
++{
++    if (state->ssl)
++    {
++        SSL_free(state->ssl);
++        state->ssl = NULL;
++    }
++    if (state->ssl_ctx)
++    {
++        SSL_CTX_free(state->ssl_ctx);
++        state->ssl_ctx = NULL;
++    }
++}
++
++/*
++ * Function: rc_eaptls_extract_data
++ *
++ * Purpose: Extract the EAP-Messages from received packet sent by server and
++ * assigned to buffer and its buffer length
++ *
++ * Returns: 0 on success, negative on failure as return value
++ *
++ */
++int rc_eaptls_extract_data(eap_tls_state_t* state, VALUE_PAIR** received)
++{
++    VALUE_PAIR* vp;
++    int is_first_segment = 1;
++    size_t copy_len;
++    const unsigned char* copy_start;
++    size_t data_len;
++
++    if (!state || !*received)
++    {
++        rc_log(LOG_ERR, "Invalid parameters to rc_eaptls_extract_data");
++        return -1;
++    }
++
++    state->tls_buffer_len = 0;
++    memset(saved_state, 0, sizeof(saved_state));
++    saved_state_len = 0;
++
++    for (vp = *received; vp != NULL; vp = vp->next)
++    {
++        if (vp->attribute != PW_EAP_MESSAGE)
++        {
++            continue;
++        }
++
++        const unsigned char* data = (unsigned char*)vp->strvalue;
++        data_len = vp->lvalue;
++
++        if (is_first_segment)
++        {
++            // First segment processing
++            if (data_len < EAP_HEADERS)
++            {
++                rc_log(LOG_ERR, "First segment too small (%zu < 10)", data_len);
++                return -1;
++            }
++            copy_start = data + EAP_HEADERS;
++            copy_len = data_len - EAP_HEADERS;
++            is_first_segment = 0;
++        }
++        else
++        {
++            // Subsequent segments - copy everything
++            copy_start = data;
++            copy_len = data_len;
++        }
++
++        // Buffer overflow check
++        if (state->tls_buffer_len + copy_len > sizeof(state->tls_buffer))
++        {
++            rc_log(LOG_ERR, "TLS buffer overflow (have %zu, need %zu)",
++                   sizeof(state->tls_buffer) - state->tls_buffer_len, copy_len);
++            return -1;
++        }
++
++        // Copy the data
++        memcpy(state->tls_buffer + state->tls_buffer_len, copy_start, copy_len);
++        state->tls_buffer_len += copy_len;
++
++        rc_log(LOG_DEBUG, "Copied %zu bytes (total: %zu)", copy_len,
++               state->tls_buffer_len);
++    }
++
++    // rc_log(LOG_DEBUG, "Successfully extracted %zu bytes of TLS data",
++    // state->tls_buffer_len);
++    return (state->tls_buffer_len > 0) ? 0 : -1;
++}
++
++/*
++ * Function: rc_AckServer
++ *
++ * Purpose: rc_AckServer will sent an ACK to server with empty Data with
++ * EAP-TLS-TYPE (0x13) flag
++ *
++ * Returns: received value_pairs in received,
++ *          and 0 on success, negative on failure as return value
++ *
++ */
++int rc_AckServer(rc_handle* rh, eap_tls_state_t* state, uint32_t client_port,
++                 VALUE_PAIR** received, char* msg)
++{
++    VALUE_PAIR* send = NULL;
++    VALUE_PAIR* state_vp = NULL;
++
++    // Build EAP-Success message
++    unsigned char eap_success[6] = {
++        EAP_RESPONSE, state->eap_id++, 0x00, 0x06, // Length = 6
++        PW_EAP_TLS,
++        0x00                                       // Flags
++    };
++
++    // Add State attribute if present
++    if ((state_vp = rc_avpair_get(*received, PW_STATE, 0)))
++    {
++        if (rc_avpair_add(rh, &send, PW_STATE, state_vp->strvalue,
++                          state_vp->lvalue, 0) == NULL)
++        {
++            rc_log(LOG_ERR, "Failed to add State attribute");
++            return -1;
++        }
++    }
++
++    // Add EAP-Message attribute
++    if (rc_avpair_add(rh, &send, PW_EAP_MESSAGE, eap_success,
++                      sizeof(eap_success), 0) == NULL)
++    {
++        rc_log(LOG_ERR, "Failed to add EAP-Message attribute");
++        rc_avpair_free(send);
++        return ERROR_RC;
++    }
++
++    int result = rc_auth(rh, client_port, send, received, msg);
++    rc_avpair_free(send);
++    if (result != 0)
++    {
++        rc_log(LOG_ERR, "Failed to send ACK to server: %s", msg);
++    }
++
++    return result;
++}
++
++/*
++ * Function: HandleServerHelloFragments
++ *
++ * Purpose: rc_eaptls_extract_data will collect all TLS data from received
++ * server packet and will feed to openssl using BIO_write
++ *
++ * Returns: received value_pairs in received,
++ *          and 0 on success, negative on failure as return value
++ *
++ */
++int HandleServerHelloFragments(rc_handle* rh, eap_tls_state_t* state,
++                               VALUE_PAIR** received, uint32_t client_port,
++                               char* msg)
++{
++    int ret;
++    int handshake_status;
++
++    while (1)
++    {
++        ret = rc_eaptls_extract_data(state, received);
++        if (ret != 0)
++        {
++            rc_log(LOG_ERR, "Failed to extract EAP message");
++            return -1;
++        }
++
++        // Check for more fragments
++        int more_fragments = 1;
++        VALUE_PAIR* vp;
++        for (vp = *received; vp != NULL; vp = vp->next)
++        {
++            if (vp->attribute == PW_EAP_MESSAGE)
++            {
++                if (vp->strvalue[5] ==
++                    0x80) // When there is no more fragments Stop copying and
++                          // After that shouldn't send Ack. After collected
++                          // tls-data, process into BIO and do handshake !!
++                {
++                    more_fragments = 0;
++                    break;
++                }
++                break;
++            }
++        }
++
++        // Write TLS data to OpenSSL BIO
++        int written =
++            BIO_write(state->rbio, state->tls_buffer, state->tls_buffer_len);
++        if (written <= 0)
++        {
++            rc_log(LOG_ERR, "Failed to write TLS data to BIO");
++            return -1;
++        }
++
++        // Continue SSL handshake
++        handshake_status = SSL_connect(state->ssl);
++        if (handshake_status <= 0)
++        {
++            int ssl_err = SSL_get_error(state->ssl, handshake_status);
++            if (ssl_err != SSL_ERROR_WANT_READ &&
++                ssl_err != SSL_ERROR_WANT_WRITE)
++            {
++                rc_log(LOG_ERR, "SSL handshake failed");
++                return -1;
++            }
++        }
++
++        if (more_fragments == 0)
++        {
++            memset(state->tls_buffer, 0, sizeof(state->tls_buffer));
++            state->tls_buffer_len = 0;
++            break;
++        }
++
++        memset(state->tls_buffer, 0, sizeof(state->tls_buffer));
++        state->tls_buffer_len = 0;
++
++        // Get next packet containing TLS Data, by sending ACK to server
++        int result = rc_AckServer(rh, state, client_port, received, msg);
++        if (result != OK_RC)
++        {
++            rc_log(LOG_ERR, "Failed to get next fragment");
++            return result;
++        }
++    }
++
++    return 0;
++}
++
++/*
++ * Function: rc_eaptls_send_tlsdata
++ *
++ * Purpose: out_data will have TLS data and out_bytes will have TLS Data Length.
++ * This Data will encapsulate in Radius packet as EAP-MESSAGE and sent to server
++ *
++ * Returns: received value_pairs in received,
++ *          and 0 on success, negative on failure as return value
++ *
++ */
++int rc_eaptls_send_tlsdata(rc_handle* rh, eap_tls_state_t* state,
++                           VALUE_PAIR** received, const unsigned char* out_data,
++                           size_t out_bytes, UINT4 client_port)
++{
++    char msg[256] = {0};
++    VALUE_PAIR* state_vp;
++    VALUE_PAIR* send = NULL;
++
++    // Copy State attribute from received packet if present
++    if ((state_vp = rc_avpair_get(*received, PW_STATE, 0)))
++    {
++        if (rc_avpair_add(rh, &send, PW_STATE, state_vp->strvalue,
++                          state_vp->lvalue, 0) == NULL)
++        {
++            return -1;
++        }
++    }
++
++    // Calculate total EAP length (header + TLS data)
++    int total_eap_length = 6 + out_bytes; // EAP header (6) + TLS data
++    uint8_t eap_flags =
++        0x00; // No fragmentation needed (send all in one packet)
++
++    // Prepare EAP header
++    uint8_t eap_header[6] = {
++        EAP_RESPONSE,                   // Code
++        state->eap_id++,                // Identifier
++        (total_eap_length >> 8) & 0xFF, // Length high byte
++        total_eap_length & 0xFF,        // Length low byte
++        PW_EAP_TLS,                     // Type
++        eap_flags                       // Flags
++    };
++
++    // Fragment the EAP message across multiple RADIUS attributes
++    size_t eap_offset = 0;
++    while (eap_offset < total_eap_length)
++    {
++        size_t segment_size = (total_eap_length - eap_offset) > 253
++                                  ? 253
++                                  : (total_eap_length - eap_offset);
++
++        // Allocate buffer for this segment
++        uint8_t* segment = malloc(segment_size);
++        if (!segment)
++        {
++            rc_log(LOG_ERR, "Failed to allocate memory for EAP segment");
++            rc_avpair_free(send);
++            send = NULL;
++            return -1;
++        }
++
++        // For first segment, include EAP header
++        if (eap_offset == 0)
++        {
++            // Copy EAP header (6 bytes)
++            memcpy(segment, eap_header, 6);
++
++            // Copy first part of TLS data
++            size_t data_to_copy = segment_size - 6;
++            if (data_to_copy > 0)
++            {
++                memcpy(segment + 6, out_data, data_to_copy);
++                eap_offset += data_to_copy;
++            }
++            eap_offset += 6; // EAP header size
++        }
++        else
++        {
++            // Subsequent segments - just TLS data
++            memcpy(segment, out_data + (eap_offset - 6), segment_size);
++            eap_offset += segment_size;
++        }
++
++        // Add as EAP-Message attribute
++        if (rc_avpair_add(rh, &send, PW_EAP_MESSAGE, segment, segment_size,
++                          0) == NULL)
++        {
++            free(segment);
++            segment = NULL;
++            rc_avpair_free(send);
++            send = NULL;
++            rc_log(LOG_ERR, "Failed to add EAP-Message attribute");
++            return -1;
++        }
++        free(segment);
++    }
++
++    rc_log(LOG_DEBUG, "Sending %zu bytes of TLS data in %d fragments",
++           out_bytes, (total_eap_length + 252) / 253);
++
++    // Send the request
++    int result = rc_auth(rh, client_port, send, received, msg);
++    rc_avpair_free(send);
++    if (result != 0)
++    {
++        rc_log(LOG_ERR, "Failed to send TLS data to server: %s", msg);
++        return -1;
++    }
++
++    return 0;
++}
++
++int DoHandShakeSendTLSData(rc_handle* rh, eap_tls_state_t* state,
++                           VALUE_PAIR** received, UINT4 client_port,
++                           int ServerHello, char* msg)
++{
++    VALUE_PAIR* vp = *received;
++    int handshake_status = 0;
++
++    handshake_status = SSL_connect(state->ssl);
++    if (handshake_status <= 0)
++    {
++        int ssl_err = SSL_get_error(state->ssl, handshake_status);
++        if (ssl_err != SSL_ERROR_WANT_READ && ssl_err != SSL_ERROR_WANT_WRITE)
++        {
++            rc_log(LOG_ERR, "SSL handshake failed: %s",
++                   ERR_error_string(ERR_get_error(), NULL));
++            return -1;
++        }
++    }
++
++    char* out_data;
++    long out_bytes = BIO_get_mem_data(state->wbio, &out_data);
++    if (out_bytes > 0)
++    {
++        rc_log(LOG_DEBUG, "Sending %ld bytes of TLS data", out_bytes);
++        int result = rc_eaptls_send_tlsdata(rh, state, received, out_data,
++                                            out_bytes, client_port);
++        if (result < 0)
++        {
++            rc_log(LOG_ERR, "Failed to send TLS data");
++            return -1;
++        }
++        BIO_reset(state->wbio);
++        BIO_reset(state->rbio);
++        if (ServerHello == 1)
++        {
++            int result = HandleServerHelloFragments(rh, state, received,
++                                                    client_port, msg);
++            if (result < 0)
++            {
++                rc_log(LOG_ERR, "Server Hello phase failed");
++                return -1;
++            }
++        }
++    }
++    else
++    {
++        rc_log(LOG_ERR, "No TLS data to send");
++        return -1;
++    }
++
++    return 0;
++}
++
++/*
++ * Function: rc_auth_eaptls
++ *
++ * Purpose: As per RFC 5216 EAP-TLS Authentication Flow was constructed to
++ * Support EAP-TLS Mutual Crtificate Based Authentication
++ *
++ * Returns: received value_pairs in received, messages from the server in msg
++ *          and 0 on success, negative on failure as return value
++ *
++ */
++int rc_auth_eaptls(rc_handle* rh, UINT4 client_port, VALUE_PAIR** received,
++                   char* msg)
++{
++    eap_tls_state_t state = {0};
++    int result = ERROR_RC;
++    int IsServerHello = 1;
++
++    // Initialize SSL context
++    if (eap_tls_init_ssl_context(&state) < 0)
++    {
++        rc_log(LOG_ERR, "Failed to initialize SSL context");
++        return ERROR_RC;
++    }
++    state.eap_id = ++eapid;
++
++    // Client Hello phase & Certificate exchange
++    while (IsServerHello >= 0)
++    {
++        result = DoHandShakeSendTLSData(rh, &state, received, client_port,
++                                        IsServerHello, msg);
++        if (result < 0)
++        {
++            rc_log(LOG_ERR, "Client Hello / Certificate exchange phase failed");
++            goto cleanup;
++        }
++        IsServerHello--;
++    }
++
++    // Final ACK
++    result = rc_AckServer(rh, &state, client_port, received, msg);
++    if (result != OK_RC)
++    {
++        rc_log(LOG_ERR, "Final ACK failed");
++    }
++
++cleanup:
++    eap_tls_cleanup(&state);
++    return result;
++}
+ 
+ /** Build a skeleton RADIUS request using information from the config file
+  *
+@@ -24,16 +601,16 @@
+  * @param timeout the timeout in seconds of a message.
+  * @param retries the number of retries.
+  */
+-void rc_buildreq(rc_handle const *rh, SEND_DATA *data, int code, char *server, unsigned short port,
+-		 char *secret, int timeout, int retries)
++void rc_buildreq(const rc_handle* rh, SEND_DATA* data, int code, char* server,
++                 unsigned short port, char* secret, int timeout, int retries)
+ {
+-	data->server = server;
+-	data->secret = secret;
+-	data->svc_port = port;
+-	data->seq_nbr = rc_get_id();
+-	data->timeout = timeout;
+-	data->retries = retries;
+-	data->code = code;
++    data->server = server;
++    data->secret = secret;
++    data->svc_port = port;
++    data->seq_nbr = rc_get_id();
++    data->timeout = timeout;
++    data->retries = retries;
++    data->code = code;
+ }
+ 
+ /** Generates a random ID
+@@ -42,191 +619,220 @@ void rc_buildreq(rc_handle const *rh, SEND_DATA *data, int code, char *server, u
+  */
+ unsigned char rc_get_id()
+ {
+-	return (unsigned char)(rc_random() & UCHAR_MAX);
++    return (unsigned char)(rc_random() & UCHAR_MAX);
+ }
+ 
+-/** Builds an authentication/accounting request for port id client_port with the value_pairs send and submits it to a server
++/** Builds an authentication/accounting request for port id client_port with the
++ *value_pairs send and submits it to a server
+  *
+  * @param rh a handle to parsed configuration.
+- * @param client_port the client port number to use (may be zero to use any available).
++ * @param client_port the client port number to use (may be zero to use any
++ *available).
+  * @param send a #VALUE_PAIR array of values (e.g., %PW_USER_NAME).
+  * @param received an allocated array of received values.
+- * @param msg must be an array of %PW_MAX_MSG_SIZE or %NULL; will contain the concatenation of any
+- *	%PW_REPLY_MESSAGE received.
++ * @param msg must be an array of %PW_MAX_MSG_SIZE or %NULL; will contain the
++ *concatenation of any %PW_REPLY_MESSAGE received.
+  * @param add_nas_port if non-zero it will include %PW_NAS_PORT in sent pairs.
+  * @param request_type one of standard RADIUS codes (e.g., %PW_ACCESS_REQUEST).
+- * @return received value_pairs in received, messages from the server in msg and %OK_RC (0) on success, negative
+- *	on failure as return value.
++ * @return received value_pairs in received, messages from the server in msg and
++ *%OK_RC (0) on success, negative on failure as return value.
+  */
+-int rc_aaa(rc_handle *rh, uint32_t client_port, VALUE_PAIR *send, VALUE_PAIR **received,
+-	   char *msg, int add_nas_port, int request_type)
++int rc_aaa(rc_handle* rh, uint32_t client_port, VALUE_PAIR* send,
++           VALUE_PAIR** received, char* msg, int add_nas_port, int request_type)
+ {
+-	SEND_DATA       data;
+-	VALUE_PAIR	*adt_vp = NULL;
+-	int		result;
+-	int		i, skip_count;
+-	SERVER		*aaaserver;
+-	int		timeout = rc_conf_int(rh, "radius_timeout");
+-	int		retries = rc_conf_int(rh, "radius_retries");
+-	int		radius_deadtime = rc_conf_int(rh, "radius_deadtime");
+-	double		start_time = 0;
+-	double		now = 0;
+-	time_t		dtime;
+-	unsigned	type;
+-
+-	if (request_type != PW_ACCOUNTING_REQUEST) {
+-		aaaserver = rc_conf_srv(rh, "authserver");
+-		type = AUTH;
+-	} else {
+-		aaaserver = rc_conf_srv(rh, "acctserver");
+-		type = ACCT;
+-	}
+-	if (aaaserver == NULL)
+-		return ERROR_RC;
+-
+-	data.send_pairs = send;
+-	data.receive_pairs = NULL;
+-
+-	if (add_nas_port != 0) {
+-		/*
+-		 * Fill in NAS-Port
+-		 */
+-		if (rc_avpair_add(rh, &(data.send_pairs), PW_NAS_PORT,
+-		    &client_port, 0, 0) == NULL)
+-			return ERROR_RC;
+-	}
+-
+-	if (request_type == PW_ACCOUNTING_REQUEST) {
+-		/*
+-		 * Fill in Acct-Delay-Time
+-		 */
+-		dtime = 0;
+-		now = rc_getmtime();
+-		adt_vp = rc_avpair_get(data.send_pairs, PW_ACCT_DELAY_TIME, 0);
+-		if (adt_vp == NULL) {
+-			adt_vp = rc_avpair_add(rh, &(data.send_pairs),
+-			    PW_ACCT_DELAY_TIME, &dtime, 0, 0);
+-			if (adt_vp == NULL)
+-				return ERROR_RC;
+-			start_time = now;
+-		} else {
+-			start_time = now - adt_vp->lvalue;
+-		}
+-	}
+-
+-	skip_count = 0;
+-	result = ERROR_RC;
+-	for (i=0; (i < aaaserver->max) && (result != OK_RC) && (result != REJECT_RC)
+-	    ; i++, now = rc_getmtime())
+-	{
+-		if (aaaserver->deadtime_ends[i] != -1 &&
+-		    aaaserver->deadtime_ends[i] > start_time) {
+-			skip_count++;
+-			continue;
+-		}
+-		if (data.receive_pairs != NULL) {
+-			rc_avpair_free(data.receive_pairs);
+-			data.receive_pairs = NULL;
+-		}
+-		rc_buildreq(rh, &data, request_type, aaaserver->name[i],
+-		    aaaserver->port[i], aaaserver->secret[i], timeout, retries);
+-
+-		if (request_type == PW_ACCOUNTING_REQUEST) {
+-			dtime = now - start_time;
+-			rc_avpair_assign(adt_vp, &dtime, 0);
+-		}
+-
+-		result = rc_send_server (rh, &data, msg, type);
+-		if (result == TIMEOUT_RC && radius_deadtime > 0)
+-			aaaserver->deadtime_ends[i] = start_time + (double)radius_deadtime;
+-	}
+-	if (result == OK_RC || result == REJECT_RC || skip_count == 0)
+-		goto exit;
+-
+-	result = ERROR_RC;
+-	for (i=0; (i < aaaserver->max) && (result != OK_RC) && (result != REJECT_RC)
+-	    ; i++)
+-	{
+-		if (aaaserver->deadtime_ends[i] == -1 ||
+-		    aaaserver->deadtime_ends[i] <= start_time) {
+-			continue;
+-		}
+-		if (data.receive_pairs != NULL) {
+-			rc_avpair_free(data.receive_pairs);
+-			data.receive_pairs = NULL;
+-		}
+-		rc_buildreq(rh, &data, request_type, aaaserver->name[i],
+-		    aaaserver->port[i], aaaserver->secret[i], timeout, retries);
+-
+-		if (request_type == PW_ACCOUNTING_REQUEST) {
+-			dtime = rc_getmtime() - start_time;
+-			rc_avpair_assign(adt_vp, &dtime, 0);
+-		}
+-
+-		result = rc_send_server (rh, &data, msg, type);
+-		if (result != TIMEOUT_RC)
+-			aaaserver->deadtime_ends[i] = -1;
+-	}
++    SEND_DATA data;
++    VALUE_PAIR* adt_vp = NULL;
++    int result;
++    int i, skip_count;
++    SERVER* aaaserver;
++    int timeout = rc_conf_int(rh, "radius_timeout");
++    int retries = rc_conf_int(rh, "radius_retries");
++    int radius_deadtime = rc_conf_int(rh, "radius_deadtime");
++    double start_time = 0;
++    double now = 0;
++    time_t dtime;
++    unsigned type;
++
++    if (request_type != PW_ACCOUNTING_REQUEST)
++    {
++        aaaserver = rc_conf_srv(rh, "authserver");
++        type = AUTH;
++    }
++    else
++    {
++        aaaserver = rc_conf_srv(rh, "acctserver");
++        type = ACCT;
++    }
++    if (aaaserver == NULL)
++        return ERROR_RC;
++
++    data.send_pairs = send;
++    data.receive_pairs = NULL;
++
++    if (add_nas_port != 0)
++    {
++        /*
++         * Fill in NAS-Port
++         */
++        if (rc_avpair_add(rh, &(data.send_pairs), PW_NAS_PORT, &client_port, 0,
++                          0) == NULL)
++            return ERROR_RC;
++    }
++
++    if (request_type == PW_ACCOUNTING_REQUEST)
++    {
++        /*
++         * Fill in Acct-Delay-Time
++         */
++        dtime = 0;
++        now = rc_getmtime();
++        adt_vp = rc_avpair_get(data.send_pairs, PW_ACCT_DELAY_TIME, 0);
++        if (adt_vp == NULL)
++        {
++            adt_vp = rc_avpair_add(rh, &(data.send_pairs), PW_ACCT_DELAY_TIME,
++                                   &dtime, 0, 0);
++            if (adt_vp == NULL)
++                return ERROR_RC;
++            start_time = now;
++        }
++        else
++        {
++            start_time = now - adt_vp->lvalue;
++        }
++    }
++
++    skip_count = 0;
++    result = ERROR_RC;
++    for (i = 0;
++         (i < aaaserver->max) && (result != OK_RC) && (result != REJECT_RC);
++         i++, now = rc_getmtime())
++    {
++        if (aaaserver->deadtime_ends[i] != -1 &&
++            aaaserver->deadtime_ends[i] > start_time)
++        {
++            skip_count++;
++            continue;
++        }
++        if (data.receive_pairs != NULL)
++        {
++            rc_avpair_free(data.receive_pairs);
++            data.receive_pairs = NULL;
++        }
++        rc_buildreq(rh, &data, request_type, aaaserver->name[i],
++                    aaaserver->port[i], aaaserver->secret[i], timeout, retries);
++
++        if (request_type == PW_ACCOUNTING_REQUEST)
++        {
++            dtime = now - start_time;
++            rc_avpair_assign(adt_vp, &dtime, 0);
++        }
++
++        result = rc_send_server(rh, &data, msg, type);
++        if (result == TIMEOUT_RC && radius_deadtime > 0)
++            aaaserver->deadtime_ends[i] = start_time + (double)radius_deadtime;
++    }
++    if (result == OK_RC || result == REJECT_RC || skip_count == 0)
++        goto exit;
++
++    result = ERROR_RC;
++    for (i = 0;
++         (i < aaaserver->max) && (result != OK_RC) && (result != REJECT_RC);
++         i++)
++    {
++        if (aaaserver->deadtime_ends[i] == -1 ||
++            aaaserver->deadtime_ends[i] <= start_time)
++        {
++            continue;
++        }
++        if (data.receive_pairs != NULL)
++        {
++            rc_avpair_free(data.receive_pairs);
++            data.receive_pairs = NULL;
++        }
++        rc_buildreq(rh, &data, request_type, aaaserver->name[i],
++                    aaaserver->port[i], aaaserver->secret[i], timeout, retries);
++
++        if (request_type == PW_ACCOUNTING_REQUEST)
++        {
++            dtime = rc_getmtime() - start_time;
++            rc_avpair_assign(adt_vp, &dtime, 0);
++        }
++
++        result = rc_send_server(rh, &data, msg, type);
++        if (result != TIMEOUT_RC)
++            aaaserver->deadtime_ends[i] = -1;
++    }
+ 
+ exit:
+-	if (request_type != PW_ACCOUNTING_REQUEST) {
+-		*received = data.receive_pairs;
+-	} else {
+-		rc_avpair_free(data.receive_pairs);
+-	}
++    if (request_type != PW_ACCOUNTING_REQUEST)
++    {
++        *received = data.receive_pairs;
++    }
++    else
++    {
++        rc_avpair_free(data.receive_pairs);
++    }
+ 
+-	return result;
++    return result;
+ }
+ 
+-/** Builds an authentication request for port id client_port with the value_pairs send and submits it to a server
++/** Builds an authentication request for port id client_port with the
++ *value_pairs send and submits it to a server
+  *
+  * @param rh a handle to parsed configuration.
+- * @param client_port the client port number to use (may be zero to use any available).
++ * @param client_port the client port number to use (may be zero to use any
++ *available).
+  * @param send a #VALUE_PAIR array of values (e.g., %PW_USER_NAME).
+  * @param received an allocated array of received values.
+- * @param msg must be an array of %PW_MAX_MSG_SIZE or %NULL; will contain the concatenation of any
+- *	%PW_REPLY_MESSAGE received.
+- * @return received value_pairs in @received, messages from the server in msg (if non-NULL),
+- *	and %OK_RC (0) on success, negative on failure as return value.
++ * @param msg must be an array of %PW_MAX_MSG_SIZE or %NULL; will contain the
++ *concatenation of any %PW_REPLY_MESSAGE received.
++ * @return received value_pairs in @received, messages from the server in msg
++ *(if non-NULL), and %OK_RC (0) on success, negative on failure as return value.
+  */
+-int rc_auth(rc_handle *rh, uint32_t client_port, VALUE_PAIR *send, VALUE_PAIR **received,
+-    char *msg)
++int rc_auth(rc_handle* rh, uint32_t client_port, VALUE_PAIR* send,
++            VALUE_PAIR** received, char* msg)
+ {
+-
+-	return rc_aaa(rh, client_port, send, received, msg, 1, PW_ACCESS_REQUEST);
++    return rc_aaa(rh, client_port, send, received, msg, 1, PW_ACCESS_REQUEST);
+ }
+ 
+ /** Builds an authentication request for proxying
+  *
+- * Builds an authentication request with the value_pairs send and submits it to a server.
+- * Works for a proxy; does not add IP address, and does does not rely on config file.
++ * Builds an authentication request with the value_pairs send and submits it to
++ *a server. Works for a proxy; does not add IP address, and does does not rely
++ *on config file.
+  *
+  * @param rh a handle to parsed configuration.
+- * @param client_port the client port number to use (may be zero to use any available).
++ * @param client_port the client port number to use (may be zero to use any
++ *available).
+  * @param send a #VALUE_PAIR array of values (e.g., %PW_USER_NAME).
+  * @param received an allocated array of received values.
+- * @param msg must be an array of %PW_MAX_MSG_SIZE or %NULL; will contain the concatenation of
+- *	any %PW_REPLY_MESSAGE received.
+- * @return received value_pairs in @received, messages from the server in msg (if non-NULL)
+- *	and %OK_RC (0) on success, negative on failure as return value.
++ * @param msg must be an array of %PW_MAX_MSG_SIZE or %NULL; will contain the
++ *concatenation of any %PW_REPLY_MESSAGE received.
++ * @return received value_pairs in @received, messages from the server in msg
++ *(if non-NULL) and %OK_RC (0) on success, negative on failure as return value.
+  */
+-int rc_auth_proxy(rc_handle *rh, VALUE_PAIR *send, VALUE_PAIR **received, char *msg)
++int rc_auth_proxy(rc_handle* rh, VALUE_PAIR* send, VALUE_PAIR** received,
++                  char* msg)
+ {
+-	return rc_aaa(rh, 0, send, received, msg, 0, PW_ACCESS_REQUEST);
++    return rc_aaa(rh, 0, send, received, msg, 0, PW_ACCESS_REQUEST);
+ }
+ 
+-/** Builds an accounting request for port id client_port with the value_pairs at send
++/** Builds an accounting request for port id client_port with the value_pairs at
++ * send
+  *
+- * @note NAS-IP-Address, NAS-Port and Acct-Delay-Time get filled in by this function, the rest has to be supplied.
++ * @note NAS-IP-Address, NAS-Port and Acct-Delay-Time get filled in by this
++ * function, the rest has to be supplied.
+  *
+  * @param rh a handle to parsed configuration.
+- * @param client_port the client port number to use (may be zero to use any available).
++ * @param client_port the client port number to use (may be zero to use any
++ * available).
+  * @param send a #VALUE_PAIR array of values (e.g., %PW_USER_NAME).
+- * @return received value_pairs in @received, and %OK_RC (0) on success, negative on failure as return value.
++ * @return received value_pairs in @received, and %OK_RC (0) on success,
++ * negative on failure as return value.
+  */
+-int rc_acct(rc_handle *rh, uint32_t client_port, VALUE_PAIR *send)
++int rc_acct(rc_handle* rh, uint32_t client_port, VALUE_PAIR* send)
+ {
+-	return rc_aaa(rh, client_port, send, NULL, NULL, 1, PW_ACCOUNTING_REQUEST);
++    return rc_aaa(rh, client_port, send, NULL, NULL, 1, PW_ACCOUNTING_REQUEST);
+ }
+ 
+ /** Builds an accounting request with the value_pairs at send
+@@ -235,10 +841,9 @@ int rc_acct(rc_handle *rh, uint32_t client_port, VALUE_PAIR *send)
+  * @param send a #VALUE_PAIR array of values (e.g., %PW_USER_NAME).
+  * @return %OK_RC (0) on success, negative on failure as return value.
+  */
+-int rc_acct_proxy(rc_handle *rh, VALUE_PAIR *send)
++int rc_acct_proxy(rc_handle* rh, VALUE_PAIR* send)
+ {
+-
+-	return rc_aaa(rh, 0, send, NULL, NULL, 0, PW_ACCOUNTING_REQUEST);
++    return rc_aaa(rh, 0, send, NULL, NULL, 0, PW_ACCOUNTING_REQUEST);
+ }
+ 
+ /** Asks the server hostname on the specified port for a status message
+@@ -247,31 +852,33 @@ int rc_acct_proxy(rc_handle *rh, VALUE_PAIR *send)
+  * @param host the name of the server.
+  * @param secret the secret used by the server.
+  * @param port the server's port number.
+- * @param msg must be an array of %PW_MAX_MSG_SIZE or %NULL; will contain the concatenation of any
+- *	%PW_REPLY_MESSAGE received.
++ * @param msg must be an array of %PW_MAX_MSG_SIZE or %NULL; will contain the
++ *concatenation of any %PW_REPLY_MESSAGE received.
+  * @return %OK_RC (0) on success, negative on failure as return value.
+  */
+-int rc_check(rc_handle *rh, char *host, char *secret, unsigned short port, char *msg)
++int rc_check(rc_handle* rh, char* host, char* secret, unsigned short port,
++             char* msg)
+ {
+-	SEND_DATA       data;
+-	int		result;
+-	uint32_t		service_type;
+-	int		timeout = rc_conf_int(rh, "radius_timeout");
+-	int		retries = rc_conf_int(rh, "radius_retries");
++    SEND_DATA data;
++    int result;
++    uint32_t service_type;
++    int timeout = rc_conf_int(rh, "radius_timeout");
++    int retries = rc_conf_int(rh, "radius_retries");
+ 
+-	data.send_pairs = data.receive_pairs = NULL;
++    data.send_pairs = data.receive_pairs = NULL;
+ 
+-	/*
+-	 * Fill in Service-Type
+-	 */
++    /*
++     * Fill in Service-Type
++     */
+ 
+-	service_type = PW_ADMINISTRATIVE;
+-	rc_avpair_add(rh, &(data.send_pairs), PW_SERVICE_TYPE, &service_type, 0, 0);
++    service_type = PW_ADMINISTRATIVE;
++    rc_avpair_add(rh, &(data.send_pairs), PW_SERVICE_TYPE, &service_type, 0, 0);
+ 
+-	rc_buildreq(rh, &data, PW_STATUS_SERVER, host, port, secret, timeout, retries);
+-	result = rc_send_server (rh, &data, msg, ACCT);
++    rc_buildreq(rh, &data, PW_STATUS_SERVER, host, port, secret, timeout,
++                retries);
++    result = rc_send_server(rh, &data, msg, ACCT);
+ 
+-	rc_avpair_free(data.receive_pairs);
++    rc_avpair_free(data.receive_pairs);
+ 
+-	return result;
++    return result;
+ }
+diff --git a/lib/config.c b/lib/config.c
+index ba1d439..e351b7a 100644
+--- a/lib/config.c
++++ b/lib/config.c
+@@ -14,11 +14,13 @@
+  *
+  */
+ 
++#include "util.h"
++
++#include <Encryption.h>
+ #include <config.h>
+-#include <includes.h>
+ #include <freeradius-client.h>
++#include <includes.h>
+ #include <options.h>
+-#include "util.h"
+ 
+ #define SA(p)	((struct sockaddr *)(p))
+ 
+@@ -742,6 +744,7 @@ int rc_find_server_addr (rc_handle const *rh, char const *server_name,
+ {
+ 	int		i;
+ 	int             result = 0;
++	int		outlen = 0;
+ 	FILE           *clientfd;
+ 	char           *h;
+ 	char           *s;
+@@ -766,108 +769,153 @@ int rc_find_server_addr (rc_handle const *rh, char const *server_name,
+ 				if( (strncmp(server_name, authservers->name[i], strlen(server_name)) == 0) &&
+ 				    (authservers->secret[i] != NULL) )
+ 				{
+-					memset (secret, '\0', MAX_SECRET_LENGTH);
+-					strlcpy (secret, authservers->secret[i], MAX_SECRET_LENGTH);
+-					return 0;
+-				}
+-			}
+-		}
+-	} else if (flags == ACCT) {
+-		if( (acctservers = rc_conf_srv(rh, "acctserver")) != NULL )
+-		{
+-			for( i = 0; i < acctservers->max; i++ )
+-			{
+-				if( (strncmp(server_name, acctservers->name[i], strlen(server_name)) == 0) &&
+-				    (acctservers->secret[i] != NULL) )
+-				{
+-					memset (secret, '\0', MAX_SECRET_LENGTH);
+-					strlcpy (secret, acctservers->secret[i], MAX_SECRET_LENGTH);
+-					return 0;
+-				}
+-			}
+-		}
+-	}
+-
+-	/* We didn't find it in the rh_config or the servername is too long so look for a
+-	 * servers file to define the secret(s)
+-	 */
+-
+-	if ((clientfd = fopen (rc_conf_str(rh, "servers"), "r")) == NULL)
+-	{
+-		rc_log(LOG_ERR, "rc_find_server: couldn't open file: %s: %s", strerror(errno), rc_conf_str(rh, "servers"));
+-		goto fail;
+-	}
+-
+-	while (fgets (buffer, sizeof (buffer), clientfd) != NULL)
+-	{
+-		if (*buffer == '#')
+-			continue;
+-
+-		if ((h = strtok_r(buffer, " \t\n", &buffer_save)) == NULL) /* first hostname */
+-			continue;
+-
+-		strlcpy (hostnm, h, AUTH_ID_LEN);
+-
+-		if ((s = strtok_r (NULL, " \t\n", &buffer_save)) == NULL) /* and secret field */
+-			continue;
+-
+-		strlcpy (secret, s, MAX_SECRET_LENGTH);
+-
+-		if (!strchr (hostnm, '/')) /* If single name form */
+-		{
+-			tmpinfo = rc_getaddrinfo(hostnm, 0);
+-			if (tmpinfo)
+-			{
+-				result = find_match (*info, tmpinfo);
+-				if (result == 0)
+-				{
+-					result++;
+-					break;
+-				}
++                    memset(secret, '\0', MAX_SECRET_LENGTH + 1);
++                    size_t len = strlen(s);
++                    char *decryptedpwd = decryptString(s, &outlen);
++                    if (decryptedpwd != NULL)
++                    {
++                        strncpy(secret, decryptedpwd, MAX_SECRET_LENGTH);
++                        secret[MAX_SECRET_LENGTH] = '\0';
++			free(decryptedpwd);
++                    }
++                    else
++                    {
++                        rc_log(LOG_ERR, "Decryption failed");
++                        fclose(clientfd);
++                        return -1;
++                    }
++                    return 0;
++                }
++            }
++        }
++    }
++    else if (flags == ACCT)
++    {
++        if ((acctservers = rc_conf_srv(rh, "acctserver")) != NULL)
++        {
++            for (i = 0; i < acctservers->max; i++)
++            {
++                if ((strncmp(server_name, acctservers->name[i],
++                             strlen(server_name)) == 0) &&
++                    (acctservers->secret[i] != NULL))
++                {
++                    memset(secret, '\0', MAX_SECRET_LENGTH + 1);
++                    size_t len = strlen(s);
++                    char *decryptedpwd = decryptString(s, &outlen);
++                    if (decryptedpwd != NULL)
++                    {
++                        strncpy(secret, decryptedpwd, MAX_SECRET_LENGTH);
++                        secret[MAX_SECRET_LENGTH] = '\0';
++			free(decryptedpwd);
++                    }
++                    else
++                    {
++                        rc_log(LOG_ERR, "Decryption failed");
++                        fclose(clientfd);
++                        return -1;
++                    }
++                    return 0;
++                }
++            }
++        }
++    }
++
++    /* We didn't find it in the rh_config or the servername is too long so look
++     * for a servers file to define the secret(s)
++     */
++
++    if ((clientfd = fopen(rc_conf_str(rh, "servers"), "r")) == NULL)
++    {
++        rc_log(LOG_ERR, "rc_find_server: couldn't open file: %s: %s",
++               strerror(errno), rc_conf_str(rh, "servers"));
++        goto fail;
++    }
++
++    while (fgets(buffer, sizeof(buffer), clientfd) != NULL)
++    {
++        if (*buffer == '#')
++            continue;
++
++        if ((h = strtok_r(buffer, " \t", &buffer_save)) ==
++            NULL) /* first hostname */
++            continue;
++
++        strlcpy (hostnm, h, AUTH_ID_LEN);
++
++        if ((s = strtok_r(NULL, " \t", &buffer_save)) ==
++            NULL) /* and secret field */
++            continue;
++        memset(secret, '\0', MAX_SECRET_LENGTH + 1);
++        size_t secret_len = strlen(s);
++        char* decrypted_secret = decryptString(s, &outlen);
++        if (decrypted_secret != NULL)
++        {
++            strlcpy(secret, decrypted_secret, MAX_SECRET_LENGTH);
++            memset(decrypted_secret, 0, strlen(decrypted_secret));
++            free(decrypted_secret);
++        }
++        else
++        {
++            rc_log(LOG_ERR, "Decryption failed");
++            fclose(clientfd);
++            return -1;
++        }
+ 
+-				freeaddrinfo(tmpinfo);
+-				tmpinfo = NULL;
+-			}
+-		}
+-		else /* <name1>/<name2> "paired" form */
+-		{
+-			strtok_r(hostnm, "/", &hostnm_save);
+-			tmpinfo = rc_getaddrinfo(hostnm, 0);
+-			if (tmpinfo)
+-			{
+-				if (rc_is_myname(tmpinfo) == 0)
+-				{	     /* If we're the 1st name, target is 2nd */
+-					if (find_match (*info, tmpinfo) == 0)
+-					{
+-						result++;
+-						break;
+-					}
+-				}
+-				else	/* If we were 2nd name, target is 1st name */
+-				{
+-					if (find_match (*info, tmpinfo) == 0)
+-					{
+-						result++;
++        if (!strchr(hostnm, '/')) /* If single name form */
++        {
++            tmpinfo = rc_getaddrinfo(hostnm, 0);
++            if (tmpinfo)
++            {
++                result = find_match(*info, tmpinfo);
++                if (result == 0)
++                {
++                    result++;
++                    break;
++                }
++
++                freeaddrinfo(tmpinfo);
++                tmpinfo = NULL;
++            }
++        }
++        else /* <name1>/<name2> "paired" form */
++        {
++            strtok_r(hostnm, "/", &hostnm_save);
++            tmpinfo = rc_getaddrinfo(hostnm, 0);
++            if (tmpinfo)
++            {
++                if (rc_is_myname(tmpinfo) == 0)
++                { /* If we're the 1st name, target is 2nd */
++                    if (find_match(*info, tmpinfo) == 0)
++                    {
++                        result++;
++                        break;
++                    }
++                }
++                else /* If we were 2nd name, target is 1st name */
++                {
++                    if (find_match(*info, tmpinfo) == 0)
++                    {
++                        result++;
+ 						break;
+-					}
+-				}
+-				freeaddrinfo(tmpinfo);
+-				tmpinfo = NULL;
+-			}
+-		}
+-	}
+-	fclose (clientfd);
+-	if (result == 0)
+-	{
+-		memset (buffer, '\0', sizeof (buffer));
+-		memset (secret, '\0', MAX_SECRET_LENGTH);
+-		rc_log(LOG_ERR, "rc_find_server: couldn't find RADIUS server %s in %s",
+-			 server_name, rc_conf_str(rh, "servers"));
+-		goto fail;
+-	}
+-	
+-	result = 0;
+-	goto cleanup;
++                    }
++                }
++                freeaddrinfo(tmpinfo);
++                tmpinfo = NULL;
++            }
++        }
++    }
++    fclose(clientfd);
++    if (result == 0)
++    {
++        memset(buffer, '\0', sizeof(buffer));
++        memset(secret, '\0', MAX_SECRET_LENGTH);
++        rc_log(LOG_ERR, "rc_find_server: couldn't find RADIUS server %s in %s",
++               server_name, rc_conf_str(rh, "servers"));
++        goto fail;
++    }
++
++    result = 0;
++    goto cleanup;
+ 
+  fail:
+  	freeaddrinfo(*info);
+diff --git a/lib/ip_util.c b/lib/ip_util.c
+index 2ad6952..4e8b28f 100644
+--- a/lib/ip_util.c
++++ b/lib/ip_util.c
+@@ -29,26 +29,36 @@
+  
+ struct addrinfo *rc_getaddrinfo (char const *host, unsigned flags)
+  {
+-	struct addrinfo hints, *res;
+-	int err;
+-	const char *service = NULL;
+- 
+-	memset(&hints, 0, sizeof(hints));
+-	hints.ai_socktype = SOCK_DGRAM;
+-	if (flags & PW_AI_PASSIVE)
+-		hints.ai_flags = AI_PASSIVE;
+-
+-	if (flags & PW_AI_AUTH)
+-		service = "radius";
+-	else if (flags & PW_AI_ACCT)
+-		service = "radius-acct";
+- 
+-	err = getaddrinfo(host, service, &hints, &res);
+-	if (err != 0) {
+- 		return NULL;
+- 	}
+-
+-	return res;
++     char clean_host[INET6_ADDRSTRLEN] = {0};
++     size_t len = strlen(host);
++
++     if (host[0] == '[' && host[len - 1] == ']')
++     {
++         strncpy(clean_host, host + 1, len - 2);
++         clean_host[len - 2] = '\0';
++         host = clean_host;
++     }
++     struct addrinfo hints, *res;
++     int err;
++     const char* service = NULL;
++
++     memset(&hints, 0, sizeof(hints));
++     hints.ai_socktype = SOCK_DGRAM;
++     if (flags & PW_AI_PASSIVE)
++         hints.ai_flags = AI_PASSIVE;
++
++     if (flags & PW_AI_AUTH)
++         service = "radius";
++     else if (flags & PW_AI_ACCT)
++         service = "radius-acct";
++
++     err = getaddrinfo(host, service, &hints, &res);
++     if (err != 0)
++     {
++         return NULL;
++     }
++
++     return res;
+ }
+ 
+ /** Get the port number for the supplied request type
+diff --git a/lib/md5.c b/lib/md5.c
+index 2344fb9..ffba816 100644
+--- a/lib/md5.c
++++ b/lib/md5.c
+@@ -29,117 +29,120 @@
+ /*#include <sys/systm.h>*/
+ /*#include <crypto/md5.h>*/
+ 
+-#define PUT_64BIT_LE(cp, value) do {				\
+-	(cp)[7] = (value)[1] >> 24;					\
+-	(cp)[6] = (value)[1] >> 16;					\
+-	(cp)[5] = (value)[1] >> 8;					\
+-	(cp)[4] = (value)[1];						\
+-	(cp)[3] = (value)[0] >> 24;					\
+-	(cp)[2] = (value)[0] >> 16;					\
+-	(cp)[1] = (value)[0] >> 8;					\
+-	(cp)[0] = (value)[0]; } while (0)
+-
+-#define PUT_32BIT_LE(cp, value) do {					\
+-	(cp)[3] = (value) >> 24;					\
+-	(cp)[2] = (value) >> 16;					\
+-	(cp)[1] = (value) >> 8;						\
+-	(cp)[0] = (value); } while (0)
++#define PUT_64BIT_LE(cp, value)                                                \
++    do                                                                         \
++    {                                                                          \
++        (cp)[7] = (value)[1] >> 24;                                            \
++        (cp)[6] = (value)[1] >> 16;                                            \
++        (cp)[5] = (value)[1] >> 8;                                             \
++        (cp)[4] = (value)[1];                                                  \
++        (cp)[3] = (value)[0] >> 24;                                            \
++        (cp)[2] = (value)[0] >> 16;                                            \
++        (cp)[1] = (value)[0] >> 8;                                             \
++        (cp)[0] = (value)[0];                                                  \
++    } while (0)
++
++#define PUT_32BIT_LE(cp, value)                                                \
++    do                                                                         \
++    {                                                                          \
++        (cp)[3] = (value) >> 24;                                               \
++        (cp)[2] = (value) >> 16;                                               \
++        (cp)[1] = (value) >> 8;                                                \
++        (cp)[0] = (value);                                                     \
++    } while (0)
+ 
+ static uint8_t PADDING[MD5_BLOCK_LENGTH] = {
+-	0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+-};
++    0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
++    0,    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
++    0,    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+ 
+ /*
+  * Start MD5 accumulation.  Set bit count to 0 and buffer to mysterious
+  * initialization constants.
+  */
+-void
+-MD5Init(MD5_CTX *ctx)
++void MD5Init(MD5_CTX* ctx)
+ {
+-	ctx->count[0] = 0;
+-	ctx->count[1] = 0;
+-	ctx->state[0] = 0x67452301;
+-	ctx->state[1] = 0xefcdab89;
+-	ctx->state[2] = 0x98badcfe;
+-	ctx->state[3] = 0x10325476;
++    ctx->count[0] = 0;
++    ctx->count[1] = 0;
++    ctx->state[0] = 0x67452301;
++    ctx->state[1] = 0xefcdab89;
++    ctx->state[2] = 0x98badcfe;
++    ctx->state[3] = 0x10325476;
+ }
+ 
+ /*
+  * Update context to reflect the concatenation of another buffer full
+  * of bytes.
+  */
+-void
+-MD5Update(MD5_CTX *ctx, uint8_t const *input, size_t len)
++void MD5Update(MD5_CTX* ctx, const uint8_t* input, size_t len)
+ {
+-	size_t have, need;
+-
+-	/* Check how many bytes we already have and how many more we need. */
+-	have = (size_t)((ctx->count[0] >> 3) & (MD5_BLOCK_LENGTH - 1));
+-	need = MD5_BLOCK_LENGTH - have;
+-
+-	/* Update bitcount */
+-/*	ctx->count += (uint64_t)len << 3;*/
+-	if ((ctx->count[0] += ((uint32_t)len << 3)) < (uint32_t)len) {
+-	/* Overflowed ctx->count[0] */
+-		ctx->count[1]++;
+-	}
+-	ctx->count[1] += ((uint32_t)len >> 29);
+-
+-
+-
+-	if (len >= need) {
+-		if (have != 0) {
+-			memcpy(ctx->buffer + have, input, need);
+-			MD5Transform(ctx->state, ctx->buffer);
+-			input += need;
+-			len -= need;
+-			have = 0;
+-		}
+-
+-		/* Process data in MD5_BLOCK_LENGTH-byte chunks. */
+-		while (len >= MD5_BLOCK_LENGTH) {
+-			MD5Transform(ctx->state, input);
+-			input += MD5_BLOCK_LENGTH;
+-			len -= MD5_BLOCK_LENGTH;
+-		}
+-	}
+-
+-	/* Handle any remaining bytes of data. */
+-	if (len != 0)
+-		memcpy(ctx->buffer + have, input, len);
++    size_t have, need;
++
++    /* Check how many bytes we already have and how many more we need. */
++    have = (size_t)((ctx->count[0] >> 3) & (MD5_BLOCK_LENGTH - 1));
++    need = MD5_BLOCK_LENGTH - have;
++
++    /* Update bitcount */
++    /*	ctx->count += (uint64_t)len << 3;*/
++    if ((ctx->count[0] += ((uint32_t)len << 3)) < (uint32_t)len)
++    {
++        /* Overflowed ctx->count[0] */
++        ctx->count[1]++;
++    }
++    ctx->count[1] += ((uint32_t)len >> 29);
++
++    if (len >= need)
++    {
++        if (have != 0)
++        {
++            memcpy(ctx->buffer + have, input, need);
++            MD5Transform(ctx->state, ctx->buffer);
++            input += need;
++            len -= need;
++            have = 0;
++        }
++
++        /* Process data in MD5_BLOCK_LENGTH-byte chunks. */
++        while (len >= MD5_BLOCK_LENGTH)
++        {
++            MD5Transform(ctx->state, input);
++            input += MD5_BLOCK_LENGTH;
++            len -= MD5_BLOCK_LENGTH;
++        }
++    }
++
++    /* Handle any remaining bytes of data. */
++    if (len != 0)
++        memcpy(ctx->buffer + have, input, len);
+ }
+ 
+ /*
+  * Final wrapup - pad to 64-byte boundary with the bit pattern
+  * 1 0* (64-bit count of bits processed, MSB-first)
+  */
+-void
+-MD5Final(unsigned char digest[MD5_DIGEST_LENGTH], MD5_CTX *ctx)
++void MD5Final(unsigned char digest[MD5_DIGEST_LENGTH], MD5_CTX* ctx)
+ {
+-	uint8_t count[8];
+-	size_t padlen;
+-	int i;
+-
+-	/* Convert count to 8 bytes in little endian order. */
+-	PUT_64BIT_LE(count, ctx->count);
+-
+-	/* Pad out to 56 mod 64. */
+-	padlen = MD5_BLOCK_LENGTH -
+-	    ((ctx->count[0] >> 3) & (MD5_BLOCK_LENGTH - 1));
+-	if (padlen < 1 + 8)
+-		padlen += MD5_BLOCK_LENGTH;
+-	MD5Update(ctx, PADDING, padlen - 8);		/* padlen - 8 <= 64 */
+-	MD5Update(ctx, count, 8);
+-
+-	if (digest != NULL) {
+-		for (i = 0; i < 4; i++)
+-			PUT_32BIT_LE(digest + i * 4, ctx->state[i]);
+-	}
+-	memset(ctx, 0, sizeof(*ctx));	/* in case it's sensitive */
+-}
++    uint8_t count[8];
++    size_t padlen;
++    int i;
++
++    /* Convert count to 8 bytes in little endian order. */
++    PUT_64BIT_LE(count, ctx->count);
+ 
++    /* Pad out to 56 mod 64. */
++    padlen = MD5_BLOCK_LENGTH - ((ctx->count[0] >> 3) & (MD5_BLOCK_LENGTH - 1));
++    if (padlen < 1 + 8)
++        padlen += MD5_BLOCK_LENGTH;
++    MD5Update(ctx, PADDING, padlen - 8); /* padlen - 8 <= 64 */
++    MD5Update(ctx, count, 8);
++
++    if (digest != NULL)
++    {
++        for (i = 0; i < 4; i++)
++            PUT_32BIT_LE(digest + i * 4, ctx->state[i]);
++    }
++    memset(ctx, 0, sizeof(*ctx)); /* in case it's sensitive */
++}
+ 
+ /* The four core functions - F1 is optimized somewhat */
+ 
+@@ -150,102 +153,175 @@ MD5Final(unsigned char digest[MD5_DIGEST_LENGTH], MD5_CTX *ctx)
+ #define F4(x, y, z) (y ^ (x | ~z))
+ 
+ /* This is the central step in the MD5 algorithm. */
+-#define MD5STEP(f, w, x, y, z, data, s) \
+-	( w += f(x, y, z) + data,  w = w<<s | w>>(32-s),  w += x )
++#define MD5STEP(f, w, x, y, z, data, s)                                        \
++    (w += f(x, y, z) + data, w = w << s | w >> (32 - s), w += x)
+ 
+ /*
+  * The core of the MD5 algorithm, this alters an existing MD5 hash to
+  * reflect the addition of 16 longwords of new data.  MD5Update blocks
+  * the data and converts bytes into longwords for this routine.
+  */
+-void
+-MD5Transform(uint32_t state[4], uint8_t const block[MD5_BLOCK_LENGTH])
++void MD5Transform(uint32_t state[4], const uint8_t block[MD5_BLOCK_LENGTH])
++{
++    uint32_t a, b, c, d, in[MD5_BLOCK_LENGTH / 4];
++
++    for (a = 0; a < MD5_BLOCK_LENGTH / 4; a++)
++    {
++        in[a] = (uint32_t)((uint32_t)(block[a * 4 + 0]) |
++                           (uint32_t)(block[a * 4 + 1]) << 8 |
++                           (uint32_t)(block[a * 4 + 2]) << 16 |
++                           (uint32_t)(block[a * 4 + 3]) << 24);
++    }
++
++    a = state[0];
++    b = state[1];
++    c = state[2];
++    d = state[3];
++
++    MD5STEP(F1, a, b, c, d, in[0] + 0xd76aa478, 7);
++    MD5STEP(F1, d, a, b, c, in[1] + 0xe8c7b756, 12);
++    MD5STEP(F1, c, d, a, b, in[2] + 0x242070db, 17);
++    MD5STEP(F1, b, c, d, a, in[3] + 0xc1bdceee, 22);
++    MD5STEP(F1, a, b, c, d, in[4] + 0xf57c0faf, 7);
++    MD5STEP(F1, d, a, b, c, in[5] + 0x4787c62a, 12);
++    MD5STEP(F1, c, d, a, b, in[6] + 0xa8304613, 17);
++    MD5STEP(F1, b, c, d, a, in[7] + 0xfd469501, 22);
++    MD5STEP(F1, a, b, c, d, in[8] + 0x698098d8, 7);
++    MD5STEP(F1, d, a, b, c, in[9] + 0x8b44f7af, 12);
++    MD5STEP(F1, c, d, a, b, in[10] + 0xffff5bb1, 17);
++    MD5STEP(F1, b, c, d, a, in[11] + 0x895cd7be, 22);
++    MD5STEP(F1, a, b, c, d, in[12] + 0x6b901122, 7);
++    MD5STEP(F1, d, a, b, c, in[13] + 0xfd987193, 12);
++    MD5STEP(F1, c, d, a, b, in[14] + 0xa679438e, 17);
++    MD5STEP(F1, b, c, d, a, in[15] + 0x49b40821, 22);
++
++    MD5STEP(F2, a, b, c, d, in[1] + 0xf61e2562, 5);
++    MD5STEP(F2, d, a, b, c, in[6] + 0xc040b340, 9);
++    MD5STEP(F2, c, d, a, b, in[11] + 0x265e5a51, 14);
++    MD5STEP(F2, b, c, d, a, in[0] + 0xe9b6c7aa, 20);
++    MD5STEP(F2, a, b, c, d, in[5] + 0xd62f105d, 5);
++    MD5STEP(F2, d, a, b, c, in[10] + 0x02441453, 9);
++    MD5STEP(F2, c, d, a, b, in[15] + 0xd8a1e681, 14);
++    MD5STEP(F2, b, c, d, a, in[4] + 0xe7d3fbc8, 20);
++    MD5STEP(F2, a, b, c, d, in[9] + 0x21e1cde6, 5);
++    MD5STEP(F2, d, a, b, c, in[14] + 0xc33707d6, 9);
++    MD5STEP(F2, c, d, a, b, in[3] + 0xf4d50d87, 14);
++    MD5STEP(F2, b, c, d, a, in[8] + 0x455a14ed, 20);
++    MD5STEP(F2, a, b, c, d, in[13] + 0xa9e3e905, 5);
++    MD5STEP(F2, d, a, b, c, in[2] + 0xfcefa3f8, 9);
++    MD5STEP(F2, c, d, a, b, in[7] + 0x676f02d9, 14);
++    MD5STEP(F2, b, c, d, a, in[12] + 0x8d2a4c8a, 20);
++
++    MD5STEP(F3, a, b, c, d, in[5] + 0xfffa3942, 4);
++    MD5STEP(F3, d, a, b, c, in[8] + 0x8771f681, 11);
++    MD5STEP(F3, c, d, a, b, in[11] + 0x6d9d6122, 16);
++    MD5STEP(F3, b, c, d, a, in[14] + 0xfde5380c, 23);
++    MD5STEP(F3, a, b, c, d, in[1] + 0xa4beea44, 4);
++    MD5STEP(F3, d, a, b, c, in[4] + 0x4bdecfa9, 11);
++    MD5STEP(F3, c, d, a, b, in[7] + 0xf6bb4b60, 16);
++    MD5STEP(F3, b, c, d, a, in[10] + 0xbebfbc70, 23);
++    MD5STEP(F3, a, b, c, d, in[13] + 0x289b7ec6, 4);
++    MD5STEP(F3, d, a, b, c, in[0] + 0xeaa127fa, 11);
++    MD5STEP(F3, c, d, a, b, in[3] + 0xd4ef3085, 16);
++    MD5STEP(F3, b, c, d, a, in[6] + 0x04881d05, 23);
++    MD5STEP(F3, a, b, c, d, in[9] + 0xd9d4d039, 4);
++    MD5STEP(F3, d, a, b, c, in[12] + 0xe6db99e5, 11);
++    MD5STEP(F3, c, d, a, b, in[15] + 0x1fa27cf8, 16);
++    MD5STEP(F3, b, c, d, a, in[2] + 0xc4ac5665, 23);
++
++    MD5STEP(F4, a, b, c, d, in[0] + 0xf4292244, 6);
++    MD5STEP(F4, d, a, b, c, in[7] + 0x432aff97, 10);
++    MD5STEP(F4, c, d, a, b, in[14] + 0xab9423a7, 15);
++    MD5STEP(F4, b, c, d, a, in[5] + 0xfc93a039, 21);
++    MD5STEP(F4, a, b, c, d, in[12] + 0x655b59c3, 6);
++    MD5STEP(F4, d, a, b, c, in[3] + 0x8f0ccc92, 10);
++    MD5STEP(F4, c, d, a, b, in[10] + 0xffeff47d, 15);
++    MD5STEP(F4, b, c, d, a, in[1] + 0x85845dd1, 21);
++    MD5STEP(F4, a, b, c, d, in[8] + 0x6fa87e4f, 6);
++    MD5STEP(F4, d, a, b, c, in[15] + 0xfe2ce6e0, 10);
++    MD5STEP(F4, c, d, a, b, in[6] + 0xa3014314, 15);
++    MD5STEP(F4, b, c, d, a, in[13] + 0x4e0811a1, 21);
++    MD5STEP(F4, a, b, c, d, in[4] + 0xf7537e82, 6);
++    MD5STEP(F4, d, a, b, c, in[11] + 0xbd3af235, 10);
++    MD5STEP(F4, c, d, a, b, in[2] + 0x2ad7d2bb, 15);
++    MD5STEP(F4, b, c, d, a, in[9] + 0xeb86d391, 21);
++
++    state[0] += a;
++    state[1] += b;
++    state[2] += c;
++    state[3] += d;
++}
++
++/** Calculate HMAC using internal MD5 implementation
++ *
++ * @param digest Caller digest to be filled in.
++ * @param text Pointer to data stream.
++ * @param text_len length of data stream.
++ * @param key Pointer to authentication key.
++ * @param key_len Length of authentication key.
++ *
++ */
++void rc_hmac_md5_calc(unsigned char* digest, const unsigned char* text,
++                      size_t text_len, const unsigned char* key, size_t key_len)
+ {
+-	uint32_t a, b, c, d, in[MD5_BLOCK_LENGTH / 4];
+-
+-	for (a = 0; a < MD5_BLOCK_LENGTH / 4; a++) {
+-		in[a] = (uint32_t)(
+-		    (uint32_t)(block[a * 4 + 0]) |
+-		    (uint32_t)(block[a * 4 + 1]) <<  8 |
+-		    (uint32_t)(block[a * 4 + 2]) << 16 |
+-		    (uint32_t)(block[a * 4 + 3]) << 24);
+-	}
+-
+-	a = state[0];
+-	b = state[1];
+-	c = state[2];
+-	d = state[3];
+-
+-	MD5STEP(F1, a, b, c, d, in[ 0] + 0xd76aa478,  7);
+-	MD5STEP(F1, d, a, b, c, in[ 1] + 0xe8c7b756, 12);
+-	MD5STEP(F1, c, d, a, b, in[ 2] + 0x242070db, 17);
+-	MD5STEP(F1, b, c, d, a, in[ 3] + 0xc1bdceee, 22);
+-	MD5STEP(F1, a, b, c, d, in[ 4] + 0xf57c0faf,  7);
+-	MD5STEP(F1, d, a, b, c, in[ 5] + 0x4787c62a, 12);
+-	MD5STEP(F1, c, d, a, b, in[ 6] + 0xa8304613, 17);
+-	MD5STEP(F1, b, c, d, a, in[ 7] + 0xfd469501, 22);
+-	MD5STEP(F1, a, b, c, d, in[ 8] + 0x698098d8,  7);
+-	MD5STEP(F1, d, a, b, c, in[ 9] + 0x8b44f7af, 12);
+-	MD5STEP(F1, c, d, a, b, in[10] + 0xffff5bb1, 17);
+-	MD5STEP(F1, b, c, d, a, in[11] + 0x895cd7be, 22);
+-	MD5STEP(F1, a, b, c, d, in[12] + 0x6b901122,  7);
+-	MD5STEP(F1, d, a, b, c, in[13] + 0xfd987193, 12);
+-	MD5STEP(F1, c, d, a, b, in[14] + 0xa679438e, 17);
+-	MD5STEP(F1, b, c, d, a, in[15] + 0x49b40821, 22);
+-
+-	MD5STEP(F2, a, b, c, d, in[ 1] + 0xf61e2562,  5);
+-	MD5STEP(F2, d, a, b, c, in[ 6] + 0xc040b340,  9);
+-	MD5STEP(F2, c, d, a, b, in[11] + 0x265e5a51, 14);
+-	MD5STEP(F2, b, c, d, a, in[ 0] + 0xe9b6c7aa, 20);
+-	MD5STEP(F2, a, b, c, d, in[ 5] + 0xd62f105d,  5);
+-	MD5STEP(F2, d, a, b, c, in[10] + 0x02441453,  9);
+-	MD5STEP(F2, c, d, a, b, in[15] + 0xd8a1e681, 14);
+-	MD5STEP(F2, b, c, d, a, in[ 4] + 0xe7d3fbc8, 20);
+-	MD5STEP(F2, a, b, c, d, in[ 9] + 0x21e1cde6,  5);
+-	MD5STEP(F2, d, a, b, c, in[14] + 0xc33707d6,  9);
+-	MD5STEP(F2, c, d, a, b, in[ 3] + 0xf4d50d87, 14);
+-	MD5STEP(F2, b, c, d, a, in[ 8] + 0x455a14ed, 20);
+-	MD5STEP(F2, a, b, c, d, in[13] + 0xa9e3e905,  5);
+-	MD5STEP(F2, d, a, b, c, in[ 2] + 0xfcefa3f8,  9);
+-	MD5STEP(F2, c, d, a, b, in[ 7] + 0x676f02d9, 14);
+-	MD5STEP(F2, b, c, d, a, in[12] + 0x8d2a4c8a, 20);
+-
+-	MD5STEP(F3, a, b, c, d, in[ 5] + 0xfffa3942,  4);
+-	MD5STEP(F3, d, a, b, c, in[ 8] + 0x8771f681, 11);
+-	MD5STEP(F3, c, d, a, b, in[11] + 0x6d9d6122, 16);
+-	MD5STEP(F3, b, c, d, a, in[14] + 0xfde5380c, 23);
+-	MD5STEP(F3, a, b, c, d, in[ 1] + 0xa4beea44,  4);
+-	MD5STEP(F3, d, a, b, c, in[ 4] + 0x4bdecfa9, 11);
+-	MD5STEP(F3, c, d, a, b, in[ 7] + 0xf6bb4b60, 16);
+-	MD5STEP(F3, b, c, d, a, in[10] + 0xbebfbc70, 23);
+-	MD5STEP(F3, a, b, c, d, in[13] + 0x289b7ec6,  4);
+-	MD5STEP(F3, d, a, b, c, in[ 0] + 0xeaa127fa, 11);
+-	MD5STEP(F3, c, d, a, b, in[ 3] + 0xd4ef3085, 16);
+-	MD5STEP(F3, b, c, d, a, in[ 6] + 0x04881d05, 23);
+-	MD5STEP(F3, a, b, c, d, in[ 9] + 0xd9d4d039,  4);
+-	MD5STEP(F3, d, a, b, c, in[12] + 0xe6db99e5, 11);
+-	MD5STEP(F3, c, d, a, b, in[15] + 0x1fa27cf8, 16);
+-	MD5STEP(F3, b, c, d, a, in[2 ] + 0xc4ac5665, 23);
+-
+-	MD5STEP(F4, a, b, c, d, in[ 0] + 0xf4292244,  6);
+-	MD5STEP(F4, d, a, b, c, in[7 ] + 0x432aff97, 10);
+-	MD5STEP(F4, c, d, a, b, in[14] + 0xab9423a7, 15);
+-	MD5STEP(F4, b, c, d, a, in[5 ] + 0xfc93a039, 21);
+-	MD5STEP(F4, a, b, c, d, in[12] + 0x655b59c3,  6);
+-	MD5STEP(F4, d, a, b, c, in[3 ] + 0x8f0ccc92, 10);
+-	MD5STEP(F4, c, d, a, b, in[10] + 0xffeff47d, 15);
+-	MD5STEP(F4, b, c, d, a, in[1 ] + 0x85845dd1, 21);
+-	MD5STEP(F4, a, b, c, d, in[8 ] + 0x6fa87e4f,  6);
+-	MD5STEP(F4, d, a, b, c, in[15] + 0xfe2ce6e0, 10);
+-	MD5STEP(F4, c, d, a, b, in[6 ] + 0xa3014314, 15);
+-	MD5STEP(F4, b, c, d, a, in[13] + 0x4e0811a1, 21);
+-	MD5STEP(F4, a, b, c, d, in[4 ] + 0xf7537e82,  6);
+-	MD5STEP(F4, d, a, b, c, in[11] + 0xbd3af235, 10);
+-	MD5STEP(F4, c, d, a, b, in[2 ] + 0x2ad7d2bb, 15);
+-	MD5STEP(F4, b, c, d, a, in[9 ] + 0xeb86d391, 21);
+-
+-	state[0] += a;
+-	state[1] += b;
+-	state[2] += c;
+-	state[3] += d;
++    MD5_CTX context;
++    unsigned char k_ipad[65]; /* inner padding - key XORd with ipad */
++    unsigned char k_opad[65]; /* outer padding - key XORd with opad */
++    unsigned char tk[16];
++    int i;
++
++    /* if key is longer than 64 bytes reset it to key=MD5(key) */
++    if (key_len > 64)
++    {
++        MD5_CTX tctx;
++
++        MD5Init(&tctx);
++        MD5Update(&tctx, key, key_len);
++        MD5Final(tk, &tctx);
++
++        key = tk;
++        key_len = 16;
++    }
++
++    /*
++     * the HMAC_MD5 transform looks like:
++     *
++     * MD5(K XOR opad, MD5(K XOR ipad, text))
++     *
++     * where K is an n byte key
++     * ipad is the byte 0x36 repeated 64 times
++
++     * opad is the byte 0x5c repeated 64 times
++     * and text is the data being protected
++     */
++
++    /* start out by storing key in pads */
++    memset(k_ipad, 0, sizeof(k_ipad));
++    memset(k_opad, 0, sizeof(k_opad));
++    memcpy(k_ipad, key, key_len);
++    memcpy(k_opad, key, key_len);
++
++    /* XOR key with ipad and opad values */
++    for (i = 0; i < 64; i++)
++    {
++        k_ipad[i] ^= 0x36;
++        k_opad[i] ^= 0x5c;
++    }
++    /*
++     * perform inner MD5
++     */
++    MD5Init(&context);                   /* init context for 1st
++                                          * pass */
++    MD5Update(&context, k_ipad, 64);     /* start with inner pad */
++    MD5Update(&context, text, text_len); /* then text of datagram */
++    MD5Final(digest, &context);          /* finish up 1st pass */
++    /*
++     * perform outer MD5
++     */
++    MD5Init(&context);               /* init context for 2nd
++                                      * pass */
++    MD5Update(&context, k_opad, 64); /* start with outer pad */
++    MD5Update(&context, digest, 16); /* then results of 1st
++                                      * hash */
++    MD5Final(digest, &context);      /* finish up 2nd pass */
+ }
+diff --git a/lib/options.h b/lib/options.h
+index 24a0252..d1759c1 100644
+--- a/lib/options.h
++++ b/lib/options.h
+@@ -9,48 +9,51 @@
+  *
+  */
+ 
+-#define OPTION_LEN	64
++#define OPTION_LEN 64
+ 
+ /* ids for different option types */
+-#define OT_STR		(1<<0)			//!< string.
+-#define OT_INT		(1<<1)			//!< integer.
+-#define OT_SRV		(1<<2)			//!< server list.
+-#define OT_AUO		(1<<3)			//!< authentication order.
++#define OT_STR (1 << 0)           //!< string.
++#define OT_INT (1 << 1)           //!< integer.
++#define OT_SRV (1 << 2)           //!< server list.
++#define OT_AUO (1 << 3)           //!< authentication order.
+ 
+-#define OT_ANY		((unsigned int)~0)	//!< Used internally.
++#define OT_ANY ((unsigned int)~0) //!< Used internally.
+ 
+ /* status types */
+-#define ST_UNDEF	(1<<0)			//!< option is undefined.
++#define ST_UNDEF (1 << 0) //!< option is undefined.
+ 
+-typedef struct _option {
+-	char name[OPTION_LEN];			//!< name of the option.
+-	int type, status;			//!< type and status.
+-	void *val;				//!< pointer to option value.
++typedef struct _option
++{
++    char name[OPTION_LEN]; //!< name of the option.
++    int type, status;      //!< type and status.
++    void* val;             //!< pointer to option value.
+ } OPTION;
+ 
+ static OPTION config_options_default[] = {
+-/* internally used options */
+-{"config_file",		OT_STR, ST_UNDEF, NULL},
+-/* General options */
+-{"auth_order",	 	OT_AUO, ST_UNDEF, NULL},
+-{"login_tries",	 	OT_INT, ST_UNDEF, NULL},
+-{"login_timeout",	OT_INT, ST_UNDEF, NULL},
+-{"nologin",		OT_STR, ST_UNDEF, NULL},
+-{"issue",		OT_STR, ST_UNDEF, NULL},
+-/* RADIUS specific options */
+-{"authserver",		OT_SRV, ST_UNDEF, NULL},
+-{"acctserver",		OT_SRV, ST_UNDEF, NULL},
+-{"servers",		OT_STR, ST_UNDEF, NULL},
+-{"dictionary",		OT_STR, ST_UNDEF, NULL},
+-{"login_radius",	OT_STR, ST_UNDEF, NULL},
+-{"mapfile",		OT_STR, ST_UNDEF, NULL},
+-{"default_realm",	OT_STR, ST_UNDEF, NULL},
+-{"radius_timeout",	OT_INT, ST_UNDEF, NULL},
+-{"radius_retries",	OT_INT,	ST_UNDEF, NULL},
+-{"radius_deadtime",	OT_INT, ST_UNDEF, NULL},
+-{"bindaddr",		OT_STR, ST_UNDEF, NULL},
+-/* local options */
+-{"login_local",		OT_STR, ST_UNDEF, NULL},
++    /* internally used options */
++    {"config_file", OT_STR, ST_UNDEF, NULL},
++    /* General options */
++    {"auth_order", OT_AUO, ST_UNDEF, NULL},
++    {"login_tries", OT_INT, ST_UNDEF, NULL},
++    {"login_timeout", OT_INT, ST_UNDEF, NULL},
++    {"nologin", OT_STR, ST_UNDEF, NULL},
++    {"issue", OT_STR, ST_UNDEF, NULL},
++    /* RADIUS specific options */
++    {"authserver", OT_SRV, ST_UNDEF, NULL},
++    {"acctserver", OT_SRV, ST_UNDEF, NULL},
++    {"servers", OT_STR, ST_UNDEF, NULL},
++    {"dictionary", OT_STR, ST_UNDEF, NULL},
++    {"login_radius", OT_STR, ST_UNDEF, NULL},
++    {"mapfile", OT_STR, ST_UNDEF, NULL},
++    {"default_realm", OT_STR, ST_UNDEF, NULL},
++    {"radius_timeout", OT_INT, ST_UNDEF, NULL},
++    {"radius_retries", OT_INT, ST_UNDEF, NULL},
++    {"radius_deadtime", OT_INT, ST_UNDEF, NULL},
++    {"bindaddr", OT_STR, ST_UNDEF, NULL},
++    {"message_authenticator_required", OT_INT, ST_UNDEF, NULL},
++    /* local options */
++    {"login_local", OT_STR, ST_UNDEF, NULL},
+ };
+ 
+-#define	NUM_OPTIONS	((sizeof(config_options_default))/(sizeof(config_options_default[0])))
++#define NUM_OPTIONS                                                            \
++    ((sizeof(config_options_default)) / (sizeof(config_options_default[0])))
+diff --git a/lib/sendserver.c b/lib/sendserver.c
+index 36f42a0..c1beeb4 100644
+--- a/lib/sendserver.c
++++ b/lib/sendserver.c
+@@ -14,23 +14,23 @@
+  *
+  */
+ 
+-#include <poll.h>
+-
+ #include <config.h>
+-#include <includes.h>
+ #include <freeradius-client.h>
++#include <includes.h>
+ #include <pathnames.h>
++#include <poll.h>
+ 
+ #if (defined(__APPLE__) || defined(__FreeBSD__)) && defined(HAVE_GETENTROPY)
+-# include <sys/random.h>
++#include <sys/random.h>
+ #endif
+ 
+ #include "util.h"
+ 
+-#define	SA(p)	((struct sockaddr *)(p))
++#define SA(p) ((struct sockaddr*)(p))
+ 
+-static void rc_random_vector (unsigned char *);
+-static int rc_check_reply (AUTH_HDR *, int, char const *, unsigned char const *, unsigned char);
++static void rc_random_vector(unsigned char*);
++static int rc_check_reply(AUTH_HDR*, int, const char*, const unsigned char*,
++                          unsigned char, unsigned int);
+ 
+ /** Packs an attribute value pair list into a buffer
+  *
+@@ -39,129 +39,140 @@ static int rc_check_reply (AUTH_HDR *, int, char const *, unsigned char const *,
+  * @param auth a pointer to #AUTH_HDR.
+  * @return The number of octets packed.
+  */
+-static int rc_pack_list (VALUE_PAIR *vp, char *secret, AUTH_HDR *auth)
++static int rc_pack_list(VALUE_PAIR* vp, char* secret, AUTH_HDR* auth,
++                        uint8_t** message_auth)
+ {
+-	int             length, i, pc, padded_length;
+-	int             total_length = 0;
+-	size_t			secretlen;
+-	uint32_t           lvalue, vendor;
+-	unsigned char   passbuf[MAX(AUTH_PASS_LEN, CHAP_VALUE_LENGTH)];
+-	unsigned char   md5buf[256];
+-	unsigned char   *buf, *vector, *vsa_length_ptr;
+-
+-	buf = auth->data;
+-
+-	while (vp != NULL)
+-	{
+-		vsa_length_ptr = NULL;
+-		if (vp->vendor != 0) {
+-			*buf++ = PW_VENDOR_SPECIFIC;
+-			vsa_length_ptr = buf;
+-			*buf++ = 6;
+-			vendor = htonl(vp->vendor);
+-			memcpy(buf, &vendor, sizeof(uint32_t));
+-			buf += 4;
+-			total_length += 6;
+-		}
+-
+-		if (vp->attribute > 0xff) continue;
+-
+-		*buf++ = (vp->attribute & 0xff);
+-
+-		switch (vp->attribute)
+-		{
+-		 case PW_USER_PASSWORD:
+-
+-		  /* Encrypt the password */
+-
+-		  /* Chop off password at AUTH_PASS_LEN */
+-		  length = vp->lvalue;
+-		  if (length > AUTH_PASS_LEN)
+-			length = AUTH_PASS_LEN;
+-
+-		  /* Calculate the padded length */
+-		  padded_length = (length+(AUTH_VECTOR_LEN-1)) & ~(AUTH_VECTOR_LEN-1);
+-
+-		  /* Record the attribute length */
+-		  *buf++ = padded_length + 2;
+-		  if (vsa_length_ptr != NULL) *vsa_length_ptr += padded_length + 2;
+-
+-		  /* Pad the password with zeros */
+-		  memset ((char *) passbuf, '\0', AUTH_PASS_LEN);
+-		  memcpy ((char *) passbuf, vp->strvalue, (size_t) length);
+-
+-		  secretlen = strlen (secret);
+-		  vector = (unsigned char *)auth->vector;
+-		  for(i = 0; i < padded_length; i += AUTH_VECTOR_LEN)
+-		  {
+-		  	/* Calculate the MD5 digest*/
+-		  	strcpy ((char *) md5buf, secret);
+-		  	memcpy ((char *) md5buf + secretlen, vector,
+-		  		  AUTH_VECTOR_LEN);
+-		  	rc_md5_calc (buf, md5buf, secretlen + AUTH_VECTOR_LEN);
+-
+-		        /* Remeber the start of the digest */
+-		  	vector = buf;
+-
+-			/* Xor the password into the MD5 digest */
+-			for (pc = i; pc < (i + AUTH_VECTOR_LEN); pc++)
+-		  	{
+-				*buf++ ^= passbuf[pc];
+-		  	}
+-		  }
+-
+-		  total_length += padded_length + 2;
+-
+-		  break;
+-		 default:
+-		  switch (vp->type)
+-		  {
+-		    case PW_TYPE_STRING:
+-			length = vp->lvalue;
+-			*buf++ = length + 2;
+-			if (vsa_length_ptr != NULL) *vsa_length_ptr += length + 2;
+-			memcpy (buf, vp->strvalue, (size_t) length);
+-			buf += length;
+-			total_length += length + 2;
+-			break;
+-
+-		    case PW_TYPE_IPV6ADDR:
+-			length = 16;
+-			*buf++ = length + 2;
+-			if (vsa_length_ptr != NULL) *vsa_length_ptr += length + 2;
+-			memcpy (buf, vp->strvalue, (size_t) length);
+-			buf += length;
+-			total_length += length + 2;
+-			break;
+-
+-		    case PW_TYPE_IPV6PREFIX:
+-			length = vp->lvalue;
+-			*buf++ = length + 2;
+-			if (vsa_length_ptr != NULL) *vsa_length_ptr += length + 2;
+-			memcpy (buf, vp->strvalue, (size_t) length);
+-			buf += length;
+-			total_length += length + 2;
+-			break;
+-
+-		    case PW_TYPE_INTEGER:
+-		    case PW_TYPE_IPADDR:
+-		    case PW_TYPE_DATE:
+-			*buf++ = sizeof (uint32_t) + 2;
+-			if (vsa_length_ptr != NULL) *vsa_length_ptr += sizeof(uint32_t) + 2;
+-			lvalue = htonl (vp->lvalue);
+-			memcpy (buf, (char *) &lvalue, sizeof (uint32_t));
+-			buf += sizeof (uint32_t);
+-			total_length += sizeof (uint32_t) + 2;
+-			break;
+-
+-		    default:
+-			break;
+-		  }
+-		  break;
+-		}
+-		vp = vp->next;
+-	}
+-	return total_length;
++    int length, i, pc, padded_length;
++    int total_length = 0;
++    size_t secretlen;
++    uint32_t lvalue, vendor;
++    unsigned char passbuf[MAX(AUTH_PASS_LEN, CHAP_VALUE_LENGTH)];
++    unsigned char md5buf[256];
++    unsigned char *buf, *vector, *vsa_length_ptr;
++
++    buf = auth->data;
++
++    while (vp != NULL)
++    {
++        vsa_length_ptr = NULL;
++        if (vp->vendor != 0)
++        {
++            *buf++ = PW_VENDOR_SPECIFIC;
++            vsa_length_ptr = buf;
++            *buf++ = 6;
++            vendor = htonl(vp->vendor);
++            memcpy(buf, &vendor, sizeof(uint32_t));
++            buf += 4;
++            total_length += 6;
++        }
++
++        if (vp->attribute > 0xff)
++            continue;
++
++        *buf++ = (vp->attribute & 0xff);
++
++        switch (vp->attribute)
++        {
++            case PW_USER_PASSWORD:
++
++                /* Encrypt the password */
++
++                /* Chop off password at AUTH_PASS_LEN */
++                length = vp->lvalue;
++                if (length > AUTH_PASS_LEN)
++                    length = AUTH_PASS_LEN;
++
++                /* Calculate the padded length */
++                padded_length = (length + (AUTH_VECTOR_LEN - 1)) &
++                                ~(AUTH_VECTOR_LEN - 1);
++
++                /* Record the attribute length */
++                *buf++ = padded_length + 2;
++                if (vsa_length_ptr != NULL)
++                    *vsa_length_ptr += padded_length + 2;
++
++                /* Pad the password with zeros */
++                memset((char*)passbuf, '\0', AUTH_PASS_LEN);
++                memcpy((char*)passbuf, vp->strvalue, (size_t)length);
++
++                secretlen = strlen(secret);
++                vector = (unsigned char*)auth->vector;
++                for (i = 0; i < padded_length; i += AUTH_VECTOR_LEN)
++                {
++                    /* Calculate the MD5 digest*/
++                    strcpy((char*)md5buf, secret);
++                    memcpy((char*)md5buf + secretlen, vector, AUTH_VECTOR_LEN);
++                    rc_md5_calc(buf, md5buf, secretlen + AUTH_VECTOR_LEN);
++
++                    /* Remeber the start of the digest */
++                    vector = buf;
++
++                    /* Xor the password into the MD5 digest */
++                    for (pc = i; pc < (i + AUTH_VECTOR_LEN); pc++)
++                    {
++                        *buf++ ^= passbuf[pc];
++                    }
++                }
++
++                total_length += padded_length + 2;
++
++                break;
++            default:
++                switch (vp->type)
++                {
++                    case PW_TYPE_STRING:
++                        length = vp->lvalue;
++                        *buf++ = length + 2;
++                        if (vsa_length_ptr != NULL)
++                            *vsa_length_ptr += length + 2;
++                        memcpy(buf, vp->strvalue, (size_t)length);
++                        if (message_auth &&
++                            (vp->attribute == PW_MESSAGE_AUTHENTICATOR))
++                            *message_auth = buf;
++                        buf += length;
++                        total_length += length + 2;
++                        break;
++
++                    case PW_TYPE_IPV6ADDR:
++                        length = 16;
++                        *buf++ = length + 2;
++                        if (vsa_length_ptr != NULL)
++                            *vsa_length_ptr += length + 2;
++                        memcpy(buf, vp->strvalue, (size_t)length);
++                        buf += length;
++                        total_length += length + 2;
++                        break;
++
++                    case PW_TYPE_IPV6PREFIX:
++                        length = vp->lvalue;
++                        *buf++ = length + 2;
++                        if (vsa_length_ptr != NULL)
++                            *vsa_length_ptr += length + 2;
++                        memcpy(buf, vp->strvalue, (size_t)length);
++                        buf += length;
++                        total_length += length + 2;
++                        break;
++
++                    case PW_TYPE_INTEGER:
++                    case PW_TYPE_IPADDR:
++                    case PW_TYPE_DATE:
++                        *buf++ = sizeof(uint32_t) + 2;
++                        if (vsa_length_ptr != NULL)
++                            *vsa_length_ptr += sizeof(uint32_t) + 2;
++                        lvalue = htonl(vp->lvalue);
++                        memcpy(buf, (char*)&lvalue, sizeof(uint32_t));
++                        buf += sizeof(uint32_t);
++                        total_length += sizeof(uint32_t) + 2;
++                        break;
++
++                    default:
++                        break;
++                }
++                break;
++        }
++        vp = vp->next;
++    }
++    return total_length;
+ }
+ 
+ /** Appends a string to the provided buffer
+@@ -171,351 +182,430 @@ static int rc_pack_list (VALUE_PAIR *vp, char *secret, AUTH_HDR *auth)
+  * @param pos the current position in the dest buffer; initially must be zero.
+  * @param src the source buffer to append.
+  */
+-static void strappend(char *dest, unsigned max_size, int *pos, const char *src)
++static void strappend(char* dest, unsigned max_size, int* pos, const char* src)
+ {
+-	unsigned len = strlen(src) + 1;
++    unsigned len = strlen(src) + 1;
+ 
+-	if (*pos == -1)
+-		return;
++    if (*pos == -1)
++        return;
+ 
+-	if (len + *pos > max_size) {
+-		*pos = -1;
+-		return;
+-	}
++    if (len + *pos > max_size)
++    {
++        *pos = -1;
++        return;
++    }
+ 
+-	memcpy(&dest[*pos], src, len);
+-	*pos += len-1;
+-	return;
++    memcpy(&dest[*pos], src, len);
++    *pos += len - 1;
++    return;
+ }
+ 
+ /** Sends a request to a RADIUS server and waits for the reply
+  *
+  * @param rh a handle to parsed configuration
+  * @param data a pointer to a #SEND_DATA structure
+- * @param msg must be an array of %PW_MAX_MSG_SIZE or %NULL; will contain the concatenation of
+- *	any %PW_REPLY_MESSAGE received.
++ * @param msg must be an array of %PW_MAX_MSG_SIZE or %NULL; will contain the
++ *concatenation of any %PW_REPLY_MESSAGE received.
+  * @param flags must be %AUTH or %ACCT
+- * @return %OK_RC (0) on success, %TIMEOUT_RC on timeout %REJECT_RC on acess reject, or negative
+- *	on failure as return value.
++ * @return %OK_RC (0) on success, %TIMEOUT_RC on timeout %REJECT_RC on acess
++ *reject, or negative on failure as return value.
+  */
+-int rc_send_server (rc_handle const *rh, SEND_DATA *data, char *msg, unsigned flags)
++int rc_send_server(const rc_handle* rh, SEND_DATA* data, char* msg,
++                   unsigned flags)
+ {
+-	int             sockfd;
+-	AUTH_HDR       *auth, *recv_auth;
+-	char           *server_name;	/* Name of server to query */
+-	struct sockaddr_storage our_sockaddr;
+-	struct addrinfo *auth_addr = NULL;
+-	socklen_t       salen;
+-	int             result = 0;
+-	int             total_length;
+-	int             length, pos;
+-	int             retry_max;
+-	unsigned	discover_local_ip;
+-	size_t		secretlen;
+-	char            secret[MAX_SECRET_LENGTH + 1];
+-	unsigned char   vector[AUTH_VECTOR_LEN];
+-	uint8_t          recv_buffer[BUFFER_LEN];
+-	uint8_t          send_buffer[BUFFER_LEN];
+-	char		our_addr_txt[50]; /* hold a text IP */
+-	char		auth_addr_txt[50]; /* hold a text IP */
+-	uint8_t		*attr;
+-	int		retries;
+-	VALUE_PAIR 	*vp;
+-	struct pollfd	pfd;
+-	double		start_time, timeout;
+-
+-	server_name = data->server;
+-	if (server_name == NULL || server_name[0] == '\0')
+-		return ERROR_RC;
+-
+-	if(data->secret != NULL)
+-	{
+-		// no need to look up the secret from configuration
+-		strlcpy(secret, data->secret, MAX_SECRET_LENGTH);
+-		auth_addr = rc_getaddrinfo (server_name, flags==AUTH?PW_AI_AUTH:PW_AI_ACCT);
+-		if(auth_addr == NULL)
+-		{
+-			rc_log(LOG_ERR, "rc_send_server: unable to resolve server: %s", server_name);
+-			return ERROR_RC;
+-		}
+-	}
+-	else if (rc_find_server_addr (rh, server_name, &auth_addr, secret, flags) != 0)
+-	{
+-		rc_log(LOG_ERR, "rc_send_server: unable to find server: %s", server_name);
+-		return ERROR_RC;
+-	}
+-
+-	rc_own_bind_addr(rh, &our_sockaddr);
+-	discover_local_ip = 0;
+-	if (our_sockaddr.ss_family == AF_INET) {
+-		if (((struct sockaddr_in*)(&our_sockaddr))->sin_addr.s_addr == INADDR_ANY) {
+-			discover_local_ip = 1;
+-		}
+-	}
+-
+-	DEBUG(LOG_ERR, "DEBUG: rc_send_server: creating socket to: %s", server_name);
+-	if (discover_local_ip) {
+-		result = rc_get_srcaddr(SA(&our_sockaddr), auth_addr->ai_addr);
+-		if (result != 0) {
+-			memset (secret, '\0', sizeof (secret));
+-			rc_log(LOG_ERR, "rc_send_server: cannot figure our own address");
+-			result = ERROR_RC;
+-			goto cleanup;
+-		}
+-	}
+-
+-	sockfd = socket (our_sockaddr.ss_family, SOCK_DGRAM, 0);
+-	if (sockfd < 0)
+-	{
+-		memset (secret, '\0', sizeof (secret));
+-		rc_log(LOG_ERR, "rc_send_server: socket: %s", strerror(errno));
+-		result = ERROR_RC;
+-		goto cleanup;
+-	}
+-
+-	if (our_sockaddr.ss_family == AF_INET)
+-		((struct sockaddr_in*)&our_sockaddr)->sin_port = 0;
+-	else
+-		((struct sockaddr_in6*)&our_sockaddr)->sin6_port = 0;
+-
+-	if (bind(sockfd, SA(&our_sockaddr), SS_LEN(&our_sockaddr)) < 0)
+-	{
+-		close (sockfd);
+-		memset (secret, '\0', sizeof (secret));
+-		rc_log(LOG_ERR, "rc_send_server: bind: %s: %s", server_name, strerror(errno));
+-		result = ERROR_RC;
+-		goto cleanup;
+-	}
+-
+-	retry_max = data->retries;	/* Max. numbers to try for reply */
+-	retries = 0;			/* Init retry cnt for blocking call */
+-
+-	if (data->svc_port) {
+-		if (our_sockaddr.ss_family == AF_INET)
+-			((struct sockaddr_in*)auth_addr->ai_addr)->sin_port = htons ((unsigned short) data->svc_port);
+-		else
+-			((struct sockaddr_in6*)auth_addr->ai_addr)->sin6_port = htons ((unsigned short) data->svc_port);
+-	}
+-
+-	/*
+-	 * Fill in NAS-IP-Address (if needed)
+-	 */
+-	if (rc_avpair_get(data->send_pairs, PW_NAS_IP_ADDRESS, 0) == NULL &&
+-	    rc_avpair_get(data->send_pairs, PW_NAS_IPV6_ADDRESS, 0) == NULL) {
+-		if (our_sockaddr.ss_family == AF_INET) {
+-			uint32_t ip;
+-			ip = *((uint32_t*)(&((struct sockaddr_in*)&our_sockaddr)->sin_addr));
+-			ip = ntohl(ip);
+-
+-			rc_avpair_add(rh, &(data->send_pairs), PW_NAS_IP_ADDRESS,
+-			    &ip, 0, 0);
+-		} else {
+-			void *p;
+-			p = &((struct sockaddr_in6*)&our_sockaddr)->sin6_addr;
+-
+-			rc_avpair_add(rh, &(data->send_pairs), PW_NAS_IPV6_ADDRESS,
+-			    p, 0, 0);
+-		}
+-	}
+-
+-	/* Build a request */
+-	auth = (AUTH_HDR *) send_buffer;
+-	auth->code = data->code;
+-	auth->id = data->seq_nbr;
+-
+-	if (data->code == PW_ACCOUNTING_REQUEST)
+-	{
+-		total_length = rc_pack_list(data->send_pairs, secret, auth) + AUTH_HDR_LEN;
+-
+-		auth->length = htons ((unsigned short) total_length);
+-
+-		memset((char *) auth->vector, 0, AUTH_VECTOR_LEN);
+-		secretlen = strlen (secret);
+-		memcpy ((char *) auth + total_length, secret, secretlen);
+-		rc_md5_calc (vector, (unsigned char *) auth, total_length + secretlen);
+-		memcpy ((char *) auth->vector, (char *) vector, AUTH_VECTOR_LEN);
+-	}
+-	else
+-	{
+-		rc_random_vector (vector);
+-		memcpy ((char *) auth->vector, (char *) vector, AUTH_VECTOR_LEN);
+-
+-		total_length = rc_pack_list(data->send_pairs, secret, auth) + AUTH_HDR_LEN;
+-
+-		auth->length = htons ((unsigned short) total_length);
+-	}
+-
+-	getnameinfo(SA(&our_sockaddr), SS_LEN(&our_sockaddr), NULL, 0, our_addr_txt, sizeof(our_addr_txt), NI_NUMERICHOST);
+-	getnameinfo(auth_addr->ai_addr, auth_addr->ai_addrlen, NULL, 0, auth_addr_txt, sizeof(auth_addr_txt), NI_NUMERICHOST);
+-
+-	DEBUG(LOG_ERR, "DEBUG: local %s : 0, remote %s : %u\n", 
+-	      our_addr_txt, auth_addr_txt, data->svc_port);
+-
+-	for (;;)
+-	{
+-		do {
+-			result = sendto (sockfd, (char *) auth, (unsigned int)total_length, 
+-				(int) 0, SA(auth_addr->ai_addr), auth_addr->ai_addrlen);
+-		} while (result == -1 && errno == EINTR);
+-		if (result == -1) {
+-			rc_log(LOG_ERR, "%s: socket: %s", __FUNCTION__, strerror(errno));
+-		}
+-
+-		pfd.fd = sockfd;
+-		pfd.events = POLLIN;
+-		pfd.revents = 0;
+-		start_time = rc_getmtime();
+-		for (timeout = data->timeout; timeout > 0;
+-		    timeout -= rc_getmtime() - start_time) {
+-			result = poll(&pfd, 1, timeout * 1000);
+-			if (result != -1 || errno != EINTR)
+-				break;
+-		}
+-		if (result == -1)
+-		{
+-			rc_log(LOG_ERR, "rc_send_server: poll: %s", strerror(errno));
+-			memset (secret, '\0', sizeof (secret));
+-			close (sockfd);
+-			result = ERROR_RC;
+-			goto cleanup;
+-		}
+-		if (result == 1 && (pfd.revents & POLLIN) != 0)
+-			break;
+-
+-		/*
+-		 * Timed out waiting for response.  Retry "retry_max" times
+-		 * before giving up.  If retry_max = 0, don't retry at all.
+-		 */
+-		if (retries++ >= retry_max)
+-		{
+-			rc_log(LOG_ERR,
+-				"rc_send_server: no reply from RADIUS server %s:%u",
+-				 auth_addr_txt, data->svc_port);
+-			close (sockfd);
+-			memset (secret, '\0', sizeof (secret));
+-			result = TIMEOUT_RC;
+-			goto cleanup;
+-		}
+-	}
+-	salen = auth_addr->ai_addrlen;
+-	do {
+-		length = recvfrom (sockfd, (char *) recv_buffer,
+-				   (int) sizeof (recv_buffer),
+-				   (int) 0, SA(auth_addr->ai_addr), &salen);
+-	} while(length == -1 && errno == EINTR);
+-
+-	if (length <= 0)
+-	{
+-		rc_log(LOG_ERR, "rc_send_server: recvfrom: %s:%d: %s", server_name,\
+-			 data->svc_port, strerror(errno));
+-		close (sockfd);
+-		memset (secret, '\0', sizeof (secret));
+-		result = ERROR_RC;
+-		goto cleanup;
+-	}
+-
+-	recv_auth = (AUTH_HDR *)recv_buffer;
+-
+-	if (length < AUTH_HDR_LEN || length < ntohs(recv_auth->length)) {
+-		rc_log(LOG_ERR, "rc_send_server: recvfrom: %s:%d: reply is too short",
+-		    server_name, data->svc_port);
+-		close(sockfd);
+-		memset(secret, '\0', sizeof(secret));
+-		result = ERROR_RC;
+-		goto cleanup;
+-	}
+-
+-	/*
+-	 *	If UDP is larger than RADIUS, shorten it to RADIUS.
+-	 */
+-	if (length > ntohs(recv_auth->length)) length = ntohs(recv_auth->length);
+-
+-	/*
+-	 *	Verify that it's a valid RADIUS packet before doing ANYTHING with it.
+-	 */
+-	attr = recv_buffer + AUTH_HDR_LEN;
+-	while (attr < (recv_buffer + length)) {
+-		if (attr[0] == 0) {
+-			rc_log(LOG_ERR, "rc_send_server: recvfrom: %s:%d: attribute zero is invalid",
+-			       server_name, data->svc_port);
+-			close(sockfd);
+-			memset(secret, '\0', sizeof(secret));
+-			return ERROR_RC;
+-		}
+-
+-		if (attr[1] < 2) {
+-			rc_log(LOG_ERR, "rc_send_server: recvfrom: %s:%d: attribute length is too small",
+-			       server_name, data->svc_port);
+-			close(sockfd);
+-			memset(secret, '\0', sizeof(secret));
+-			return ERROR_RC;
+-		}
+-
+-		if ((attr + attr[1]) > (recv_buffer + length)) {
+-			rc_log(LOG_ERR, "rc_send_server: recvfrom: %s:%d: attribute overflows the packet",
+-			       server_name, data->svc_port);
+-			close(sockfd);
+-			memset(secret, '\0', sizeof(secret));
+-			return ERROR_RC;
+-		}
+-
+-		attr += attr[1];
+-	}
+-
+-	result = rc_check_reply (recv_auth, BUFFER_LEN, secret, vector, data->seq_nbr);
+-
+-	length = ntohs(recv_auth->length)  - AUTH_HDR_LEN;
+-	if (length > 0) {
+-		data->receive_pairs = rc_avpair_gen(rh, NULL, recv_auth->data,
+-		    length, 0);
+-	} else {
+-		data->receive_pairs = NULL;
+-	}
+-
+-	close (sockfd);
+-	memset (secret, '\0', sizeof (secret));
+-
+-	if (result != OK_RC) {
+-		goto cleanup;
+-	}
+-
+-	if (msg) {
+-		*msg = '\0';
+-		pos = 0;
+-		vp = data->receive_pairs;
+-		while (vp)
+-		{
+-			if ((vp = rc_avpair_get(vp, PW_REPLY_MESSAGE, 0)))
+-			{
+-				strappend(msg, PW_MAX_MSG_SIZE, &pos, vp->strvalue);
+-				strappend(msg, PW_MAX_MSG_SIZE, &pos, "\n");
+-				vp = vp->next;
+-			}
+-		}
+-	}
+-
+-	if ((recv_auth->code == PW_ACCESS_ACCEPT) ||
+-		(recv_auth->code == PW_PASSWORD_ACK) ||
+-		(recv_auth->code == PW_ACCOUNTING_RESPONSE))
+-	{
+-		result = OK_RC;
+-	}
+-	else if ((recv_auth->code == PW_ACCESS_REJECT) ||
+-		(recv_auth->code == PW_PASSWORD_REJECT))
+-	{
+-		result = REJECT_RC;
+-	}
+-	else
+-	{
+-		rc_log(LOG_ERR, "rc_send_server: received RADIUS server response neither ACCEPT nor REJECT, invalid");
+-		result = BADRESP_RC;
+-	}
+-
+- cleanup:
+- 	if (auth_addr)
+- 		freeaddrinfo(auth_addr);
+-
+-	return result;
++    int sockfd;
++    AUTH_HDR *auth, *recv_auth;
++    char* server_name; /* Name of server to query */
++    struct sockaddr_storage our_sockaddr;
++    struct addrinfo* auth_addr = NULL;
++    socklen_t salen;
++    int result = 0;
++    int total_length;
++    int length, pos;
++    int retry_max;
++    unsigned discover_local_ip;
++    size_t secretlen;
++    char secret[MAX_SECRET_LENGTH + 1];
++    unsigned char vector[AUTH_VECTOR_LEN];
++    uint8_t recv_buffer[BUFFER_LEN];
++    uint8_t send_buffer[BUFFER_LEN];
++    char our_addr_txt[50];  /* hold a text IP */
++    char auth_addr_txt[50]; /* hold a text IP */
++    uint8_t* attr;
++    int retries;
++    VALUE_PAIR* vp;
++    struct pollfd pfd;
++    double start_time, timeout;
++    uint8_t* message_auth_ptr = NULL;
++    memset(secret, 0, sizeof(secret));
++    memset(vector, 0, sizeof(vector));
++    memset(recv_buffer, 0, sizeof(recv_buffer));
++    memset(send_buffer, 0, sizeof(send_buffer));
++
++    server_name = data->server;
++    if (server_name == NULL || server_name[0] == '\0')
++        return ERROR_RC;
++
++    if (data->secret != NULL)
++    {
++        // no need to look up the secret from configuration
++        strlcpy(secret, data->secret, MAX_SECRET_LENGTH);
++        auth_addr = rc_getaddrinfo(server_name,
++                                   flags == AUTH ? PW_AI_AUTH : PW_AI_ACCT);
++        if (auth_addr == NULL)
++        {
++            rc_log(LOG_ERR, "rc_send_server: unable to resolve server: %s",
++                   server_name);
++            return ERROR_RC;
++        }
++    }
++    else if (rc_find_server_addr(rh, server_name, &auth_addr, secret, flags) !=
++             0)
++    {
++        rc_log(LOG_ERR, "rc_send_server: unable to find server: %s",
++               server_name);
++        return ERROR_RC;
++    }
++
++    rc_own_bind_addr(rh, &our_sockaddr);
++    discover_local_ip = 0;
++    if (our_sockaddr.ss_family == AF_INET)
++    {
++        if (((struct sockaddr_in*)(&our_sockaddr))->sin_addr.s_addr ==
++            INADDR_ANY)
++        {
++            discover_local_ip = 1;
++        }
++    }
++
++    DEBUG(LOG_ERR, "DEBUG: rc_send_server: creating socket to: %s",
++          server_name);
++    if (discover_local_ip)
++    {
++        result = rc_get_srcaddr(SA(&our_sockaddr), auth_addr->ai_addr);
++        if (result != 0)
++        {
++            memset(secret, '\0', sizeof(secret));
++            rc_log(LOG_ERR, "rc_send_server: cannot figure our own address");
++            result = ERROR_RC;
++            goto cleanup;
++        }
++    }
++
++    sockfd = socket(our_sockaddr.ss_family, SOCK_DGRAM, 0);
++    if (sockfd < 0)
++    {
++        memset(secret, '\0', sizeof(secret));
++        rc_log(LOG_ERR, "rc_send_server: socket: %s", strerror(errno));
++        result = ERROR_RC;
++        goto cleanup;
++    }
++
++    if (our_sockaddr.ss_family == AF_INET)
++        ((struct sockaddr_in*)&our_sockaddr)->sin_port = 0;
++    else
++        ((struct sockaddr_in6*)&our_sockaddr)->sin6_port = 0;
++
++    if (bind(sockfd, SA(&our_sockaddr), SS_LEN(&our_sockaddr)) < 0)
++    {
++        close(sockfd);
++        memset(secret, '\0', sizeof(secret));
++        rc_log(LOG_ERR, "rc_send_server: bind: %s: %s", server_name,
++               strerror(errno));
++        result = ERROR_RC;
++        goto cleanup;
++    }
++
++    retry_max = data->retries; /* Max. numbers to try for reply */
++    retries = 0;               /* Init retry cnt for blocking call */
++
++    if (data->svc_port)
++    {
++        if (our_sockaddr.ss_family == AF_INET)
++            ((struct sockaddr_in*)auth_addr->ai_addr)->sin_port =
++                htons((unsigned short)data->svc_port);
++        else
++            ((struct sockaddr_in6*)auth_addr->ai_addr)->sin6_port =
++                htons((unsigned short)data->svc_port);
++    }
++
++    /*
++     * Fill in NAS-IP-Address (if needed)
++     */
++    if (rc_avpair_get(data->send_pairs, PW_NAS_IP_ADDRESS, 0) == NULL &&
++        rc_avpair_get(data->send_pairs, PW_NAS_IPV6_ADDRESS, 0) == NULL)
++    {
++        if (our_sockaddr.ss_family == AF_INET)
++        {
++            uint32_t ip;
++            ip =
++                *((uint32_t*)(&((struct sockaddr_in*)&our_sockaddr)->sin_addr));
++            ip = ntohl(ip);
++
++            rc_avpair_add(rh, &(data->send_pairs), PW_NAS_IP_ADDRESS, &ip, 0,
++                          0);
++        }
++        else
++        {
++            void* p;
++            p = &((struct sockaddr_in6*)&our_sockaddr)->sin6_addr;
++
++            rc_avpair_add(rh, &(data->send_pairs), PW_NAS_IPV6_ADDRESS, p, 0,
++                          0);
++        }
++    }
++
++    /*
++     * Insert Message Authenticator at start (if needed)
++     */
++    if ((data->code == PW_ACCESS_REQUEST) &&
++        (rc_avpair_get(data->send_pairs, PW_MESSAGE_AUTHENTICATOR, 0) == NULL))
++    {
++        VALUE_PAIR* vp;
++        uint8_t message_auth_buff[AUTH_VECTOR_LEN];
++        memset(message_auth_buff, 0, sizeof(message_auth_buff));
++        vp = rc_avpair_new(rh, PW_MESSAGE_AUTHENTICATOR, message_auth_buff,
++                           sizeof(message_auth_buff), 0);
++        if (vp != NULL)
++        {
++            vp->next = data->send_pairs;
++            data->send_pairs = vp;
++        }
++    }
++
++    /* Build a request */
++    auth = (AUTH_HDR*)send_buffer;
++    auth->code = data->code;
++    auth->id = data->seq_nbr;
++
++    if (data->code == PW_ACCOUNTING_REQUEST)
++    {
++        total_length = rc_pack_list(data->send_pairs, secret, auth, NULL) +
++                       AUTH_HDR_LEN;
++
++        auth->length = htons((unsigned short)total_length);
++
++        memset((char*)auth->vector, 0, AUTH_VECTOR_LEN);
++        secretlen = strlen(secret);
++        memcpy((char*)auth + total_length, secret, secretlen);
++        rc_md5_calc(vector, (unsigned char*)auth, total_length + secretlen);
++        memcpy((char*)auth->vector, (char*)vector, AUTH_VECTOR_LEN);
++    }
++    else
++    {
++        rc_random_vector(vector);
++        memcpy((char*)auth->vector, (char*)vector, AUTH_VECTOR_LEN);
++
++        total_length =
++            rc_pack_list(data->send_pairs, secret, auth, &message_auth_ptr) +
++            AUTH_HDR_LEN;
++
++        auth->length = htons((unsigned short)total_length);
++        if (message_auth_ptr)
++        {
++            rc_hmac_md5_calc(message_auth_ptr, (uint8_t*)auth, total_length,
++                             secret, strlen(secret));
++        }
++    }
++
++    getnameinfo(SA(&our_sockaddr), SS_LEN(&our_sockaddr), NULL, 0, our_addr_txt,
++                sizeof(our_addr_txt), NI_NUMERICHOST);
++    getnameinfo(auth_addr->ai_addr, auth_addr->ai_addrlen, NULL, 0,
++                auth_addr_txt, sizeof(auth_addr_txt), NI_NUMERICHOST);
++
++    DEBUG(LOG_ERR, "DEBUG: local %s : 0, remote %s : %u\n", our_addr_txt,
++          auth_addr_txt, data->svc_port);
++
++    for (;;)
++    {
++        do
++        {
++            result = sendto(sockfd, (char*)auth, (unsigned int)total_length,
++                            (int)0, SA(auth_addr->ai_addr),
++                            auth_addr->ai_addrlen);
++        } while (result == -1 && errno == EINTR);
++        if (result == -1)
++        {
++            rc_log(LOG_ERR, "%s: socket: %s", __FUNCTION__, strerror(errno));
++        }
++
++        pfd.fd = sockfd;
++        pfd.events = POLLIN;
++        pfd.revents = 0;
++        start_time = rc_getmtime();
++        for (timeout = data->timeout; timeout > 0;
++             timeout -= rc_getmtime() - start_time)
++        {
++            result = poll(&pfd, 1, timeout * 1000);
++            if (result != -1 || errno != EINTR)
++                break;
++        }
++        if (result == -1)
++        {
++            rc_log(LOG_ERR, "rc_send_server: poll: %s", strerror(errno));
++            memset(secret, '\0', sizeof(secret));
++            close(sockfd);
++            result = ERROR_RC;
++            goto cleanup;
++        }
++        if (result == 1 && (pfd.revents & POLLIN) != 0)
++            break;
++
++        /*
++         * Timed out waiting for response.  Retry "retry_max" times
++         * before giving up.  If retry_max = 0, don't retry at all.
++         */
++        if (retries++ >= retry_max)
++        {
++            rc_log(LOG_ERR, "rc_send_server: no reply from RADIUS server %s:%u",
++                   auth_addr_txt, data->svc_port);
++            close(sockfd);
++            memset(secret, '\0', sizeof(secret));
++            result = TIMEOUT_RC;
++            goto cleanup;
++        }
++    }
++    salen = auth_addr->ai_addrlen;
++    do
++    {
++        length = recvfrom(sockfd, (char*)recv_buffer, (int)sizeof(recv_buffer),
++                          (int)0, SA(auth_addr->ai_addr), &salen);
++    } while (length == -1 && errno == EINTR);
++
++    if (length <= 0)
++    {
++        rc_log(LOG_ERR, "rc_send_server: recvfrom: %s:%d: %s", server_name,
++               data->svc_port, strerror(errno));
++        close(sockfd);
++        memset(secret, '\0', sizeof(secret));
++        result = ERROR_RC;
++        goto cleanup;
++    }
++
++    recv_auth = (AUTH_HDR*)recv_buffer;
++
++    if (length < AUTH_HDR_LEN || length < ntohs(recv_auth->length))
++    {
++        rc_log(LOG_ERR, "rc_send_server: recvfrom: %s:%d: reply is too short",
++               server_name, data->svc_port);
++        close(sockfd);
++        memset(secret, '\0', sizeof(secret));
++        result = ERROR_RC;
++        goto cleanup;
++    }
++
++    /*
++     *	If UDP is larger than RADIUS, shorten it to RADIUS.
++     */
++    if (length > ntohs(recv_auth->length))
++        length = ntohs(recv_auth->length);
++
++    /*
++     *	Verify that it's a valid RADIUS packet before doing ANYTHING with it.
++     */
++    attr = recv_buffer + AUTH_HDR_LEN;
++    while (attr < (recv_buffer + length))
++    {
++        if (attr[0] == 0)
++        {
++            rc_log(LOG_ERR,
++                   "rc_send_server: recvfrom: %s:%d: attribute zero is invalid",
++                   server_name, data->svc_port);
++            close(sockfd);
++            memset(secret, '\0', sizeof(secret));
++            return ERROR_RC;
++        }
++
++        if (attr[1] < 2)
++        {
++            rc_log(
++                LOG_ERR,
++                "rc_send_server: recvfrom: %s:%d: attribute length is too small",
++                server_name, data->svc_port);
++            close(sockfd);
++            memset(secret, '\0', sizeof(secret));
++            return ERROR_RC;
++        }
++
++        if ((attr + attr[1]) > (recv_buffer + length))
++        {
++            rc_log(
++                LOG_ERR,
++                "rc_send_server: recvfrom: %s:%d: attribute overflows the packet",
++                server_name, data->svc_port);
++            close(sockfd);
++            memset(secret, '\0', sizeof(secret));
++            return ERROR_RC;
++        }
++
++        attr += attr[1];
++    }
++
++    result =
++        rc_check_reply(recv_auth, BUFFER_LEN, secret, vector, data->seq_nbr,
++                       ((data->code == PW_ACCESS_REQUEST) &&
++                        data->message_authenticator_required));
++
++    length = ntohs(recv_auth->length) - AUTH_HDR_LEN;
++    if (length > 0)
++    {
++        data->receive_pairs =
++            rc_avpair_gen(rh, NULL, recv_auth->data, length, 0);
++    }
++    else
++    {
++        data->receive_pairs = NULL;
++    }
++
++    close(sockfd);
++    memset(secret, '\0', sizeof(secret));
++
++    if (result != OK_RC)
++    {
++        goto cleanup;
++    }
++
++    if (msg)
++    {
++        *msg = '\0';
++        pos = 0;
++        vp = data->receive_pairs;
++        while (vp)
++        {
++            if ((vp = rc_avpair_get(vp, PW_REPLY_MESSAGE, 0)))
++            {
++                strappend(msg, PW_MAX_MSG_SIZE, &pos, vp->strvalue);
++                strappend(msg, PW_MAX_MSG_SIZE, &pos, "\n");
++                vp = vp->next;
++            }
++        }
++    }
++
++    if ((recv_auth->code == PW_ACCESS_ACCEPT) ||
++        (recv_auth->code == PW_PASSWORD_ACK) ||
++        (recv_auth->code == PW_ACCOUNTING_RESPONSE) ||
++        (recv_auth->code == PW_ACCESS_CHALLENGE))
++    {
++        result = OK_RC;
++    }
++    else if ((recv_auth->code == PW_ACCESS_REJECT) ||
++             (recv_auth->code == PW_PASSWORD_REJECT))
++    {
++        result = REJECT_RC;
++    }
++    else
++    {
++        rc_log(
++            LOG_ERR,
++            "rc_send_server: received RADIUS server response neither ACCEPT nor REJECT, invalid");
++        result = BADRESP_RC;
++    }
++
++cleanup:
++    if (auth_addr)
++        freeaddrinfo(auth_addr);
++
++    return result;
+ }
+ 
+ /** Verify items in returned packet
+@@ -527,150 +617,233 @@ int rc_send_server (rc_handle const *rh, SEND_DATA *data, char *msg, unsigned fl
+  * @param seq_nbr a unique sequence number.
+  * @return %OK_RC upon success, %BADRESP_RC if anything looks funny.
+  */
+-static int rc_check_reply (AUTH_HDR *auth, int bufferlen, char const *secret, unsigned char const *vector, uint8_t seq_nbr)
++static int rc_check_reply(AUTH_HDR* auth, int bufferlen, const char* secret,
++                          const unsigned char* vector, uint8_t seq_nbr,
++                          unsigned message_authenticator_required)
+ {
+-	int             secretlen;
+-	int             totallen;
+-	unsigned char   calc_digest[AUTH_VECTOR_LEN];
+-	unsigned char   reply_digest[AUTH_VECTOR_LEN];
++    int secretlen;
++    int totallen;
++    unsigned char calc_digest[AUTH_VECTOR_LEN];
++    unsigned char reply_digest[AUTH_VECTOR_LEN];
++    uint8_t* message_authenticator = NULL;
++    uint8_t *attr, *end;
+ #ifdef DIGEST_DEBUG
+-	uint8_t		*ptr;
++    uint8_t* ptr;
+ #endif
+ 
+-	totallen = ntohs (auth->length);
+-	secretlen = (int)strlen (secret);
+-
+-	/* Do sanity checks on packet length */
+-	if ((totallen < 20) || (totallen > 4096))
+-	{
+-		rc_log(LOG_ERR, "rc_check_reply: received RADIUS server response with invalid length");
+-		return BADRESP_RC;
+-	}
+-
+-	/* Verify buffer space, should never trigger with current buffer size and check above */
+-	if ((totallen + secretlen) > bufferlen)
+-	{
+-		rc_log(LOG_ERR, "rc_check_reply: not enough buffer space to verify RADIUS server response");
+-		return BADRESP_RC;
+-	}
+-
+-	/* Verify that id (seq. number) matches what we sent */
+-	if (auth->id != seq_nbr)
+-	{
+-		rc_log(LOG_ERR, "rc_check_reply: received non-matching id in RADIUS server response");
+-		return BADRESP_RC;
+-	}
+-
+-	/* Verify the reply digest */
+-	memcpy ((char *) reply_digest, (char *) auth->vector, AUTH_VECTOR_LEN);
+-	memcpy ((char *) auth->vector, (char *) vector, AUTH_VECTOR_LEN);
+-	memcpy ((char *) auth + totallen, secret, secretlen);
++    totallen = ntohs(auth->length);
++    secretlen = (int)strlen(secret);
++
++    /* Do sanity checks on packet length */
++    if ((totallen < 20) || (totallen > 4096))
++    {
++        rc_log(
++            LOG_ERR,
++            "rc_check_reply: received RADIUS server response with invalid length");
++        return BADRESP_RC;
++    }
++
++    /* Verify buffer space, should never trigger with current buffer size and
++     * check above */
++    if ((totallen + secretlen) > bufferlen)
++    {
++        rc_log(
++            LOG_ERR,
++            "rc_check_reply: not enough buffer space to verify RADIUS server response");
++        return BADRESP_RC;
++    }
++
++    /* Verify that id (seq. number) matches what we sent */
++    if (auth->id != seq_nbr)
++    {
++        rc_log(
++            LOG_ERR,
++            "rc_check_reply: received non-matching id in RADIUS server response");
++        return BADRESP_RC;
++    }
++
++    attr = auth->data;
++    end = (uint8_t*)auth + totallen;
++
++    /*
++     *      Check that the packet is well-formed, and find the
++     * Message-Authenticator.
++     */
++    while (attr < end)
++    {
++        size_t remaining = end - attr;
++
++        if (remaining < 2)
++            return BADRESP_RC;
++
++        if (attr[1] < 2)
++            return BADRESP_RC;
++
++        if (attr[1] > remaining)
++            return BADRESP_RC;
++
++        if (attr[0] == PW_MESSAGE_AUTHENTICATOR)
++        {
++            if (attr[1] != 18)
++                return BADRESP_RC;
++
++            if (message_authenticator)
++                return BADRESP_RC;
++
++            message_authenticator = &attr[2];
++        }
++
++        attr += attr[1];
++    }
++
++    if (message_authenticator_required && !message_authenticator)
++    {
++        rc_log(
++            LOG_ERR,
++            "rc_check_reply: missing required message authenticator from RADIUS server");
++        return BADRESP_RC;
++    }
++
++    /* Verify the reply digest */
++    memcpy((char*)reply_digest, (char*)auth->vector, AUTH_VECTOR_LEN);
++    memcpy((char*)auth->vector, (char*)vector, AUTH_VECTOR_LEN);
++    memcpy((char*)auth + totallen, secret, secretlen);
+ #ifdef DIGEST_DEBUG
+-        rc_log(LOG_ERR, "Calculating digest on:");
+-        for (ptr = (u_char *)auth; ptr < ((u_char *)auth) + totallen + secretlen; ptr += 32) {
+-                char buf[65];
+-                int i;
+-
+-                buf[0] = '\0';
+-                for (i = 0; i < 32; i++) {
+-                        if (ptr + i >= ((u_char *)auth) + totallen + secretlen)
+-                                break;
+-                        sprintf(buf + i * 2, "%.2X", ptr[i]);
+-                }
+-                rc_log(LOG_ERR, "  %s", buf);
++    rc_log(LOG_ERR, "Calculating digest on:");
++    for (ptr = (u_char*)auth; ptr < ((u_char*)auth) + totallen + secretlen;
++         ptr += 32)
++    {
++        char buf[65];
++        int i;
++
++        buf[0] = '\0';
++        for (i = 0; i < 32; i++)
++        {
++            if (ptr + i >= ((u_char*)auth) + totallen + secretlen)
++                break;
++            sprintf(buf + i * 2, "%.2X", ptr[i]);
+         }
++        rc_log(LOG_ERR, "  %s", buf);
++    }
+ #endif
+-	rc_md5_calc (calc_digest, (unsigned char *) auth, totallen + secretlen);
++    rc_md5_calc(calc_digest, (unsigned char*)auth, totallen + secretlen);
+ #ifdef DIGEST_DEBUG
+-	rc_log(LOG_ERR, "Calculated digest is:");
+-        for (ptr = (u_char *)calc_digest; ptr < ((u_char *)calc_digest) + 16; ptr += 32) {
+-                char buf[65];
+-                int i;
+-
+-                buf[0] = '\0';
+-                for (i = 0; i < 32; i++) {
+-                        if (ptr + i >= ((u_char *)calc_digest) + 16)
+-                                break;
+-                        sprintf(buf + i * 2, "%.2X", ptr[i]);
+-                }
+-                rc_log(LOG_ERR, "  %s", buf);
++    rc_log(LOG_ERR, "Calculated digest is:");
++    for (ptr = (u_char*)calc_digest; ptr < ((u_char*)calc_digest) + 16;
++         ptr += 32)
++    {
++        char buf[65];
++        int i;
++
++        buf[0] = '\0';
++        for (i = 0; i < 32; i++)
++        {
++            if (ptr + i >= ((u_char*)calc_digest) + 16)
++                break;
++            sprintf(buf + i * 2, "%.2X", ptr[i]);
+         }
+-	rc_log(LOG_ERR, "Reply digest is:");
+-        for (ptr = (u_char *)reply_digest; ptr < ((u_char *)reply_digest) + 16; ptr += 32) {
+-                char buf[65];
+-                int i;
+-
+-                buf[0] = '\0';
+-                for (i = 0; i < 32; i++) {
+-                        if (ptr + i >= ((u_char *)reply_digest) + 16)
+-                                break;
+-                        sprintf(buf + i * 2, "%.2X", ptr[i]);
+-                }
+-                rc_log(LOG_ERR, "  %s", buf);
++        rc_log(LOG_ERR, "  %s", buf);
++    }
++    rc_log(LOG_ERR, "Reply digest is:");
++    for (ptr = (u_char*)reply_digest; ptr < ((u_char*)reply_digest) + 16;
++         ptr += 32)
++    {
++        char buf[65];
++        int i;
++
++        buf[0] = '\0';
++        for (i = 0; i < 32; i++)
++        {
++            if (ptr + i >= ((u_char*)reply_digest) + 16)
++                break;
++            sprintf(buf + i * 2, "%.2X", ptr[i]);
+         }
++        rc_log(LOG_ERR, "  %s", buf);
++    }
+ #endif
+ 
+-	if (memcmp ((char *) reply_digest, (char *) calc_digest,
+-		    AUTH_VECTOR_LEN) != 0)
+-	{
+-		rc_log(LOG_ERR, "rc_check_reply: received invalid reply digest from RADIUS server");
+-		return BADRESP_RC;
+-	}
+-
+-	return OK_RC;
++    if (memcmp((char*)reply_digest, (char*)calc_digest, AUTH_VECTOR_LEN) != 0)
++    {
++        rc_log(
++            LOG_ERR,
++            "rc_check_reply: received invalid reply digest from RADIUS server");
++        return BADRESP_RC;
++    }
++
++    if (message_authenticator)
++    {
++        memcpy((char*)reply_digest, (char*)message_authenticator,
++               AUTH_VECTOR_LEN);
++        memset(message_authenticator, 0, AUTH_VECTOR_LEN);
++        rc_hmac_md5_calc(calc_digest, (uint8_t*)auth, totallen, secret,
++                         secretlen);
++        if (memcmp((char*)reply_digest, (char*)calc_digest, AUTH_VECTOR_LEN) !=
++            0)
++        {
++            rc_log(
++                LOG_ERR,
++                "rc_check_reply: received invalid message authenticator from RADIUS server");
++            return BADRESP_RC;
++        }
++    }
+ 
++    return OK_RC;
+ }
+ 
+ /** Generates a random vector of AUTH_VECTOR_LEN octets
+  *
+  * @param vector a buffer with at least %AUTH_VECTOR_LEN bytes.
+  */
+-static void rc_random_vector (unsigned char *vector)
++static void rc_random_vector(unsigned char* vector)
+ {
+-	int             randno;
+-	int             i;
++    int randno;
++    int i;
+ #if defined(HAVE_GETENTROPY)
+-	if (getentropy(vector, AUTH_VECTOR_LEN) >= 0) {
+-		return;
+-	} /* else fall through */
++    if (getentropy(vector, AUTH_VECTOR_LEN) >= 0)
++    {
++        return;
++    } /* else fall through */
+ #elif defined(HAVE_DEV_URANDOM)
+-	int		fd;
+-
+-/* well, I added this to increase the security for user passwords.
+-   we use /dev/urandom here, as /dev/random might block and we don't
+-   need that much randomness. BTW, great idea, Ted!     -lf, 03/18/95	*/
+-
+-	if ((fd = open(_PATH_DEV_URANDOM, O_RDONLY)) >= 0)
+-	{
+-		unsigned char *pos;
+-		int readcount;
+-
+-		i = AUTH_VECTOR_LEN;
+-		pos = vector;
+-		while (i > 0)
+-		{
+-			readcount = read(fd, (char *)pos, i);
+-			if (readcount >= 0) {
+-				pos += readcount;
+-				i -= readcount;
+-			} else {
+-				if (errno != EINTR && errno != EAGAIN)
+-					goto fallback;
+-			}
+-		}
+-
+-		close(fd);
+-		return;
+-	} /* else fall through */
++    int fd;
++
++    /* well, I added this to increase the security for user passwords.
++       we use /dev/urandom here, as /dev/random might block and we don't
++       need that much randomness. BTW, great idea, Ted!     -lf, 03/18/95	*/
++
++    if ((fd = open(_PATH_DEV_URANDOM, O_RDONLY)) >= 0)
++    {
++        unsigned char* pos;
++        int readcount;
++
++        i = AUTH_VECTOR_LEN;
++        pos = vector;
++        while (i > 0)
++        {
++            readcount = read(fd, (char*)pos, i);
++            if (readcount >= 0)
++            {
++                pos += readcount;
++                i -= readcount;
++            }
++            else
++            {
++                if (errno != EINTR && errno != EAGAIN)
++                    goto fallback;
++            }
++        }
++
++        close(fd);
++        return;
++    } /* else fall through */
+ #endif
+- fallback:
+-	for (i = 0; i < AUTH_VECTOR_LEN;)
+-	{
+-		randno = rc_random();
+-		memcpy ((char *) vector, (char *) &randno, sizeof (int));
+-		vector += sizeof (int);
+-		i += sizeof (int);
+-	}
+-
+-	return;
++fallback:
++    for (i = 0; i < AUTH_VECTOR_LEN;)
++    {
++        randno = rc_random();
++        memcpy((char*)vector, (char*)&randno, sizeof(int));
++        vector += sizeof(int);
++        i += sizeof(int);
++    }
++
++    return;
+ }
+diff --git a/lib/util.h b/lib/util.h
+index f9c40de..3ff78d6 100644
+--- a/lib/util.h
++++ b/lib/util.h
+@@ -8,6 +8,7 @@
+ #ifndef UTIL_H
+ # define UTIL_H
+ 
++#include <freeradius-client.h>
+ #include <string.h>
+ 
+ #ifndef HAVE_STRLCPY
+diff --git a/src/radiusclient.c b/src/radiusclient.c
+index 25d93b6..56557dc 100644
+--- a/src/radiusclient.c
++++ b/src/radiusclient.c
+@@ -26,61 +26,403 @@
+  * $Id: radiusclient.c,v 1.8 2010/02/04 10:30:26 aland Exp $
+  */
+ 
++#include "pam_helper.h"
++
+ #include <ctype.h>
++#include <dlfcn.h>
++#include <errno.h>
++#include <freeradius-client.h>
++#include <security/pam_appl.h>
++#include <security/pam_ext.h>
++#include <security/pam_modules.h>
++#include <stdbool.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+ #include <unistd.h>
++#define INVALID_USR_CREDEN 0x80
++#define IPMI_USER_DISABLED 0x02
++#define MAX_USER_NAME_LENGTH 16
++#define SERVICE_NAME_LEN 16
++#define USER_NAME_LEN 48
++#define USER_BMC_IP 56
++#define MAX_IP_LEN 46
++#define MODCNT_ENVNAME "MDCount"
++#define SEL_LOGIN_SUCCESS 0
++#define SEL_LOGOUT_SUCCESS 1
++#define SEL_LOGIN_FAILED 3
++#define SEL_PUBKEY_LOGIN_FAILED 6
++#define TAIL_BIN_PATH "/usr/bin/tail"
++#define GREP_BIN_PATH "/bin/grep"
++#define AUDIT_INFO_FILE "/var/log/info.log"
++#define WEB_SERVICE_SECURE "HTTPS"
+ 
+-#include <freeradius-client.h>
++#define WEB_SERVICE_NON_SECURE "HTTP"
++#define MAX_ENV_COUNT 3
+ 
++/*need to remove while link*/
++#define QUEUE_NAME 64
++#define PAM_USERNAME 64
++#define ADD_PAM_USER 1
++#define PAM_RADIUS_RES_Q "/var/PAMRADIUSQ"
++#define PAM_HELPER_Q "/var/PAMHelper"
+ #define BUF_LEN 4096
+ 
+-int process(void *, VALUE_PAIR *, int, int);
++/* EAP Identity Response Field Indexes */
++#define EAP_CODE_INDEX 0       // EAP Code (Request/Response/Success/Failure)
++#define EAP_IDENTIFIER_INDEX 1 // Identifier
++#define EAP_LENGTH_MSB_INDEX 2 // Length (MSB)
++#define EAP_LENGTH_LSB_INDEX 3 // Length (LSB)
++#define EAP_TYPE_INDEX 4       // EAP Type (Identity, TLS, etc.)
++
++bool radiusEnableEapTLSStatus = false;
++struct privilageStruct
++{
++    int privNum;
++    char privStr[16];
++};
++int process(void*, VALUE_PAIR*, int, int, int*);
++int sigwrap_open(const char* pathname, int flags)
++{
++    while (1)
++    {
++        int hFile = open(pathname, flags);
++        if (hFile != -1)
++            return hFile;
++
++        if (errno != EINTR)
++            return hFile;
++    }
++}
++
++/*openbmc related pam modules invoking*/
++/* the name we store our context under */
++#define PLD_CTX "PAM_LDAPD_CTX"
++/* structure that stores the results for an nslcd call */
++struct nslcd_resp
++{
++    int res;
++    char msg[1024];
++};
++
++/* this struct represents the context that the PAM module keeps
++   between calls */
++struct pld_ctx
++{
++    char* username;
++    struct nslcd_resp saved_authz;
++    struct nslcd_resp saved_session;
++    int asroot;
++    char* oldpassword;
++};
++/* clear the context to all empty values */
++static void ctx_clear(struct pld_ctx* ctx)
++{
++    if (ctx->username)
++    {
++        free(ctx->username);
++        ctx->username = NULL;
++    }
++    ctx->saved_authz.res = PAM_SUCCESS;
++    memset(ctx->saved_authz.msg, 0, sizeof(ctx->saved_authz.msg));
++    ctx->saved_session.res = PAM_SUCCESS;
++    memset(ctx->saved_session.msg, 0, sizeof(ctx->saved_session.msg));
++    ctx->asroot = 0;
++    if (ctx->oldpassword)
++    {
++        memset(ctx->oldpassword, 0, strlen(ctx->oldpassword));
++        free(ctx->oldpassword);
++        ctx->oldpassword = NULL;
++    }
++}
++
++/* free the context (this is installed as handler into PAM) */
++static void ctx_free(pam_handle_t* pamh, void* data, int err)
++{
++    struct pld_ctx* ctx = data;
++    ctx_clear(ctx);
++    free(ctx);
++}
++
++/* try to get the module's context, returns a PAM status code */
++static int ctx_get(pam_handle_t* pamh, const char* username,
++                   struct pld_ctx** pctx)
++{
++    struct pld_ctx* ctx = NULL;
++    int rc;
++    /* try to get the context from PAM */
++    rc = pam_get_data(pamh, PLD_CTX, (const void**)&ctx);
++    if ((rc == PAM_SUCCESS) && (ctx != NULL))
++    {
++        /* if the user is different clear the context */
++        if ((ctx->username != NULL) && (strcmp(ctx->username, username) != 0))
++            ctx_clear(ctx);
++    }
++    else
++    {
++        /* allocate a new context */
++        ctx = calloc(1, sizeof(struct pld_ctx));
++        if (ctx == NULL)
++        {
++            fprintf(stderr, "calloc(): failed to allocate memory: %s",
++                    strerror(errno));
++            return PAM_BUF_ERR;
++        }
++        ctx_clear(ctx);
++        /* store the new context with the handler to free it */
++        rc = pam_set_data(pamh, PLD_CTX, ctx, ctx_free);
++        if (rc != PAM_SUCCESS)
++        {
++            ctx_free(pamh, ctx, 0);
++            fprintf(stderr, "failed to store context: %s",
++                    pam_strerror(pamh, rc));
++            /*pam_syslog(pamh, LOG_ERR, "failed to store context: %s",
++                       pam_strerror(pamh, rc));*/
++            return rc;
++        }
++    }
++    /* save the username in the context */
++    if (ctx->username == NULL)
++        ctx->username = strdup(username);
++    /* return the context */
++    *pctx = ctx;
++    return PAM_SUCCESS;
++}
++
++/* our PAM module configuration */
++struct pld_cfg
++{
++    int nullok;
++    int no_warn;
++    int ignore_unknown_user;
++    int ignore_authinfo_unavail;
++    int debug;
++    uid_t minimum_uid;
++};
++
++static void cfg_init(pam_handle_t* pamh, int flags, int argc, const char** argv,
++                     struct pld_cfg* cfg)
++{
++    int i;
++    /* initialise config with defaults */
++    cfg->nullok = 0;
++    cfg->no_warn = 0;
++    cfg->ignore_unknown_user = 0;
++    cfg->ignore_authinfo_unavail = 0;
++    cfg->debug = 0;
++    cfg->minimum_uid = 0;
++    /* go over arguments */
++    for (i = 0; i < argc; i++)
++    {
++        if (strcmp(argv[i], "use_first_pass") == 0)
++            /* ignore, this option is used by pam_get_authtok() internally */;
++        else if (strcmp(argv[i], "try_first_pass") == 0)
++            /* ignore, this option is used by pam_get_authtok() internally */;
++        else if (strcmp(argv[i], "nullok") == 0)
++            cfg->nullok = 1;
++        else if (strcmp(argv[i], "use_authtok") == 0)
++            /* ignore, this option is used by pam_get_authtok() internally */;
++        else if (strcmp(argv[i], "no_warn") == 0)
++            cfg->no_warn = 1;
++        else if (strcmp(argv[i], "ignore_unknown_user") == 0)
++            cfg->ignore_unknown_user = 1;
++        else if (strcmp(argv[i], "ignore_authinfo_unavail") == 0)
++            cfg->ignore_authinfo_unavail = 1;
++        else if (strcmp(argv[i], "debug") == 0)
++            cfg->debug = 1;
++        else if (strncmp(argv[i], "minimum_uid=", 12) == 0)
++            cfg->minimum_uid = (uid_t)atoi(argv[i] + 12);
++        else
++            fprintf(stderr, "unknown option: %s", argv[i]);
++    }
++    /* check flags */
++    if (flags & PAM_SILENT)
++        cfg->no_warn = 1;
++}
++
++static int init(pam_handle_t* pamh, struct pld_cfg* cfg, struct pld_ctx** ctx,
++                const char** username, const char** service, const char** ruser,
++                const char** rhost, const char** tty)
++{
++    int rc;
++    struct passwd* pwent;
++    /* get user name */
++    rc = pam_get_user(pamh, username, NULL);
++    if (rc != PAM_SUCCESS)
++    {
++        fprintf(stderr, "failed to get user name: %s", pam_strerror(pamh, rc));
++        return rc;
++    }
++    if ((*username == NULL) || ((*username)[0] == '\0'))
++    {
++        fprintf(stderr, "got empty user name");
++        return PAM_USER_UNKNOWN;
++    }
++    /* check uid is not applicable for radius hence commenting
++    if (cfg->minimum_uid > 0)
++    {
++      pwent = pam_modutil_getpwnam(args->pamh, *username);
++      if ((pwent != NULL) && (pwent->pw_uid < cfg->minimum_uid))
++      {
++        if (cfg->debug)
++          pam_syslog(pamh, LOG_DEBUG, "uid below minimum_uid; user=%s uid=%ld",
++                     *username, (long)pwent->pw_uid);
++        return cfg->ignore_unknown_user ? PAM_IGNORE : PAM_USER_UNKNOWN;
++      }
++    }*/
++    /* get our context */
++    rc = ctx_get(pamh, *username, ctx);
++    if (rc != PAM_SUCCESS)
++        return rc;
++    /* get service name */
++    rc = pam_get_item(pamh, PAM_SERVICE, (const void**)service);
++    if (rc != PAM_SUCCESS)
++    {
++        fprintf(stderr, "failed to get service name: %s",
++                pam_strerror(pamh, rc));
++        return rc;
++    }
++    /* get more PAM information (ignore errors) */
++    pam_get_item(pamh, PAM_RUSER, (const void**)ruser);
++    pam_get_item(pamh, PAM_RHOST, (const void**)rhost);
++    pam_get_item(pamh, PAM_TTY, (const void**)tty);
++    return PAM_SUCCESS;
++}
++
++/* map a NSLCD PAM status code to a PAM status code */
++static int nslcd2pam_rc(pam_handle_t* pamh, int rc)
++{
++#define map(i)                                                                 \
++    case NSLCD_##i:                                                            \
++        return i;
++    switch (rc)
++    {
++        case (PAM_SUCCESS):
++        case (PAM_PERM_DENIED):
++        case (PAM_AUTH_ERR):
++        case (PAM_CRED_INSUFFICIENT):
++        case (PAM_AUTHINFO_UNAVAIL):
++        case (PAM_USER_UNKNOWN):
++        case (PAM_MAXTRIES):
++        case (PAM_NEW_AUTHTOK_REQD):
++        case (PAM_ACCT_EXPIRED):
++        case (PAM_SESSION_ERR):
++        case (PAM_AUTHTOK_ERR):
++        case (PAM_AUTHTOK_DISABLE_AGING):
++        case (PAM_IGNORE):
++        case (PAM_ABORT):
++        case (PAM_AUTHTOK_EXPIRED):
++            return rc;
++        default:
++            fprintf(stderr, "unknown NSLCD_PAM_* code returned: %d", rc);
++            return PAM_ABORT;
++    }
++}
++
++/* check whether the specified user is handled by nslcd */
++static int nslcd_request_exists(pam_handle_t* pamh, struct pld_cfg* cfg,
++                                const char* username)
++{
++    return 0;
++}
++
++/* perform an authentication call over nslcd */
++static int nslcd_request_authc(
++    pam_handle_t* pamh, struct pld_cfg* cfg, const char* username,
++    const char* service, const char* ruser, const char* rhost, const char* tty,
++    const char* passwd, struct nslcd_resp* authc_resp,
++    struct nslcd_resp* authz_resp)
++{
++    return 0;
++}
+ 
+-static void
+-usage(void)
++/* do a session open nslcd request */
++static int nslcd_request_sess_o(pam_handle_t* pamh, struct pld_cfg* cfg,
++                                const char* username, const char* service,
++                                const char* ruser, const char* rhost,
++                                const char* tty, struct nslcd_resp* resp)
+ {
++    return 0;
++}
++
++/* do a session close nslcd request */
++static int nslcd_request_sess_c(pam_handle_t* pamh, struct pld_cfg* cfg,
++                                const char* username, const char* service,
++                                const char* ruser, const char* rhost,
++                                const char* tty, const char* sessid)
++{
++    return 0;
++}
++
++/* do a password modification nslcd call */
++static int nslcd_request_pwmod(
++    pam_handle_t* pamh, struct pld_cfg* cfg, const char* username,
++    const char* service, const char* ruser, const char* rhost, const char* tty,
++    int asroot, const char* oldpasswd, const char* newpasswd,
++    struct nslcd_resp* resp)
++{
++    return 0;
++}
++
++static int nslcd_request_config_get(pam_handle_t* pamh, struct pld_cfg* cfg,
++                                    int cfgopt, struct nslcd_resp* resp)
++{
++    return 0;
++}
+ 
+-    fprintf(stderr, "usage: radiusclient [-f config_file] [-p nas_port] [-s | [-a] a1=v1 [a2=v2[...[aN=vN]...]]]\n");
++/* remap the return code based on the configuration */
++static int remap_pam_rc(int rc, struct pld_cfg* cfg)
++{
++    if ((rc == PAM_AUTHINFO_UNAVAIL) && cfg->ignore_authinfo_unavail)
++        return PAM_IGNORE;
++    if ((rc == PAM_USER_UNKNOWN) && cfg->ignore_unknown_user)
++        return PAM_IGNORE;
++    return rc;
++}
++
++static void usage(void)
++{
++    fprintf(stderr, "usage: radiusclient [-f config_file] [-p nas_port] [-s | "
++                    "[-a] a1=v1 [a2=v2[...[aN=vN]...]]]\n");
+     exit(1);
+ }
+ 
+-int
+-main(int argc, char **argv)
++int main(int argc, char** argv)
+ {
+     int i, nas_port, ch, acct, server, ecount, firstline, theend;
+-    void *rh;
++    int privilage = 0;
++    void* rh;
+     size_t len;
+     VALUE_PAIR *send, **vp;
+     char *rc_conf, *cp;
+-    char lbuf[4096];
++    char lbuf[BUF_LEN];
+ 
+     rc_conf = RC_CONFIG_FILE;
+     nas_port = 5060;
+-
+     acct = 0;
+     server = 0;
+-    while ((ch = getopt(argc, argv, "af:p:s")) != -1) {
+-        switch (ch) {
+-        case 'f':
+-            rc_conf = optarg;
+-            break;
++    while ((ch = getopt(argc, argv, "af:p:s")) != -1)
++    {
++        switch (ch)
++        {
++            case 'f':
++                rc_conf = optarg;
++                break;
+ 
+-        case 'p':
+-            nas_port = atoi(optarg);
+-            break;
++            case 'p':
++                nas_port = atoi(optarg);
++                break;
+ 
+-        case 'a':
+-            acct = 1;
+-            break;
++            case 'a':
++                acct = 1;
++                break;
+ 
+-        case 's':
+-            server = 1;
+-            break;
++            case 's':
++                server = 1;
++                break;
+ 
+-        default:
+-            usage();
++            default:
++                usage();
+         }
+     }
+     argc -= optind;
+@@ -89,95 +431,691 @@ main(int argc, char **argv)
+     if ((argc == 0 && server == 0) || (argc != 0 && server != 0))
+         usage();
+ 
+-    if ((rh = rc_read_config(rc_conf)) == NULL) {
++    if ((rh = rc_read_config(rc_conf)) == NULL)
++    {
+         fprintf(stderr, "error opening radius configuration file\n");
+         exit(1);
+     }
+ 
+-    if (rc_read_dictionary(rh, rc_conf_str(rh, "dictionary")) != 0) {
++    if (rc_read_dictionary(rh, rc_conf_str(rh, "dictionary")) != 0)
++    {
+         fprintf(stderr, "error reading radius dictionary\n");
+         exit(2);
+     }
+ 
+-    if (server == 0) {
++    if (server == 0)
++    {
+         send = NULL;
+         vp = &send;
+-        for (i = 0; i < argc; i++) {
+-            if (rc_avpair_parse(rh, argv[i], vp) < 0) {
++        for (i = 0; i < argc; i++)
++        {
++            if (rc_avpair_parse(rh, argv[i], vp) < 0)
++            {
+                 fprintf(stderr, "%s: can't parse AV pair\n", argv[i]);
+                 exit(3);
+             }
+             vp = &send->next;
+         }
+-        exit(process(rh, send, acct, nas_port));
++        exit(process(rh, send, acct, nas_port, &privilage));
+     }
+-    while (1 == 1) {
++    while (1 == 1)
++    {
+         send = NULL;
+         vp = &send;
+         ecount = 0;
+         firstline = 1;
+         acct = 0;
+-        do {
++        do
++        {
+             len = 0;
+             cp = rc_fgetln(stdin, &len);
+             theend = 1;
+-            if (cp != NULL && len > 0) {
+-                if (firstline != 0) {
++            if (cp != NULL && len > 0)
++            {
++                if (firstline != 0)
++                {
+                     if (len >= 4 && memcmp(cp, "ACCT", 4) == 0)
+                         acct = 1;
+                     firstline = 0;
+                     theend = 0;
+                     continue;
+                 }
+-                for (i = 0; i < len; i++) {
+-                    if (!isspace(cp[i])) {
++                for (i = 0; i < len; i++)
++                {
++                    if (!isspace(cp[i]))
++                    {
+                         theend = 0;
+                         break;
+                     }
+                 }
+-                if (theend == 0) {
+-                    memcpy(lbuf, cp, len);
+-                    lbuf[len] = '\0';
+-                    if (rc_avpair_parse(rh, lbuf, vp) < 0) {
++                if (theend == 0)
++                {
++                    if (cp != NULL && len > 0)
++                    {
++                        size_t copy_len =
++                            (len >= sizeof(lbuf)) ? sizeof(lbuf) - 1 : len;
++                        memcpy(lbuf, cp, copy_len);
++                        lbuf[copy_len] = '\0';
++                    }
++                    if (rc_avpair_parse(rh, lbuf, vp) < 0)
++                    {
+                         fprintf(stderr, "%s: can't parse AV pair\n", lbuf);
+                         ecount++;
+-                    } else {
++                    }
++                    else
++                    {
+                         vp = &send->next;
+                     }
+                 }
+             }
+         } while (theend == 0);
+         if (send != NULL && ecount == 0)
+-            printf("%d\n\n", process(rh, send, acct, nas_port));
++            printf("%d\n\n", process(rh, send, acct, nas_port, &privilage));
+         else
+             printf("%d\n\n", -1);
+         fflush(stdout);
+         if (send != NULL)
+             rc_avpair_free(send);
+-		if (cp == NULL || len == 0)
++        if (cp == NULL || len <= 0)
+             break;
+     }
+     exit(0);
+ }
++void GetPAMItems(pam_handle_t* pamh, char* ip_addr, char* username,
++                 char* service)
++{
++    const void* login_info;
++    int retval = 0;
++    memset(ip_addr, 0, MAX_IP_LEN);
++    memset(username, 0, USER_NAME_LEN);
++    memset(service, 0, SERVICE_NAME_LEN);
+ 
+-int
+-process(void *rh, VALUE_PAIR *send, int acct, int nas_port)
++    retval = pam_get_item(pamh, PAM_RHOST, (const void**)&login_info);
++    if (retval == PAM_SUCCESS)
++    {
++        if (login_info)
++            memcpy(ip_addr, login_info,
++                   MIN(MAX_IP_LEN,
++                       1 + strnlen((const char*)login_info, MAX_IP_LEN)));
++    }
++    retval = pam_get_item(pamh, PAM_SERVICE, (const void**)&login_info);
++    if (retval == PAM_SUCCESS)
++    {
++        memcpy(service, login_info,
++               MIN(SERVICE_NAME_LEN,
++                   1 + strnlen((const char*)login_info, SERVICE_NAME_LEN)));
++    }
++    retval = pam_get_item(pamh, PAM_USER, (const void**)&login_info);
++    if (retval == PAM_SUCCESS)
++    {
++        memcpy(username, login_info,
++               MIN(USER_NAME_LEN,
++                   1 + strnlen((const char*)login_info, USER_NAME_LEN)));
++    }
++    return;
++}
++void GetModuleCountEnv(pam_handle_t* pamh, int* cntr)
+ {
+-    VALUE_PAIR *received;
+-    char msg[PW_MAX_MSG_SIZE];
+-    char buf[BUF_LEN];
+-    int i;
++    char env_count[MAX_ENV_COUNT] = {0};
++    char env_name[USER_NAME_LEN] = {0};
++
++    /*Check MDCount Environment variable is available?. if yes
++    take the module count (number of modules it traversed)*/
++    if (NULL != pam_getenv(pamh, MODCNT_ENVNAME))
++    {
++        if (snprintf(env_count, sizeof(env_count), "%s",
++                     pam_getenv(pamh, MODCNT_ENVNAME)) >= MAX_ENV_COUNT)
++        {
++            return;
++        }
++        *cntr = atoi(env_count);
++    }
++    if (*cntr > 4)
++        *cntr = 0;
++    *cntr = *cntr + 1;
++    sprintf(env_name, "%s=%d", MODCNT_ENVNAME, *cntr);
++    if (PAM_SUCCESS != pam_putenv(pamh, env_name))
++    {
++        fprintf(stderr, "GetModuleCountEnv_1 = %s \n", env_name);
++    }
++    return;
++}
++PAM_EXTERN int pam_sm_authenticate(pam_handle_t* pamh, int flags, int argc,
++                                   const char** argv)
++{
++    /*radius module related variable declarations*/
++    int i, nas_port, ch, acct, server, ecount, firstline, theend,
++        ret = 0, pam_handle;
++    void* rh;
++    size_t len;
++    VALUE_PAIR *send, **vp;
++    char *rc_conf, *cp;
++    char lbuf[BUF_LEN];
++    int retval = PAM_SUCCESS;
++    int pam_err = 0;
++    int privilage = 0;
++    char userNamePassword[256] = {0};
++    /*pam module related variable declrations*/
++    int rc;
++    struct pld_cfg cfg;
++    struct pld_ctx* ctx;
++    const char *username, *service;
++    const char *ruser = NULL, *rhost = NULL, *tty = NULL;
++    char* passwd = NULL;
++    struct nslcd_resp resp;
++    /// usr/lib/libnss_radius.so
++    int (*post_pam_userinfo)(pamusrpkt_t* pu, char* queue);
++    void* bnss_radius_handle = NULL;
+ 
++    int (*getRadiusEnableDbusProperty)(bool* radiusEnableStatus);
++    int (*getRadiusEnableEapTLSDbusProperty)(bool* radiusEnableEapTLSStatus);
++    int (*getRadiusPortDbusProperty)(int* radiusPortNo);
++    bool radiusEnableStatus = false;
++    int radiusPortNo = 0;
++    fprintf(stderr, "RADIUS User Authentication Started\n");
++    bnss_radius_handle = dlopen("/usr/lib/libnss_radius.so", RTLD_LAZY);
++    if (bnss_radius_handle)
++    {
++        getRadiusEnableDbusProperty =
++            dlsym(bnss_radius_handle, "getRadiusEnableDbusProperty");
++        if (NULL != getRadiusEnableDbusProperty)
++        {
++            retval = getRadiusEnableDbusProperty(&radiusEnableStatus);
++            if ((retval < 0) || (radiusEnableStatus == false))
++            {
++                retval = PAM_AUTH_ERR;
++                dlclose(bnss_radius_handle);
++                return retval;
++            }
++        }
++        getRadiusPortDbusProperty =
++            dlsym(bnss_radius_handle, "getRadiusPortDbusProperty");
++        if (NULL != getRadiusPortDbusProperty)
++        {
++            retval = getRadiusPortDbusProperty(&radiusPortNo);
++            if ((retval < 0) || (radiusPortNo != 1812))
++            {
++                retval = PAM_AUTH_ERR;
++                dlclose(bnss_radius_handle);
++                return retval;
++            }
++        }
++        getRadiusEnableEapTLSDbusProperty =
++            dlsym(bnss_radius_handle, "getRadiusEnableEapTLSDbusProperty");
++        if (NULL != getRadiusEnableEapTLSDbusProperty)
++        {
++            retval =
++                getRadiusEnableEapTLSDbusProperty(&radiusEnableEapTLSStatus);
++            if (retval < 0)
++            {
++                retval = -1;
++                return retval;
++            }
++        }
++    }
++    if (bnss_radius_handle != NULL)
++    {
++        dlclose(bnss_radius_handle);
++    }
++
++    /*libnss_radius related variables declartions*/
++    pamusrpkt_t pam_radius_req, pam_radius_res;
++    memset(&pam_radius_req, 0, sizeof(pamusrpkt_t));
++    memset(&pam_radius_res, 0, sizeof(pamusrpkt_t));
++    /* set up configuration */
++    cfg_init(pamh, flags, argc, argv, &cfg);
++    rc = init(pamh, &cfg, &ctx, &username, &service, &ruser, &rhost, &tty);
++    if (rc != PAM_SUCCESS)
++    {
++        return remap_pam_rc(rc, &cfg);
++    }
++    if (username == NULL || username[0] == '\0')
++    {
++        fprintf(stderr, "username is NULL or empty");
++        return PAM_USER_UNKNOWN;
++    }
++    if (strlen(username) > PAM_USERNAME)
++    {
++        fprintf(stderr, "username exceeds maximum length");
++        return PAM_USER_UNKNOWN;
++    }
++
++    i = 0;
++
++    rc = pam_get_authtok(pamh, PAM_AUTHTOK, (const char**)&passwd, NULL);
++    if (rc != PAM_SUCCESS)
++    {
++        retval = PAM_AUTH_ERR;
++        /* very strange. */
++        return rc;
++    }
++
++    /* check password */
++    if (!cfg.nullok && ((passwd == NULL) || (passwd[0] == '\0')))
++    {
++        if (cfg.debug)
++            fprintf(stderr, "user has empty password, access denied");
++        return PAM_AUTH_ERR;
++    }
++    rc_conf = RC_CONFIG_FILE;
++    nas_port = 5060;
++
++    acct = 0;
++    server = 0;
++    while ((ch = getopt(argc, argv, "af:p:s")) != -1)
++    {
++        switch (ch)
++        {
++            case 'f':
++                rc_conf = optarg;
++                break;
++
++            case 'p':
++                nas_port = atoi(optarg);
++                break;
++
++            case 'a':
++                acct = 1;
++                break;
++
++            case 's':
++                server = 1;
++                break;
++
++            default:
++                usage();
++        }
++    }
++    argc -= optind;
++    argv += optind;
++    if ((argc == 0 && server == 0) || (argc != 0 && server != 0))
++        usage();
++
++    if ((rh = rc_read_config(rc_conf)) == NULL)
++    {
++        retval = PAM_AUTH_ERR;
++        return retval;
++    }
++
++    if (rc_read_dictionary(rh, rc_conf_str(rh, "dictionary")) != 0)
++    {
++        retval = PAM_AUTH_ERR;
++        return retval;
++    }
++
++    if (server == 0)
++    {
++        send = NULL;
++        vp = &send;
++        ret = snprintf(userNamePassword, sizeof(userNamePassword),
++                       "User-Name=%s Password=%s", username, passwd);
++        if (ret < 0 || ret >= (signed)sizeof(userNamePassword))
++        {
++            fprintf(stderr, "Buffer Overflow in userNamePassword\n");
++            return PAM_AUTH_ERR;
++        }
++        if (rc_avpair_parse(rh, userNamePassword, vp) < 0)
++        {
++            retval = PAM_AUTH_ERR;
++            return retval;
++        }
++        retval = process(rh, send, acct, nas_port, &privilage);
++        if (retval == 0)
++        {
++            // Add user
++            pam_radius_req.action = ADD_PAM_USER;
++            pam_radius_req.pt = PAM_RADIUS_TBL;
++            ret = snprintf(pam_radius_req.srcq, sizeof(pam_radius_req.srcq),
++                           "%s", PAM_RADIUS_RES_Q);
++            if (ret < 0 || ret >= (signed)sizeof(pam_radius_req.srcq))
++            {
++                fprintf(stderr, "Buffer Overflow\n");
++                return PAM_AUTH_ERR;
++            }
++            ret = snprintf(pam_radius_req.usr.name,
++                           sizeof(pam_radius_req.usr.name), "%s", username);
++            if (ret < 0 || ret >= (signed)sizeof(pam_radius_req.usr.name))
++            {
++                fprintf(stderr, "Buffer Overflow\n");
++                return PAM_AUTH_ERR;
++            }
++            // pam_radius_req.usr.priv = privilege;
++            // this need to updated while sync
++            pam_radius_req.usr.priv = privilage;
++            PAMH_CREATE_Q(PAM_RADIUS_RES_Q);
++            PAMH_OPEN_Q(PAM_RADIUS_RES_Q, pam_handle);
++            bnss_radius_handle = dlopen("/usr/lib/libnss_radius.so", RTLD_LAZY);
++            if (bnss_radius_handle)
++            {
++                post_pam_userinfo =
++                    dlsym(bnss_radius_handle, "post_pam_userinfo");
++                if (NULL != post_pam_userinfo)
++                {
++                    pam_radius_req.checksum = 0;
++                    pam_radius_req.checksum =
++                        calculate_checksum(&pam_radius_req);
++                    retval = post_pam_userinfo(&pam_radius_req, PAM_HELPER_Q);
++                    if (retval < 0)
++                    {
++                        retval = PAM_AUTHINFO_UNAVAIL;
++                        return retval;
++                    }
++                }
++            }
++
++            return PAM_SUCCESS;
++        }
++        else
++        {
++            // authentication failure
++            return PAM_AUTH_ERR;
++        }
++        while (1 == 1)
++        {
++            send = NULL;
++            vp = &send;
++            ecount = 0;
++            firstline = 1;
++            acct = 0;
++            do
++            {
++                len = 0;
++                cp = rc_fgetln(stdin, &len);
++                theend = 1;
++                if (cp != NULL && len > 0)
++                {
++                    if (firstline != 0)
++                    {
++                        if (len >= 4 && memcmp(cp, "ACCT", 4) == 0)
++                            acct = 1;
++                        firstline = 0;
++                        theend = 0;
++                        continue;
++                    }
++                    for (i = 0; i < len; i++)
++                    {
++                        if (!isspace(cp[i]))
++                        {
++                            theend = 0;
++                            break;
++                        }
++                    }
++                    if (theend == 0)
++                    {
++                        if (cp != NULL && len > 0)
++                        {
++                            size_t copy_len =
++                                (len >= sizeof(lbuf)) ? sizeof(lbuf) - 1 : len;
++                            memcpy(lbuf, cp, copy_len);
++                            lbuf[copy_len] = '\0';
++                        }
++                        if (rc_avpair_parse(rh, lbuf, vp) < 0)
++                        {
++                            ecount++;
++                        }
++                        else
++                        {
++                            vp = &send->next;
++                        }
++                    }
++                }
++            } while (theend == 0);
++            if (send != NULL && ecount == 0)
++                printf("%d\n\n", process(rh, send, acct, nas_port, &privilage));
++            else
++                printf("%d\n\n", -1);
++            fflush(stdout);
++            if (send != NULL)
++                rc_avpair_free(send);
++            if (cp == NULL || len <= 0)
++                break;
++        }
++        return (PAM_SUCCESS);
++    }
++}
++
++PAM_EXTERN int pam_sm_setcred(pam_handle_t* pamh, int flags, int argc,
++                              const char* argv[])
++{
++    if (0)
++    {
++        pamh = pamh;
++        flags = flags;
++        argc = argc;
++        argv = argv;
++    }
++
++    return (PAM_SUCCESS);
++}
++
++PAM_EXTERN int pam_sm_acct_mgmt(pam_handle_t* pamh, int flags, int argc,
++                                const char* argv[])
++{
++    if (0)
++    {
++        pamh = pamh;
++        flags = flags;
++        argc = argc;
++        argv = argv;
++    }
++    return (PAM_SUCCESS);
++}
++PAM_EXTERN int pam_sm_open_session(pam_handle_t* pamh, int flags, int argc,
++                                   const char* argv[])
++{
++    char ip_addr[MAX_IP_LEN] = {0};
++    char username[USER_NAME_LEN] = {0};
++    char service[SERVICE_NAME_LEN] = {0};
++    int priv = 0;
++    /*Get the Information from handler*/
++    GetPAMItems(pamh, ip_addr, username, service);
++    if (0)
++    {
++        flags = flags;
++        argc = argc;
++        argv = argv;
++    }
++    return (PAM_SUCCESS);
++}
++PAM_EXTERN int pam_sm_close_session(pam_handle_t* pamh, int flags, int argc,
++                                    const char* argv[])
++{
++    char ip_addr[MAX_IP_LEN] = {0};
++    char username[USER_NAME_LEN] = {0};
++    char service[SERVICE_NAME_LEN] = {0};
++    int priv = 0;
++    /*Get the Information from handler*/
++    GetPAMItems(pamh, ip_addr, username, service);
++    if (0)
++    {
++        pamh = pamh;
++        flags = flags;
++        argc = argc;
++        argv = argv;
++    }
++    return (PAM_SUCCESS);
++}
++
++PAM_EXTERN int pam_sm_chauthtok(pam_handle_t* pamh, int flags, int argc,
++                                const char* argv[])
++{
++    if (0)
++    {
++        pamh = pamh;
++        flags = flags;
++        argc = argc;
++        argv = argv;
++    }
++    return PAM_SUCCESS;
++}
++
++int process(void* rh, VALUE_PAIR* send, int acct, int nas_port, int* privilage)
++{
++    VALUE_PAIR* received;
++    char msg[BUF_LEN];
++    char buf[BUF_LEN];
++    char privlage[1024] = {0};
++    char* groupName = NULL;
++    char username[256] = {0};
++    int i, retval = 0;
++    char* serverRes;
++    int (*getDbusProperty)(char* groupName, char* priv);
++    void* bnss_radius_handle = NULL;
++    struct privilageStruct privBuf[3] = {
++        {1, "priv-admin"}, {2, "priv-operator"}, {3, "priv-user"}};
++    int iter = 0;
+     received = NULL;
+-    if (acct == 0) {
++    VALUE_PAIR* vp;
++    for (vp = send; vp != NULL; vp = vp->next)
++    {
++        if (vp->attribute == PW_USER_NAME)
++        {
++            int ret = snprintf(username, sizeof(username), "%s", vp->strvalue);
++            if (ret < 0 || ret >= (signed)sizeof(username))
++            {
++                fprintf(stderr,
++                        "Buffer overflow or encoding error in username\n");
++                return PAM_AUTH_ERR;
++            }
++            break;
++        }
++    }
++    if (acct == 0)
++    {
+         i = rc_auth(rh, nas_port, send, &received, msg);
+-        if (received != NULL) {
+-            printf("%s", rc_avpair_log(rh, received, buf, BUF_LEN));
++        if (received != NULL)
++        {
++            rc_avpair_free(send);
++            send = NULL;
++            if (radiusEnableEapTLSStatus == true && i == 0)
++            {
++                rc_avpair_free(received);
++                received = NULL;
++                unsigned char* eap_identity;
++                unsigned int eap_identityLen = 5 + strlen(username);
++                size_t uname_len = strlen(username);
++
++                eap_identity = malloc(eap_identityLen * sizeof(char));
++
++                eap_identity[EAP_CODE_INDEX] = EAP_RESPONSE;
++                eap_identity[EAP_IDENTIFIER_INDEX] = 0x01;
++                eap_identity[EAP_LENGTH_MSB_INDEX] =
++                    (eap_identityLen >> 8) & 0xFF;
++                eap_identity[EAP_LENGTH_LSB_INDEX] = eap_identityLen & 0xFF;
++                eap_identity[EAP_TYPE_INDEX] = EAP_IDENTITY;
++                if (uname_len > eap_identityLen - 5)
++                {
++                    fprintf(stderr,
++                            "Username length exceeds EAP identity buffer\n");
++                    free(eap_identity);
++                    return PAM_AUTH_ERR;
++                }
++                memcpy(eap_identity + 5, username,
++                       strlen(username)); // Username
++
++                if (rc_avpair_add(rh, &send, PW_EAP_MESSAGE, eap_identity,
++                                  eap_identityLen, 0) == NULL)
++                {
++                    retval = PAM_AUTH_ERR;
++                    rc_avpair_free(send);
++                    send = NULL;
++                    free(eap_identity);
++                    eap_identity = NULL;
++                    return retval;
++                }
++                free(eap_identity);
++                eap_identity = NULL;
++
++                i = rc_auth(rh, nas_port, send, &received, msg);
++                if (i != OK_RC || received == NULL)
++                {
++                    retval = PAM_AUTH_ERR;
++                    rc_avpair_free(send);
++                    send = NULL;
++                    return retval;
++                }
++
++                rc_avpair_free(send);
++                send = NULL;
++                i = rc_auth_eaptls(rh, nas_port, &received, msg);
++                if (i != OK_RC || received == NULL)
++                {
++                    retval = PAM_AUTH_ERR;
++                    return retval;
++                }
++            }
++            serverRes = rc_avpair_log(rh, received, buf, BUF_LEN);
++            if (serverRes == NULL || serverRes[0] == '\0')
++            {
++                fprintf(stderr,
++                        "Failed to extract server response attributes\n");
++                rc_avpair_free(received);
++                return -1;
++            }
++            groupName = malloc((strlen(serverRes) + 1) * sizeof(char));
++            if (groupName == NULL)
++            {
++                retval = -1;
++                rc_avpair_free(received);
++                return retval;
++            }
++            memset(groupName, 0, strlen(serverRes) + 1);
++            memcpy(groupName, serverRes, strlen(serverRes));
++            groupName[strlen(serverRes)] = '\0';
++            bnss_radius_handle = dlopen("/usr/lib/libnss_radius.so", RTLD_LAZY);
++            if (bnss_radius_handle)
++            {
++                getDbusProperty = dlsym(bnss_radius_handle, "getDbusProperty");
++                if (NULL != getDbusProperty)
++                {
++                    retval = getDbusProperty(groupName, privlage);
++                    if ((retval < 0) || (strlen(groupName) < 1) ||
++                        (strlen(privlage) < 1))
++                    {
++                        retval = -1;
++                        rc_avpair_free(received);
++                        free(groupName);
++                        return retval;
++                    }
++                    else
++                    {
++                        for (iter = 0;
++                             iter < (sizeof(privBuf) / sizeof(privBuf[0]));
++                             iter++)
++                        {
++                            if ((strcmp(privBuf[iter].privStr, privlage)) == 0)
++                            {
++                                *privilage = privBuf[iter].privNum;
++                                break;
++                            }
++                        }
++                        if (iter >= ((sizeof(privBuf) / sizeof(privBuf[0]))))
++                        {
++                            retval = -1;
++                            rc_avpair_free(received);
++                            free(groupName);
++                            return retval;
++                        }
++                    }
++                }
++            }
++            free(groupName);
+             rc_avpair_free(received);
++            received = NULL;
+         }
+-    } else {
++    }
++    else
++    {
+         i = rc_acct(rh, nas_port, send);
+     }
+-
+-    return (i == OK_RC) ? 0 : 1;
++    if (i == OK_RC)
++    {
++        fprintf(stderr, "RADIUS Authentication Successful (RC = %d)\n", i);
++        return 0;
++    }
++    else
++    {
++        fprintf(stderr, "RADIUS Authentication Failed (RC = %d)\n", i);
++        return 1;
++    }
+ }
+-- 
+2.34.1
+

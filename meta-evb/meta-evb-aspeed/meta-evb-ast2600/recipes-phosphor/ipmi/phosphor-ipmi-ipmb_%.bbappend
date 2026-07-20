@@ -5,7 +5,7 @@ SRC_URI += " \
             file://ipmb-channels.json \
            "
 do_install:append() {
-    install -D ${WORKDIR}/ipmb-channels.json \
+    install -D ${UNPACKDIR}/ipmb-channels.json \
                ${D}/usr/share/ipmbbridge
 }
 

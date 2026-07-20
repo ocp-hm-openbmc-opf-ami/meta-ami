@@ -1,0 +1,288 @@
+From 7b848a510f407b78e602f39c7eac0f320329ae98 Mon Sep 17 00:00:00 2001
+From: rupeshS <rupeshs@ami.com>
+Date: Tue, 28 Apr 2026 13:01:12 +0000
+Subject: 
+This is patch adds the u-boot specific changes to enable bmc to host commnication via pcie
+
+Signed-off-by: rupeshS <rupeshs@ami.com>
+---
+ arch/arm/dts/ast2600-evb.dts                  | 19 +++++++++-
+ arch/arm/dts/ast2600.dtsi                     | 26 +++++++++-----
+ drivers/pci/Makefile                          |  2 +-
+ .../{aspeed_rc_bridge.c => aspeed_pcie_phy.c} | 26 ++++++--------
+ drivers/pci/pcie_aspeed.c                     | 35 +++++++++++++++----
+ drivers/pci/pcie_aspeed.h                     |  2 +-
+ 6 files changed, 77 insertions(+), 33 deletions(-)
+ rename drivers/pci/{aspeed_rc_bridge.c => aspeed_pcie_phy.c} (78%)
+
+diff --git a/arch/arm/dts/ast2600-evb.dts b/arch/arm/dts/ast2600-evb.dts
+index 89e0ffde8d..272030ca23 100644
+--- a/arch/arm/dts/ast2600-evb.dts
++++ b/arch/arm/dts/ast2600-evb.dts
+@@ -36,6 +36,23 @@
+ 			clock-frequency = <800000000>;
+ 		};
+ 	};
++
++	/*
++	 * reserved-memory layout
++	 * 0xb100_0000 ~ 0xb100_FFFF is reserved for mctp0 controller in linux side.
++	 * 0xb101_0000 ~ 0xb101_FFFF is reserved for mctp1 controller in linux side.
++	 */
++	reserved-memory {
++		mctp0_reserved: mctp0_reserved@b1000000 {
++			reg = <0xb1000000 0x10000>;
++			no-map;
++		};
++
++		mctp1_reserved: mctp1_reserved@b1010000 {
++			reg = <0xb1010000 0x10000>;
++			no-map;
++		};
++	};
+ };
+ 
+ &uart5 {
+@@ -276,7 +293,7 @@
+ 	pinctrl-0 = <&pinctrl_i2c9_default>;
+ };
+ 
+-&pcie_rc_bridge1 {
++&pcie_phy1 {
+ 	status = "okay";
+ };
+ 
+diff --git a/arch/arm/dts/ast2600.dtsi b/arch/arm/dts/ast2600.dtsi
+index cef93e6cc5..fa47c1ed84 100644
+--- a/arch/arm/dts/ast2600.dtsi
++++ b/arch/arm/dts/ast2600.dtsi
+@@ -401,8 +401,8 @@
+ 				};
+ 			};
+ 
+-			pcie_rc_bridge0: pcie@1e6ed000 {
+-				compatible = "aspeed,ast2600-rc_bridge";
++			pcie_phy0: phy@1e6ed000 {
++				compatible = "aspeed,ast2600-pcie_phy";
+ 				reg = <0x1e6ed000 0x100>;
+ 				resets = <&rst ASPEED_RESET_PCIE_DEV_O>;
+ 				pinctrl-names = "default";
+@@ -410,8 +410,8 @@
+ 				status = "disabled";
+ 			};
+ 
+-			pcie_rc_bridge1: pcie@1e6ed200 {
+-				compatible = "aspeed,ast2600-rc_bridge";
++			pcie_phy1: phy@1e6ed200 {
++				compatible = "aspeed,ast2600-pcie_phy";
+ 				reg = <0x1e6ed200 0x100>;
+ 				resets = <&rst ASPEED_RESET_PCIE_RC_O>;
+ 				pinctrl-names = "default";
+@@ -428,9 +428,9 @@
+ 						0x82000000 0x0 0x60000000 0x60000000 0x0 0x20000000>; /* non-prefetchable memory */
+ 				device_type = "pci";
+ 				bus-range = <0x00 0xff>;
+-				resets = <&rst ASPEED_RESET_H2X>;
+-				slot0-handle = <&pcie_rc_bridge0>;
+-				slot1-handle = <&pcie_rc_bridge1>;
++				resets = <&rst ASPEED_RESET_H2X>, <&rst ASPEED_RESET_PCIE_DEV_O>, <&rst ASPEED_RESET_PCIE_RC_O>;
++				slot0-handle = <&pcie_phy0>;
++				slot1-handle = <&pcie_phy1>;
+ 				status = "disabled";
+ 			};
+ 
+diff --git a/drivers/pci/Makefile b/drivers/pci/Makefile
+index 0268e01029..a60bff41f2 100644
+--- a/drivers/pci/Makefile
++++ b/drivers/pci/Makefile
+@@ -20,7 +20,7 @@ obj-$(CONFIG_FSL_PCI_INIT) += fsl_pci_init.o
+ obj-$(CONFIG_PCI_INDIRECT_BRIDGE) += pci_indirect.o
+ obj-$(CONFIG_PCI_GT64120) += pci_gt64120.o
+ obj-$(CONFIG_PCI_MSC01) += pci_msc01.o
+-obj-$(CONFIG_PCIE_ASPEED) += pcie_aspeed.o aspeed_rc_bridge.o
++obj-$(CONFIG_PCIE_ASPEED) += pcie_aspeed.o aspeed_pcie_phy.o
+ obj-$(CONFIG_PCIE_IMX) += pcie_imx.o
+ obj-$(CONFIG_FTPCI100) += pci_ftpci100.o
+ obj-$(CONFIG_PCI_MVEBU) += pci_mvebu.o
+diff --git a/drivers/pci/aspeed_rc_bridge.c b/drivers/pci/aspeed_pcie_phy.c
+similarity index 78%
+rename from drivers/pci/aspeed_rc_bridge.c
+rename to drivers/pci/aspeed_pcie_phy.c
+index 31b3617a82..de03d5c4f3 100644
+--- a/drivers/pci/aspeed_rc_bridge.c
++++ b/drivers/pci/aspeed_pcie_phy.c
+@@ -37,7 +37,7 @@ DECLARE_GLOBAL_DATA_PTR;
+ #define PCIE_LINK_5G			BIT(17)
+ #define PCIE_LINK_2_5G			BIT(16)
+ 
+-extern int aspeed_rc_bridge_link_status(struct udevice *dev)
++extern int aspeed_pcie_phy_link_status(struct udevice *dev)
+ {
+ 	struct aspeed_rc_bridge *rc_bridge = dev_get_priv(dev);
+ 	u32 pcie_link = readl(rc_bridge->reg + ASPEED_PCIE_LINK);
+@@ -45,11 +45,7 @@ extern int aspeed_rc_bridge_link_status(struct udevice *dev)
+ 
+ 	printf("RC Bridge %s : ", dev->name);
+ 	if (pcie_link & PCIE_LINK_STS) {
+-		printf("Link up - ");
+-		if (pcie_link & PCIE_LINK_5G)
+-			printf("5G\n");
+-		if (pcie_link & PCIE_LINK_2_5G)
+-			printf("2.5G\n");
++		printf("Link up\n");
+ 		ret = 1;
+ 	} else {
+ 		printf("Link down\n");
+@@ -59,7 +55,7 @@ extern int aspeed_rc_bridge_link_status(struct udevice *dev)
+ 	return ret;
+ }
+ 
+-static int aspeed_rc_bridge_probe(struct udevice *dev)
++static int aspeed_pcie_phy_probe(struct udevice *dev)
+ {
+ 	struct reset_ctl reset_ctl;
+ 	int ret = 0;
+@@ -75,8 +71,8 @@ static int aspeed_rc_bridge_probe(struct udevice *dev)
+ 	}
+ 
+ 	//reset rc bridge
+-	reset_assert(&reset_ctl);
+-	reset_deassert(&reset_ctl);
++//	reset_assert(&reset_ctl);
++//	reset_deassert(&reset_ctl);
+ 
+ 	rc_bridge->reg = devfdt_get_addr_ptr(dev);
+ 	if (IS_ERR(rc_bridge->reg))
+@@ -84,21 +80,21 @@ static int aspeed_rc_bridge_probe(struct udevice *dev)
+ 
+ 	writel(PCIE_UNLOCK, rc_bridge->reg + ASPEED_PCIE_LOCK);
+ 	writel(ROOT_COMPLEX_ID(0x3), rc_bridge->reg + ASPEED_PCIE_GLOBAL);
+-	mdelay(100);
++//	mdelay(100);
+ 
+ 	return 0;
+ }
+ 
+-static const struct udevice_id aspeed_rc_bridge_ids[] = {
+-	{ .compatible = "aspeed,ast2600-rc_bridge" },
++static const struct udevice_id aspeed_pcie_phy_ids[] = {
++	{ .compatible = "aspeed,ast2600-pcie_phy" },
+ 	{ }
+ };
+ 
+ U_BOOT_DRIVER(aspeed_rc_bridge) = {
+-	.name		= "aspeed_rc_bridge",
++	.name		= "aspeed_pcie_phy",
+ 	.id			= UCLASS_MISC,
+-	.of_match	= aspeed_rc_bridge_ids,
+-	.probe		= aspeed_rc_bridge_probe,
++	.of_match	= aspeed_pcie_phy_ids,
++	.probe		= aspeed_pcie_phy_probe,
+ 	.priv_auto_alloc_size	= sizeof(struct aspeed_rc_bridge),
+ };
+ 
+diff --git a/drivers/pci/pcie_aspeed.c b/drivers/pci/pcie_aspeed.c
+index d844721db0..98641c504d 100644
+--- a/drivers/pci/pcie_aspeed.c
++++ b/drivers/pci/pcie_aspeed.c
+@@ -381,7 +381,7 @@ void aspeed_pcie_rc_slot_enable(struct pcie_aspeed *pcie, int slot)
+ static int pcie_aspeed_probe(struct udevice *dev)
+ {
+ 	void *fdt = (void *)gd->fdt_blob;
+-	struct reset_ctl reset_ctl;
++	struct reset_ctl reset_ctl, rc0_reset_ctl, rc1_reset_ctl;
+ 	struct pcie_aspeed *pcie = (struct pcie_aspeed *)dev_get_priv(dev);
+ 	struct aspeed_h2x_reg *h2x_reg = pcie->h2x_reg;
+ 	struct udevice *ahbc_dev, *slot0_dev, *slot1_dev;
+@@ -391,14 +391,20 @@ static int pcie_aspeed_probe(struct udevice *dev)
+ 	txTag = 0;
+ 	ret = reset_get_by_index(dev, 0, &reset_ctl);
+ 	if (ret) {
+-		printf("%s(): Failed to get reset signal\n", __func__);
++		printf("%s(): Failed to get pcie reset signal\n", __func__);
+ 		return ret;
+ 	}
+ 
+ 	reset_assert(&reset_ctl);
+-	mdelay(100);
++	mdelay(1);
+ 	reset_deassert(&reset_ctl);
+ 
++	//workaround : Send vender define message for avoid when PCIE RESET send unknown message out
++	writel(0x34000000, &h2x_reg->h2x_tx_desc3);
++	writel(0x0000007f, &h2x_reg->h2x_tx_desc2);
++	writel(0x00001a03, &h2x_reg->h2x_tx_desc1);
++	writel(0x00000000, &h2x_reg->h2x_tx_desc0);
++
+ 	ret = uclass_get_device_by_driver
+ 			(UCLASS_MISC, DM_GET_DRIVER(aspeed_ahbc), &ahbc_dev);
+ 	if (ret) {
+@@ -408,21 +414,31 @@ static int pcie_aspeed_probe(struct udevice *dev)
+ 	aspeed_ahbc_remap_enable(devfdt_get_addr_ptr(ahbc_dev));
+ 
+ 	//init
+-	writel(0x1, &h2x_reg->h2x_reg00);
++	//writel(0x1, &h2x_reg->h2x_reg00);
+ 
+ 	//ahb to pcie rc
+ 	writel(0xe0006000, &h2x_reg->h2x_reg60);
+ 	writel(0x0, &h2x_reg->h2x_reg64);
+ 	writel(0xFFFFFFFF, &h2x_reg->h2x_reg68);
+ 
++	//PCIe Host Enable
++	writel(BIT(0), &h2x_reg->h2x_reg00);
++
+ 	slot0_of_handle =
+ 		fdtdec_lookup_phandle(fdt, dev_of_offset(dev), "slot0-handle");
+ 	if (slot0_of_handle) {
++		ret = reset_get_by_index(dev, 1, &rc0_reset_ctl);
++		if (ret) {
++			printf("%s(): Failed to get rc low reset signal\n", __func__);
++			return ret;
++		}
+ 		aspeed_pcie_rc_slot_enable(pcie, 0);
++		reset_deassert(&rc0_reset_ctl);
++		mdelay(50);
+ 		if (uclass_get_device_by_of_offset
+ 				(UCLASS_MISC, slot0_of_handle, &slot0_dev))
+ 			goto slot1;
+-		if (aspeed_rc_bridge_link_status(slot0_dev))
++		if (aspeed_pcie_phy_link_status(slot0_dev))
+ 			aspeed_pcie_set_slot_power_limit(pcie, 0);
+ 	}
+ 
+@@ -430,11 +446,18 @@ slot1:
+ 	slot1_of_handle =
+ 		fdtdec_lookup_phandle(fdt, dev_of_offset(dev), "slot1-handle");
+ 	if (slot1_of_handle) {
++		ret = reset_get_by_index(dev, 2, &rc1_reset_ctl);
++		if (ret) {
++			printf("%s(): Failed to get rc high reset signal\n", __func__);
++			return ret;
++		}
+ 		aspeed_pcie_rc_slot_enable(pcie, 1);
++		reset_deassert(&rc1_reset_ctl);
++		mdelay(50);
+ 		if (uclass_get_device_by_of_offset
+ 				(UCLASS_MISC, slot1_of_handle, &slot1_dev))
+ 			goto end;
+-		if (aspeed_rc_bridge_link_status(slot1_dev))
++		if (aspeed_pcie_phy_link_status(slot1_dev))
+ 			aspeed_pcie_set_slot_power_limit(pcie, 1);
+ 	}
+ 
+diff --git a/drivers/pci/pcie_aspeed.h b/drivers/pci/pcie_aspeed.h
+index ff1e878e56..b8a33d9f95 100644
+--- a/drivers/pci/pcie_aspeed.h
++++ b/drivers/pci/pcie_aspeed.h
+@@ -109,6 +109,6 @@ struct aspeed_rc_bridge {
+ 	void *reg;
+ };
+ 
+-int aspeed_rc_bridge_link_status(struct udevice *dev);
++int aspeed_pcie_phy_link_status(struct udevice *dev);
+ 
+ #endif
+-- 
+2.43.0
+

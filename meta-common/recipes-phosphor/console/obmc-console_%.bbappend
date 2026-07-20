@@ -3,7 +3,9 @@ SOL_PATH = "${@'${THISDIR}/${PN}/multi-sol' if d.getVar('MULTI_SOL_ENABLED') == 
 FILESEXTRAPATHS:prepend := "${SOL_PATH}:"
 RDEPENDS:${PN} += "bash"
 
-SRCREV = "d972ab558efb5d23790c4638a3012de6c06a7fad"
+SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/obmc-console.git;branch=master;protocol=https;name=override;"
+SRCREV_FORMAT = "override"
+SRCREV_override = "448388450a9430a31a831f152181960a8719334f"
 
 Single_SOL_SRC_URI = "file://single_sol_conf.ttyS2.conf \
 		     "
@@ -21,26 +23,20 @@ Multi_SOL_SRC_URI = " \
 	"
 SRC_URI += "${@bb.utils.contains('MULTI_SOL_ENABLED', '1', '${Multi_SOL_SRC_URI}', '${Single_SOL_SRC_URI}' , d)}"
 
-SRC_URI += " file://0002-Fix-for-lauching-sol-session-with-SOL-loop-test.patch   \
-             file://0003-Added-support-to-enable-disable-obmc-console-log.patch  \
-             file://0004-Fix-for-coverity-issue-in-obmc_console.patch            \
-             file://0005-Added-changes-to-save-baudrate-in-config-file.patch     \
-           "
-
 PACKAGECONFIG[obmc-console-log] = "-Dobmc-console-log=true,-Dobmc-console-log=false"
 
 do_install:append() {
     install -d ${D}${bindir}
 if [ "${MULTI_SOL_ENABLED}" = "1" ]; then
-    install -m 0755 ${WORKDIR}/multi_sol-configure.sh ${D}${bindir}/sol-configure.sh
+    install -m 0755 ${UNPACKDIR}/multi_sol-configure.sh ${D}${bindir}/sol-configure.sh
 else
 
     if [ "${MACHINE}" = "evb-ast2600" ] || [ "${MACHINE}" = "intel-ast2600" ]; then
-	install -m 0755 ${WORKDIR}/ast2600-sol-configure.sh ${D}${bindir}/sol-configure.sh
+	install -m 0755 ${UNPACKDIR}/ast2600-sol-configure.sh ${D}${bindir}/sol-configure.sh
     elif [ "${MACHINE}" = "ast2700-default" ] || [ "${MACHINE}" = "ast2700-dcscm" ] || [ "${MACHINE}" = "ast2700-a0-dcscm" ]; then
-	install -m 0755 ${WORKDIR}/ast2700-sol-configure.sh ${D}${bindir}/sol-configure.sh
+	install -m 0755 ${UNPACKDIR}/ast2700-sol-configure.sh ${D}${bindir}/sol-configure.sh
     fi
 
-    install -m 0644 ${WORKDIR}/single_sol_conf.ttyS2.conf ${D}/etc/obmc-console/server.ttyS2.conf
+    install -m 0644 ${UNPACKDIR}/single_sol_conf.ttyS2.conf ${D}/etc/obmc-console/server.ttyS2.conf
 fi
 }

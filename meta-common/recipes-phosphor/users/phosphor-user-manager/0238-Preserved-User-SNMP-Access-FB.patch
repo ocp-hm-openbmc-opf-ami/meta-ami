@@ -1,0 +1,138 @@
+From 0cbe2325827f851d164d65588dc52cfcc9b7106b Mon Sep 17 00:00:00 2001
+From: madhankumars <madhankumars@ami.com>
+Date: Wed, 4 Mar 2026 15:48:55 +0530
+Subject: [PATCH 238/238] Preserved User SNMP Access FB
+
+---
+ user_mgr.cpp | 22 ++++++++++++++++++++--
+ users.cpp    | 21 +++++++++++++++++++++
+ users.hpp    |  2 ++
+ 3 files changed, 43 insertions(+), 2 deletions(-)
+
+diff --git a/user_mgr.cpp b/user_mgr.cpp
+index 461a8ff..a7137d9 100644
+--- a/user_mgr.cpp
++++ b/user_mgr.cpp
+@@ -893,6 +893,7 @@ void UserMgr::renameUser(std::string userName, std::string newUserName)
+     std::vector<std::string> priv = user.get()->userPrivilege();
+     std::vector<std::string> groupNames = user.get()->userGroups();
+     bool enabled = user.get()->userEnabled();
++    bool snmpAccessEnableStatus = user.get()->snmpAccessEnableStatus();
+     uint64_t passwordExpiration = user.get()->passwordExpiration();
+     sdbusplus::message::object_path tempObjPath(usersObjPath);
+     tempObjPath /= newUserName;
+@@ -908,6 +909,8 @@ void UserMgr::renameUser(std::string userName, std::string newUserName)
+ 			  user.get()->userChannelAccess(),enabled,
+                           passwordExpiration, *this));
+ 
++    auto& newUserRef = usersList.at(newUserName);
++    newUserRef->snmpAccessEnableStatus(snmpAccessEnableStatus);
+     /* If the user is named and identified as an SNMP user, it also needs to be
+      * renamed */
+     renameSnmpUser(userName, newUserName);
+@@ -2209,7 +2212,6 @@ void UserMgr::initUserObjects(void)
+     userNameList = std::move(userSSHLists.first);
+     sshGrpUsersList = std::move(userSSHLists.second);
+     auto userJsonOpt = readJsonFile(ipmiUserDataBackupFile);
+-    nlohmann::json userJson = *userJsonOpt;
+     bool defaultUser = true;
+ 
+     if (!userNameList.empty())
+@@ -2241,11 +2243,25 @@ void UserMgr::initUserObjects(void)
+             std::vector<std::string> userPriv;
+             std::vector<uint8_t> userChannelAccess;
+             std::vector<uint8_t> availableChannels = getAvailableChannelIds();
+-
++            bool snmpAccessEnableStatus = false;
++            if (!userJsonOpt)
++            {
++                lg2::warning(
++                    "User JSON backup file missing or invalid, SNMP access state will default to false");
++            }
++            nlohmann::json userJson = *userJsonOpt;
+             for (const auto& entry : userJson)
+             {
+                 if (!entry.contains("user_name") || entry["user_name"] != user)
+                     continue;
++                if (entry.contains("snmp_access") &&
++                    entry["snmp_access"].is_boolean())
++                {
++                    snmpAccessEnableStatus = entry["snmp_access"].get<bool>();
++                    lg2::info(
++                        "Restoring SNMP access for user: {USER} = {STATE}",
++                        "USER", user, "STATE", snmpAccessEnableStatus);
++                }
+                 if (entry.contains("ipmi_enabled") &&
+                     entry["ipmi_enabled"].is_array())
+                 {
+@@ -2319,6 +2335,8 @@ void UserMgr::initUserObjects(void)
+                                         bus, objPath.c_str(), userGroups,
+                                         userPriv, userChannelAccess, isUserEnabled(user),
+                                         getPasswordExpiration(user), *this));
++	    auto& userObj = usersList.at(user);
++	    userObj->snmpAccessEnableStatus(snmpAccessEnableStatus);
+         }
+     }
+ }
+diff --git a/users.cpp b/users.cpp
+index b5a6f4b..dd561fd 100644
+--- a/users.cpp
++++ b/users.cpp
+@@ -185,6 +185,14 @@ bool Users::userEnabled(void) const
+     return manager.isUserEnabled(userName);
+ }
+ 
++/** @brief lists user SNMP enabled state
++ *
++ */
++bool Users::snmpAccessEnableStatus(void) const
++{
++    return UsersIface::snmpAccessEnableStatus();
++}
++
+ void Users::setUserEnabled(bool value)
+ {
+     UsersIface::userEnabled(value);
+@@ -204,6 +212,19 @@ bool Users::userEnabled(bool value)
+     return UsersIface::userEnabled(value);
+ }
+ 
++/** @brief update user SNMP enabled state
++ *
++ *  @param[in] value - bool value
++ */
++bool Users::snmpAccessEnableStatus(bool value)
++{
++    if (value == UsersIface::snmpAccessEnableStatus())
++    {
++        return value;
++    }
++    return UsersIface::snmpAccessEnableStatus(value);
++}
++
+ /** @brief lists user locked state for failed attempt
+  *
+  **/
+diff --git a/users.hpp b/users.hpp
+index 7e1c321..9e8b9c3 100644
+--- a/users.hpp
++++ b/users.hpp
+@@ -115,6 +115,7 @@ class Users : public Interfaces
+      *
+      */
+     bool userEnabled(void) const override;
++    bool snmpAccessEnableStatus(void) const override;
+ 
+     void setUserEnabled(bool value);
+ 
+@@ -123,6 +124,7 @@ class Users : public Interfaces
+      *  @param[in] value - bool value
+      */
+     bool userEnabled(bool value) override;
++    bool snmpAccessEnableStatus(bool value) override;
+ 
+     /** @brief lists user locked state for failed attempt
+      *
+-- 
+2.34.1
+

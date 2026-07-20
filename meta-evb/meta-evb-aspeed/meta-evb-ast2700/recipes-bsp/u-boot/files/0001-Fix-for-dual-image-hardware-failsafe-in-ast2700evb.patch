@@ -1,0 +1,91 @@
+From 10e58bd538f795aea79bbc569ee5cfa028acfd42 Mon Sep 17 00:00:00 2001
+From: rupeshs <rupeshs@ami.com>
+Date: Fri, 17 Apr 2026 22:56:58 +0530
+Subject: [PATCH] Fix-for-dual-image-hardware-failsafe-in-ast2700evb.patch
+
+Signed-off-by: rupeshs <rupeshs@ami.com>
+---
+ arch/arm/mach-aspeed/ast2700/board_common.c | 20 +++++++++-----------
+ common/autoboot.c                           | 19 +++++--------------
+ 2 files changed, 14 insertions(+), 25 deletions(-)
+
+diff --git a/arch/arm/mach-aspeed/ast2700/board_common.c b/arch/arm/mach-aspeed/ast2700/board_common.c
+index 8e4075374e..b408731a75 100644
+--- a/arch/arm/mach-aspeed/ast2700/board_common.c
++++ b/arch/arm/mach-aspeed/ast2700/board_common.c
+@@ -118,23 +118,21 @@ int board_init(void)
+ 			break;
+ 	}
+ 	writel((readl(0x14C02030) | 0x1), 0x14C02030);//enable ABR mode
+-	writel((readl(0x14c3740c) | 0x1), 0x14c3740c);//enable FMC WDT
+-	writel(0x23A9F65B, 0x14c37404);//10 min WDT time out
+-	writel(0x4755, 0x14c37408);//reload timer value
+ 
++        writel(readl(0x14c3740c) & ~0x1, 0x14c3740c);   // Disable WDTA (clear BIT[0])
++        writel(0x23A9F65B, 0x14c37404);//10 min WDT time out
++        writel(0x4755, 0x14c37408);//reload timer value
++        writel(0,0x14c37410); //disable timeout status
++        writel((readl(0x14c3740c) | 0x1), 0x14c3740c);//enable WDTA
++                                                      //
+         // Check boot source and set environment variable
+         uint32_t boot_indicator = readl(0x14c3744c);
+-        if (boot_indicator & 0x2) { // ABR_BOOT_SRC_INDICATE
++        if (boot_indicator & BIT(1)) {
+             env_set("bootfrom", "alternate");
+             printf("Booting from alternate flash\n");
+         } else {
+-            env_set("bootfrom", "primary");
++           env_set("bootfrom", "primary");
++            printf("Booting from primary flash\n");
+         }
+-    
+-        writel((readl(0x14C02030) | 0x1), 0x14C02030);//enable ABR mode
+-        writel((readl(0x14c3740c) | 0x1), 0x14c3740c);//enable FMC WDT
+-        writel(0x23A9F65B, 0x14c37404);//10 min WDT time out
+-        writel(0x4755, 0x14c37408);//reload timer value
+-
+ 	return 0;
+ }
+diff --git a/common/autoboot.c b/common/autoboot.c
+index 130c0e4400..f49ecfe2cc 100644
+--- a/common/autoboot.c
++++ b/common/autoboot.c
+@@ -420,6 +420,10 @@ static int abortboot(int bootdelay)
+ 			abort = abortboot_single_key(bootdelay);
+ 	}
+ 
++       /* Disable FMC WDTA when autoboot is interrupted */
++        if (abort)
++                writel(readl(0x14c3740c) & ~BIT(0), 0x14c3740c);
++
+ 	if (IS_ENABLED(CONFIG_SILENT_CONSOLE) && abort)
+ 		gd->flags &= ~GD_FLG_SILENT;
+ 
+@@ -488,23 +492,10 @@ void autoboot_command(const char *s)
+ {
+ 	debug("### main_loop: bootcmd=\"%s\"\n", s ? s : "<UNDEFINED>");
+ 
+-	writel((readl(0x14c3740c) & 0xFFFE), 0x14c3740c);//disable FMC_WDT2
+-	if (!(readl(0x14c3744c) & 0x10))
+-	{
+-		writel(0xEA000000, 0x14c3744c);//clear boot source
+-	}
+-	writel((readl(0x14c3740c) | 0x1), 0x14c3740c);//enable FMC_WDT2
+-
+-  writel((readl(0x14c3740c) & 0xFFFE), 0x14c3740c);//disable FMC_WDT2
+-
+     // Check if we're booting from alternate source
+     uint32_t boot_source = readl(0x14c3744c);
+-    bool is_alternate_boot = (boot_source & 0x2); // Check ABR_BOOT_SRC_INDICATE
+-
+-    // Only clear boot source after successful boot, not during autoboot
+-    // This should be done after kernel loads successfully
+ 
+-    writel((readl(0x14c3740c) | 0x1), 0x14c3740c);//enable FMC_WDT2
++    bool is_alternate_boot = (boot_source & BIT(1)); // Check ABR_BOOT_SRC_INDICATE
+ 
+     // If booting from alternate, adjust the bootcmd to use correct flash device
+     if (is_alternate_boot && s) {
+-- 
+2.53.0
+

@@ -3,7 +3,7 @@ project(
     'cpp',
     default_options: [
         'warning_level=3',
-        'cpp_std=c++20'
+        'cpp_std=c++23'
     ],
     license: 'Apache-2.0',
     version: '0.1',

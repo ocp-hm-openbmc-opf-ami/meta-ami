@@ -103,7 +103,7 @@ python populate_packages:prepend () {
         d.setVar('RPROVIDES:' + pkg, provides)
 
     mlprefix = d.getVar('MLPREFIX') or ''
-    dvar = d.expand('${WORKDIR}/package')
+    dvar = d.expand('${S}/package')
     pam_libdir = d.expand('${base_libdir}/security')
     pam_sbindir = d.expand('${sbindir}')
     pam_filterdir = d.expand('${base_libdir}/security/pam_filter')
@@ -122,16 +122,16 @@ do_install:append() {
             rm -rf ${D}${sysconfdir}/init.d/
             rm -rf ${D}${sysconfdir}/rc*
             install -d ${D}${nonarch_libdir}/tmpfiles.d
-            install -m 0644 ${WORKDIR}/pam-volatiles.conf \
+            install -m 0644 ${UNPACKDIR}/pam-volatiles.conf \
                     ${D}${nonarch_libdir}/tmpfiles.d/pam.conf
         else
             install -d ${D}${sysconfdir}/default/volatiles
-            install -m 0644 ${WORKDIR}/99_pam \
+            install -m 0644 ${UNPACKDIR}/99_pam \
                     ${D}${sysconfdir}/default/volatiles/
         fi
 
 	install -d ${D}${sysconfdir}/pam.d/
-	install -m 0644 ${WORKDIR}/pam.d/* ${D}${sysconfdir}/pam.d/
+	install -m 0644 ${UNPACKDIR}/pam.d/* ${D}${sysconfdir}/pam.d/
 
 	# The lsb requires unix_chkpwd has setuid permission
 	chmod 4755 ${D}${sbindir}/unix_chkpwd
@@ -144,7 +144,7 @@ do_install:append() {
 do_install_ptest() {
     mkdir -p ${D}${PTEST_PATH}/tests
     find ${B}/tests -maxdepth 1 -type f -exec cp {} ${D}${PTEST_PATH}/tests \;
-    install -m 0644 ${S}/tests/confdir ${D}${PTEST_PATH}/tests
+    install -m 0644 ${UNPACKDIR}/tests/confdir ${D}${PTEST_PATH}/tests
 }
 
 pkg_postinst:${PN}() {

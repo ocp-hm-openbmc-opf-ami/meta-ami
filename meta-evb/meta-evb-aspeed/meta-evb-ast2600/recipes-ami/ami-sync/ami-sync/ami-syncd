@@ -1,0 +1,72 @@
+#!/bin/bash
+
+NVMP=/tmp/.rwfs
+
+
+sync_overlay_to_nv_storage() {
+    # Ensure the file responsible for monotonicity between boots is
+    # refreshed. Firmware updates are completed by assertion of the
+    # BMC reset input. This prevents timesyncd from gracefully
+    # updating this file.
+    touch /var/lib/systemd/timesync/clock
+    rsync -a --numeric-ids --inplace --partial --delete -x\
+    --exclude='**/var/volatile/tmp/**' --exclude='**/etc/ami-sync-enable**' --exclude='**/etc/sync-enable**' \
+    /run/initramfs/rw/ $NVMP/
+    sync $NVMP/cow
+}
+
+findmtd() {
+	m=$(grep -xl "$1" /sys/class/mtd/*/name)
+	m=${m%/name}
+	m=${m##*/}
+	echo "$m"
+}
+
+blkid_fs_type() {
+	# Emulate util-linux's `blkid -s TYPE -o value $1`
+	# Example busybox blkid output:
+	#    # blkid /dev/mtdblock5
+	#    /dev/mtdblock5: TYPE="squashfs"
+	# Process output to extract TYPE value "squashfs".
+	blkid "$1" | sed -e 's/^.*TYPE="//' -e 's/".*$//'
+}
+
+probe_fs_type() {
+	fst=$(blkid_fs_type "$1")
+	echo "${fst:=jffs2}"
+}
+
+
+
+finalize_sync_and_remount_readonly() {
+    history -a
+    sync_overlay_to_nv_storage
+    mount -o remount,ro $NVMP
+    exit 0
+}
+
+# register cleanup function
+trap finalize_sync_and_remount_readonly SIGINT
+trap finalize_sync_and_remount_readonly SIGTERM
+trap finalize_sync_and_remount_readonly EXIT
+
+mkdir -p $NVMP
+
+rwfs=$(findmtd rwfs)
+
+rwdev=/dev/mtdblock${rwfs#mtd}
+rwopts=rw
+current_boot=$(cat /sys/class/spi_master/spi0/device/current_boot)
+boot_mode=$(cat /sys/class/spi_master/spi0/device/abr_bootmode)
+
+# make sure the mount points are RW
+mount "$rwdev" $NVMP -t "$(probe_fs_type "$rwdev")" -o "$rwopts"
+
+
+# Run rsync periodically to sync the overlay to NV storage fffffff
+while true; do
+    if [ -f /run/initramfs/init-options ] && grep -Eq '^(copy-base-filesystem-to-ram|copy-files-to-ram)$' /run/initramfs/init-options && { [ "$current_boot" -ne 1 ] || [ "$boot_mode" -ne 1 ]; }; then # remove condition when read/write block issue fixed for single spi abr from backup spi
+        sync_overlay_to_nv_storage
+    fi
+    sleep 10
+done

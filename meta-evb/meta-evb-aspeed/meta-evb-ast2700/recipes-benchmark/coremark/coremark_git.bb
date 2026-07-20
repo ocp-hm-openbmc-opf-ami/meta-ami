@@ -14,7 +14,6 @@ SRC_URI = "\
     git://github.com/eembc/coremark.git;branch=main;protocol=https \
     file://0001-add-LDFLAGS-in-OUTCMD-to-fix-QA-issues.patch \
 "
-
 S = "${WORKDIR}/git"
 
 do_compile() {

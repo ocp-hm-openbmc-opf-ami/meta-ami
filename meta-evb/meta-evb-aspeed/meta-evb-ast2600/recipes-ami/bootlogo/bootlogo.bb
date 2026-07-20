@@ -15,7 +15,7 @@ RDEPENDS:${PN} = "bash"
 SYSTEMD_PACKAGES = "${PN}"
 do_install() {
     install -d ${D}/${bindir}
-    install -m 0755 ${WORKDIR}/bootlogo-clear.sh ${D}/${bindir}/
+    install -m 0755 ${UNPACKDIR}/bootlogo-clear.sh ${D}/${bindir}/
 }
 
 SYSTEMD_SERVICE:${PN} = "psplash-clear.service"

@@ -33,7 +33,7 @@ PACKAGECONFIG[no-tls1_1] = "no-tls1_1"
 PACKAGECONFIG[manpages] = ""
 PACKAGECONFIG[fips] = "enable-fips"
 
-B = "${WORKDIR}/build"
+B = "${S}/build"
 do_configure[cleandirs] = "${B}"
 
 EXTRA_OECONF = "${@bb.utils.contains('PTEST_ENABLED', '1', '', 'no-tests', d)}"
@@ -63,12 +63,12 @@ DEPRECATED_CRYPTO_FLAGS ?= ""
 do_configure () {
 	# When we upgrade glibc but not uninative we see obtuse failures in openssl. Make
 	# the issue really clear that perl isn't functional due to symbol mismatch issues.
-	cat <<- EOF > ${WORKDIR}/perltest
+	cat <<- EOF > ${S}/perltest
 	#!/usr/bin/env perl
 	use POSIX;
 	EOF
-	chmod a+x ${WORKDIR}/perltest
-	${WORKDIR}/perltest
+	chmod a+x ${S}/perltest
+	${S}/perltest
 
 	os=${HOST_OS}
 	case $os in
@@ -201,7 +201,7 @@ do_install:append:class-native () {
 
 do_install:append:class-nativesdk () {
 	mkdir -p ${D}${SDKPATHNATIVE}/environment-setup.d
-	install -m 644 ${WORKDIR}/environment.d-openssl.sh ${D}${SDKPATHNATIVE}/environment-setup.d/openssl.sh
+	install -m 644 ${UNPACKDIR}/environment.d-openssl.sh ${D}${SDKPATHNATIVE}/environment-setup.d/openssl.sh
 }
 
 PTEST_BUILD_HOST_FILES += "configdata.pm"

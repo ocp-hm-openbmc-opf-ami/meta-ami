@@ -18,6 +18,7 @@ reboot_after_change () {
 
 fips_on () {
 	openssl fipsinstall -module "$FIPS_SO" -out "$FIPS_CNF" -provider_name fips > /dev/null 2>&1
+	[ ! -f $OPENSSL_CNF_DEFAULT ] && cp -f $OPENSSL_CNF $OPENSSL_CNF_DEFAULT
 	cp -f $OPENSSL_CNF_DEFAULT $OPENSSL_CNF_TMP
 	sed -i "s/^# fips = fips_sect/fips = fips_sect\nbase = base_sect\n\n\[base_sect\]\nactivate = 1\n\n.include \/etc\/ssl\/fipsmodule.cnf/g" $OPENSSL_CNF_TMP
 	sed -i 's/^default = default_sect/# default = default_sect/g' $OPENSSL_CNF_TMP

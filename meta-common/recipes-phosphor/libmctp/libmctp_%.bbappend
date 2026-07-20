@@ -30,7 +30,11 @@ FILES:${PN}:append = "${datadir} ${datadir}/mctp"
 do_install:append() {
     install -d ${D}${datadir}/mctp
 
-#    if [ -e "${WORKDIR}/mctp-restart-notify.service" ]; then
-#        install -m 0644 ${WORKDIR}/mctp-restart-notify.service ${D}${nonarch_base_libdir}/systemd/system/mctp-restart-notify.service
+    if [ -z "$(ls -A ${D}${nonarch_base_libdir}/systemd)" ]; then
+        rm -rf ${D}${nonarch_base_libdir}/systemd
+    fi
+
+#    if [ -e "${UNPACKDIR}/mctp-restart-notify.service" ]; then
+#        install -m 0644 ${UNPACKDIR}/mctp-restart-notify.service ${D}${nonarch_base_libdir}/systemd/system/mctp-restart-notify.service
 #    fi
 }

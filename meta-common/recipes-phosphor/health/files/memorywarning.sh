@@ -15,4 +15,4 @@
     echo 1 > /proc/sys/vm/drop_caches
 
     # Clear swap cache
-    swapoff -a && swapon -a
+    # swapoff -a && swapon -a

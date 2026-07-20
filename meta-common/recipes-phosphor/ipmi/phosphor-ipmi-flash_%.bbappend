@@ -11,11 +11,11 @@ SRC_URI += " \
 
 do_install:append() {
   install -d ${D}${systemd_system_unitdir}
-  install -m 0644 ${WORKDIR}/phosphor-ipmi-flash-bmc-prepare.target ${D}${systemd_system_unitdir}
-  install -m 0644 ${WORKDIR}/phosphor-ipmi-flash-bmc-verify.target ${D}${systemd_system_unitdir}
-  install -m 0644 ${WORKDIR}/phosphor-ipmi-flash-bmc-update.target ${D}${systemd_system_unitdir}
+  install -m 0644 ${UNPACKDIR}/phosphor-ipmi-flash-bmc-prepare.target ${D}${systemd_system_unitdir}
+  install -m 0644 ${UNPACKDIR}/phosphor-ipmi-flash-bmc-verify.target ${D}${systemd_system_unitdir}
+  install -m 0644 ${UNPACKDIR}/phosphor-ipmi-flash-bmc-update.target ${D}${systemd_system_unitdir}
 
   install -d ${D}${datadir}/phosphor-ipmi-flash
-  install -m 0644 ${WORKDIR}/config-static-bmc-reboot.json ${D}${datadir}/phosphor-ipmi-flash
-  install -m 0644 ${WORKDIR}/config-tarball-bmc-reboot.json ${D}${datadir}/phosphor-ipmi-flash
+  install -m 0644 ${UNPACKDIR}/config-static-bmc-reboot.json ${D}${datadir}/phosphor-ipmi-flash
+  install -m 0644 ${UNPACKDIR}/config-tarball-bmc-reboot.json ${D}${datadir}/phosphor-ipmi-flash
 }

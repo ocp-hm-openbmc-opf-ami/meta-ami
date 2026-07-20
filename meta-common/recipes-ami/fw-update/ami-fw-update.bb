@@ -12,7 +12,7 @@ SRC_URI = " \
     file://applyonreset.sh \
     file://apply-onreset.service \
     file://clearboot.sh \
-    file://clear-boot.service \
+    file://clearboot-system-shutdown \
     file://usb-ctrl \
     file://prepare-bmc.sh \
     file://flash-bmc.sh \
@@ -23,6 +23,7 @@ SRC_URI = " \
     file://flash-pldm.sh \
     file://flash-raid.sh \
     file://fwupd_singlespiabr.json\
+    file://flash-nvme.sh \
 "
 
 inherit allarch
@@ -37,11 +38,13 @@ RDEPENDS:${PN} += " \
     dropbear \
     dosfstools \
     dtc \
+    dbus-tools \
+    coreutils-stdbuf \
 "
 SYSTEMD_PACKAGES = "${PN}"
-SYSTEMD_SERVICE:${PN} = "apply-onreset.service clear-boot.service"
+SYSTEMD_SERVICE:${PN} = "apply-onreset.service"
 
-S = "${WORKDIR}"
+S = "${WORKDIR}/git"
 B = "${WORKDIR}/build"
 
 do_compile() {
@@ -49,11 +52,11 @@ do_compile() {
     
     # Use fwupd_singlespiabr.json when onetree-single-spi-abr feature is enabled
     if ${@bb.utils.contains('IMAGE_FEATURES', 'onetree-single-spi-abr', 'true', 'false', d)}; then
-        cp ${WORKDIR}/fwupd_singlespiabr.json ${WORKDIR}/fwupd.json
+        cp ${UNPACKDIR}/fwupd_singlespiabr.json ${UNPACKDIR}/fwupd.json
     fi
     
-    python3 ${WORKDIR}/gen_fwupd.py \
-        --json ${WORKDIR}/fwupd.json \
+    python3 ${UNPACKDIR}/gen_fwupd.py \
+        --json ${UNPACKDIR}/fwupd.json \
         --out  ${B}/fwupd.sh
     chmod 0755 ${B}/fwupd.sh
 }
@@ -64,7 +67,7 @@ do_install() {
     install -d ${D}${libexecdir}/fwupd
 
     # Common runtime library
-    install -m 0755 ${WORKDIR}/common.sh ${D}${libexecdir}/fwupd/common.sh
+    install -m 0755 ${UNPACKDIR}/common.sh ${D}${libexecdir}/fwupd/common.sh
 
     # Component scripts: install if present
     for f in \
@@ -72,10 +75,11 @@ do_install() {
         prepare-bios.sh flash-bios.sh cleanup-bios.sh \
         prepare-cpld.sh flash-cpld.sh cleanup-cpld.sh \
         prepare-pldm.sh flash-pldm.sh cleanup-pldm.sh \
-        prepare-raid.sh flash-raid.sh cleanup-raid.sh
+        prepare-raid.sh flash-raid.sh cleanup-raid.sh \
+        prepare-nvme.sh flash-nvme.sh cleanup-nvme.sh
     do
-        if [ -f "${WORKDIR}/$f" ]; then
-            install -m 0755 "${WORKDIR}/$f" "${D}${libexecdir}/fwupd/$f"
+        if [ -f "${UNPACKDIR}/$f" ]; then
+            install -m 0755 "${UNPACKDIR}/$f" "${D}${libexecdir}/fwupd/$f"
         fi
     done
 
@@ -85,18 +89,30 @@ do_install() {
 
     # Install usb-ctrl only when phosphor-misc-usb-ctrl is NOT present in image
     if ${@bb.utils.contains('OBMC_IMAGE_EXTRA_INSTALL','phosphor-misc-usb-ctrl','false','true',d)}; then
-        install -m 0755 ${WORKDIR}/usb-ctrl ${D}${bindir}/usb-ctrl
+        install -m 0755 ${UNPACKDIR}/usb-ctrl ${D}${bindir}/usb-ctrl
     fi
 
-    install -m 0755 ${WORKDIR}/applyonreset.sh ${D}${bindir}/applyonreset.sh
-    install -m 0755 ${WORKDIR}/clearboot.sh ${D}${bindir}/clearboot.sh
+    install -m 0755 ${UNPACKDIR}/applyonreset.sh ${D}${bindir}/applyonreset.sh
+    install -m 0755 ${UNPACKDIR}/clearboot.sh ${D}${bindir}/clearboot.sh
+
+    # Install fwupd.json configuration
+    install -d ${D}/etc
+    if ${@bb.utils.contains('IMAGE_FEATURES', 'onetree-single-spi-abr', 'true', 'false', d)}; then
+        install -m 0644 ${UNPACKDIR}/fwupd_singlespiabr.json ${D}/etc/fwupd.json
+    else
+        install -m 0644 ${UNPACKDIR}/fwupd.json ${D}/etc/fwupd.json
+    fi
+
+    # Run clearboot at the very end of shutdown/reboot, after services stop.
+    install -d ${D}${nonarch_base_libdir}/systemd/system-shutdown
+    install -m 0755 ${UNPACKDIR}/clearboot-system-shutdown \
+        ${D}${nonarch_base_libdir}/systemd/system-shutdown/clearboot
 
     # systemd unit
     install -d ${D}${systemd_system_unitdir}
-    install -m 0644 ${WORKDIR}/apply-onreset.service \
+    install -m 0644 ${UNPACKDIR}/apply-onreset.service \
         ${D}${systemd_system_unitdir}/apply-onreset.service
-    install -m 0644 ${WORKDIR}/clear-boot.service \
-        ${D}${systemd_system_unitdir}/clear-boot.service
+
 }
 
 # Not strictly required, but explicit is fine:
@@ -107,5 +123,6 @@ FILES:${PN} += " \
     ${bindir}/usb-ctrl \
     ${libexecdir}/fwupd/* \
     ${systemd_system_unitdir}/apply-onreset.service \
-    ${systemd_system_unitdir}/clear-boot.service \
+    ${nonarch_base_libdir}/systemd/system-shutdown/clearboot \
+    /etc/fwupd.json \
 "

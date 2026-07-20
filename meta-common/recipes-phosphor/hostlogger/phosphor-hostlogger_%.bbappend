@@ -12,7 +12,7 @@ MULTI_SOL_SRC_URI = " \
 	file://ttyS0.conf \
 	file://ttyS1.conf \
 	file://ttyS2.conf \
-	file://ttyS8.conf \
+	${@bb.utils.contains('MACHINE', 'evb-ast2600', 'file://ttyS3.conf', 'file://ttyS8.conf', d)} \
 	"
 SRC_URI += "${@bb.utils.contains('MULTI_SOL_ENABLED', '1', '${MULTI_SOL_SRC_URI}', '${SINGLE_SOL_SRC_URI}' , d)}"
 
@@ -23,9 +23,9 @@ SRC_URI += "\
 do_install:append() {
     install -m 0755 -d ${D}${sysconfdir}/${BPN}
 if [ "${MULTI_SOL_ENABLED}" = "1" ]; then
-    install -m 0644 ${WORKDIR}/ttyS*.conf ${D}${sysconfdir}/${BPN}/
+    install -m 0644 ${UNPACKDIR}/ttyS*.conf ${D}${sysconfdir}/${BPN}/
 else
-    install -m 0644 ${WORKDIR}/ttyS2.conf ${D}${sysconfdir}/${BPN}/
+    install -m 0644 ${UNPACKDIR}/ttyS2.conf ${D}${sysconfdir}/${BPN}/
 fi
 
           # Remove upstream-provided default configuration

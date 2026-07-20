@@ -10,18 +10,22 @@ NCSI_SRC_URI = "file://ncsi.cfg \
                 file://0001-Update-DTS-File-for-Uboot-Enable-NCSI-on-MAC3-and-Disable-MAC2.patch \
                "
 
-SRC_URI:append = " ${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-network-ncsi-support', NCSI_SRC_URI, '', d)}"
 
 SRC_URI:append:evb-ast2600 = " \
     file://fw_env_evb.config \
     file://0001-Resolved-boot-spi-error.patch \
     file://evb_ast2600.cfg \
+    file://BMC_HOST.patch \
     "
 do_install:prepend:evb-ast2600 () {
-	cp ${WORKDIR}/fw_env_evb.config ${WORKDIR}/fw_env.config
+    cp ${UNPACKDIR}/fw_env_evb.config ${S}/fw_env.config
+    install -m 0644 ${UNPACKDIR}/fw_env_evb.config ${S}/tools/env/fw_env.config
 }
 
-SRC_URI:append = " file://0002-ast2600-dp-fw-Fix-abnormal-link-training-cmd.patch "
-SRC_URI:append = " file://0003-Updated-U-Boot-Patches-for-DP-and-VGA-Support.patch "
+do_install:append:evb-ast2600 () {
+    install -m 0644 ${UNPACKDIR}/fw_env_evb.config ${D}${sysconfdir}/fw_env.config
+}
 
+SRC_URI:append = " file://0004-ARM-dts-ast2600-evb-Configure-RGMII-delay-for-MAC.patch "
 
+SRC_URI:append = " ${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-network-ncsi-support', NCSI_SRC_URI, '', d)}"

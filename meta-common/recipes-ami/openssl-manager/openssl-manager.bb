@@ -37,6 +37,6 @@ SRC_URI += "${@bb.utils.contains('OPENSSL_FIPS_SUPPORT', 'enabled', 'file://open
 do_install:append() {
 	if ${@bb.utils.contains('OPENSSL_FIPS_SUPPORT', 'enabled', 'true', 'false', d)}; then
 		install -d ${D}/${bindir}
-		install -m 0755 ${WORKDIR}/openssl_fips_swich.sh ${D}/${bindir}/
+		install -m 0755 ${UNPACKDIR}/openssl_fips_swich.sh ${D}/${bindir}/
 	fi
 }

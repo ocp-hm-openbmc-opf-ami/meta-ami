@@ -18,8 +18,8 @@ RDEPENDS:${PN} = " bash "
 
 do_install:append() {
 	install -d ${D}${systemd_system_unitdir}
-	install -m 0644 ${WORKDIR}/xyz.openbmc_project.bmc_boot_done.service ${D}${systemd_system_unitdir}/
+	install -m 0644 ${S}/xyz.openbmc_project.bmc_boot_done.service ${D}${systemd_system_unitdir}/
 
 	install -d ${D}${bindir}
-	install -m 0755 ${WORKDIR}/bmc-boot-done.sh ${D}${bindir}/
+	install -m 0755 ${S}/bmc-boot-done.sh ${D}${bindir}/
 }

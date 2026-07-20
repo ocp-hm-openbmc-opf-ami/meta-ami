@@ -1,44 +1,52 @@
-From 03ae30fdf8cc08dcbbb26beefb813b420198f1bf Mon Sep 17 00:00:00 2001
-From: saikumaru <saikumaru@ami.com>
-Date: Wed, 5 Nov 2025 12:44:53 +0530
-Subject: [PATCH] Fixed the erase method boot issue
+From 12ebed4e115513be92af73121a86a5cb09772708 Mon Sep 17 00:00:00 2001
+From: rupeshs <rupeshs@ami.com>
+Date: Fri, 17 Apr 2026 19:56:56 +0530
+Subject: [PATCH] Fixed-the-erase-method-boot-issue
 
-Signed-off-by: saikumaru <saikumaru@ami.com>
+Signed-off-by: rupeshs <rupeshs@ami.com>
 ---
- arch/arm/mach-aspeed/ast2700/board_common.c | 14 ++++
- common/autoboot.c                           | 72 +++++++++++++++------
- include/configs/evb_ast2700.h               | 49 +++++++-------
- 3 files changed, 92 insertions(+), 43 deletions(-)
+ arch/arm/mach-aspeed/ast2700/board_common.c | 15 +++++
+ common/autoboot.c                           | 73 ++++++++++++++-------
+ include/configs/evb_ast2700.h               | 47 +++++++------
+ 3 files changed, 93 insertions(+), 42 deletions(-)
 
 diff --git a/arch/arm/mach-aspeed/ast2700/board_common.c b/arch/arm/mach-aspeed/ast2700/board_common.c
-index a4a980e8c1..7c8245869d 100644
+index b9a4cbafd7..4f5269ecac 100644
 --- a/arch/arm/mach-aspeed/ast2700/board_common.c
 +++ b/arch/arm/mach-aspeed/ast2700/board_common.c
-@@ -89,5 +89,19 @@ int board_init(void)
+@@ -5,6 +5,7 @@
+ 
+ #include <dm.h>
+ #include <ram.h>
++#include <env.h>
+ #include <init.h>
+ #include <timer.h>
+ #include <asm/io.h>
+@@ -117,5 +118,19 @@ int board_init(void)
  			break;
  	}
  
-+       // Check boot source and set environment variable
-+       uint32_t boot_indicator = readl(0x14c3744c);
-+       if (boot_indicator & 0x2) { // ABR_BOOT_SRC_INDICATE
-+           env_set("bootfrom", "alternate");
-+           printf("Booting from alternate flash\n");
-+       } else {
-+           env_set("bootfrom", "primary");
-+       }
-+
-+       writel((readl(0x14C02030) | 0x1), 0x14C02030);//enable ABR mode
-+       writel((readl(0x14c3740c) | 0x1), 0x14c3740c);//enable FMC WDT
-+       writel(0x23A9F65B, 0x14c37404);//10 min WDT time out
-+       writel(0x4755, 0x14c37408);//reload timer value
++        // Check boot source and set environment variable
++        uint32_t boot_indicator = readl(0x14c3744c);
++        if (boot_indicator & 0x2) { // ABR_BOOT_SRC_INDICATE
++            env_set("bootfrom", "alternate");
++            printf("Booting from alternate flash\n");
++        } else {
++            env_set("bootfrom", "primary");
++        }
++    
++        writel((readl(0x14C02030) | 0x1), 0x14C02030);//enable ABR mode
++        writel((readl(0x14c3740c) | 0x1), 0x14c3740c);//enable FMC WDT
++        writel(0x23A9F65B, 0x14c37404);//10 min WDT time out
++        writel(0x4755, 0x14c37408);//reload timer value
 +
  	return 0;
  }
 diff --git a/common/autoboot.c b/common/autoboot.c
-index 5d331991c1..eefcf61649 100644
+index 5d331991c1..058f4e7311 100644
 --- a/common/autoboot.c
 +++ b/common/autoboot.c
-@@ -488,26 +488,56 @@ void autoboot_command(const char *s)
+@@ -488,26 +488,55 @@ void autoboot_command(const char *s)
  {
  	debug("### main_loop: bootcmd=\"%s\"\n", s ? s : "<UNDEFINED>");
  
@@ -46,6 +54,24 @@ index 5d331991c1..eefcf61649 100644
 -		 (stored_bootdelay != -1 && !abortboot(stored_bootdelay)))) {
 -		bool lock;
 -		int prev;
+-
+-		lock = autoboot_keyed() &&
+-			!IS_ENABLED(CONFIG_AUTOBOOT_KEYED_CTRLC);
+-		if (lock)
+-			prev = disable_ctrlc(1); /* disable Ctrl-C checking */
+-
+-		run_command_list(s, -1, 0);
+-
+-		if (lock)
+-			disable_ctrlc(prev);	/* restore Ctrl-C checking */
+-	}
+-
+-	if (IS_ENABLED(CONFIG_AUTOBOOT_USE_MENUKEY) &&
+-	    menukey == AUTOBOOT_MENUKEY) {
+-		s = env_get("menucmd");
+-		if (s)
+-			run_command_list(s, -1, 0);
+-	}
 +  writel((readl(0x14c3740c) & 0xFFFE), 0x14c3740c);//disable FMC_WDT2
 +
 +    // Check if we're booting from alternate source
@@ -97,37 +123,12 @@ index 5d331991c1..eefcf61649 100644
 +        if (s)
 +            run_command_list(s, -1, 0);
 +    }
- 
--		lock = autoboot_keyed() &&
--			!IS_ENABLED(CONFIG_AUTOBOOT_KEYED_CTRLC);
--		if (lock)
--			prev = disable_ctrlc(1); /* disable Ctrl-C checking */
--
--		run_command_list(s, -1, 0);
--
--		if (lock)
--			disable_ctrlc(prev);	/* restore Ctrl-C checking */
--	}
--
--	if (IS_ENABLED(CONFIG_AUTOBOOT_USE_MENUKEY) &&
--	    menukey == AUTOBOOT_MENUKEY) {
--		s = env_get("menucmd");
--		if (s)
--			run_command_list(s, -1, 0);
--	}
  }
 diff --git a/include/configs/evb_ast2700.h b/include/configs/evb_ast2700.h
-index 202ff58cf7..5715f302fc 100644
+index 764daf4544..05cca332f3 100644
 --- a/include/configs/evb_ast2700.h
 +++ b/include/configs/evb_ast2700.h
-@@ -2,33 +2,38 @@
- /*
-  * Copyright (C) ASPEED Technology Inc.
-  */
--
- #ifndef __CONFIG_H
- #define __CONFIG_H
--
+@@ -9,26 +9,33 @@
  #include <configs/aspeed-common.h>
  
  /* Extra ENV for Boot Command */
@@ -154,7 +155,7 @@ index 202ff58cf7..5715f302fc 100644
 -	"ufsboota=setenv bootpart 2; setenv rootfs rofs-a; run setufsargs; ext4load scsi 0:${bootpart} ${loadaddr} fitImage && bootm ${loadaddr}; echo Error loading kernel FIT image\0"	\
 -	"ufsbootb=setenv bootpart 3; setenv rootfs rofs-b; run setufsargs; ext4load scsi 0:${bootpart} ${loadaddr} fitImage && bootm ${loadaddr}; echo Error loading kernel FIT image\0"	\
 -	"bootufs=if test \"${bootside}\" = \"b\"; then run ufsbootb; run ufsboota; else run ufsboota; run ufsbootb; fi\0"	\
--	"verify=yes\0"	\
+-	"verify=no\0"	\
 -	""
 -#endif	/* __CONFIG_H */
 +        "bootspi=if test \"${bootfrom}\" = \"alternate\"; then " \
@@ -182,5 +183,5 @@ index 202ff58cf7..5715f302fc 100644
 +#endif
 +
 -- 
-2.47.1
+2.53.0
 

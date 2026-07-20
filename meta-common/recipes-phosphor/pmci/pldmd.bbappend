@@ -16,6 +16,7 @@ SRC_URI:append = " \
     file://013-add-timer-to-event-loop.patch \
     file://014-added-msg-tag-support.patch \
     file://015-add_association_interface_to_pldm_sensors.patch \
+    file://016-Fix-For-LF-Sync.patch \
     file://xyz.openbmc_project.pldmd.service \
 "
 
@@ -23,6 +24,6 @@ DEPENDS += " nlohmann-json"
 DEPENDS:remove = "mctpwplus mctp-wrapper"
 
 do_install:append() {
-    install -D -m 0644 ${WORKDIR}/xyz.openbmc_project.pldmd.service ${D}${systemd_system_unitdir}/xyz.openbmc_project.pldmd.service
+    install -D -m 0644 ${UNPACKDIR}/xyz.openbmc_project.pldmd.service ${D}${systemd_system_unitdir}/xyz.openbmc_project.pldmd.service
 }
 SYSTEMD_SERVICE:${PN} = "xyz.openbmc_project.pldmd.service"

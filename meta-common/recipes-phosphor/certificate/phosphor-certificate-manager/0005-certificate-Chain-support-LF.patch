@@ -1,0 +1,305 @@
+From a5a55087dd62b2d30c6c56246033532de07045dc Mon Sep 17 00:00:00 2001
+From: Minal Upadhye <minalsunilu@ami.com>
+Date: Thu, 26 Feb 2026 15:33:47 +0530
+Subject: [PATCH] certificate-Chain-support LF 2
+
+Signed-off-by: Minal Upadhye <minalsunilu@ami.com>
+---
+ certificate.cpp   |  17 ++++++
+ certificate.hpp   |  16 ++++-
+ certs_manager.cpp | 148 +++++++++++++++++++++++++++++++++++++++++++---
+ config.h.in       |   2 +
+ 4 files changed, 174 insertions(+), 9 deletions(-)
+
+diff --git a/certificate.cpp b/certificate.cpp
+index d7dd0be..78b91e1 100644
+--- a/certificate.cpp
++++ b/certificate.cpp
+@@ -475,6 +475,23 @@ void Certificate::storageUpdate()
+         }
+     }
+ }
++void Certificate::setCertificateType(CertsTypes type)
++{
++    certificateType(type);
++}
++CertsTypes Certificate::getCertificateType()
++{
++    return certificateType();
++}
++
++void Certificate::setCertificate(std::string payload)
++{
++    chainCertString(payload);
++}
++std::string Certificate::getCertificate()
++{
++    return chainCertString();
++}
+ 
+ void Certificate::populateProperties(X509& cert)
+ {
+diff --git a/certificate.hpp b/certificate.hpp
+index e2864eb..58605d2 100644
+--- a/certificate.hpp
++++ b/certificate.hpp
+@@ -71,6 +71,9 @@ using AppendPrivKeyFunc = std::function<void(const std::string&)>;
+ using X509Ptr = std::unique_ptr<X509, decltype(&::X509_free)>;
+ } // namespace internal
+ 
++using CertsTypes =
++    sdbusplus::server::xyz::openbmc_project::certs::Certificate::Type;
++
+ class Manager; // Forward declaration for Certificate Manager.
+ 
+ /** @class Certificate
+@@ -216,6 +219,14 @@ class Certificate : public internal::CertificateInterface
+      */
+     void setCertInstallPath(const std::string& path);
+ 
++    void setCertificateType(CertsTypes type);
++
++    CertsTypes getCertificateType();
++
++    void setCertificate(std::string payload);
++
++    std::string getCertificate();
++
+   private:
+     /**
+      * @brief Populate certificate properties by parsing given certificate
+@@ -230,7 +241,10 @@ class Certificate : public internal::CertificateInterface
+     /** @brief Check and append private key to the certificate file
+      *         If private key is not present in the certificate file append the
+      *         certificate file with private key existing in the system.
+-     *  @param[in] filePath - Certificate and key full file path.
++     *  @param[in] filePath - Certificate and key full file path..
++     *
++     *
++     *
+      *  @return void.
+      */
+     void checkAndAppendPrivateKey(const std::string& filePath);
+diff --git a/certs_manager.cpp b/certs_manager.cpp
+index 35f65fe..ca1d65c 100644
+--- a/certs_manager.cpp
++++ b/certs_manager.cpp
+@@ -288,6 +288,56 @@ std::string Manager::install(const std::string filePath)
+ 
+     return certObjectPath;
+ }
++void Manager::installChain_Cert(const std::string filePath)
++{
++    std::string tmp_cert;
++    fs::path sourceFile(filePath);
++    if (!fs::exists(sourceFile))
++    {
++        lg2::error("File is Missing, FILE:{FILE}", "FILE", filePath);
++        elog<InternalFailure>();
++    }
++    std::vector<std::string> httpsChain = splitCertificates(sourceFile);
++    if (httpsChain.size() > 5)
++    {
++        elog<NotAllowed>(NotAllowedReason("Certificates limit reached"));
++    }
++    lg2::info("Starts Https chain list install");
++    for (std::string& c : httpsChain)
++    {
++        tmp_cert.append(c);
++    }
++    for (const auto& cert : installedCerts)
++    {
++        cert->setCertificate(tmp_cert);
++        break;
++    }
++    fs::path httpsChainStore(certInstallPath);
++    fs::path httpsChainListFile =
++        httpsChainStore / defaultHttpsChainListFileName;
++    // Atomically install all the certificates
++    fs::path tempPath = Certificate::generateUniqueFilePath(httpsChainStore);
++    fs::create_directory(tempPath);
++    // Copies the Https list
++    Certificate::copyCertificate(sourceFile,
++                                 tempPath / defaultHttpsChainListFileName);
++    X509StorePtr x509Store = getX509Store(sourceFile);
++
++    for (const auto& httpsSingle : httpsChain)
++    {
++        std::string tmp = httpsSingle;
++        internal::X509Ptr cert = parseCert(httpsSingle);
++        validateCertificateAgainstStore(*x509Store, *cert);
++        validateCertificateStartDate(*cert);
++        validateCertificateKeyLength(*cert);
++        validateCertificateInSSLContext(*cert);
++    }
++    for (const fs::path& f : fs::directory_iterator(tempPath))
++    {
++        fs::path path = certInstallPath;
++        fs::copy(tempPath / f.filename(), path.parent_path());
++    }
++}
+ 
+ std::vector<sdbusplus::message::object_path> Manager::installAll(
+     const std::string filePath)
+@@ -402,6 +452,7 @@ void Manager::deleteAll()
+             fs::remove(authoritiesList);
+         }
+     }
++
+     certIdCounter = 1;
+     storageUpdate();
+     reloadOrReset(unitToRestart);
+@@ -412,8 +463,19 @@ void Manager::deleteCertificate(const Certificate* const certificate)
+     const std::vector<std::unique_ptr<Certificate>>::iterator& certIt =
+         std::find_if(installedCerts.begin(), installedCerts.end(),
+                      [certificate](const std::unique_ptr<Certificate>& cert) {
+-                         return (cert.get() == certificate);
+-                     });
++        return (cert.get() == certificate);
++    });
++
++    if (certType == CertificateType::server)
++    {
++        if (fs::path httpsList = fs::path(certInstallPath).parent_path() /
++                                 defaultHttpsChainListFileName;
++            fs::exists(httpsList))
++        {
++            fs::remove(httpsList);
++        }
++    }
++
+     if (certIt != installedCerts.end())
+     {
+         installedCerts.erase(certIt);
+@@ -431,15 +493,41 @@ void Manager::deleteCertificate(const Certificate* const certificate)
+ void Manager::replaceCertificate(Certificate* const certificate,
+                                  const std::string& filePath)
+ {
+-    if (isCertificateUnique(filePath, certificate))
++    CertsTypes CertType;
++    for (const auto& cert : installedCerts)
+     {
+-        certificate->install(filePath, false);
+-        storageUpdate();
+-        reloadOrReset(unitToRestart);
++        CertType = cert->getCertificateType();
+     }
+-    else
++    auto contypestr =
++        sdbusplus::common::xyz::openbmc_project::certs::convertForMessage(
++            CertType);
++
++    syslog(LOG_INFO, "Get cert %s \r\n", std::string(contypestr).c_str());
++
++    if (contypestr == "xyz.openbmc_project.Certs.Certificate.Type.PEM")
+     {
+-        elog<NotAllowed>(NotAllowedReason("Certificate already exist"));
++        if (isCertificateUnique(filePath, certificate))
++        {
++            certificate->install(filePath, false);
++            storageUpdate();
++            reloadOrReset(unitToRestart);
++        }
++        else
++        {
++            elog<NotAllowed>(NotAllowedReason("Certificate already exist"));
++        }
++    }
++    else if (contypestr == "xyz.openbmc_project.Certs.Certificate.Type.PEMchain")
++    {
++        fs::path chainFile = fs::path(certInstallPath).parent_path();
++        chainFile = chainFile / defaultHttpsChainListFileName;
++        if (fs::exists(chainFile))
++        {
++            elog<NotAllowed>(
++                NotAllowedReason("Certificate Chain already exist"));
++            return;
++        }
++        installChain_Cert(filePath);
+     }
+ }
+ 
+@@ -1272,6 +1360,50 @@ void Manager::createCertificates()
+             report<InvalidCertificate>(InvalidCertificateReason(
+                 "Existing certificate file is corrupted"));
+         }
++
++        fs::path chainFile = fs::path(certInstallPath).parent_path();
++        chainFile = chainFile / defaultHttpsChainListFileName;
++        if (!fs::exists(chainFile))
++        {
++            return;
++        }
++        std::vector<std::string> https = splitCertificates(chainFile.string());
++
++        /*Certificate lenght should be more than one, after that only it will
++         * consider as chain*/
++        if (https.size() > 1)
++        {
++            std::string cert_buff;
++            installedCerts[0]->setCertificateType(
++                sdbusplus::server::xyz::openbmc_project::certs::Certificate::
++                    Type::PEM);
++            /*Read the data from chain certificate update in DBUS property*/
++            std::ifstream inputCertFileStream;
++            inputCertFileStream.exceptions(
++                std::ifstream::failbit | std::ifstream::badbit |
++                std::ifstream::eofbit);
++            try
++            {
++                std::string buf;
++                inputCertFileStream.open(chainFile);
++                while (std::getline(inputCertFileStream, buf))
++                {
++                    cert_buff.append(buf);
++                }
++                inputCertFileStream.close();
++            }
++            catch (const std::exception& e)
++            {
++                lg2::error("Fail to read chain certificate");
++            }
++            installedCerts[0]->setCertificate(cert_buff);
++        }
++        else
++        {
++            installedCerts[0]->setCertificateType(
++                sdbusplus::server::xyz::openbmc_project::certs::Certificate::
++                    Type::PEMchain);
++        }
+     }
+ }
+ 
+diff --git a/config.h.in b/config.h.in
+index 3d48991..8a62ff3 100644
+--- a/config.h.in
++++ b/config.h.in
+@@ -22,5 +22,7 @@ inline constexpr size_t maxNumAuthorityCertificates = @authority_limit@;
+ /* The default name of the authorities list file. */
+ inline constexpr char defaultAuthoritiesListFileName[] = "@authorities_list_name@";
+ 
++inline constexpr char defaultHttpsChainListFileName[] = "httpschain";
++
+ /* Whether to allow expired certificates. */
+ inline constexpr bool allowExpired = @allow_expired@;
+
+diff --git a/certs_manager.hpp b/certs_manager.hpp
+index 9c96f9f..0146c2c 100644
+--- a/certs_manager.hpp
++++ b/certs_manager.hpp
+@@ -78,6 +78,12 @@ class Manager : public internal::ManagerInterface
+      */
+     std::string install(const std::string filePath) override;
+
++    /** @brief Implementation for Install chain certificate
++     *
++     *  @parm[in] filepath
++     * */
++    void installChain_Cert(const std::string filePath);
++
+     /** @brief Implementation for InstallAll
+      *  Install the authority list and restart the associated services.
+      *
+-- 
+2.34.1
+

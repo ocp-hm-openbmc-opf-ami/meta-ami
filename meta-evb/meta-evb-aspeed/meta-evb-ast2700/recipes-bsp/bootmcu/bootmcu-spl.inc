@@ -5,6 +5,7 @@ PACKAGE_ARCH = "${MACHINE_ARCH}"
 PROVIDES += "virtual/bootmcu"
 DEPENDS = "ast2700-riscv-linux-gnu-native kern-tools-native swig-native ${PYTHON_PN}-setuptools-native fmc-imgtool-native"
 DEPENDS += "${@bb.utils.contains('MACHINE_FEATURES', 'ast-secure', 'aspeed-secure-config-native u-boot-tools-native', '', d)}"
+DEPENDS += "u-boot-mkimage-native"
 
 inherit deploy cml1 python3native otptool
 
@@ -128,6 +129,10 @@ do_create_fmc_image() {
     local lms_key_index=""
     local sign_args=""
 
+    if [ "${FMC_IMAGE_ENABLE}" != "1" ]; then
+        return
+    fi
+
     if [ -f "${FMC_ECC_KEY}" ]; then
         ecc_key="--ecc-key ${FMC_ECC_KEY}"
     fi
@@ -154,7 +159,7 @@ do_create_fmc_image() {
         --verbose \
         --version 2 \
         --input ${B}/spl/u-boot-spl.bin \
-        --output ${B}/${BOOTMCU_FW_BINARY} \
+        --output ${B}/${BOOTMCU_FMC_BINARY} \
         --prebuilt-dir ${DEPLOY_DIR_IMAGE}/ \
         ${sign_args}
 }
@@ -162,7 +167,7 @@ do_create_fmc_image() {
 addtask create_fmc_image before do_deploy after do_compile
 
 do_create_fmc_image[depends] += " \
-    fmc-images:do_deploy \
+    bmc-pb:do_deploy \
     "
 
 do_deploy() {
@@ -178,8 +183,8 @@ do_deploy() {
     # To reduce the risk of unexpected run-time errors, verification should be added.
 
     # spl fmc since AST2700 A1
-    install -m 644 ${BOOTMCU_FW_BINARY} ${DEPLOYDIR}
-    install -m 644 ${BOOTMCU_FW_BINARY} ${DEPLOYDIR}/${BOOTMCU_FW_BINARY}-${sub_ver}
+    install -m 644 ${BOOTMCU_FMC_BINARY} ${DEPLOYDIR}
+    install -m 644 ${BOOTMCU_FMC_BINARY} ${DEPLOYDIR}/${BOOTMCU_FMC_BINARY}-${sub_ver}
 }
 
 addtask deploy before do_build after do_compile

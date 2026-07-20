@@ -10,7 +10,7 @@ inherit obmc-phosphor-systemd
 RDEPENDS:${PN} += "libsystemd bash"
 DEPENDS += " systemd"
 
-S="${WORKDIR}/git"
+S = "${WORKDIR}/git"
 
 SRC_URI += " \
         file://multi-host-config \
@@ -22,7 +22,7 @@ MULTI_HOST_DEFAULT_MODE ?= "0"
 
 do_install:append() {
   install -d ${D}/${sbindir}
-  install -m 0755 ${WORKDIR}/multi-host-config ${D}/${sbindir}/multi-host-config
+    install -m 0755 ${UNPACKDIR}/multi-host-config ${D}/${sbindir}/multi-host-config
 
   # Create config directories
   install -d ${D}/etc/multi-host-config

@@ -3,7 +3,14 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/virtual-media.git;protocol=https;branch=main"
 
 
-SRCREV = "b0ca4aa34cb4dcf5a5aa3c197751a427f48483e8"
+SRCREV = "b92d139a3e90d3eed04368c0af14cdcc97367954"
 
 RDEPENDS:${PN} = "nbd-client nbdkit nfs-export-root"
+
+SYSTEMD_SERVICE:${PN} += "${@bb.utils.contains('MULTI_HOST_DEFAULT_MODE', '1', 'xyz.openbmc_project.VirtualMedia1.service', '', d)}"
+
+PACKAGECONFIG:append = "${@bb.utils.contains('MULTI_HOST_DEFAULT_MODE', '1', ' dual_node', '', d)}"
+PACKAGECONFIG[dual_node] = "-Ddual_node=enabled,-Ddual_node=disabled"
+
+FILES_${PN} += "${systemd_system_unitdir}/xyz.openbmc_project.VirtualMedia*.service"
 
