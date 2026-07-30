@@ -1,0 +1,257 @@
+From b8aa23b368fa950300ab685a70b129bdcef543fb Mon Sep 17 00:00:00 2001
+From: henryliu <henryliu@ami.com>
+Date: Mon, 22 Sep 2025 18:22:37 +0800
+Subject: [PATCH] Add-Deferred-Binding-Support
+
+---
+ include/libbej/bej_decoder_json.hpp |   8 +-
+ src/bej_decoder_json.cpp            | 162 ++++++++++++++++++++++++++--
+ 2 files changed, 160 insertions(+), 10 deletions(-)
+
+diff --git a/include/libbej/bej_decoder_json.hpp b/include/libbej/bej_decoder_json.hpp
+index 06f5587..ac39586 100644
+--- a/include/libbej/bej_decoder_json.hpp
++++ b/include/libbej/bej_decoder_json.hpp
+@@ -3,9 +3,9 @@
+ #include "bej_common.h"
+ #include "bej_decoder_core.h"
+ 
++#include <map>
+ #include <span>
+ #include <string>
+-#include <unordered_map>
+ #include <vector>
+ 
+ namespace libbej
+@@ -22,13 +22,15 @@ class BejDecoderJson
+      *
+      * @param[in] dictionaries - dictionaries needed for decoding.
+      * @param[in] encodedPldmBlock - encoded PLDM block.
+-     * @param[in] resourceIdToUriMap - mapping of resource IDs to URIs.
++     * @param[in] resourceUriMap - mapping of resource IDs to URIs.
++     * @param[in] actionUriMap - mapping of resource IDs to Action URIs.
+      * @return 0 if successful.
+      */
+     int decode(
+         const BejDictionaries& dictionaries,
+         const std::span<const uint8_t> encodedPldmBlock,
+-        const std::unordered_map<uint32_t, std::string>& resourceIdToUriMap);
++        const std::map<uint32_t, std::string>& resourceUriMap,
++        const std::map<uint32_t, std::vector<std::string>>& actionUriMap);
+ 
+     /**
+      * @brief Get the JSON output related to the latest call to decode.
+diff --git a/src/bej_decoder_json.cpp b/src/bej_decoder_json.cpp
+index a39ca86..ce471dc 100644
+--- a/src/bej_decoder_json.cpp
++++ b/src/bej_decoder_json.cpp
+@@ -1,5 +1,6 @@
+ #include "bej_decoder_json.hpp"
+ 
++#include <cstdlib>
+ namespace libbej
+ {
+ 
+@@ -10,9 +11,154 @@ struct BejJsonParam
+ {
+     bool* isPrevAnnotated;
+     std::string* output;
+-    const std::unordered_map<uint32_t, std::string>* resourceIdToUriMap;
++    const std::map<uint32_t, std::string>* resourceUriMap;
++    const std::map<uint32_t, std::vector<std::string>>* actionUriMap;
+ };
+ 
++/**
++ * @brief Convert deferred binding value if it starts with "%"
++ *
++ * @param[in] value - input string to check and potentially convert
++ * @param[in] params - BejJsonParam struct containing context data
++ * @return converted string or original value
++ */
++static std::string convertDeferredBinding(const char* value,
++                                          struct BejJsonParam* params)
++{
++    if (value == nullptr || value[0] != '%')
++    {
++        return std::string(value);
++    }
++
++    std::string input(value);
++
++    // Check for "%%" escape sequence
++    if (input == "%%")
++    {
++        return "%";
++    }
++    // Check for "%L" prefix
++    // Macro format: %L<resource-ID>
++    else if (input.length() >= 2 && input.substr(0, 2) == "%L")
++    {
++        // Extract substring after "%L" and convert to uint32
++        std::string numberStr = input.substr(2);
++        if (!numberStr.empty())
++        {
++            try
++            {
++                uint32_t number = std::stoul(numberStr);
++
++                if (params->resourceUriMap != nullptr)
++                {
++                    auto it = params->resourceUriMap->find(number);
++                    if (it != params->resourceUriMap->end())
++                    {
++                        return it->second;
++                    }
++                }
++                // If no mapping found, return the /invalid.PDR<resource-ID>
++                // string
++                return "/invalid.PDR" + std::to_string(number);
++            }
++            catch (const std::exception&)
++            {
++                // If conversion fails, return original value
++                return input;
++            }
++        }
++    }
++    // Check for "%I" prefix
++    // Macro format: %I<resource-ID>
++    else if (input.length() >= 2 && input.substr(0, 2) == "%I")
++    {
++        // Extract substring after "%I" and convert to uint32
++        std::string numberStr = input.substr(2);
++        if (!numberStr.empty())
++        {
++            try
++            {
++                uint32_t number = std::stoul(numberStr);
++
++                if (params->resourceUriMap != nullptr)
++                {
++                    auto it = params->resourceUriMap->find(number);
++                    if (it != params->resourceUriMap->end())
++                    {
++                        // return the last URI segment after '/'
++                        std::string uri = it->second;
++                        size_t pos = uri.find_last_of('/');
++                        if (pos != std::string::npos && pos + 1 < uri.length())
++                        {
++                            return uri.substr(pos + 1);
++                        }
++                    }
++                }
++                // If no mapping found, return the invalid string
++                return "invalid";
++            }
++            catch (const std::exception&)
++            {
++                // If conversion fails, return original value
++                return input;
++            }
++        }
++    }
++    // Check for "%T" prefix
++    // Macro format: %T<resource-ID>.<n>
++    else if (input.length() >= 2 && input.substr(0, 2) == "%T")
++    {
++        // Extract substring after "%T" before the dot and convert to uint32
++        size_t dotPos = input.find('.');
++        if (dotPos != std::string::npos && dotPos > 2)
++        {
++            std::string resourceIdStr = input.substr(2, dotPos - 2);
++            std::string indexStr = input.substr(dotPos + 1);
++            if (!resourceIdStr.empty() && !indexStr.empty())
++            {
++                try
++                {
++                    uint32_t resourceId = std::stoul(resourceIdStr);
++                    size_t index = std::stoul(indexStr);
++
++                    if (params->actionUriMap != nullptr)
++                    {
++                        auto it = params->actionUriMap->find(resourceId);
++                        if (it != params->actionUriMap->end())
++                        {
++                            const auto& uriList = it->second;
++                            if (index < uriList.size())
++                            {
++                                // Return the URI at the specified index n
++                                return uriList[index];
++                            }
++                        }
++                    }
++                    // If no mapping found, return the
++                    // /invalid.<resource-ID>.<n> string
++                    return "/invalid." + std::to_string(resourceId) + "." +
++                           std::to_string(index);
++                }
++                catch (const std::exception&)
++                {
++                    // If conversion fails, return original value
++                    return input;
++                }
++            }
++        }
++    }
++
++    // Add more rules here as needed
++    // Future rules can be added like:
++    // if (input.substr(0, 3) == "%XX") { ... }
++
++    // If no rules match, return original value
++    return input;
++}
++
++// Macro for easy deferred binding conversion
++#define DEFERRED_BINDING(value, params)                                        \
++    convertDeferredBinding(value, params).c_str()
+ /**
+  * @brief Add a property name to output buffer.
+  *
+@@ -183,7 +329,7 @@ static int callbackString(const char* propertyName, const char* value,
+         reinterpret_cast<struct BejJsonParam*>(dataPtr);
+     addPropertyNameToOutput(params, propertyName);
+     params->output->push_back('\"');
+-    params->output->append(value);
++    params->output->append(DEFERRED_BINDING(value, params));
+     params->output->push_back('\"');
+     *params->isPrevAnnotated = false;
+     return 0;
+@@ -279,11 +425,11 @@ static int callbackResourceLink(const char* propertyName, uint64_t resourceId,
+     addPropertyNameToOutput(params, propertyName);
+ 
+     // Try to find URI for this resourceId
+-    if (params->resourceIdToUriMap != nullptr)
++    if (params->resourceUriMap != nullptr)
+     {
+         auto it =
+-            params->resourceIdToUriMap->find(static_cast<uint32_t>(resourceId));
+-        if (it != params->resourceIdToUriMap->end())
++            params->resourceUriMap->find(static_cast<uint32_t>(resourceId));
++        if (it != params->resourceUriMap->end())
+         {
+             // Found URI mapping, output the URI string
+             params->output->push_back('\"');
+@@ -371,7 +517,8 @@ static int stackPush(const struct BejStackProperty* const property,
+ int BejDecoderJson::decode(
+     const BejDictionaries& dictionaries,
+     const std::span<const uint8_t> encodedPldmBlock,
+-    const std::unordered_map<uint32_t, std::string>& resourceIdToUriMap)
++    const std::map<uint32_t, std::string>& resourceUriMap,
++    const std::map<uint32_t, std::vector<std::string>>& actionUriMap)
+ {
+     // Clear the previous output if any.
+     output.clear();
+@@ -412,7 +559,8 @@ int BejDecoderJson::decode(
+     struct BejJsonParam callbackData = {
+         .isPrevAnnotated = &isPrevAnnotated,
+         .output = &output,
+-        .resourceIdToUriMap = &resourceIdToUriMap,
++        .resourceUriMap = &resourceUriMap,
++        .actionUriMap = &actionUriMap,
+     };
+ 
+     return bejDecodePldmBlock(
+-- 
+2.34.1
+
