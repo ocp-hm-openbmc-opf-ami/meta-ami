@@ -141,6 +141,8 @@ if [ -d "meta-core/meta-common" ]; then
 
 	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.at-scale-debug.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.at-scale-debug.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-core/at-scale-debug/at-scale-debug_git.bb
 
+	sed -i 's/git@github.com\/ocp-hm-openbmc-opf-ami\/firmware.bmc.openbmc.applications.at-scale-debug.git;protocol=https;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.at-scale-debug.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-core/at-scale-debug/at-scale-debug_git.bb
+
 	sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.libraries.libpeciplus.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.libraries.libpeciplus.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-core/libpeciplus/libpeciplus_git.bb
 
 	sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.mctp-tools.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.mctp-tools.git;protocol=ssh;branch=main/g' meta-core/meta-common/recipes-phosphor/pmci/mctp-cmd-tool.bb
