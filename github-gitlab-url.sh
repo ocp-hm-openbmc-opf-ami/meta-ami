@@ -50,7 +50,13 @@ sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.mctpd.git
 
 sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.mctpwplus.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/mctpwplus.git;protocol=https;branch=oks-main/g' meta-core/meta-common/recipes-phosphor/pmci/mctpwplus.bb
 
+sed -i 's/git@github.com\/ocp-hm-openbmc-opf-ami\/mctpwplus.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/mctpwplus.git;protocol=https;branch=oks-main/g' meta-core/meta-common/recipes-phosphor/pmci/mctpwplus.bb
+
 sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.nvme-mi-daemon.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/nvme-mi-daemon.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-phosphor/pmci/nvmemi-daemon.bb
+
+sed -i 's/git@github.com\/ocp-hm-openbmc-opf-ami\/i3c-hub-detector.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.i3c-hub-detector.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-phosphor/pmci/i3c-hub-detector.bb
+
+sed -i 's/git@github.com\/ocp-hm-openbmc-opf-ami\/mctp-setup.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/intel\/firmware.bmc.openbmc.applications.kmctp-setup.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-phosphor/pmci/mctp-setup.bb
 
 sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.pldmd.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/pldmd.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-phosphor/pmci/pldmd.bb
 
