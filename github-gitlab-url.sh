@@ -48,7 +48,7 @@ sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.mctp-wrapper
 
 sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.mctpd.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/mctpd.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-phosphor/pmci/mctpd.bb
 
-sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.mctpwplus.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/mctpwplus.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-phosphor/pmci/mctpwplus.bb
+sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.libraries.mctpwplus.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/mctpwplus.git;protocol=https;branch=oks-main/g' meta-core/meta-common/recipes-phosphor/pmci/mctpwplus.bb
 
 sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.nvme-mi-daemon.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/nvme-mi-daemon.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-phosphor/pmci/nvmemi-daemon.bb
 
