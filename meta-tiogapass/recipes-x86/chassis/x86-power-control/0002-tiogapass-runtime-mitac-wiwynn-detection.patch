@@ -1,0 +1,174 @@
+From: AMI Team <ami@example.com>
+Date: Mon, 1 Jan 2024 00:00:00 +0000
+Subject: [PATCH] power-control: runtime MITAC/WIWYNN board detection for TiogaPass
+
+TiogaPass is manufactured by two ODMs with different GPIO wiring:
+
+  Board   GPIO offset  Signal
+  WIWYNN  14  (B6)     PS_PWROK      (named in DTS)
+  WIWYNN  215 (AA7)    POST_COMPLETE (named in DTS)
+  MITAC   26  (D2)     PS_PWROK      (unnamed in DTS)
+  MITAC   2   (A2)     POST_COMPLETE (unnamed in DTS)
+
+Board identity is read from BOARD_SKU_ID1 (GPIO P1, chip offset 121):
+  1 = WIWYNN -> use existing named-line JSON-config flow
+  0 = MITAC  -> use offset-based requestGPIOEventsByOffset()
+
+Upstream-Status: Pending
+
+Signed-off-by: AMI Team <ami@example.com>
+---
+--- a/src/power_control.cpp
++++ b/src/power_control.cpp
+@@ -41,6 +41,13 @@
+ #include <string_view>
+ #include <sys/mman.h>
+ 
++/* TiogaPass ODM variants detected via BOARD_SKU_ID1 (GPIO P1, offset 121) */
++#define TP_MITAC  0
++#define TP_WIWYNN 1
++#define TP_SKU_ID1_OFFSET    121u
++#define TP_MITAC_PWROK_OFFSET  26u  /* D2 - unnamed in DTS */
++#define TP_MITAC_POSTCMP_OFFSET 2u  /* A2 - unnamed in DTS */
++
+ namespace power_control
+ {
+ static boost::asio::io_context io;
+@@ -1360,6 +1367,64 @@
+     return true;
+ }
+ 
++static int tiogapassPlatformId()
++{
++    gpiod::chip chip("0");
++    auto line = chip.get_line(TP_SKU_ID1_OFFSET);
++    if (!line)
++    {
++        lg2::error("TiogaPass: failed to find SKU_ID1 at offset {OFF}",
++                   "OFF", TP_SKU_ID1_OFFSET);
++        return TP_WIWYNN;
++    }
++    try
++    {
++        line.request({appName, gpiod::line_request::DIRECTION_INPUT, {}});
++    }
++    catch (const std::exception& e)
++    {
++        lg2::error("TiogaPass: SKU_ID1 request failed: {ERROR}", "ERROR", e);
++        return TP_WIWYNN;
++    }
++    return (line.get_value() == 1) ? TP_WIWYNN : TP_MITAC;
++}
++
++/* Request GPIO events by chip offset for pins not named in the DTS. */
++static bool requestGPIOEventsByOffset(
++    unsigned int offset, const std::function<void(bool)>& handler,
++    gpiod::line& gpioLine,
++    boost::asio::posix::stream_descriptor& gpioEventDescriptor)
++{
++    gpiod::chip chip("0");
++    gpioLine = chip.get_line(offset);
++    if (!gpioLine)
++    {
++        lg2::error("TiogaPass: failed to get line at offset {OFF}", "OFF",
++                   offset);
++        return false;
++    }
++    try
++    {
++        gpioLine.request({appName, gpiod::line_request::EVENT_BOTH_EDGES, {}});
++    }
++    catch (const std::exception& e)
++    {
++        lg2::error("TiogaPass: events request failed for offset {OFF}: {ERROR}",
++                   "OFF", offset, "ERROR", e);
++        return false;
++    }
++    int fd = gpioLine.event_get_fd();
++    if (fd < 0)
++    {
++        lg2::error("TiogaPass: fd error for offset {OFF}", "OFF", offset);
++        return false;
++    }
++    gpioEventDescriptor.assign(fd);
++    waitForGPIOEvent(std::to_string(offset), handler, gpioLine,
++                     gpioEventDescriptor);
++    return true;
++}
++
+ static bool setGPIOOutput(const std::string& name, const int value,
+                           gpiod::line& gpioLine)
+ {
+@@ -3034,18 +3099,31 @@
+     // Request power OK GPIO events
+     if (powerOkConfig.type == ConfigType::GPIO)
+     {
+-        try
++        const int odm = tiogapassPlatformId();
++        if (odm == TP_MITAC)
+         {
+-            if (!requestGPIOEvents(powerOkConfig.lineName, powerOKHandler,
+-                                   powerOKLine, powerOKEvent))
++            if (!requestGPIOEventsByOffset(TP_MITAC_PWROK_OFFSET,
++                                           powerOKHandler, powerOKLine,
++                                           powerOKEvent))
+             {
+                 return -1;
+             }
+         }
+-        catch (const std::exception& e)
++        else
+         {
+-            lg2::error("standard exception caught: {ERROR}", "ERROR", e);
+-            return -1;
++            try
++            {
++                if (!requestGPIOEvents(powerOkConfig.lineName, powerOKHandler,
++                                       powerOKLine, powerOKEvent))
++                {
++                    return -1;
++                }
++            }
++            catch (const std::exception& e)
++            {
++                lg2::error("standard exception caught: {ERROR}", "ERROR", e);
++                return -1;
++            }
+         }
+     }
+     else if (powerOkConfig.type == ConfigType::DBUS)
+@@ -3260,21 +3338,27 @@
+     bool postCompleteConfigured = false;
+     if (postCompleteConfig.type == ConfigType::GPIO)
+     {
+-        try
++        const int odm = tiogapassPlatformId();
++        if (odm == TP_MITAC)
+         {
+-            if (!requestGPIOEvents(postCompleteConfig.lineName,
+-                                   postCompleteHandler, postCompleteLine,
+-                                   postCompleteEvent))
++            if (!requestGPIOEventsByOffset(TP_MITAC_POSTCMP_OFFSET,
++                                           postCompleteHandler,
++                                           postCompleteLine, postCompleteEvent))
+             {
+                 return -1;
+             }
++            postCompleteConfigured = true;
+         }
+-        catch (const std::exception& e)
++        else if (!requestGPIOEvents(postCompleteConfig.lineName,
++                                    postCompleteHandler, postCompleteLine,
++                                    postCompleteEvent))
+         {
+-            lg2::error("standard exception caught: {ERROR}", "ERROR", e);
+             return -1;
+         }
+-        postCompleteConfigured = true;
++        else
++        {
++            postCompleteConfigured = true;
++        }
+     }
+     else if (postCompleteConfig.type == ConfigType::DBUS)
+     {
