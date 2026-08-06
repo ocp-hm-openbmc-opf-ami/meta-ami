@@ -4,9 +4,9 @@ LICENSE = "GPL-2.0-only"
 
 LIC_FILES_CHKSUM = "file://LICENSE;md5=4cc91856b08b094b4f406a29dc61db21"
 
-SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/mctp-ext.git;protocol=https;branch=main \
+SRC_URI = "git://github.com/ocp-hm-openbmc-opf-ami/mctp-ext.git;protocol=https;branch=main \
            "
-SRCREV = "590b30639dbc9ce37474b16d4da11979dedc49c4"
+SRCREV = "fc8b0493e6472873f531e1501f40f02760e8aea0"
 PV = "1.0+git${SRCPV}"
 
 S = "${WORKDIR}/git"
@@ -42,3 +42,4 @@ do_install:append () {
 	install -d ${D}${systemd_system_unitdir}
 	install -m 0644 ${UNPACKDIR}/mctpreactor.service ${D}${systemd_system_unitdir}/mctpreactor.service
 }
+
