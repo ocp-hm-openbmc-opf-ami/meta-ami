@@ -15,7 +15,7 @@ GROUPADD_PARAM:${PN}:append = ";redfish-hostiface"
 
 SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/bmcweb;protocol=https;branch=master;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "b76407e4d11621c47c86598d74e871071b9ccc26"
+SRCREV_override = "9c234a8e50f0e760509324bf8ae81d1d3ae81040"
 
 #EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '-Dintel-pfr=enabled',' ', d)}"
 #EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'meta-mgx','-Dredfish-intel-feature=enabled','', d)}"

@@ -21,7 +21,7 @@ KBRANCH = "onetree-dev-6.6"
 
 KBUILD_CFLAGS += "-ffile-prefix-map=${WORKDIR}=/usr/src/debug/${PN}/${PV}"
 KBUILD_CFLAGS += "-ffile-prefix-map=${B}=/usr/src/debug/${PN}/${PV}"
-SRCREV = "8f00e3e5a6f0448177ce0cf026001cf573b190f8"
+SRCREV = "cf0936d0e6ede13afd003565574ae53bcca8ef4f"
 
 
 do_compile:prepend(){
@@ -197,10 +197,6 @@ NETWORK_BONDING_SRC_URI += "file://bond.cfg \
 SRC_URI += "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
 
 SRC_URI:append = " ${@bb.utils.contains('ENABLE_COMMUNITY_MCTP_KERNEL_MODE', '1', ' file://Enable_MCTP_vdm.cfg ', '', d)}"
-SRC_URI:append = " file://0007-Receive-MCTP-Broadcast-Package.patch "
-SRC_URI:append = " file://0008-MCTP-route-type-default-value.patch "
-SRC_URI:append = " file://0009-mctp-pcie-vdm-add-carrier-state-for-PCIe-reset.patch "
-SRC_URI:append = " file://0010-aspeed-mctp-handle-PCIe-host-reset.patch "
 
 # ABR mode detection patch for AST2600
 SRC_URI_ABR_PATCH = "file://0001-spi-aspeed-Add-ABR-mode-detection-support-for-AST260.patch"
