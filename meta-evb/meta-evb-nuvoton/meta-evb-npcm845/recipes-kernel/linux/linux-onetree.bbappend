@@ -13,8 +13,8 @@ SRC_URI:append = " file://i3c_mctp.cfg"
 # for af_mctp test
 SRC_URI:append = " file://mctp.cfg"
 
-# for s997
-SRC_URI:append = " file://s997.cfg"
+# for s997 (set S997_ENABLE = "0" in the machine conf to build without s997 related changes)
+SRC_URI:append:s997 = " file://s997.cfg"
 
 SRC_URI:append = " file://nfs_cifs.cfg \
                  "
