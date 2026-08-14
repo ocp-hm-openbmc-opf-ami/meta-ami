@@ -41,6 +41,21 @@ hostname file diffutils diffstat lz4 wget zstd rpcgen patch
 - Add [MACHINE = "ast2700-default"] for A2 or [MACHINE = "ast2700-a1-spl"] for A1 to the bottom of the  BUILD_DIR  /conf/local.conf file
 - bitbake obmc-phosphor-image
 ```
+
+### 6) Agilex-3 Build Instruction
+```
+- meta-ami/github-gitlab-url.sh
+- TEMPLATECONF=meta-altera/meta-agilex3/conf/templates/default . openbmc-env
+- bitbake obmc-phosphor-image
+```
+
+### 7) Agilex-5 Build Instruction
+```
+- meta-ami/github-gitlab-url.sh
+- TEMPLATECONF=meta-altera/meta-agilex5/conf/templates/default . openbmc-env
+- bitbake obmc-phosphor-image
+```
+
 ### Notes
 - By default root user is disabled in the stack except AST2600EVB
 - uncomment EXTRA_IMAGE_FEATURES += "debug-tweaks" in build/conf/local.conf to enable the root user access
