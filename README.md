@@ -63,5 +63,27 @@ TEMPLATECONF=meta-ami/meta-evb/meta-evb-nuvoton/meta-evb-npcm845/conf/templates/
 bitbake obmc-phosphor-image
 ```
 
+### 2.4 Agilex-3
+
+```sh
+git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
+git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/meta-core
+git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
+meta-ami/github-gitlab-url.sh
+TEMPLATECONF=meta-altera/meta-agilex3/conf/templates/default . openbmc-env
+bitbake obmc-phosphor-image
+```
+
+### 2.5 Agilex-5
+
+```sh
+git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
+git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/meta-core
+git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
+meta-ami/github-gitlab-url.sh
+TEMPLATECONF=meta-altera/meta-agilex5/conf/templates/default . openbmc-env
+bitbake obmc-phosphor-image
+```
+
 Please refer to [ocp-hm-openbmc-opf-ami/docs](https://github.com/ocp-hm-openbmc-opf-ami/docs)
 for more information.
