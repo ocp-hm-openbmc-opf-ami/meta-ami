@@ -69,6 +69,7 @@ bitbake obmc-phosphor-image
 git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
 git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/meta-core
 git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-altera.git
 meta-ami/github-gitlab-url.sh
 TEMPLATECONF=meta-altera/meta-agilex3/conf/templates/default . openbmc-env
 bitbake obmc-phosphor-image
@@ -80,6 +81,7 @@ bitbake obmc-phosphor-image
 git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
 git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/meta-core
 git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-altera.git
 meta-ami/github-gitlab-url.sh
 TEMPLATECONF=meta-altera/meta-agilex5/conf/templates/default . openbmc-env
 bitbake obmc-phosphor-image
