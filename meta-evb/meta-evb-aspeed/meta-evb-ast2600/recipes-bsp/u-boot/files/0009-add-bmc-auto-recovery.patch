@@ -1,0 +1,489 @@
+From c67ba1eeb71bb11e385a835fa333a4cb18bba4ed Mon Sep 17 00:00:00 2001
+From: sramya <sramya@ami.com>
+Date: Wed, 8 Apr 2026 19:05:38 +0530
+Subject: [PATCH] add BMC firmware auto-recovery support
+
+Recovery is triggered by recovery_mode_selection set to "mmc" or "tftp"
+(manual mode), or when normal boot retry count exceeds
+recovery_max_bootretry (default: 3).
+In auto mode, recovery tries eMMC first and then TFTP fallback.
+Watchdog timeout is not used for recovery decision.
+Default eMMC source is mmc 0:5 (Linux mount: /mnt/recovery).
+
+What this patch does:
+ - Adds recovery environment variables and Kconfig defaults
+ - Adds mode-based recovery trigger via recovery_mode_selection
+	 (auto/mmc/tftp)
+ - Triggers auto recovery when recovery_current_bootretry exceeds
+	 recovery_max_bootretry
+ - Restores SPI from eMMC image (default mmc 0:5, configurable
+	 device/partition)
+ - Falls back to TFTP when eMMC recovery fails in auto mode (with DHCP)
+ - Treats recovery_tftp_ip="0.0.0.0" as not configured
+ - Uses full-image sf update (offset 0x0) in recovery flash path
+ - Saves the last recovery source for Linux logs
+---
+ oem/ami/ami_bmc_recovery.c | 258 +++++++++++++++++++++++++
+ oem/ami/ami_bmc_recovery.h |   8 ++
+ include/env_default.h      |  13 ++
+ arch/arm/include/asm/arch-aspeed/aspeed_scu_info.h |   3 +
+ arch/arm/mach-aspeed/cpuinfo.c                     |   3 +
+ 9 files changed, 350 insertions(+)
+ create mode 100644 oem/ami/ami_bmc_recovery.c
+ create mode 100644 oem/ami/ami_bmc_recovery.h
+diff --git a/oem/ami/ami_bmc_recovery.c b/oem/ami/ami_bmc_recovery.c
+new file mode 100644
+index 0000000000..f29505275b
+--- /dev/null
++++ b/oem/ami/ami_bmc_recovery.c
+@@ -0,0 +1,263 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * ami_bmc_recovery.c - BMC auto-recovery with eMMC primary and TFTP fallback
++ */
++
++#include <common.h>
++#include <command.h>
++#include <environment.h>
++#include <net.h>
++#include <linux/delay.h>
++#include <linux/stringify.h>
++#include "ami_bmc_recovery.h"
++
++#define RECOVERY_LOAD_ADDR      0x83000000UL
++#define RECOVERY_SPI_OFFSET     0x0
++
++
++static int need_recovery(void)
++{
++	const char *mode;
++	unsigned int current_retry, retry_limit;
++
++	mode = env_get("recovery_mode_selection") ?: "auto";
++	if (!strcmp(mode, "mmc") || !strcmp(mode, "tftp")) {
++		printf("AUTO-RECOVERY: Manual recovery triggered (recovery_mode_selection=%s)\n", mode);
++		return 1;
++	}
++
++	current_retry = simple_strtoul(env_get("recovery_current_bootretry") ?: "0", NULL, 10);
++	retry_limit = simple_strtoul(env_get("recovery_max_bootretry") ?:
++		__stringify(CONFIG_RECOVERY_MAX_BOOTRETRY), NULL, 10);
++
++	/* only count this boot attempt if the limit is not already exceeded */
++	if (retry_limit > 0 && current_retry <= retry_limit) {
++		current_retry++;
++		env_set("recovery_current_bootretry", simple_itoa(current_retry));
++		env_save();
++		printf("AUTO-RECOVERY: Normal boot retry count=%u (limit=%u)\n",
++		       current_retry, retry_limit);
++	}
++
++	if (retry_limit > 0 && current_retry > retry_limit) {
++		printf("AUTO-RECOVERY: Auto-recovery triggered (recovery_current_bootretry=%u > recovery_max_bootretry=%u)\n",
++		       current_retry, retry_limit);
++		return 1;
++	}
++
++	return 0;
++}
++
++static int verify_and_flash(ulong load_addr, ulong img_size)
++{
++	char sf_cmd[96];
++
++	if (run_command("sf probe 0", 0) != 0) {
++		printf("AUTO-RECOVERY: SPI probe failed\n");
++		return -1;
++	}
++
++	printf("AUTO-RECOVERY: flashing 0x%lx bytes to offset 0x%lx\n",
++	       img_size, RECOVERY_SPI_OFFSET);
++
++	snprintf(sf_cmd, sizeof(sf_cmd),
++		 "sf update 0x%lx 0x%lx 0x%lx",
++		 load_addr, RECOVERY_SPI_OFFSET, img_size);
++	if (run_command(sf_cmd, 0) != 0) {
++		printf("AUTO-RECOVERY: sf update failed\n");
++		return -1;
++	}
++
++	printf("AUTO-RECOVERY: flash complete\n");
++	return 0;
++}
++
++static int recovery_from_emmc(void)
++{
++	unsigned long img_size;
++	unsigned int retry, retry_max;
++	const char *img_name;
++	unsigned int mmc_dev, mmc_part;
++	char cmd[192];
++
++	
+
+ = (env_get("recovery_bootfile") && env_get("recovery_bootfile")[0]) ?
++		env_get("recovery_bootfile") : CONFIG_RECOVERY_BOOTFILE;
++	retry_max = simple_strtoul(env_get("recovery_retry") ?:
++		__stringify(CONFIG_RECOVERY_RETRY), NULL, 10);
++	mmc_dev = simple_strtoul(env_get("recovery_mmc_dev") ?:
++		__stringify(CONFIG_RECOVERY_MMC_DEV), NULL, 10);
++	mmc_part = simple_strtoul(env_get("recovery_mmc_part") ?: __stringify(CONFIG_RECOVERY_MMC_PART), NULL, 10);
++
++	if (!img_name[0]) {
++		printf("AUTO-RECOVERY: recovery_bootfile is empty\n");
++		return -1;
++	}
++
++	env_set("recovery_last_source", "mmc");
++
++	printf("AUTO-RECOVERY: loading %s from ext4 mmc %u:%u\n",
++	       img_name, mmc_dev, mmc_part);
++
++	for (retry = 0; retry < retry_max; retry++) {
++		printf("AUTO-RECOVERY: eMMC attempt %u/%u: ext4load mmc %u:%u 0x%lx /%s\n",
++		       retry + 1, retry_max, mmc_dev, mmc_part,
++		       RECOVERY_LOAD_ADDR, img_name);
++
++		/*
++		 * Use ext4load to read the image from the ext4-formatted
++		 * recovery partition (mmc 0:5, /mnt/recovery on Linux).
++		 */
++		snprintf(cmd, sizeof(cmd),
++			 "mmc dev %d && mmc rescan && ext4load mmc %d:%d 0x%lx /%s",
++			 mmc_dev, mmc_dev, mmc_part,
++			 RECOVERY_LOAD_ADDR, img_name);
++
++		if (run_command(cmd, 0) != 0) {
++			printf("AUTO-RECOVERY: ext4load failed on mmc %u:%u attempt %u\n",
++			       mmc_dev, mmc_part, retry + 1);
++			continue;
++		}
++
++		img_size = env_get_hex("filesize", 0);
++		printf("AUTO-RECOVERY: eMMC image loaded, size=0x%lx - checking size before flash\n",
++		       img_size);
++
++		printf("AUTO-RECOVERY: Flashing SPI-ROM\n");
++		if (verify_and_flash(RECOVERY_LOAD_ADDR, img_size) == 0) {
++			return 0;
++		}
++	}
++
++	printf("AUTO-RECOVERY: eMMC recovery failed after %u attempts\n", retry_max);
++	return -1;
++}
++
++static int recovery_from_tftp(void)
++{
++	const char *tftp_ip, *img_name;
++	char cmd[128];
++	unsigned int retry, retry_max;
++	unsigned long img_size;
++
++	tftp_ip = env_get("recovery_tftp_ip");
++	img_name = (env_get("recovery_bootfile") && env_get("recovery_bootfile")[0]) ?
++		env_get("recovery_bootfile") : CONFIG_RECOVERY_BOOTFILE;
++	retry_max = simple_strtoul(env_get("recovery_retry") ?: __stringify(CONFIG_RECOVERY_RETRY), NULL, 10);
++
++	if (!img_name || !img_name[0]) {
++		printf("AUTO-RECOVERY: recovery_bootfile is not configured\n");
++		return -1;
++	}
++	if (!tftp_ip || !tftp_ip[0] || !strcmp(tftp_ip, "0.0.0.0")) {
++		printf("AUTO-RECOVERY: recovery_tftp_ip is not configured\n");
++		return -1;
++	}
++	env_set("recovery_last_source", "tftp");
++
++	printf("AUTO-RECOVERY: Downloading %s from TFTP server %s\n", img_name, tftp_ip);
++
++	snprintf(cmd, sizeof(cmd), "tftp 0x%lx %s:%s",
++		 RECOVERY_LOAD_ADDR, tftp_ip, img_name);
++
++	if (net_loop(DHCP) < 0) {
++		printf("AUTO-RECOVERY: DHCP failed on default interface, trying ethernet@1e680000\n");
++		env_set("ethact", "ethernet@1e680000");
++		if (net_loop(DHCP) < 0) {
++			printf("AUTO-RECOVERY: DHCP failed on fallback interface\n");
++			return -1;
++		}
++	}
++
++	printf("AUTO-RECOVERY: TFTP target re-applied after DHCP: server=%s file=%s\n",
++	       tftp_ip, img_name);
++
++	for (retry = 0; retry < retry_max; retry++) {
++		if (retry > 0) {
++			printf("AUTO-RECOVERY: retrying TFTP (%u/%u) after link settle delay\n",
++			       retry + 1, retry_max);
++			mdelay(3000);
++		}
++
++		if (run_command(cmd, 0) == 0)
++			break;
++
++		printf("AUTO-RECOVERY: TFTP download attempt %u failed\n", retry + 1);
++	}
++
++	if (retry == retry_max) {
++		printf("AUTO-RECOVERY: TFTP download failed\n");
++		return -1;
++	}
++
++	img_size = env_get_hex("filesize", 0);
++	printf("AUTO-RECOVERY: TFTP download completed, filesize=0x%lx\n", img_size);
++
++	printf("AUTO-RECOVERY: Flashing SPI-ROM\n");
++	if (verify_and_flash(RECOVERY_LOAD_ADDR, img_size) == 0) {
++		return 0;
++	}
++
++	printf("AUTO-RECOVERY: TFTP recovery failed after %u attempts\n", retry);
++	return -1;
++}
++
++int ami_bmc_recovery_check(void)
++{
++	const char *mode;
++
++	if (!need_recovery())
++		return 0;
++
++	mode = env_get("recovery_mode_selection") ?: "auto";
++
++	printf("\n*** AUTO-RECOVERY TRIGGERED ***\n");
++	printf("recovery_mode_selection=%s\n", mode);
++
++	if (!strcmp(mode, "mmc")) {
++		/* forced eMMC-only */
++		if (recovery_from_emmc() == 0) {
++			printf("AUTO-RECOVERY: eMMC recovery succeeded - resetting\n");
++			goto recovery_done;
++		}
++		printf("AUTO-RECOVERY: eMMC recovery failed\n");
++	} else if (!strcmp(mode, "tftp")) {
++		/* forced TFTP-only */
++		if (recovery_from_tftp() == 0) {
++			printf("AUTO-RECOVERY: TFTP recovery succeeded - resetting\n");
++			goto recovery_done;
++		}
++		printf("AUTO-RECOVERY: TFTP recovery failed\n");
++	} else {
++		/* auto: eMMC first unless last source was mmc, then TFTP fallback */
++		const char *last = env_get("recovery_last_source") ?: "none";
++
++		if (strcmp(last, "mmc") != 0) {
++			/* last is "none", "tftp", or unset, try eMMC first */
++			if (recovery_from_emmc() == 0) {
++				printf("AUTO-RECOVERY: eMMC recovery succeeded - resetting\n");
++				goto recovery_done;
++			}
++			printf("AUTO-RECOVERY: eMMC failed - trying TFTP fallback\n");
++		} else {
++			/* last is "mmc", skip eMMC and try TFTP only */
++			printf("AUTO-RECOVERY: last recovery source was eMMC, skipping eMMC and trying TFTP\n");
++		}
++
++		if (recovery_from_tftp() == 0) {
++			printf("AUTO-RECOVERY: TFTP recovery succeeded - resetting\n");
++			goto recovery_done;
++		}
++	}
++
++	printf("AUTO-RECOVERY: FATAL - both eMMC and TFTP recovery failed\n");
++	printf("AUTO-RECOVERY: Manual flashing is required; dropping to U-Boot prompt\n");
++	return -1;
++
++recovery_done:
++	env_set("recovery_current_bootretry", "0");
++	env_set("recovery_mode_selection", "auto");
++	env_save();
++
++	do_reset(NULL, 0, 0, NULL);
++	return 1;
++}
+diff --git a/common/autoboot.c b/common/autoboot.c
+index 94133eaeda..fbf609ef50 100644
+--- a/common/autoboot.c
++++ b/common/autoboot.c
+@@ -14,6 +14,9 @@
+ #include <post.h>
+ #include <u-boot/sha256.h>
+ #include <bootcount.h>
++#ifdef CONFIG_BMC_AUTO_RECOVERY
++#include "../oem/ami/ami_bmc_recovery.h"
++#endif
+ 
+ DECLARE_GLOBAL_DATA_PTR;
+ 
+@@ -329,6 +330,11 @@ void autoboot_command(const char *s)
+ {
+ 	debug("### main_loop: bootcmd=\"%s\"\n", s ? s : "<UNDEFINED>");
+ 
++#ifdef CONFIG_BMC_AUTO_RECOVERY
++	if (ami_bmc_recovery_check() != 0)
++		return;
++#endif
++
+ 	if (stored_bootdelay != -1 && s && !abortboot(stored_bootdelay)) {
+ #if defined(CONFIG_AUTOBOOT_KEYED) && !defined(CONFIG_AUTOBOOT_KEYED_CTRLC)
+ 		int prev = disable_ctrlc(1);	/* disable Control C checking */
+diff --git a/oem/ami/ami_bmc_recovery.h b/oem/ami/ami_bmc_recovery.h
+new file mode 100644
+index 0000000000..8b6a39ed08
+--- /dev/null
++++ b/oem/ami/ami_bmc_recovery.h
+@@ -0,0 +1,8 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++#ifndef __AMI_BMC_RECOVERY_H__
++#define __AMI_BMC_RECOVERY_H__
++
++int ami_bmc_recovery_check(void);
++
++#endif /* __AMI_BMC_RECOVERY_H__ */
++
+diff --git a/common/Makefile b/common/Makefile
+index 8c92feb399..7e8a3f9d5f 100644
+--- a/common/Makefile
++++ b/common/Makefile
+@@ -11,6 +11,7 @@ obj-y += exports.o
+ obj-$(CONFIG_HASH) += hash.o
+ obj-$(CONFIG_HUSH_PARSER) += cli_hush.o
+ obj-$(CONFIG_AUTOBOOT) += autoboot.o
++obj-$(CONFIG_BMC_AUTO_RECOVERY) += ../oem/ami/ami_bmc_recovery.o
+ 
+ # This option is not just y/n - it can have a numeric value
+ ifdef CONFIG_BOOT_RETRY_TIME
+diff --git a/Kconfig b/Kconfig
+index 0165ca33c5..7a44afdeca 100644
+--- a/Kconfig
++++ b/Kconfig
+@@ -585,3 +585,45 @@ source "fs/Kconfig"
+ source "lib/Kconfig"
+ 
+ source "test/Kconfig"
++
++config BMC_AUTO_RECOVERY
++	bool "AMI BMC auto-recovery support"
++	default n
++	help
++	  Enable AMI BMC auto-recovery path with eMMC primary and TFTP fallback.
++
++config RECOVERY_MODE_SELECTION
++	string "Recovery mode: auto (default logic), mmc (eMMC only), tftp (TFTP only)"
++	default "auto"
++
++config RECOVERY_RETRY
++	int "Default recovery_retry"
++	default 3
++
++config RECOVERY_MAX_BOOTRETRY
++	int "Default recovery_max_bootretry"
++	default 3
++
++config RECOVERY_CURRENT_BOOTRETRY
++	int "Default recovery_current_bootretry"
++	default 0
++
++config RECOVERY_LAST_SOURCE
++	string "Default recovery_last_source"
++	default "none"
++
++config RECOVERY_MMC_DEV
++	int "Default recovery_mmc_dev"
++	default 0
++
++config RECOVERY_MMC_PART
++	int "Default recovery_mmc_part"
++	default 5
++
++config RECOVERY_BOOTFILE
++	string "Default recovery_bootfile"
++	default "obmc-phosphor-image-evb-ast2600.static.mtd"
++
++config RECOVERY_TFTP_IP
++	string "Default recovery_tftp_ip"
++	default "0.0.0.0"
+
+diff --git a/include/env_default.h b/include/env_default.h
+index 86b639d3e2..35b18c6a0c 100644
+--- a/include/env_default.h
++++ b/include/env_default.h
+@@ -107,10 +107,19 @@ const uchar default_environment[] = {
+ #if defined(CONFIG_BOOTCOUNT_BOOTLIMIT) && (CONFIG_BOOTCOUNT_BOOTLIMIT > 0)
+ 	"bootlimit="	__stringify(CONFIG_BOOTCOUNT_BOOTLIMIT)"\0"
+ #endif
+ #ifdef	CONFIG_EXTRA_ENV_SETTINGS
+ 	CONFIG_EXTRA_ENV_SETTINGS
+ #endif
++	"recovery_mode_selection=" CONFIG_RECOVERY_MODE_SELECTION "\0"
++	"recovery_retry=" __stringify(CONFIG_RECOVERY_RETRY) "\0"
++	"recovery_max_bootretry=" __stringify(CONFIG_RECOVERY_MAX_BOOTRETRY) "\0"
++	"recovery_current_bootretry=" __stringify(CONFIG_RECOVERY_CURRENT_BOOTRETRY) "\0"
++	"recovery_last_source=" CONFIG_RECOVERY_LAST_SOURCE "\0"
++	"recovery_mmc_dev=" __stringify(CONFIG_RECOVERY_MMC_DEV) "\0"
++	"recovery_mmc_part=" __stringify(CONFIG_RECOVERY_MMC_PART) "\0"
++	"recovery_bootfile=" CONFIG_RECOVERY_BOOTFILE "\0"
++	"recovery_tftp_ip=" CONFIG_RECOVERY_TFTP_IP "\0"
+ 	"\0"
+ #else /* CONFIG_USE_DEFAULT_ENV_FILE */
+ #include "generated/defaultenv_autogenerated.h"
+ #endif
+diff --git a/arch/arm/include/asm/arch-aspeed/aspeed_scu_info.h b/arch/arm/include/asm/arch-aspeed/aspeed_scu_info.h
+index c535213dcb..27de05a510 100644
+--- a/arch/arm/include/asm/arch-aspeed/aspeed_scu_info.h
++++ b/arch/arm/include/asm/arch-aspeed/aspeed_scu_info.h
+@@ -11,6 +11,9 @@ void aspeed_print_soc_id(void);
+ void aspeed_print_security_info(void);
+ void aspeed_print_sysrst_info(void);
+ void aspeed_print_dram_initializer(void);
++#ifdef CONFIG_BMC_AUTO_RECOVERY
++void aspeed_disable_hw_abr(void);
++#endif
+ void aspeed_print_2nd_wdt_mode(void);
+ void aspeed_print_spi_strap_mode(void);
+ void aspeed_print_espi_mode(void);
+diff --git a/arch/arm/mach-aspeed/ast2600/scu_info.c b/arch/arm/mach-aspeed/ast2600/scu_info.c
+index a2277eec58..62baf9ac6d 100644
+--- a/arch/arm/mach-aspeed/ast2600/scu_info.c
++++ b/arch/arm/mach-aspeed/ast2600/scu_info.c
+@@ -276,6 +276,25 @@ void aspeed_print_dram_initializer(void)
+ 		printf("[init by VBIOS]\n");
+ }
+ 
++#ifdef CONFIG_BMC_AUTO_RECOVERY
++void aspeed_disable_hw_abr(void)
++{
++	u32 val;
++
++	if (!(readl(ASPEED_HW_STRAP2) & BIT(11)))
++		return; /* ABR already disabled */
++
++	/* Clear WDT2 timeout status (BIT(4)) and disable WDT2 (BIT(0)) */
++	val = readl(ASPEED_FMC_WDT2);
++	writel(val & ~(BIT(4) | BIT(0)), ASPEED_FMC_WDT2);
++
++	/* Clear ABR enable bit in HW_STRAP2 */
++	writel(readl(ASPEED_HW_STRAP2) & ~BIT(11), ASPEED_HW_STRAP2);
++
++	printf("HW ABR: disabled - software auto-recovery (bmc_auto_recovery) is active\n");
++}
++#endif
++
+ void aspeed_print_2nd_wdt_mode(void)
+ {
+ 	/* ABR enable */
+diff --git a/arch/arm/mach-aspeed/cpuinfo.c b/arch/arm/mach-aspeed/cpuinfo.c
+index 3deadc59e6..c2d863ae9d 100644
+--- a/arch/arm/mach-aspeed/cpuinfo.c
++++ b/arch/arm/mach-aspeed/cpuinfo.c
+@@ -15,6 +15,9 @@ int print_cpuinfo(void)
+ 	aspeed_print_soc_id();
+ 	aspeed_print_sysrst_info();
+ 	aspeed_print_security_info();
++#ifdef CONFIG_BMC_AUTO_RECOVERY
++	aspeed_disable_hw_abr();
++#endif
+ 	aspeed_print_2nd_wdt_mode();
+ 	if (aspeed_print_fmc_aux_ctrl)
+ 		aspeed_print_fmc_aux_ctrl();

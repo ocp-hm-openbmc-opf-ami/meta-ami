@@ -1,7 +1,11 @@
 FILESEXTRAPATHS:append := ":${THISDIR}/files"
 
-SRC_URI:append= "file://sd_partition_info_rwfs.json \
-"
+# SRC_URI:append= "file://sd_partition_info_rwfs.json \
+# "
+
+# Feature-specific partition config for BMC auto-recovery (includes recovery partition)
+BMC_RECOVERY_PARTITION_URI = "file://sd_partition_info_bmc_recovery.json"
+SRC_URI:append = " ${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-bmc-auto-recovery', BMC_RECOVERY_PARTITION_URI, '', d)}"
 
 
 # Custom task to convert JSON to conf file
@@ -9,10 +13,7 @@ python do_convert_json_to_conf() {
     import json
     import os
 
-    if bb.utils.contains('IMAGE_FEATURES', 'onetree-dual-image-common-conf', True, False, d):
-        json_name = 'sd_partition_info_rwfs.json'
-    else:
-        json_name = 'sd_partition_info.json'
+    json_name = 'sd_partition_info_bmc_recovery.json'
 
     json_file = os.path.join(d.getVar('UNPACKDIR'), json_name)
     conf_file = os.path.join(d.getVar('UNPACKDIR'), 'sd_partition_info.conf')
