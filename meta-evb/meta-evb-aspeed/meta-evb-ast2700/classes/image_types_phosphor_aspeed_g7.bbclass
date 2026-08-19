@@ -4,7 +4,8 @@
 # If UBOOT_FITIMAGE_ENABLE is enabled, it means the build uses a U-Boot FIT image
 # instead of a Caliptra Manifest Flash image. In this case, the U-Boot binary is u-boot.bin;
 # otherwise, the U-Boot binary is the Caliptra Manifest Flash image.
-UBOOT_BINARY := "${@oe.utils.conditional('UBOOT_FITIMAGE_ENABLE', '1', 'u-boot.${UBOOT_SUFFIX}', '${CALIPTRA_MANIFEST_FLASH_IMAGE}', d)}"
+USE_UBOOT_IMAGE ?= "${UBOOT_FITIMAGE_ENABLE}"
+UBOOT_BINARY := "${@oe.utils.conditional('USE_UBOOT_IMAGE', '1', 'u-boot.${UBOOT_SUFFIX}', '${CALIPTRA_MANIFEST_FLASH_IMAGE}', d)}"
 UBOOT_SUFFIX:append = ".merged"
 
 # Install the image-u-boot to deploy folder when building the emmc image.

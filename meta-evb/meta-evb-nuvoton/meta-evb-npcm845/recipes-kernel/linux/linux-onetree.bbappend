@@ -53,7 +53,7 @@ SRC_URI:remove = "file://Enable_I3C.cfg"
 SRC_URI:append = " file://0001-Nuvoton-drivers.patch \
 		   file://0002-Nuvoton-include.patch \
 		   file://0003-Nuvoton-net.patch \
-                   file://0004-Add-AMI-USB-Gadget-features.patch \
+		   file://0004-Nuvoton-Generic.patch \
 		 "
 do_configure:append (){
 
