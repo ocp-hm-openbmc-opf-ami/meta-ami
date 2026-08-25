@@ -12,7 +12,9 @@ log_info() {
 
 set_recovery_defaults() {
     fw_setenv recovery_current_bootretry 0
-    fw_setenv recovery_mode_selection auto
+    if [ -z "$(fw_printenv -n recovery_mode_selection 2>/dev/null || true)" ]; then
+        fw_setenv recovery_mode_selection auto
+    fi
 }
 
 log_info "BMC boot complete - resetting recovery env variables"

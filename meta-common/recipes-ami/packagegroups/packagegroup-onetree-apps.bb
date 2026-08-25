@@ -870,8 +870,7 @@ DESCRIPTION:${PN}-bmc-auto-recovery = "Provides automatic BMC firmware recovery 
 RDEPENDS:${PN}-bmc-auto-recovery = "bmc-auto-recovery \
 	                                 emmc-enable \
                                      u-boot-fw-utils \
-                                     intel-ipmi-oem \
-                                     ipmitool"
+									 intel-ipmi-oem"
 SUPPORTED_VENDOR:${PN}-bmc-auto-recovery = "ALL"
 #-----------------------------------#
 

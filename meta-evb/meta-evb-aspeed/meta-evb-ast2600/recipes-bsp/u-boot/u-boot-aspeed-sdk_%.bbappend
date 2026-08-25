@@ -9,7 +9,6 @@ SRC_URI:append:emmc-sw-ami = " \
 BMC_RECOVERY_SRC_URI = " \
     file://0009-add-bmc-auto-recovery.patch \
     file://bmc-auto-recovery.cfg \
-    file://auto-recovery-emmc-dos-partition.cfg \
     "
 SRC_URI:append = " ${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-bmc-auto-recovery', BMC_RECOVERY_SRC_URI, '', d)}"
 
