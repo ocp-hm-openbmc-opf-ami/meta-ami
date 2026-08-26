@@ -6,7 +6,7 @@ as servers, top of rack switches or RAID appliances. It uses
 [OpenEmbedded](https://www.openembedded.org/wiki/Main_Page),
 [systemd](https://www.freedesktop.org/wiki/Software/systemd/), and
 [D-Bus](https://www.freedesktop.org/wiki/Software/dbus/) to allow easy
-customization for your platform.
+customization for your platform..
 
 ## Setting up your OpenBMC project
 
