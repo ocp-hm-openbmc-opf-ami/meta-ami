@@ -3,21 +3,16 @@ From: sramya <sramya@ami.com>
 Date: Wed, 8 Apr 2026 19:05:38 +0530
 Subject: [PATCH] add BMC firmware auto-recovery support
 
-Recovery is triggered by recovery_mode_selection set to "mmc" or "tftp"
-(manual mode), or when normal boot retry count exceeds
-recovery_max_bootretry (default: 3).
-In auto mode, recovery tries eMMC first and then TFTP fallback.
-Watchdog timeout is not used for recovery decision.
-Default eMMC source is mmc 0:5 (Linux mount: /mnt/recovery).
-
 What this patch does:
  - Adds recovery environment variables and Kconfig defaults
  - Adds mode-based recovery trigger via recovery_mode_selection
-	 (auto/mmc/tftp)
+	 (auto/mmc/tftp), defaulting to "auto" when unset
+ - Treats recovery_mode_selection="mmc"/"tftp" as manual mode; in auto
+	 mode, tries eMMC first and then falls back to TFTP
  - Triggers auto recovery when recovery_current_bootretry exceeds
-	 recovery_max_bootretry
- - Restores SPI from eMMC image (default mmc 0:5, configurable
-	 device/partition)
+	 recovery_max_bootretry (default: 3)
+ - Restores SPI from eMMC image (device/partition configurable via
+	 recovery_mmc_dev/recovery_mmc_part)
  - Falls back to TFTP when eMMC recovery fails in auto mode (with DHCP)
  - Treats recovery_tftp_ip="0.0.0.0" as not configured
  - Uses full-image sf update (offset 0x0) in recovery flash path
@@ -36,7 +31,7 @@ new file mode 100644
 index 0000000000..f29505275b
 --- /dev/null
 +++ b/oem/ami/ami_bmc_recovery.c
-@@ -0,0 +1,263 @@
+@@ -0,0 +1,261 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * ami_bmc_recovery.c - BMC auto-recovery with eMMC primary and TFTP fallback
@@ -55,14 +50,7 @@ index 0000000000..f29505275b
 +
 +static int need_recovery(void)
 +{
-+	const char *mode;
 +	unsigned int current_retry, retry_limit;
-+
-+	mode = env_get("recovery_mode_selection") ?: "auto";
-+	if (!strcmp(mode, "mmc") || !strcmp(mode, "tftp")) {
-+		printf("AUTO-RECOVERY: Manual recovery triggered (recovery_mode_selection=%s)\n", mode);
-+		return 1;
-+	}
 +
 +	current_retry = simple_strtoul(env_get("recovery_current_bootretry") ?: "0", NULL, 10);
 +	retry_limit = simple_strtoul(env_get("recovery_max_bootretry") ?:
@@ -151,7 +139,7 @@ index 0000000000..f29505275b
 +
 +		/*
 +		 * Use ext4load to read the image from the ext4-formatted
-+		 * recovery partition (mmc 0:5, /mnt/recovery on Linux).
++		 * recovery partition (mount point /mnt/recovery on Linux).
 +		 */
 +		snprintf(cmd, sizeof(cmd),
 +			 "mmc dev %d && mmc rescan && ext4load mmc %d:%d 0x%lx /%s",
@@ -204,12 +192,8 @@ index 0000000000..f29505275b
 +		 RECOVERY_LOAD_ADDR, tftp_ip, img_name);
 +
 +	if (net_loop(DHCP) < 0) {
-+		printf("AUTO-RECOVERY: DHCP failed on default interface, trying ethernet@1e680000\n");
-+		env_set("ethact", "ethernet@1e680000");
-+		if (net_loop(DHCP) < 0) {
-+			printf("AUTO-RECOVERY: DHCP failed on fallback interface\n");
-+			return -1;
-+		}
++		printf("AUTO-RECOVERY: DHCP failed\n");
++		return -1;
 +	}
 +
 +	printf("AUTO-RECOVERY: TFTP target re-applied after DHCP: server=%s file=%s\n",
@@ -249,13 +233,17 @@ index 0000000000..f29505275b
 +{
 +	const char *mode;
 +
-+	if (!need_recovery())
-+		return 0;
-+
 +	mode = env_get("recovery_mode_selection") ?: "auto";
 +
++	if (!strcmp(mode, "mmc") || !strcmp(mode, "tftp")) {
++		printf("AUTO-RECOVERY: Manual recovery triggered (recovery_mode_selection=%s)\n", mode);
++	} else if (!need_recovery()) {
++		return 0;
++	} else {
++		printf("recovery_mode_selection=%s\n", mode);
++	}
++
 +	printf("\n*** AUTO-RECOVERY TRIGGERED ***\n");
-+	printf("recovery_mode_selection=%s\n", mode);
 +
 +	if (!strcmp(mode, "mmc")) {
 +		/* forced eMMC-only */
@@ -263,37 +251,38 @@ index 0000000000..f29505275b
 +			printf("AUTO-RECOVERY: eMMC recovery succeeded - resetting\n");
 +			goto recovery_done;
 +		}
-+		printf("AUTO-RECOVERY: eMMC recovery failed\n");
++		printf("AUTO-RECOVERY: FATAL - eMMC recovery failed\n");
 +	} else if (!strcmp(mode, "tftp")) {
 +		/* forced TFTP-only */
 +		if (recovery_from_tftp() == 0) {
 +			printf("AUTO-RECOVERY: TFTP recovery succeeded - resetting\n");
 +			goto recovery_done;
 +		}
-+		printf("AUTO-RECOVERY: TFTP recovery failed\n");
-+	} else {
-+		/* auto: eMMC first unless last source was mmc, then TFTP fallback */
++		printf("AUTO-RECOVERY: FATAL - TFTP recovery failed\n");
++	} else if (!strcmp(mode, "auto")) {
 +		const char *last = env_get("recovery_last_source") ?: "none";
 +
-+		if (strcmp(last, "mmc") != 0) {
-+			/* last is "none", "tftp", or unset, try eMMC first */
++		if (!strcmp(last, "none")) {
++			/* no prior attempt this cycle, try eMMC first */
 +			if (recovery_from_emmc() == 0) {
 +				printf("AUTO-RECOVERY: eMMC recovery succeeded - resetting\n");
 +				goto recovery_done;
 +			}
-+			printf("AUTO-RECOVERY: eMMC failed - trying TFTP fallback\n");
++			printf("AUTO-RECOVERY: eMMC recovery failed, will try TFTP next cycle\n");
++		} else if (!strcmp(last, "mmc")) {
++			/* eMMC was already tried, fall back to TFTP */
++			if (recovery_from_tftp() == 0) {
++				printf("AUTO-RECOVERY: TFTP recovery succeeded - resetting\n");
++				goto recovery_done;
++			}
++			printf("AUTO-RECOVERY: FATAL - both eMMC and TFTP recovery failed\n");
 +		} else {
-+			/* last is "mmc", skip eMMC and try TFTP only */
-+			printf("AUTO-RECOVERY: last recovery source was eMMC, skipping eMMC and trying TFTP\n");
++			printf("AUTO-RECOVERY: FATAL - unexpected recovery_last_source=%s\n", last);
 +		}
-+
-+		if (recovery_from_tftp() == 0) {
-+			printf("AUTO-RECOVERY: TFTP recovery succeeded - resetting\n");
-+			goto recovery_done;
-+		}
++	} else {
++		printf("AUTO-RECOVERY: invalid recovery_mode_selection=%s - going to manual recovery\n", mode);
 +	}
 +
-+	printf("AUTO-RECOVERY: FATAL - both eMMC and TFTP recovery failed\n");
 +	printf("AUTO-RECOVERY: Manual flashing is required; dropping to U-Boot prompt\n");
 +	return -1;
 +
