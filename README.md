@@ -20,14 +20,14 @@ for the latest requirements
 
 ```sh
 sudo apt install git gcc g++ make file wget \
-    gawk diffstat bzip2 cpio chrpath zstd lz4 bzip2
+    gawk diffstat bzip2 cpio chrpath zstd lz4 bzip2 git-lfs
 ```
 
 #### Fedora
 
 ```sh
 sudo dnf install git python3 gcc g++ gawk which bzip2 chrpath cpio \
-    hostname file diffutils diffstat lz4 wget zstd rpcgen patch
+    hostname file diffutils diffstat lz4 wget zstd rpcgen patch git-lfs
 ```
 
 ### 2) Download and build
@@ -84,6 +84,17 @@ git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/meta-a
 git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-altera.git
 meta-ami/github-gitlab-url.sh
 TEMPLATECONF=meta-altera/meta-agilex5/conf/templates/default . openbmc-env
+bitbake obmc-phosphor-image
+```
+
+### 2.6 FVP
+
+```sh
+git clone https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-core
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
+meta-ami/github-gitlab-url.sh
+TEMPLATECONF=meta-ami/meta-evb/meta-evb-arm/meta-evb-fvp-base/conf/templates/default . openbmc-env
 bitbake obmc-phosphor-image
 ```
 

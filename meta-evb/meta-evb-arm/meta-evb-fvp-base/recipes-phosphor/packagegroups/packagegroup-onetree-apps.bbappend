@@ -1,0 +1,7 @@
+RDEPENDS:${PN}-dual-image:remove = "emmc-enable"
+RDEPENDS:${PN}-extlog:remove = "emmc-enable"
+RDEPENDS:${PN}-prov-mode-mgr:append = " u-boot-env"
+RDEPENDS:${PN}-sensors:remove = "emmc-enable"
+RDEPENDS:${PN}-tools:remove = "pwmtachtool adcapp i3c-tools"
+RDEPENDS:${PN}-power:remove = " x86-power-control"
+RDEPENDS:${PN}-network-openssl-support:remove = "fips-openssl openssl-ossl-module-fips"
