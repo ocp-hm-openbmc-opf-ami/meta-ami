@@ -4,19 +4,21 @@ Date: Wed, 8 Apr 2026 19:05:38 +0530
 Subject: [PATCH] add BMC firmware auto-recovery support
 
 What this patch does:
- - Adds recovery environment variables and Kconfig defaults
- - Adds mode-based recovery trigger via recovery_mode_selection
-	 (auto/mmc/tftp), defaulting to "auto" when unset
- - Treats recovery_mode_selection="mmc"/"tftp" as manual mode; in auto
-	 mode, tries eMMC first and then falls back to TFTP
- - Triggers auto recovery when recovery_current_bootretry exceeds
-	 recovery_max_bootretry (default: 3)
- - Restores SPI from eMMC image (device/partition configurable via
-	 recovery_mmc_dev/recovery_mmc_part)
- - Falls back to TFTP when eMMC recovery fails in auto mode (with DHCP)
- - Treats recovery_tftp_ip="0.0.0.0" as not configured
- - Uses full-image sf update (offset 0x0) in recovery flash path
- - Saves the last recovery source for Linux logs
+ - Adds Kconfig defaults and environment variables for BMC auto-recovery.
+ - When recovery_current_bootretry exceeds recovery_max_bootretry, checks
+	 recovery_mode_selection=auto/mmc/tftp to determine the recovery source.
+ - In auto mode, tries eMMC first and TFTP on the next boot if eMMC fails;
+	 mmc and tftp directly use their respective recovery source.
+ - Restores SPI using the recovery/golden image from the configured eMMC device
+	 and partition (recovery_mmc_dev/recovery_mmc_part).
+ - Uses recovery_bootfile as the eMMC image name and TFTP file path; TFTP server
+	 configuration is provided by recovery_tftp_ip and includes DHCP setup.
+ - Configures retry count (recovery_retry), boot retry state
+	 (recovery_current_bootretry/recovery_max_bootretry), and the last recovery
+	 source (recovery_last_source).
+ - Writes the recovery image to SPI starting at offset 0x0, performing a
+	 complete SPI update.
+ - Disables hardware ABR when software BMC auto-recovery is enabled.
 ---
  oem/ami/ami_bmc_recovery.c | 258 +++++++++++++++++++++++++
  oem/ami/ami_bmc_recovery.h |   8 ++
@@ -235,14 +237,16 @@ index 0000000000..f29505275b
 +
 +	mode = env_get("recovery_mode_selection") ?: "auto";
 +
-+	if (!strcmp(mode, "mmc") || !strcmp(mode, "tftp")) {
-+		printf("AUTO-RECOVERY: Manual recovery triggered (recovery_mode_selection=%s)\n", mode);
-+	} else if (!need_recovery()) {
-+		return 0;
-+	} else {
-+		printf("recovery_mode_selection=%s\n", mode);
++	if (strcmp(mode, "auto") && strcmp(mode, "mmc") && strcmp(mode, "tftp")) {
++		printf("AUTO-RECOVERY: invalid recovery_mode_selection=%s - going to manual recovery\n", mode);
++		return -1;
 +	}
 +
++	if (!need_recovery()) {
++		return 0;
++	}
++
++	printf("AUTO-RECOVERY: recovery triggered (recovery_mode_selection=%s)\n", mode);
 +	printf("\n*** AUTO-RECOVERY TRIGGERED ***\n");
 +
 +	if (!strcmp(mode, "mmc")) {
@@ -279,8 +283,6 @@ index 0000000000..f29505275b
 +		} else {
 +			printf("AUTO-RECOVERY: FATAL - unexpected recovery_last_source=%s\n", last);
 +		}
-+	} else {
-+		printf("AUTO-RECOVERY: invalid recovery_mode_selection=%s - going to manual recovery\n", mode);
 +	}
 +
 +	printf("AUTO-RECOVERY: Manual flashing is required; dropping to U-Boot prompt\n");

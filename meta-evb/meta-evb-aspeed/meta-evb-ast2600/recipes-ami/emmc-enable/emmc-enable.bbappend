@@ -1,6 +1,9 @@
 FILESEXTRAPATHS:append := ":${THISDIR}/files"
 
-SRC_URI:append = " file://sd_partition_info_rwfs.json"
+SRC_URI:append = " \
+    file://sd_partition_info_rwfs.json \
+    file://sd_partition_info_bmc_recovery.json \
+"
 
 
 # Custom task to convert JSON to conf file
@@ -8,8 +11,9 @@ python do_convert_json_to_conf() {
     import json
     import os
 
-    if (bb.utils.contains('IMAGE_FEATURES', 'onetree-dual-image-common-conf', True, False, d)
-            or bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-bmc-auto-recovery', True, False, d)):
+    if bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-bmc-auto-recovery', True, False, d):
+        json_name = 'sd_partition_info_bmc_recovery.json'
+    elif bb.utils.contains('IMAGE_FEATURES', 'onetree-dual-image-common-conf', True, False, d):
         json_name = 'sd_partition_info_rwfs.json'
     else:
         json_name = 'sd_partition_info.json'
@@ -52,7 +56,8 @@ CLEAN_PARTS="{clean_parts}"
 addtask do_convert_json_to_conf after do_compile before do_install
 
 do_install:append() {
-    if ${@bb.utils.contains('IMAGE_FEATURES', 'onetree-dual-image-common-conf', 'true', 'false', d)}; then
+    if ${@bb.utils.contains('IMAGE_FEATURES', 'onetree-dual-image-common-conf', 'true', 'false', d)} || \
+       ${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-bmc-auto-recovery', 'true', 'false', d)}; then
         install -d ${D}${sysconfdir}
         install -m 0644 ${UNPACKDIR}/sd_partition_info.conf ${D}${sysconfdir}/
     fi    
