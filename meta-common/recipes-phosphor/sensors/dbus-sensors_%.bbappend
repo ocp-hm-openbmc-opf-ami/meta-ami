@@ -1,9 +1,9 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 RDEPENDS:${PN} += " libapisensor"
-SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/dbus-sensors;protocol=https;branch=master;name=override;"
+SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/dbus-sensors;protocol=https;branch=integrate-onetree-3.1.1;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "541b758c11bdaa766c0fd5dd118006aa37df6773"
+SRCREV_override = "5c002d3889f2711d606612d51bc3d0f5b1d26c79"
 
 SRC_URI:append = "\
      file://intrusionsensor-depend-on-networkd.conf \

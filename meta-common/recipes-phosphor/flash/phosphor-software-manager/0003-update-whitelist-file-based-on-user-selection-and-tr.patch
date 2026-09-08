@@ -1,0 +1,260 @@
+From c0725bde7248031226a790432a306ca65d2c1cac Mon Sep 17 00:00:00 2001
+From: kirubagharanas <kirubagharanas@ami.com>
+Date: Tue, 3 Jun 2025 17:34:12 +0530
+Subject: [PATCH] update whitelist/u-boot-env and clear non-preserved files
+ during factory default
+
+---
+ bmc/meson.build                    |   1 +
+ bmc/static/item_updater_helper.cpp | 181 ++++++++++++++++++++++++++++++++++++
+ meson.options                      |   2 +
+ 3 files changed, 184 insertions(+)
+
+diff --git a/bmc/meson.build b/bmc/meson.build
+index 43d9238..e2bb4aa 100644
+--- a/bmc/meson.build
++++ b/bmc/meson.build
+@@ -65,0 +66 @@ conf.set('FWUPD_SCRIPT', get_option('fwupd-script').enabled())
++conf.set('FWUPD_INTEL_FEATURES', get_option('fwupd-intel-features').enabled())
+diff --git a/bmc/static/item_updater_helper.cpp b/bmc/static/item_updater_helper.cpp
+index 38de972..059aa51 100644
+--- a/bmc/static/item_updater_helper.cpp
++++ b/bmc/static/item_updater_helper.cpp
+@@ -1,6 +1,13 @@
+ #include "item_updater_helper.hpp"
+ 
+ #include "utils.hpp"
++
++#include <sdbusplus/bus.hpp>
++#include <phosphor-logging/elog-errors.hpp>
++#include <phosphor-logging/elog.hpp>
++#include <phosphor-logging/lg2.hpp>
++#include <xyz/openbmc_project/Common/error.hpp>
++#include <xyz/openbmc_project/Software/Image/error.hpp>
+ 
+ namespace phosphor
+ {
+@@ -9,6 +16,11 @@ namespace software
+ namespace updater
+ {
+ 
++PHOSPHOR_LOG2_USING;
++using namespace phosphor::logging;
++using namespace sdbusplus::error::xyz::openbmc_project::software::image;
++namespace fs = std::filesystem;
++
+ void Helper::setEntry(const std::string& /* entryId */, uint8_t /* value */)
+ {
+     // Empty
+@@ -25,10 +37,181 @@ void Helper::cleanup()
+     // Empty
+ }
+ 
++
+ void Helper::factoryReset()
+ {
++    // Update whitelist file
++    #ifdef FWUPD_INTEL_FEATURES
++        std::string whitelist = "/tmp/.rwfs/.restore_whitelist";
++        std::string u_boot_bkup = "/tmp/.rwfs/uboot_env_data.bin";
++    #else
++        std::string whitelist = "/run/initramfs/rw/cow/whitelist";
++        std::string u_boot_bkup = "/run/initramfs/rw/cow/uboot_env_data.bin";
++    #endif
++    std::ofstream whitelistFile(whitelist, std::ios::trunc);
++    auto bus = sdbusplus::bus::new_default();
++    try
++    {
++        auto getpreserveobjectpaths = bus.new_method_call(
++            "xyz.openbmc_project.ObjectMapper",
++            "/xyz/openbmc_project/object_mapper",
++            "xyz.openbmc_project.ObjectMapper", "GetSubTreePaths");
++        getpreserveobjectpaths.append(
++            "/", 0,
++            std::vector<std::string>{
++                "xyz.openbmc_project.Configuration.Preserve"});
++
++        auto getpreserveobjects = bus.call(getpreserveobjectpaths);
++        std::vector<std::string> configList;
++        getpreserveobjects.read(configList);
++        for (const auto& configObj : configList)
++        {
++            try
++            {
++                auto isEnableCall = bus.new_method_call(
++                    "xyz.openbmc_project.EntityManager", configObj.c_str(),
++                    "org.freedesktop.DBus.Properties", "Get");
++                isEnableCall.append(
++                    "xyz.openbmc_project.Configuration.Preserve", "isEnable");
++
++                auto isEnableReply = bus.call(isEnableCall);
++                std::variant<bool> isEnableVariant;
++                isEnableReply.read(isEnableVariant);
++                bool isEnable = std::get<bool>(isEnableVariant);
++                std::string ConfigName = configObj.substr(configObj.find_last_of('/') + 1);
++
++                if (isEnable)
++                {
++                    auto filePathCall = bus.new_method_call(
++                        "xyz.openbmc_project.EntityManager", configObj.c_str(),
++                        "org.freedesktop.DBus.Properties", "Get");
++                    filePathCall.append(
++                        "xyz.openbmc_project.Configuration.Preserve",
++                        "filepath");
++                    auto filePathReply = bus.call(filePathCall);
++                    std::variant<std::vector<std::string>> filePathsVariant;
++                    filePathReply.read(filePathsVariant);
++                    if (auto filePaths = std::get_if<std::vector<std::string>>(
++                            &filePathsVariant))
++                    {
++                        for (const auto& filePath : *filePaths)
++                        {
++                            whitelistFile << filePath << std::endl;
++                        }
++                    }
++                    else
++                    {
++                        error("Failed to get {CONFNAME} modules filepath", "CONFNAME", ConfigName);
++                    }
++
++                    if (ConfigName == "U_BOOT_ENV") {
++                        std::ifstream mtdDevices("/proc/mtd");
++                        std::string mtd, mtdpart, mtdSize;
++                        std::ostringstream mtdHexSize;
++
++                        try
++                        {
++                            // get u-boot-env mtd partition
++                            while (std::getline(mtdDevices, mtd))
++                            {
++                                if (mtd.find("u-boot-env") != std::string::npos)
++                                {
++                                    mtdpart = mtd.substr(0, mtd.find(':'));
++                                    break;
++                                }
++                            }
++                            // get u-boot-env mtd size
++                            std::string mtdsizefile = "/sys/class/mtd/" + mtdpart + "/size";
++                            std::ifstream getMTDSize(mtdsizefile);
++                            getMTDSize >> mtdSize;
++                            getMTDSize.close();
++                            mtdHexSize << "0x" << std::hex << stoi(mtdSize);
++                            // Backup u-boot-env data from mtd partition
++                            std::string cmd_args = "mtd_debug read /dev/" + mtdpart + " 0 " + mtdHexSize.str() + " " + u_boot_bkup;
++                            auto val = std::system(cmd_args.c_str());
++
++                            if (val) {
++                                error("Failed to backup u-boot-env parition ");
++                            }
++                        }
++                        catch (const std::exception& e)
++                        {
++                            error("Error during processing: {ERROR}", "ERROR", e);
++                        }
++
++                        mtdDevices.close();
++                    }
++                }
++                else {
++                    auto filePathCall = bus.new_method_call(
++                        "xyz.openbmc_project.EntityManager", configObj.c_str(),
++                        "org.freedesktop.DBus.Properties", "Get");
++                    filePathCall.append(
++                        "xyz.openbmc_project.Configuration.Preserve",
++                        "filepath");
++                    auto filePathReply = bus.call(filePathCall);
++                    std::variant<std::vector<std::string>> filePathsVariant;
++                    filePathReply.read(filePathsVariant);
++                    if (auto filePaths = std::get_if<std::vector<std::string>>(
++                            &filePathsVariant))
++                    {
++                        for (const auto& filePath : *filePaths)
++                        {
++                            std::error_code ec;
++                            fs::remove_all(filePath, ec);
++                        }
++                    }
++                }
++            }
++            catch (const sdbusplus::exception::SdBusError& e)
++            {
++                error("Failed to get Property status: {ERROR}", "ERROR", e);
++                return;
++            }
++        }
++        // Clear user selection and set to default
++        for (const auto& configObj : configList)
++        {
++            try
++            {
++                auto isOptionalCall = bus.new_method_call(
++                    "xyz.openbmc_project.EntityManager", configObj.c_str(),
++                    "org.freedesktop.DBus.Properties", "Get");
++                isOptionalCall.append(
++                    "xyz.openbmc_project.Configuration.Preserve", "isOptional");
++
++                auto isOptionalReply = bus.call(isOptionalCall);
++                std::variant<bool> isOptionalVariant;
++                isOptionalReply.read(isOptionalVariant);
++                bool isOptional = std::get<bool>(isOptionalVariant);
++                std::variant<bool> isOptionalVal = false;
++                std::string ConfigName = configObj.substr(configObj.find_last_of('/') + 1);
++
++                if (isOptional && ConfigName != "U_BOOT_ENV")
++                {
++                    auto method = bus.new_method_call("xyz.openbmc_project.EntityManager", configObj.c_str(),
++                            "org.freedesktop.DBus.Properties", "Set");
++                    method.append("xyz.openbmc_project.Configuration.Preserve", "isEnable" , isOptionalVal);
++
++                    bus.call_noreply(method);
++                }
++            }
++            catch (const sdbusplus::exception::SdBusError& e)
++            {
++                error("Failed to set Property status: {ERROR}", "ERROR", e);
++                return;
++            }
++        }
++
++    }
++    catch (const sdbusplus::exception::SdBusError& e)
++    {
++       error("Error in getting restore factory file list: {ERROR}", "ERROR", e);
++        return;
++    }
++    whitelistFile.close();
+     // Set openbmconce=factory-reset env in U-Boot.
+     // The init will cleanup rwfs during boot.
+     utils::execute("/sbin/fw_setenv", "openbmconce", "factory-reset");
+ }
+
+ void Helper::removeVersion(const std::string& /* flashId */)
+ {
+     // Empty
+ }
+
+ void Helper::updateUbootVersionId(const std::string& /* flashId */)
+ {
+     // Empty
+ }
+
+ void Helper::mirrorAlt()
+ {
+     // Empty
+ }
+
+ } // namespace updater
+ } // namespace software
+ } // namespace phosphor
+
+diff --git a/meson.options b/meson.options
+index 45244a1..4f7adee 100644
+--- a/meson.options
++++ b/meson.options
+@@ -94,2 +94,4 @@ option('fwupd-script', type: 'feature',
+ option('fwupd-script', type: 'feature',
+     description: 'Enable fwupd script support.')
++option('fwupd-intel-features', type: 'feature', value: 'disabled',
++    description: 'Enable the Intel platforms.')
+-- 
+2.34.1
