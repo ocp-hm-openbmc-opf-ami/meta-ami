@@ -1,7 +1,7 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
-SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/phosphor-post-code-manager.git;branch=master;protocol=https;name=override;"
+SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/phosphor-post-code-manager.git;branch=integrate-onetree-3.1.1;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "6b76468ad06c18686646c940999ccf20fe2e951c"
+SRCREV_override = "96d8350a2e2f64a73efd1df2c0dc137d8ecb401d"
 
 python () {
     if bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-multi-host-support', True, False, d) \

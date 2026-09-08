@@ -1,6 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRCREV_override = "9a26a4f66347de9de82f967b20f9825fb465289f"
+SRCREV_override = "965d6cbbfdc8aebca0a13e2511c34dc8c13664bd"
 
 SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/phosphor-net-ipmid.git;branch=master;protocol=https;name=override;"
 

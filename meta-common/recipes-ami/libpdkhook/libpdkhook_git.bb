@@ -4,11 +4,11 @@ LICENSE = "Proprietary"
 LIC_FILES_CHKSUM = "file://${AMIBASE}/COPYING.AMI;md5=65a69a674f34a9f30737c9f0abd4fc5c"
 
 
-SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/libpdkhook.git;protocol=https;branch=main"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/libpdkhook.git;protocol=https;branch=integrate-onetree-3.1.1"
 SRC_URI += " \
            file://0001-fix-boost-asio-compatibility.patch \
           "
-SRCREV = "33a825db0bdda68e13a10bcaf1463d26259da576"
+SRCREV = "53be2ba6c08970716e5f085969c76de372a5a700"
 
 S = "${WORKDIR}/git"
 PV = "1.0"
