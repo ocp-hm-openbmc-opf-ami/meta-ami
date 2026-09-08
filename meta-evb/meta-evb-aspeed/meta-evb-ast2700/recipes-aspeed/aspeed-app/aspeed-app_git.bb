@@ -21,3 +21,4 @@ EXTRA_OEMESON:append:aspeed-g7 = " \
 "
 
 FILES:${PN}:append = " /usr/share/* "
+

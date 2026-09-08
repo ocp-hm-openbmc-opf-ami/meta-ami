@@ -1,0 +1,123 @@
+From aa7020b1ac2fb59e7d6e53b803d468dd2257708a Mon Sep 17 00:00:00 2001
+From: dineshsv <dineshsv@ami.com>
+Date: Fri, 29 May 2026 15:05:05 +0000
+Subject: [PATCH 46/46] 2 Workaround on Open Source PR 35
+
+---
+ src/cmd.cpp | 81 ++++++++++++++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 74 insertions(+), 7 deletions(-)
+
+diff --git a/src/cmd.cpp b/src/cmd.cpp
+index 32c9bcb..dae0e32 100644
+--- a/src/cmd.cpp
++++ b/src/cmd.cpp
+@@ -9,6 +9,7 @@
+ #include <stdplus/print.hpp>
+ 
+ #include <array>
++#include <chrono>
+ #include <cstdio>
+ #include <format>
+ #include <map>
+@@ -65,6 +66,23 @@ void write(stdplus::Fd& kcs, message_t&& m)
+     stdplus::fd::writeExact(kcs, out);
+ }
+ 
++// Detect kernel-injected event buffer sequences (0x2f→0x2e→0x35 or
++// 0x2f→0x35) by checking if commands arrive within 300ms of each other.
++using SteadyClock = std::chrono::steady_clock;
++static SteadyClock::time_point lastGetEnablesTime{};
++static SteadyClock::time_point lastSetEnablesTime{};
++static constexpr int kKernelInjectThresholdMs = 300;
++static bool isKernelInjected(SteadyClock::time_point ref)
++{
++    if (ref == SteadyClock::time_point{})
++    {
++        return false;
++    }
++    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
++        SteadyClock::now() - ref);
++    return elapsed.count() < kKernelInjectThresholdMs;
++}
++
+ void read(stdplus::Fd& kcs, bus_t& bus, slot_t& outstanding)
+ {
+     std::array<uint8_t, 1024> buffer;
+@@ -83,18 +101,67 @@ void read(stdplus::Fd& kcs, bus_t& bus, slot_t& outstanding)
+         stdplus::print(stderr, "Read too small, ignoring\n");
+         return;
+     }
++
++    // Based on the IPMI KCS spec Figure 9-1
++    uint8_t netfn = in[0] >> 2, lun = in[0] & 3, cmd = in[1];
++    // [workaround]This intentionally deviates from normal IPMI flow to suppress known ipmitool v1.8.19 kernel behaviour…
++    // Block kernel-injected 0x2e arriving kKernelInjectThresholdMs after 0x2f.
++    // Respond CC=0x00 without forwarding, so enables stay unchanged.
++    if (netfn == 0x06 && cmd == 0x2e &&
++        isKernelInjected(lastGetEnablesTime))
++    {
++        std::array<uint8_t, 3> rsp;
++        rsp[0] = (0x06 | 1) << 2;
++        rsp[0] |= lun;
++        rsp[1] = 0x2e;
++        rsp[2] = 0x00;
++        stdplus::fd::writeExact(kcs, std::span<uint8_t>(rsp));
++        lastSetEnablesTime = SteadyClock::now();
++        return;
++    }
++    // [workaround]This intentionally deviates from normal IPMI flow to suppress known ipmitool v1.8.19 kernel behaviour…
++    // Block kernel-injected 0x35 arriving kKernelInjectThresholdMs after 0x2e or 0x2f.
++    // Respond CC=0x80 (data not available).
++    if (netfn == 0x06 && cmd == 0x35 &&
++        (isKernelInjected(lastSetEnablesTime) ||
++         isKernelInjected(lastGetEnablesTime)))
++    {
++        std::array<uint8_t, 3> rsp;
++        rsp[0] = (0x06 | 1) << 2;
++        rsp[0] |= lun;
++        rsp[1] = 0x35;
++        rsp[2] = 0x80;
++        stdplus::fd::writeExact(kcs, std::span<uint8_t>(rsp));
++        return;
++    }
++
+     auto m = bus.new_method_call("xyz.openbmc_project.Ipmi.Host",
+                                  "/xyz/openbmc_project/Ipmi",
+                                  "xyz.openbmc_project.Ipmi.Server", "execute");
+     std::map<std::string, std::variant<int>> options;
+-    // Based on the IPMI KCS spec Figure 9-1
+-    uint8_t netfn = in[0] >> 2, lun = in[0] & 3, cmd = in[1];
+     m.append(netfn, lun, cmd, in.subspan(2), options);
+-    outstanding = m.call_async(
+-        stdplus::exception::ignore([&outstanding, &kcs](message_t&& m) {
+-            outstanding = slot_t(nullptr);
+-            write(kcs, std::move(m));
+-        }));
++
++    // Record response timestamps for 0x2f and 0x2e.
++    if (netfn == 0x06 && (cmd == 0x2f || cmd == 0x2e))
++    {
++        outstanding = m.call_async(stdplus::exception::ignore(
++            [&outstanding, &kcs, cmd](message_t&& m) {
++                outstanding = slot_t(nullptr);
++                if (cmd == 0x2f)
++                    lastGetEnablesTime = SteadyClock::now();
++                else
++                    lastSetEnablesTime = SteadyClock::now();
++                write(kcs, std::move(m));
++            }));
++    }
++    else
++    {
++        outstanding = m.call_async(
++            stdplus::exception::ignore([&outstanding, &kcs](message_t&& m) {
++                outstanding = slot_t(nullptr);
++                write(kcs, std::move(m));
++            }));
++    }
+ }
+ 
+ } // namespace kcsbridge
+-- 
+2.43.0
+
