@@ -75,6 +75,7 @@ PACKAGES = "\
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-dual-image-common-conf', '${PN}-dual-image-common-conf', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-hw-failsafe-boot', '${PN}-hw-failsafe-boot', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-single-spi-abr', '${PN}-single-spi-abr', '', d)} \
+		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-bmc-auto-recovery', '${PN}-bmc-auto-recovery', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-sync-conf', '${PN}-sync-conf', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-ipmi-ssif', '${PN}-ipmi-ssif', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-nvidiasipack', '${PN}-nvidiasipack', '', d)} \
@@ -862,6 +863,15 @@ SUMMARY:${PN}-bmc-services-ready = "AMI Core Features: OneTree BMC services read
 DESCRIPTION:${PN}-bmc-services-ready = "Ensure BMC readiness for the customized services"
 RDEPENDS:${PN}-bmc-services-ready = "bmc-services-ready"
 SUPPORTED_VENDOR:${PN}-bmc-services-ready = "ALL"
+#-----------------------------------#
+
+SUMMARY:${PN}-bmc-auto-recovery = "AMI Core Features: BMC Firmware Auto-Recovery (Single Image)"
+DESCRIPTION:${PN}-bmc-auto-recovery = "Provides automatic BMC firmware recovery using eMMC with TFTP fallback."
+RDEPENDS:${PN}-bmc-auto-recovery = "bmc-auto-recovery \
+	                                 emmc-enable \
+                                     u-boot-fw-utils \
+									 intel-ipmi-oem"
+SUPPORTED_VENDOR:${PN}-bmc-auto-recovery = "ALL"
 #-----------------------------------#
 
 SUMMARY:${PN}-pdk = "AMI Core Features: OneTree PDK"
