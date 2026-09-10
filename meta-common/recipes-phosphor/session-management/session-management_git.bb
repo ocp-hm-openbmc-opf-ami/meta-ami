@@ -8,7 +8,6 @@ SRCREV = "983f9426f8ab901870c42cb68f47e05b0f15244d"
 
 S = "${UNPACKDIR}/git"
 PV = "1.0+git${SRCPV}"
-
 inherit pkgconfig meson systemd
 inherit obmc-phosphor-systemd
 
