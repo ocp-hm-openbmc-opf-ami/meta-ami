@@ -10,26 +10,26 @@ using DbusUserPropVariant =
 
 extern "C"
 {
-int IsvalidGroupName(char *Grpname,char *Groupcheck)
+int IsvalidGroupName(char* Grpname, char* Groupcheck)
 {
-       char *delimit="'";
-       unsigned int IsGrpfound = 1;
-       char *token=strtok(Grpname,delimit);
-       while(token!=NULL)
-       {
-               if(strcmp(token,Groupcheck)==0)
-               {
-                       IsGrpfound = 1;
-                       return IsGrpfound;
-               }
-               if(IsGrpfound > GROUPNAME_SPACE)
-               {
-                       break;
-               }
-               token=strtok(NULL,delimit);
-               IsGrpfound++;
-       }
-       return -1;
+    char* delimit = "'";
+    unsigned int IsGrpfound = 1;
+    char* token = strtok(Grpname, delimit);
+    while (token != NULL)
+    {
+        if (strcmp(token, Groupcheck) == 0)
+        {
+            IsGrpfound = 1;
+            return IsGrpfound;
+        }
+        if (IsGrpfound > GROUPNAME_SPACE)
+        {
+            break;
+        }
+        token = strtok(NULL, delimit);
+        IsGrpfound++;
+    }
+    return -1;
 }
 int getDbusProperty(char* groupName, char* priv)
 {
@@ -58,8 +58,9 @@ int getDbusProperty(char* groupName, char* priv)
             auto reply = bus.call(method);
             reply.read(variant);
             sGroupName = std::get<std::string>(variant);
-	    std::string cToCpp(groupName);
-	    int ret = IsvalidGroupName((char *)cToCpp.c_str(),(char *)sGroupName.c_str());
+            std::string cToCpp(groupName);
+            int ret = IsvalidGroupName((char*)cToCpp.c_str(),
+                                       (char*)sGroupName.c_str());
             if ((sGroupName.length() > 2) && (ret == 1))
             {
                 auto method = bus.new_method_call(
@@ -87,8 +88,6 @@ int getDbusProperty(char* groupName, char* priv)
         }
         // syslog(LOG_WARNING,"server's response = %s privilage read = %s not
         // fournd next search\n", p,privlage);
-        syslog(LOG_WARNING,
-               "server's responseprivilage read notfournd next sear");
         fprintf(stderr, "server's responseprivilage read notfournd next sear");
     }
     return -1;
