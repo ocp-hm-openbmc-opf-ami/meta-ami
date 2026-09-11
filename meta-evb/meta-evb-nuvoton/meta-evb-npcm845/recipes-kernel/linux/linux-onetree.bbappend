@@ -1,5 +1,8 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/linux-onetree:"
 
+# fdtoverlay/dtc for build-time device-tree overlay merge
+DEPENDS:append = " dtc-native"
+
 SRC_URI:append = " file://evb-npcm845.cfg"
 SRC_URI:append = " file://enable-v4l2.cfg"
 SRC_URI:append = " file://luks.cfg"
@@ -9,6 +12,9 @@ SRC_URI:append = " file://i3c_mctp.cfg"
 
 # for af_mctp test
 SRC_URI:append = " file://mctp.cfg"
+
+# for s997 (set S997_ENABLE = "0" in the machine conf to build without s997 related changes)
+SRC_URI:append:s997 = " file://s997.cfg"
 
 SRC_URI:append = " file://nfs_cifs.cfg \
                  "
@@ -62,3 +68,26 @@ do_configure:append (){
     cp -rf ${UNPACKDIR}/i3c-arbel-npcm845/include/linux/i3c/* ${S}/include/linux/i3c/
 }
 
+# Merge standalone device-tree overlays into the board dtb at build time.
+# The base dtb is built with DTC_FLAGS=-@ (see linux-onetree.bb) so it carries
+# __symbols__, allowing fdtoverlay to resolve labels like &gpio0 / &i2c4.
+# Every *.dtso under dts-arbel-npcm845/ is compiled and applied in filename order.
+do_compile:append (){
+    dtb="${B}/arch/arm64/boot/dts/nuvoton/nuvoton-npcm845-evb.dtb"
+    overlay_dir="${UNPACKDIR}/dts-arbel-npcm845"
+
+    [ -f "${dtb}" ] || return 0
+
+    dtbos=""
+    for src in ${overlay_dir}/*.dtso; do
+        [ -e "${src}" ] || continue
+        out="${B}/$(basename ${src} .dtso).dtbo"
+        dtc -@ -I dts -O dtb -o "${out}" "${src}"
+        dtbos="${dtbos} ${out}"
+    done
+
+    if [ -n "${dtbos}" ]; then
+        fdtoverlay -i "${dtb}" -o "${dtb}.merged" ${dtbos}
+        mv "${dtb}.merged" "${dtb}"
+    fi
+}

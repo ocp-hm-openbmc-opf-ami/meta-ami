@@ -1,0 +1,103 @@
+#!/bin/sh
+#
+# numctl - show a two-digit value on SN74LV595AD shift registers
+#
+# Wiring (bit-banged via sysfs GPIO):
+#   gpio128 = SER   (serial data)
+#   gpio129 = RCLK  (storage/latch clock, pin 12 RCK)
+#   gpio130 = SRCLK (shift clock, pin 11 SRCK)
+#
+# Two cascaded '595s drive two common-cathode 7-segment digits.
+# Value is "a.b." (dot on both), "a.b" (dot on left) or "ab" (no dots),
+# a and b are 0-9.
+#
+
+set -eu
+
+# sysfs GPIO numbers are offset by the gpiochip base (512 on this kernel).
+GPIO_BASE=512
+SER=$((GPIO_BASE + 128))
+RCLK=$((GPIO_BASE + 129))
+SRCLK=$((GPIO_BASE + 130))
+
+usage() {
+	echo "Usage: numctl <value>" >&2
+	echo "  <value> must be 'a.b.', 'a.b' or 'ab' where a and b are digits 0-9" >&2
+	exit 1
+}
+
+[ $# -eq 1 ] || usage
+
+val="$1"
+dpl=0
+dpr=0
+case "$val" in
+	[0-9][0-9]) ;;
+	[0-9].[0-9]) dpl=1 ;;
+	[0-9].[0-9].) dpl=1; dpr=1 ;;
+	*)
+		echo "numctl: invalid value '$val'" >&2
+		usage
+		;;
+esac
+
+# Common-cathode 7-seg patterns, bit0=a .. bit6=g, bit7=dp (segment on = 1).
+seg() {
+	case "$1" in
+		0) echo 63 ;;
+		1) echo 6 ;;
+		2) echo 91 ;;
+		3) echo 79 ;;
+		4) echo 102 ;;
+		5) echo 109 ;;
+		6) echo 125 ;;
+		7) echo 7 ;;
+		8) echo 127 ;;
+		9) echo 111 ;;
+	esac
+}
+
+# Extract the two digits (dots stripped) and build each digit byte.
+digits=$(printf '%s' "$val" | tr -d '.')
+left=$(seg "$(printf '%s' "$digits" | cut -c1)")
+right=$(seg "$(printf '%s' "$digits" | cut -c2)")
+
+# Set dp (bit7 = 128) per the dots present in the value.
+[ "$dpl" -eq 1 ] && left=$((left | 128))
+[ "$dpr" -eq 1 ] && right=$((right | 128))
+
+gpio_out() {
+	[ -d /sys/class/gpio/gpio$1 ] || echo "$1" > /sys/class/gpio/export
+	echo out > /sys/class/gpio/gpio$1/direction
+}
+
+gpio_set() {
+	echo "$2" > /sys/class/gpio/gpio$1/value
+}
+
+gpio_out "$SER"
+gpio_out "$RCLK"
+gpio_out "$SRCLK"
+
+gpio_set "$SRCLK" 0
+gpio_set "$RCLK" 0
+
+# Shift one byte MSB-first (dp first, segment a last -> lands on QA).
+shift_byte() {
+	byte=$1
+	bit=7
+	while [ "$bit" -ge 0 ]; do
+		gpio_set "$SER" $(( (byte >> bit) & 1 ))
+		gpio_set "$SRCLK" 1
+		gpio_set "$SRCLK" 0
+		bit=$((bit - 1))
+	done
+}
+
+# Left digit shifted first (ends up in the far cascaded '595).
+shift_byte "$left"
+shift_byte "$right"
+
+# Latch to outputs.
+gpio_set "$RCLK" 1
+gpio_set "$RCLK" 0
