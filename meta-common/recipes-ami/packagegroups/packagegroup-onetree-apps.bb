@@ -332,7 +332,8 @@ SUMMARY:${PN}-power = "AMI Core Features: Power Control"
 DESCRIPTION:${PN}-power = " Manages system power control, including various \
 				power operations such as power-on, power-off, \
 				power cycle, reset, and status monitoring."
-RDEPENDS:${PN}-power = " x86-power-control"
+RDEPENDS:${PN}-power = " x86-power-control \
+			  bmc-boot-check "
 SUPPORTED_VENDOR:${PN}-power = "ALL"
 #-----------------------------------#
 

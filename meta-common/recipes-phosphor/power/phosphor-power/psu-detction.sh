@@ -4,6 +4,13 @@ set -u
 
 JSON_DEFAULT="/usr/share/phosphor-power/psu.json"
 JSON_FILE="${1:-$JSON_DEFAULT}"
+DEBUG="${DEBUG:-0}"
+
+debug_log() {
+    if [[ "$DEBUG" == "1" || "$DEBUG" == "true" || "$DEBUG" == "yes" ]]; then
+        echo "$*"
+    fi
+}
 
 if [[ ! -f "$JSON_FILE" ]]; then
     echo "JSON file not found: $JSON_FILE" >&2
@@ -78,7 +85,7 @@ ensure_sysfs_device() {
     sysfs_node="/sys/bus/i2c/devices/i2c-${bus}/new_device"
 
     if [[ -d "$dev_path" ]]; then
-        echo "Sysfs already present: $dev_path"
+        debug_log "Sysfs already present: $dev_path"
         return 0
     fi
 
@@ -87,14 +94,14 @@ ensure_sysfs_device() {
         return 1
     fi
 
-    echo "Creating sysfs node: pmbus $addr_hex > $sysfs_node"
+    debug_log "Creating sysfs node: pmbus $addr_hex > $sysfs_node"
     if echo "pmbus $addr_hex" > "$sysfs_node"; then
-        echo "Created sysfs node for addr=$addr_hex on bus=$bus"
+        debug_log "Created sysfs node for addr=$addr_hex on bus=$bus"
         return 0
     fi
 
     if [[ -d "$dev_path" ]]; then
-        echo "Sysfs appeared during create: $dev_path"
+        debug_log "Sysfs appeared during create: $dev_path"
         return 0
     fi
 
@@ -117,7 +124,7 @@ probe_entry() {
         return $?
     fi
 
-    echo "Probe failed for PSU[$idx] $name"
+    debug_log "Probe failed for PSU[$idx] $name"
     return 1
 }
 
@@ -138,8 +145,8 @@ done
 if [[ ${#failed[@]} -eq 0 ]]; then
     :
 else
-    echo "Failed PSUs on first pass: ${failed[*]}"
-    echo "Starting background retry every 5 seconds for missing PSUs."
+    debug_log "Failed PSUs on first pass: ${failed[*]}"
+    debug_log "Starting background retry every 5 seconds for missing PSUs."
     (
         pending=("${failed[@]}")
         while [[ ${#pending[@]} -gt 0 ]]; do
@@ -147,17 +154,19 @@ else
             next_failed=()
             for idx in "${pending[@]}"; do
                 if probe_entry "$idx"; then
-                    echo "Background retry: PSU[$idx] ${PSU_NAME[$idx]} recovered and sysfs created."
+                    debug_log "Background retry: PSU[$idx] ${PSU_NAME[$idx]} recovered and sysfs created."
                 else
                     next_failed+=("$idx")
                 fi
             done
             pending=("${next_failed[@]}")
         done
-        echo "Background retry: all missing PSUs recovered."
+        debug_log "Background retry: all missing PSUs recovered."
     ) &
     disown $!
-    echo "Background retry PID=$! started. Service will continue starting now."
+    debug_log "Background retry PID=$! started. Service will continue starting now."
 fi
 
 exit 0
+
+

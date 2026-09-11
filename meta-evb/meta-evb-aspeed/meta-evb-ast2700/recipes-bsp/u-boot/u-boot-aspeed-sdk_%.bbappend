@@ -13,4 +13,14 @@ SRC_URI:append:ast2700-default = "${@bb.utils.contains('IMAGE_FEATURES', 'onetre
 SRC_URI:append = " \
 	file://disable-kernel-fitimage-signature-verify-via-cptra.cfg \
 	file://0001-Software-Secure-Boot-workaround.patch \
+	file://0002-Update-the-OTP-info-for-AST2700-A2-in-SDKv11_02-migration.patch \
+	file://0003-drivers-usb-aspeed-SDK-migration-to-v11.02.patch \
     "
+
+SRC_URI:append = " \
+	file://0001-clk-aspeed-ast2700-fix-clkgate-register-selection-fo.patch \
+	file://0001-misc-sli_ast2700-Clear-status-at-SLIM-retry.patch \
+	file://0001-edaf_bridge-clear-SAFS-size-setting-for-channel-3.patch \
+	file://0001-drivers-reset-ast2700-fix-the-reset_status-typo.patch \
+	file://0001-dts-arm-ast2700-Fix-bug-for-SPI2-Quad-IO-settings.patch \
+	"

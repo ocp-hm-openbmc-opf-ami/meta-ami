@@ -1,8 +1,8 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/entity-manager.git;branch=master;protocol=https;name=override;"
+SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/entity-manager.git;branch=integrate-onetree-3.1.1;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "1ec09dfd5d23c0db0617b9ba118442a10e618892"
+SRCREV_override = "3b082bca48274c0cdac3f8942d1b5bbfe87f5c12"
 
 SRC_URI:append = " \
     file://cpld.json \

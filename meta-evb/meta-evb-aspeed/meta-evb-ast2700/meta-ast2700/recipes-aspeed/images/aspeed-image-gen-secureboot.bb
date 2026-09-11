@@ -86,15 +86,14 @@ install_unsigned_image() {
 
     # kernel unsigned image, dtb and its
     install -m 0644 ${DEPLOY_DIR_IMAGE}/${KERNEL_FITIMAGE_ITS_NAME} ${S}/${GEN_IMAGE_MODE}
-    install -m 0644 ${DEPLOY_DIR_IMAGE}/fitImage-linux.bin-${MACHINE} ${S}/${GEN_IMAGE_MODE}
-    install -m 0644 ${DEPLOY_DIR_IMAGE}/fitImage-linux.bin-${MACHINE} ${S}/${GEN_IMAGE_MODE}/linux.bin
+    install -m 0644 ${DEPLOY_DIR_IMAGE}/linux.bin ${S}/${GEN_IMAGE_MODE}/linux.bin
     for kernel_dtb in ${KERNEL_DEVICETREE}; do
         kernel_dtb_basename=$(basename ${kernel_dtb})
         install -m 0644 ${DEPLOY_DIR_IMAGE}/${kernel_dtb_basename} ${S}/${GEN_IMAGE_MODE}
         install -m 0644 ${DEPLOY_DIR_IMAGE}/${kernel_dtb_basename} ${S}/${GEN_IMAGE_MODE}/arch/arm64/boot/dts/aspeed
     done
 
-    # caliptra firmware
+    # caliptra firmware prebuilt
     install -m 0644 ${DEPLOY_DIR_IMAGE}/${CALIPTRA_FW_BINARY} ${S}/${GEN_IMAGE_MODE}
 
     # zephyr binaries
@@ -103,6 +102,28 @@ install_unsigned_image() {
     if [ -n "${BOOTMCU_FW_BINARY}" ]; then
         install -m 0644 ${DEPLOY_DIR_IMAGE}/${BOOTMCU_FW_BINARY} ${S}/${GEN_IMAGE_MODE}
     fi
+
+    # trusted-firmware-a
+    install -m 0644 ${DEPLOY_DIR_IMAGE}/bl31.* ${S}/${GEN_IMAGE_MODE}
+
+    # optee-os
+    if [ -f ${DEPLOY_DIR_IMAGE}/optee/tee-raw.bin ]; then
+        cp --no-preserve=ownership -rf ${DEPLOY_DIR_IMAGE}/optee ${S}/${GEN_IMAGE_MODE}
+    fi
+
+    # irot image
+    if [ "${ASPEED_IROT}" = "yes" ]; then
+        install -m 0644 ${DEPLOY_DIR_IMAGE}/freertos-* ${S}/${GEN_IMAGE_MODE}
+    fi
+
+    # ddr prebuilt
+    install -m 0644 ${DEPLOY_DIR_IMAGE}/ddr* ${S}/${GEN_IMAGE_MODE}
+
+    # display port prebuilt
+    install -m 0644 ${DEPLOY_DIR_IMAGE}/dp* ${S}/${GEN_IMAGE_MODE}
+
+    # vbios prebuilt
+    install -m 0644 ${DEPLOY_DIR_IMAGE}/uefi* ${S}/${GEN_IMAGE_MODE}
 }
 
 make_otp_image() {
@@ -139,11 +160,8 @@ make_otp_image() {
     fi
 }
 
-# export CRYPTOGRAPHY_OPENSSL_NO_LEGACY variable to fix the following errors.
-# OpenSSL 3.0 legacy provider failed to load
-# https://github.com/pyca/cryptography/issues/10598
 make_fmc_image_and_sign() {
-    export CRYPTOGRAPHY_OPENSSL_NO_LEGACY=1
+    export OPENSSL_MODULES="${STAGING_LIBDIR_NATIVE}/ossl-modules"
 
     local ecc_key=""
     local ecc_key_index=""
@@ -173,9 +191,9 @@ make_fmc_image_and_sign() {
     fmc-imgtool \
         --verbose \
         --version 2 \
-        --input ${DEPLOY_DIR_IMAGE}/${MCU_RUNTIME_IMAGE} \
+        --input ${S}/${GEN_IMAGE_MODE}/${MCU_RUNTIME_IMAGE} \
         --output ${S}/${GEN_IMAGE_MODE}/${BOOTMCU_FMC_BINARY} \
-        --prebuilt-dir ${DEPLOY_DIR_IMAGE}/ \
+        --prebuilt-dir ${S}/${GEN_IMAGE_MODE}/ \
         ${sign_args}
 }
 
@@ -217,7 +235,7 @@ make_caliptra_manifest_image_and_sign() {
         create-auth-flash \
         --cfg ${CALIPTRA_MANIFEST_CONFIG_DIR}/${CALIPTRA_MANIFEST_CONFIG} \
         ${caliptra_manifest_key_dir} \
-        --prebuilt-dir ${DEPLOY_DIR_IMAGE}/ \
+        --prebuilt-dir ${S}/${GEN_IMAGE_MODE}/ \
         --flash ${S}/${GEN_IMAGE_MODE}/${CALIPTRA_MANIFEST_FLASH_IMAGE}
 
     # Build only the Caliptra SoC Manifest.
@@ -225,7 +243,7 @@ make_caliptra_manifest_image_and_sign() {
         create-auth-man \
         --cfg ${CALIPTRA_MANIFEST_CONFIG_DIR}/${CALIPTRA_MANIFEST_CONFIG} \
         ${caliptra_manifest_key_dir} \
-        --prebuilt-dir ${DEPLOY_DIR_IMAGE}/ \
+        --prebuilt-dir ${S}/${GEN_IMAGE_MODE}/ \
         --man ${S}/${GEN_IMAGE_MODE}/${CALIPTRA_MANIFEST_SOC_IMAGE}
 
     rm -f ${S}/${GEN_IMAGE_MODE}/caliptra-manifest.toml
@@ -286,16 +304,16 @@ deploy_static_image_helper() {
     fi
 
     # trusted-firmware-a
-    install -m 0644 ${DEPLOY_DIR_IMAGE}/bl31.* ${DEPLOYDIR}/${GEN_IMAGE_MODE}
+    install -m 0644 ${S}/${GEN_IMAGE_MODE}/bl31.* ${DEPLOYDIR}/${GEN_IMAGE_MODE}
 
     # optee-os
-    if [ -f ${DEPLOY_DIR_IMAGE}/optee/tee-raw.bin ]; then
-        cp --no-preserve=ownership -rf ${DEPLOY_DIR_IMAGE}/optee ${DEPLOYDIR}/${GEN_IMAGE_MODE}
+    if [ -f ${S}/${GEN_IMAGE_MODE}/optee/tee-raw.bin ]; then
+        cp --no-preserve=ownership -rf ${S}/${GEN_IMAGE_MODE}/optee ${DEPLOYDIR}/${GEN_IMAGE_MODE}
     fi
 
     # irot image
     if [ "${ASPEED_IROT}" = "yes" ]; then
-        install -m 0644 ${DEPLOY_DIR_IMAGE}/freertos-* ${DEPLOYDIR}/${GEN_IMAGE_MODE}
+        install -m 0644 ${S}/${GEN_IMAGE_MODE}/freertos-* ${DEPLOYDIR}/${GEN_IMAGE_MODE}
     fi
 }
 
@@ -315,16 +333,16 @@ deploy_mmc_image_helper() {
     fi
 
     # trusted-firmware-a
-    install -m 0644 ${DEPLOY_DIR_IMAGE}/bl31.* ${DEPLOYDIR}/${GEN_IMAGE_MODE}
+    install -m 0644 ${S}/${GEN_IMAGE_MODE}/bl31.* ${DEPLOYDIR}/${GEN_IMAGE_MODE}
 
     # optee-os
-    if [ -f ${DEPLOY_DIR_IMAGE}/optee/tee-raw.bin ]; then
-        cp --no-preserve=ownership -rf ${DEPLOY_DIR_IMAGE}/optee ${DEPLOYDIR}/${GEN_IMAGE_MODE}
+    if [ -f ${S}/${GEN_IMAGE_MODE}/optee/tee-raw.bin ]; then
+        cp --no-preserve=ownership -rf ${S}/${GEN_IMAGE_MODE}/optee ${DEPLOYDIR}/${GEN_IMAGE_MODE}
     fi
 
     # irot image
     if [ "${ASPEED_IROT}" = "yes" ]; then
-        install -m 0644 ${DEPLOY_DIR_IMAGE}/freertos-* ${DEPLOYDIR}/${GEN_IMAGE_MODE}
+        install -m 0644 ${S}/${GEN_IMAGE_MODE}/freertos-* ${DEPLOYDIR}/${GEN_IMAGE_MODE}
     fi
 
     # decompress wic image for user data area boot partition update
