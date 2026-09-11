@@ -1,0 +1,1 @@
+require conf/machine/include/ast2700-default-layout.inc
