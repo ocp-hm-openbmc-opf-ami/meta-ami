@@ -1,0 +1,80 @@
+From: Mahalakshmi Kailasam <mahalakshmik@ami.com>
+Date: Fri, 11 Sep 2026 12:00:00 +0000
+Subject: [PATCH] dbus-sdr: Support dynamic sensors with fb-ipmi-oem
+
+The sdbusplus version used by TiogaPass defines object_path in the
+sdbusplus::message namespace. Using sdbusplus::object_path prevents the
+dynamic sensor provider from compiling.
+
+fb-ipmi-oem and the dynamic sensor provider are loaded into the same
+ipmid process. Both define ipmi::storage::deviceHashes and a storage
+registration constructor. The deviceHashes definitions have incompatible
+value types, so symbol interposition corrupts FRU SDR lookup state.
+
+Use the supported object path type and give the dynamic provider's private
+FRU state and registration function internal linkage.
+
+Signed-off-by: Mahalakshmi Kailasam <mahalakshmik@ami.com>
+---
+ dbus-sdr/storagecommands.cpp | 17 +++++++++--------
+ 1 file changed, 9 insertions(+), 8 deletions(-)
+
+diff --git a/dbus-sdr/storagecommands.cpp b/dbus-sdr/storagecommands.cpp
+--- a/dbus-sdr/storagecommands.cpp
++++ b/dbus-sdr/storagecommands.cpp
+@@ -80,8 +80,8 @@ using ObjectType =
+     boost::container::flat_map<std::string,
+                                boost::container::flat_map<std::string, Value>>;
+ using ManagedObjectType =
+-    boost::container::flat_map<sdbusplus::object_path, ObjectType>;
+-using ManagedEntry = std::pair<sdbusplus::object_path, ObjectType>;
++    boost::container::flat_map<sdbusplus::message::object_path, ObjectType>;
++using ManagedEntry = std::pair<sdbusplus::message::object_path, ObjectType>;
+ using Paths = std::vector<std::string>;
+ 
+ constexpr static const char* fruDeviceServiceName =
+@@ -104,11 +104,12 @@ std::unique_ptr<sdbusplus::Timer> writeTimer = nullptr;
+ static std::vector<sdbusplus::bus::match_t> fruMatches;
+ 
+-ManagedObjectType frus;
++static ManagedObjectType frus;
+ 
+ // we unfortunately have to build a map of hashes in case there is a
+ // collision to verify our dev-id
+-boost::container::flat_map<uint8_t, std::pair<uint16_t, uint8_t>> deviceHashes;
+-void registerStorageFunctions() __attribute__((constructor));
++static boost::container::flat_map<uint8_t, std::pair<uint16_t, uint8_t>>
++    deviceHashes;
++static void registerStorageFunctions() __attribute__((constructor));
+ 
+ bool writeFru(const std::vector<uint8_t>& fru)
+ {
+@@ -297,7 +298,7 @@ void startMatch(void)
+         "type='signal',arg0path='/xyz/openbmc_project/"
+         "FruDevice/',member='InterfacesAdded'",
+         [](sdbusplus::message_t& message) {
+-            sdbusplus::object_path path;
++            sdbusplus::message::object_path path;
+             ObjectType object;
+             try
+             {
+@@ -323,7 +324,7 @@ void startMatch(void)
+         "type='signal',arg0path='/xyz/openbmc_project/"
+         "FruDevice/',member='InterfacesRemoved'",
+         [](sdbusplus::message_t& message) {
+-            sdbusplus::object_path path;
++            sdbusplus::message::object_path path;
+             std::set<std::string> interfaces;
+             try
+             {
+@@ -1253,7 +1254,7 @@ std::vector<uint8_t> getType12SDRs(uint16_t index, uint16_t recordId)
+     return resp;
+ }
+ 
+-void registerStorageFunctions()
++static void registerStorageFunctions()
+ {
+     createTimers();
+     startMatch();
+-- 
+2.43.0
