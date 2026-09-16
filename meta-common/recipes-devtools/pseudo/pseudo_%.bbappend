@@ -1,6 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRCREV = "823895ba708c63f6ae4dcbfc266210f26c02c698"
+SRCREV = "ba8887e5f1e922f866681ec7dec1a00b602a9328"
 S = "${WORKDIR}/git"
 PV = "1.9.8+git"
 

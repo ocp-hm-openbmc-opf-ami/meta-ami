@@ -12,7 +12,7 @@ SRC_URI += " \
     file://0285-Fix-For-LF-Sync-Build-Issue.patch \
     "
 
-SRCREV = "c7d94ca0b59f8f618fddd8a73e0876bdbc441dc8"
+SRCREV = "a82f7bf548750e4937fbb833372cf65577ea0c6b"
 
 # Override version
 PV = "1.1.8+git${SRCPV}"

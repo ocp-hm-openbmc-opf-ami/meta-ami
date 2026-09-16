@@ -13,7 +13,7 @@ SRC_URI = "git://github.com/openbmc/openbmc-tools;protocol=https;branch=master \
            file://0005-build_fix_pwmtachtool.patch \
            "
 
-SRCREV = "8355598fbe7a98ea1d96666157cbbf2459ba8908"
+SRCREV = "06aa79bb1f79601430a95806497661634739a542"
 
 S = "${WORKDIR}/git/pwmtachtool/src"
 PV = "0.1+git${SRCPV}"
