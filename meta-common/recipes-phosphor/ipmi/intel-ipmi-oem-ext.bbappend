@@ -1,6 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/intel-ipmi-oem-ext.git;branch=integrate-onetree-3.1.1;protocol=https;name=override;"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/intel-ipmi-oem-ext.git;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
 SRCREV_override = "e90ab9b638a8ff5fe53b38a3ab23315e57f81b54"
 

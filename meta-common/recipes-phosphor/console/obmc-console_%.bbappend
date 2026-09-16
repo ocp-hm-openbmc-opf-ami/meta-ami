@@ -3,7 +3,7 @@ SOL_PATH = "${@'${THISDIR}/${PN}/multi-sol' if d.getVar('MULTI_SOL_ENABLED') == 
 FILESEXTRAPATHS:prepend := "${SOL_PATH}:"
 RDEPENDS:${PN} += "bash"
 
-SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/obmc-console.git;branch=integrate-onetree-3.1.1;protocol=https;name=override;"
+SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/obmc-console.git;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
 SRCREV_override = "3d271b52351a344064ca03a91aa2136b1ea7b6e0"
 
