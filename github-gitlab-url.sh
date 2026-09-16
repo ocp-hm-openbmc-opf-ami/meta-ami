@@ -1,5 +1,67 @@
 #!/bin/sh
 
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-networkd;branch=main;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-networkd;protocol=https;branch=main;name=override/g' meta-ami/meta-common/recipes-network/network/phosphor-network_%.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/obmc-ikvm;branch=main;protocol=https/git@github.com\/ocp-hm-openbmc-opf-ami\/obmc-ikvm;protocol=https;branch=main/g' meta-ami/meta-common/recipes-graphics/obmc-ikvm/obmc-ikvm_%.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/x86-power-control.git;branch=master;protocol=https;name=override/github.com\/ocp-hm-openbmc-opf-ami\/x86-power-control.git;protocol=https;branch=master;name=override/g' meta-ami/meta-common/recipes-x86/chassis/x86-power-control_%.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-debug-collector.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-debug-collector.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/dump/phosphor-debug-collector_%.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/intel-ipmi-oem-ext.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/intel-ipmi-oem-ext.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/ipmi/intel-ipmi-oem-ext.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/intel-ipmi-oem.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/intel-ipmi-oem;protocol=https;branch=master;name=override/g' meta-ami/meta-common/recipes-phosphor/ipmi/intel-ipmi-oem_%.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-host-ipmid.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-host-ipmid;protocol=https;branch=master;name=override/g' meta-ami/meta-common/recipes-phosphor/ipmi/phosphor-ipmi-host_%.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-logging.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-logging.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/logging/phosphor-logging_%.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-sel-logger.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-sel-logger.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/sel-logger/phosphor-sel-logger_%.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/webui-vue.git;branch=main;protocol=https;name=webui/git@github.com\/ocp-hm-openbmc-opf-ami\/webui-vue;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/webui/webui-vue_%.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-time-manager.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-time-manager.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/date-time/phosphor-time-manager_%.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/snmp-agent.git;branch=main;protocol=https/git@github.com\/ocp-hm-openbmc-opf-ami\/snmp-agent;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/snmp/snmp-agent_%.bb
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/session-manager.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/session-manager.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/session-management/session-management_git.bb
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-gpio-monitor.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-gpio-monitor.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/gpio/phosphor-gpio-monitor_%.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-dbus-interfaces.git;branch=main;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-dbus-interfaces;protocol=https;branch=main;name=override/g' meta-ami/meta-common/recipes-phosphor/dbus/phosphor-dbus-interfaces_%.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/obmc-console.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/obmc-console.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/console/obmc-console_%.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/bmcweb;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/bmcweb;protocol=https;branch=master;name=override/g' meta-ami/meta-common/recipes-phosphor/bmcweb/bmcweb_%.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-watchdog.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-watchdog.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/watchdog/phosphor-watchdog_%.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-post-code-manager.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-post-code-manager.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/state/phosphor-post-code-manager_%.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-pid-control.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-pid-control.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/fans/phosphor-pid-control_%.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/telemetry.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/telemetry.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/telemetry/telemetry_%.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-health-monitor.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-health-monitor.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/health/phosphor-health-monitor_%.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/entity-manager.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/entity-manager.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/configuration/entity-manager_%.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/dbus-sensors.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/dbus-sensors;protocol=https;branch=master;name=override/g' meta-ami/meta-common/recipes-phosphor/sensors/dbus-sensors_%.bbappend
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/libapisensor.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/libapisensor.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/sensors/libapisensor_git.bb
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/sensor-history-reader.git;protocol=https;branch=master/git@github.com\/ocp-hm-openbmc-opf-ami\/sensor-history-reader.git;protocol=https;branch=master/g' meta-ami/meta-common/recipes-ami/sensor-reader/sensor-reader_git.bb
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/two-factor-authentication.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/two-factor-authentication.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/two-factor-authentication/web-two-factor-authentication.bb
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/platform-event-filter.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/platform-event-filter.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/pef/pef-alert-manager.bb
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/email-alert-manager.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/email-alert-manager.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/pef/mail-alert-manager.bb
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/obmc-ikvm;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/obmc-ikvm;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/kvm-dbus-monitor/kvm-dbus-monitor_git.bb
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/libpdkhook.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/libpdkhook.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/libpdkhook/libpdkhook_git.bb
+
 if [ -d "meta-core/meta-common" ]; then
 
 	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.host-misc-comm-manager;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.host-misc-comm-manager;protocol=https;branch=main/g' meta-core/meta-common/recipes-intel/host-misc-comm-manager/host-misc-comm-manager_git.bb
@@ -43,6 +105,8 @@ if [ -d "meta-core/meta-common" ]; then
 	sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.mctp-tools.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.mctp-tools.git;protocol=ssh;branch=main/g' meta-core/meta-common/recipes-phosphor/pmci/mctp-cmd-tool.bb
 
 	sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.cxl-cci.git;protocol=ssh;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.cxl-cci.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-phosphor/pmci/cxl-cci.bb
+
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/libpeci.git;branch=main;protocol=https/git@github.com\/ocp-hm-openbmc-opf-ami\/libpeci.git;branch=main;protocol=https/g' meta-core/meta-common/recipes-core/libpeci/libpeci_%.bbappend
 
 else
 	echo "INFO : meta-common does not exists."

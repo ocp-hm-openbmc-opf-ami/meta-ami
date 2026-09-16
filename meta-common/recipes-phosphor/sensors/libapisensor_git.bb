@@ -5,7 +5,7 @@ DESCRIPTION="A library to get sensor readings from hardware.  Used by dbus-senso
 LICENSE = "Apache-2.0"
 LIC_FILES_CHKSUM = "file://${COREBASE}/meta/files/common-licenses/Apache-2.0;md5=89aea4e17d99a7cacdbeed46a0096b10"
  
-SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/libapisensor.git;protocol=https;branch=integrate-onetree-3.1.1"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/libapisensor.git;protocol=https;branch=main"
 SRCREV = "567d5a4065f38bead5b5d28898257b38ed05561b"
  
 PV = "1.0.0"

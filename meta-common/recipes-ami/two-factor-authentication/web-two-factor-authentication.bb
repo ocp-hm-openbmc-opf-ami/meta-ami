@@ -6,7 +6,7 @@ LICENSE = "CLOSED"
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 
-SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/two-factor-authentication.git;protocol=https;branch=integrate-onetree-3.1.1"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/two-factor-authentication.git;protocol=https;branch=main"
 
 
 
