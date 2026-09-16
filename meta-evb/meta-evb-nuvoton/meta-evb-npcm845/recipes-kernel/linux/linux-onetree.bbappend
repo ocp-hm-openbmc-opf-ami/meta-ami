@@ -72,7 +72,7 @@ do_configure:append (){
 # The base dtb is built with DTC_FLAGS=-@ (see linux-onetree.bb) so it carries
 # __symbols__, allowing fdtoverlay to resolve labels like &gpio0 / &i2c4.
 # Every *.dtso under dts-arbel-npcm845/ is compiled and applied in filename order.
-do_compile:append (){
+do_compile:append:s997 (){
     dtb="${B}/arch/arm64/boot/dts/nuvoton/nuvoton-npcm845-evb.dtb"
     overlay_dir="${UNPACKDIR}/dts-arbel-npcm845"
 
