@@ -4,7 +4,7 @@ LICENSE = "CLOSED"
 
 
 SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/session-manager.git;protocol=https;branch=main"
-SRCREV = "e108da202c9dc09ff47935442ff57089a09637c4"
+SRCREV = "890e84d1b2791810fab507d3f6ac6d0ef00fc37a"
 
 S = "${UNPACKDIR}/git"
 PV = "1.0+git${SRCPV}"

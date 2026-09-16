@@ -7,7 +7,7 @@ SRC_URI += "\
             file://0004-Add-support-for-multi-host-PCC-with-dynamic-object.patch \
             file://lpcsnoop@.service \
             "
-SRCREV = "b59c07b475141f08ab0c5dd44a6ce995bb5a6f6b"
+SRCREV = "d3a3fb88b233f8babf8c04270771f6754f124ab2"
 
 # Indices to use based on the feature
 POSTD_MULTIHOST = "${@ '1' if ( \

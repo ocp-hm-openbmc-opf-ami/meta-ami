@@ -10,7 +10,7 @@ SRC_URI += " \
             file://0002-recreated-Coverity-fix.patch \
             file://0003-Multi-PSU-Runtime-support.patch \
             "
-SRCREV = "6c9e3cb88a909a514df76088ff869d413b33ea19"
+SRCREV = "ab3c5bb457d8e3c55f468124a74fe5b399c3c00d"
 
 PACKAGECONFIG:append = " monitor"
 PACKAGECONFIG:append = " monitor-ng"

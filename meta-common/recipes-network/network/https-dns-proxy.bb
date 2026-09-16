@@ -7,7 +7,7 @@ LIC_FILES_CHKSUM = "file://LICENSE;md5=b213ece8dac27def21a4514fd537988a"
 #SRCREV = "2cf67e30a797fbec1c7e4bbdb79ab6174fdd4bfc"
 #SRC_URI = "git://github.com/aarond10/https_dns_proxy.git;branch=main;protocol=https"
 SRC_URI = "git://github.com/aarond10/https_dns_proxy.git;protocol=https;branch=master"
-SRCREV = "484bd153bb85a51df1c5bede1b091be76537e0a7"
+SRCREV = "f6c1da39e18527fc0b65fb043b8e41168df4567f"
 S = "${WORKDIR}/git"
 inherit cmake
 

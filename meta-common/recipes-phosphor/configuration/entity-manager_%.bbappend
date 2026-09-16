@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/entity-manager.git;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "1ec09dfd5d23c0db0617b9ba118442a10e618892"
+SRCREV_override = "9af5356abd0d4303f4832c8a13dab53e00ebf0ed"
 
 SRC_URI:append = " \
     file://cpld.json \
