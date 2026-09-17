@@ -1,0 +1,490 @@
+From bbb37458d4e2a9c6470bb6a70a0a38ca42ac318f Mon Sep 17 00:00:00 2001
+From: mickhuang <mickhuang@ami.com>
+Date: Fri, 31 Jul 2026 00:23:26 +0800
+Subject: [PATCH] board: ibex_ast2700: Add PHY3/XHCI USB IP initialization for
+ A1
+
+Port SCU0 USB routing (usb_func_ctrl, PHY3/XHCI, BEHCI EOF timing)
+and the matching pcie0/pcie1 ehci/xhci enable properties, restricted
+to AST2700-A1: PortA = EHCI_VHUB + XHCI_PHY, PortB = XHCI_VHUB only.
+
+Ported from aspeed-zephyr-project commit e2aba300c58e ("usb: Add more
+SoC0 USB IP initialization").
+
+Signed-off-by: mickhuang <mickhuang@ami.com>
+---
+ arch/riscv/dts/ast2700-ibex.dts               |   3 -
+ .../include/asm/arch-ast2700/scu_ast2700.h    |  12 +-
+ .../include/asm/arch-ast2700/usb_ast2700.h    |  36 +-
+ board/aspeed/ibex_ast2700/ibex_ast2700.c      | 339 ++++++++++++++++--
+ 4 files changed, 345 insertions(+), 45 deletions(-)
+
+diff --git a/arch/riscv/dts/ast2700-ibex.dts b/arch/riscv/dts/ast2700-ibex.dts
+index 14df5af9ff..3bce4ce94a 100644
+--- a/arch/riscv/dts/ast2700-ibex.dts
++++ b/arch/riscv/dts/ast2700-ibex.dts
+@@ -306,14 +306,11 @@
+ 
+ &pcie0 {
+ 	/delete-property/ bmc-device;
+-	/delete-property/ ehci;
+-	/delete-property/ xhci;
+ };
+ 
+ &pcie1 {
+ 	/delete-property/ bmc-device;
+ 	/delete-property/ ehci;
+-	/delete-property/ xhci;
+ };
+ 
+ #if BINMAN_SYMS_OK
+diff --git a/arch/riscv/include/asm/arch-ast2700/scu_ast2700.h b/arch/riscv/include/asm/arch-ast2700/scu_ast2700.h
+index c39720710b..a3364a82e7 100644
+--- a/arch/riscv/include/asm/arch-ast2700/scu_ast2700.h
++++ b/arch/riscv/include/asm/arch-ast2700/scu_ast2700.h
+@@ -38,8 +38,14 @@
+ #define SCU_CPU_RST2_E2M1			BIT(11)
+ #define SCU_CPU_RST2_E2M0			BIT(10)
+ #define SCU_CPU_RST2_TSP			BIT(9)
+-#define SCU_CPU_RST2_USBB_VHUB			BIT(3)
+-#define SCU_CPU_RST2_USBA_VHUB			BIT(0)
++#define SCU_CPU_RST2_USBB_EHCI_VHUB0		BIT(7)
++#define SCU_CPU_RST2_USBA_EHCI_VHUB0		BIT(6)
++#define SCU_CPU_RST2_USBB_XHCI			BIT(5)
++#define SCU_CPU_RST2_USBB_PHY3			BIT(4)
++#define SCU_CPU_RST2_USBB_VHUB1			BIT(3)
++#define SCU_CPU_RST2_USBA_XHCI			BIT(2)
++#define SCU_CPU_RST2_USBA_PHY3			BIT(1)
++#define SCU_CPU_RST2_USBA_VHUB1			BIT(0)
+ 
+ #define SCU_CPU_VGA_FUNC_DAC_OUTPUT		GENMASK(11, 10)
+ #define SCU_CPU_VGA_FUNC_DP_OUTPUT		GENMASK(9, 8)
+@@ -274,7 +280,7 @@ struct ast2700_scu0 {
+ 	uint32_t pinmux2;		/* 0x404 */
+ 	uint32_t pinmux3;		/* 0x408 */
+ 	uint32_t rsv_0x40c;		/* 0x40C */
+-	uint32_t pinmux4;		/* 0x410 */
++	uint32_t usb_func_ctrl;		/* 0x410 */
+ 	uint32_t vga_func_ctrl;		/* 0x414 */
+ 	uint32_t rsv_0x418[2];	/* 0x418 */
+ 	uint32_t pinmux_lock0;	/* 0x420 */
+diff --git a/arch/riscv/include/asm/arch-ast2700/usb_ast2700.h b/arch/riscv/include/asm/arch-ast2700/usb_ast2700.h
+index 1eb734ad05..2df2e67e3e 100644
+--- a/arch/riscv/include/asm/arch-ast2700/usb_ast2700.h
++++ b/arch/riscv/include/asm/arch-ast2700/usb_ast2700.h
+@@ -5,14 +5,36 @@
+ #ifndef _ASM_ARCH_USB_AST2700_H_
+ #define _ASM_ARCH_USB_AST2700_H_
+ 
+-#define ASPEED_VHUBA1_BASE		0x12011000
+-#define ASPEED_VHUBA1_PHY_CTL_1		(ASPEED_VHUBA1_BASE + 0x800)
+-#define ASPEED_VHUBA1_PHY_CTL_2		(ASPEED_VHUBA1_BASE + 0x804)
+-#define ASPEED_VHUBA1_PHY_CTL_3		(ASPEED_VHUBA1_BASE + 0x808)
++/* USB PHY3 (USB 3.x) base addresses */
++#define ASPEED_UPHY3A_BASE		0x12010000
++#define ASPEED_UPHY3B_BASE		0x12020000
+ 
++/* USB PHY3 register offsets */
++#define ASPEED_USB_PHY3_S00		0x00	/* PHY SRAM Control/Status #1 */
++#define ASPEED_USB_PHY3_S04		0x04	/* PHY SRAM Control/Status #2 */
++#define ASPEED_USB_PHY3_C00		0x08	/* PHY PCS Control/Status #1 */
++#define ASPEED_USB_PHY3_C04		0x0C	/* PHY PCS Control/Status #2 */
++#define ASPEED_USB_PHY3_P00		0x10	/* PHY PCS Protocol Setting #1 */
++#define ASPEED_USB_PHY3_P04		0x14	/* PHY PCS Protocol Setting #2 */
++#define ASPEED_USB_PHY3_P08		0x18	/* PHY PCS Protocol Setting #3 */
++#define ASPEED_USB_PHY3_P0C		0x1C	/* PHY PCS Protocol Setting #4 */
++#define ASPEED_USB_PHY3_DWC		0x40	/* DWC3 Commands base address offset */
++
++/* USB vHUB base addresses */
++#define ASPEED_VHUBA0_BASE		0x12060000
++#define ASPEED_VHUBB0_BASE		0x12062000
++#define ASPEED_VHUBA1_BASE		0x12011000
+ #define ASPEED_VHUBB1_BASE		0x12021000
+-#define ASPEED_VHUBB1_PHY_CTL_1		(ASPEED_VHUBB1_BASE + 0x800)
+-#define ASPEED_VHUBB1_PHY_CTL_2		(ASPEED_VHUBB1_BASE + 0x804)
+-#define ASPEED_VHUBB1_PHY_CTL_3		(ASPEED_VHUBB1_BASE + 0x808)
++
++/* USB PHY2 register offsets (relative to vHUB1 base) */
++#define ASPEED_USB_PHY_CTL_STS_1	0x800	/* USB PHY Control/Status #1 */
++#define ASPEED_USB_PHY_CTL_STS_2	0x804	/* USB PHY Control/Status #2 */
++#define ASPEED_USB_PHY_CTL_STS_3	0x808	/* USB PHY Control/Status #3 */
++#define ASPEED_USB_PHY_CTL_STS_4	0x80C	/* USB PHY Control/Status #4 */
++
++/* BEHCI (PCIe-EHCI bridge) base addresses */
++#define ASPEED_BEHCI0_BASE		0x12061800
++#define ASPEED_BEHCI1_BASE		0x12063800
++#define ASPEED_USB_BEHCI_FRM_TIMING	0x88	/* Frame Timing Adjustment */
+ 
+ #endif /* _ASM_ARCH_USB_AST2700_H_ */
+diff --git a/board/aspeed/ibex_ast2700/ibex_ast2700.c b/board/aspeed/ibex_ast2700/ibex_ast2700.c
+index 2227395408..40b25f3f1e 100644
+--- a/board/aspeed/ibex_ast2700/ibex_ast2700.c
++++ b/board/aspeed/ibex_ast2700/ibex_ast2700.c
+@@ -302,47 +302,322 @@ static int hspi_init(void)
+ 	return 0;
+ }
+ 
++/* ---- USB init helpers for AST2700 A1 fixed routing policy ----
++ * Port A: EHCI->vHUB and XHCI->PHY
++ * Port B: XHCI->vHUB (USB2 path still initialized for PHY2/vHUB settings)
++ */
++
++enum usb_port {
++	PORT_A,
++	PORT_B,
++};
++
++/* USB function routing options (mirrors Zephyr scu0_usb_function enum) */
++enum usb_function {
++	USB_FUNC_NOT_USED,
++	USB_FUNC_EHCI_VHUB_AND_XHCI_PHY,
++	USB_FUNC_XHCI_PHY,
++	USB_FUNC_XHCI_VHUB,
++	USB_FUNC_EHCI_VHUB,
++	USB_FUNC_VHUB_PHY,
++	USB_FUNC_EHCI_PHY,
++};
++
++/* BEHCI EOF1/EOF2 timing workaround for DMA termination bug.
++ * preEOF1 = 0x100, preEOF2 = preEOF1 + MPS(0x40)
++ */
++#define BEHCI_PRE_EOF1_MASK	GENMASK(21, 12)
++#define BEHCI_PRE_EOF2_MASK	GENMASK(31, 22)
++#define BEHCI_PRE_EOF1_VAL	0x100
++#define BEHCI_WORKAROUND_MPS	0x40
++#define BEHCI_EOF1_EOF2_TIMING	\
++	(FIELD_PREP(BEHCI_PRE_EOF1_MASK, BEHCI_PRE_EOF1_VAL) | \
++	 FIELD_PREP(BEHCI_PRE_EOF2_MASK, BEHCI_PRE_EOF1_VAL + BEHCI_WORKAROUND_MPS))
++
++/* USB PHY3 default PCS protocol settings (from SNPS documents) */
++#define PHY3P00_DEFAULT		0xCE70000F
++#define PHY3P04_DEFAULT		0x49C00014
++#define PHY3P08_DEFAULT		0x5E406825
++#define PHY3P0C_DEFAULT		0x00000001
++
++/* USB PHY3 SRAM status bits */
++#define USB_PHY3_INIT_DONE	BIT(15)	/* PHY internal SRAM init done */
++#define USB_PHY3_SRAM_BYPASS	BIT(7)	/* SRAM bypass */
++#define USB_PHY3_SRAM_EXT_LOAD	BIT(6)	/* SRAM external load done */
++
++/* DWC3 command entries for GSBUSCFG0, GUCTL, GLADJ */
++#define DWC_CTRL_NUM		3
++#define BURST_128		0x00000006
++#define BURST_256		0x0000000E
++
++struct usb_dwc3_ctrl {
++	uint32_t offset;
++	uint32_t value;
++};
++
++static struct usb_dwc3_ctrl dwc3_ctrl[DWC_CTRL_NUM] = {
++	{0xc100, BURST_128},		/* GSBUSCFG0: Bus Burst Type */
++	{0xc12c, 0x0c854802},		/* GUCTL: ref_clk setting */
++	{0xc630, 0x0c800020},		/* GLADJ: ref_clk adjustment */
++};
++
++static bool usb_func_has_ehci(enum usb_function func)
++{
++	return func == USB_FUNC_EHCI_VHUB_AND_XHCI_PHY ||
++	       func == USB_FUNC_EHCI_VHUB ||
++	       func == USB_FUNC_EHCI_PHY;
++}
++
++static int usb_usb3_init(struct ast2700_scu0 *scu, enum usb_port port)
++{
++	uint32_t phy3_base, clk, rst;
++	uint32_t val;
++	uint32_t timeout = 100;
++	uint32_t i, offset;
++
++	if (port == PORT_A) {
++		phy3_base = ASPEED_UPHY3A_BASE;
++		clk = SCU_CPU_CLKGATE1_USBA;
++		rst = SCU_CPU_RST2_USBA_PHY3 | SCU_CPU_RST2_USBA_XHCI;
++	} else {
++		phy3_base = ASPEED_UPHY3B_BASE;
++		clk = SCU_CPU_CLKGATE1_USBB;
++		rst = SCU_CPU_RST2_USBB_PHY3 | SCU_CPU_RST2_USBB_XHCI;
++	}
++
++	/* Enable clock and de-assert reset for PHY3 and XHCI */
++	setbits_le32(&scu->clkgate_clr, clk);
++	mdelay(10);
++	setbits_le32(&scu->modrst2_clr, rst);
++	udelay(1);
++
++	/* Wait for PHY3 internal SRAM init done */
++	while (!(readl((void *)(phy3_base + ASPEED_USB_PHY3_S00)) & USB_PHY3_INIT_DONE)) {
++		udelay(100);
++		if (--timeout == 0) {
++			printf("%s: Wait PHY3 %s init timed out\n", __func__,
++			       port == PORT_A ? "PortA" : "PortB");
++			return -ETIMEDOUT;
++		}
++	}
++
++	/* Set SRAM bypass */
++	val = readl((void *)(phy3_base + ASPEED_USB_PHY3_S00));
++	val |= USB_PHY3_SRAM_BYPASS;
++	writel(val, (void *)(phy3_base + ASPEED_USB_PHY3_S00));
++
++	/* Apply default PHY3 PCS protocol settings (SNPS recommended) */
++	writel(PHY3P00_DEFAULT, (void *)(phy3_base + ASPEED_USB_PHY3_P00));
++	writel(PHY3P04_DEFAULT, (void *)(phy3_base + ASPEED_USB_PHY3_P04));
++	writel(PHY3P08_DEFAULT, (void *)(phy3_base + ASPEED_USB_PHY3_P08));
++	writel(PHY3P0C_DEFAULT, (void *)(phy3_base + ASPEED_USB_PHY3_P0C));
++
++	/* Write DWC3 commands: GSBUSCFG0, GUCTL, GLADJ */
++	for (i = 0, offset = ASPEED_USB_PHY3_DWC; i < DWC_CTRL_NUM; i++) {
++		if (i % 2 == 0) {
++			writel(dwc3_ctrl[i].value,
++			       (void *)(phy3_base + offset));
++			offset += 4;
++			writel(dwc3_ctrl[i].offset & 0xFFFF,
++			       (void *)(phy3_base + offset));
++		} else {
++			val = readl((void *)(phy3_base + offset)) & 0xFFFF;
++			val |= (dwc3_ctrl[i].value & 0xFFFF) << 16;
++			writel(val, (void *)(phy3_base + offset));
++			offset += 4;
++			val = (dwc3_ctrl[i].offset << 16) |
++			      (dwc3_ctrl[i].value >> 16);
++			writel(val, (void *)(phy3_base + offset));
++			offset += 4;
++		}
++	}
++
++	debug("%s: Initialized %s USB3\n", __func__,
++	      port == PORT_A ? "PortA" : "PortB");
++	return 0;
++}
++
++static int usb_usb2_init(struct ast2700_scu0 *scu, enum usb_port port,
++			 enum usb_function func)
++{
++	uint32_t phy2_base, ehci_base, clk, rst;
++	bool has_ehci = usb_func_has_ehci(func);
++
++	if (port == PORT_A) {
++		phy2_base = ASPEED_VHUBA1_BASE;
++		ehci_base = ASPEED_BEHCI0_BASE;
++		clk = SCU_CPU_CLKGATE1_USBA;
++		rst = SCU_CPU_RST2_USBA_VHUB1;
++		if (has_ehci)
++			rst |= SCU_CPU_RST2_USBA_EHCI_VHUB0;
++	} else {
++		phy2_base = ASPEED_VHUBB1_BASE;
++		ehci_base = ASPEED_BEHCI1_BASE;
++		clk = SCU_CPU_CLKGATE1_USBB;
++		rst = SCU_CPU_RST2_USBB_VHUB1;
++		if (has_ehci)
++			rst |= SCU_CPU_RST2_USBB_EHCI_VHUB0;
++	}
++
++	/* Enable clock and de-assert reset for EHCI/vHUB1 */
++	setbits_le32(&scu->clkgate_clr, clk);
++	mdelay(10);
++	setbits_le32(&scu->modrst2_clr, rst);
++	udelay(1);
++
++	/* Set PHY2 xHCI-to-vHub1 clock rate as 60MHz {PHYA_B04} [27:26] = b'11 */
++	clrsetbits_le32((void *)(phy2_base + ASPEED_USB_PHY_CTL_STS_2),
++			GENMASK(27, 26), 3 << 26);
++
++	/* Set PHY2 pre-emphasis current {PHYA_B08} [22:21] = b'10 */
++	clrsetbits_le32((void *)(phy2_base + ASPEED_USB_PHY_CTL_STS_3),
++			GENMASK(22, 21), 2 << 21);
++
++	/* Adjust BEHCI EOF1/EOF2 timing to workaround DMA termination bug */
++	if (has_ehci)
++		writel(BEHCI_EOF1_EOF2_TIMING,
++		       (void *)(ehci_base + ASPEED_USB_BEHCI_FRM_TIMING));
++
++	debug("%s: Initialized %s USB2\n", __func__,
++	      port == PORT_A ? "PortA" : "PortB");
++	return 0;
++}
++
++static void usb_func_init(struct ast2700_scu0 *scu, enum usb_port port,
++			  enum usb_function func)
++{
++	uint32_t vhub_ehci_shift, u3_xhci_shift, u2_xhci_shift;
++
++	switch (port) {
++	case PORT_A:
++		vhub_ehci_shift = 24;
++		u3_xhci_shift = 0;
++		u2_xhci_shift = 2;
++		break;
++	case PORT_B:
++		vhub_ehci_shift = 28;
++		u3_xhci_shift = 4;
++		u2_xhci_shift = 6;
++		break;
++	default:
++		return;
++	}
++
++	switch (func) {
++	case USB_FUNC_EHCI_VHUB:
++		/* EHCI to vHUB */
++		clrsetbits_le32(&scu->usb_func_ctrl,
++				GENMASK(vhub_ehci_shift + 1, vhub_ehci_shift),
++				0 << vhub_ehci_shift);
++		break;
++
++	case USB_FUNC_EHCI_VHUB_AND_XHCI_PHY:
++	case USB_FUNC_XHCI_PHY:
++		/* EHCI to vHUB, XHCI to PHY */
++		clrsetbits_le32(&scu->usb_func_ctrl,
++				GENMASK(vhub_ehci_shift + 1, vhub_ehci_shift),
++				0 << vhub_ehci_shift);
++		clrsetbits_le32(&scu->usb_func_ctrl,
++				GENMASK(u3_xhci_shift + 1, u3_xhci_shift),
++				2 << u3_xhci_shift);
++		clrsetbits_le32(&scu->usb_func_ctrl,
++				GENMASK(u2_xhci_shift + 1, u2_xhci_shift),
++				2 << u2_xhci_shift);
++		break;
++
++	case USB_FUNC_VHUB_PHY:
++		/* vHUB1 to PHY */
++		clrsetbits_le32(&scu->usb_func_ctrl,
++				GENMASK(u2_xhci_shift + 1, u2_xhci_shift),
++				1 << u2_xhci_shift);
++		clrsetbits_le32(&scu->usb_func_ctrl,
++				GENMASK(vhub_ehci_shift + 1, vhub_ehci_shift),
++				0 << vhub_ehci_shift);
++		break;
++
++	case USB_FUNC_EHCI_PHY:
++		/* PCIe EHCI to PHY */
++		clrsetbits_le32(&scu->usb_func_ctrl,
++				GENMASK(vhub_ehci_shift + 1, vhub_ehci_shift),
++				3 << vhub_ehci_shift);
++		break;
++
++	case USB_FUNC_XHCI_VHUB:
++		/* XHCI to vHUB */
++		clrsetbits_le32(&scu->usb_func_ctrl,
++				GENMASK(u3_xhci_shift + 1, u3_xhci_shift),
++				2 << u3_xhci_shift);
++		clrsetbits_le32(&scu->usb_func_ctrl,
++				GENMASK(u2_xhci_shift + 1, u2_xhci_shift),
++				0 << u2_xhci_shift);
++		clrsetbits_le32(&scu->usb_func_ctrl,
++				GENMASK(vhub_ehci_shift + 1, vhub_ehci_shift),
++				0 << vhub_ehci_shift);
++		break;
++
++	default:
++		break;
++	}
++}
++
++static int usb_port_init(struct ast2700_scu0 *scu, enum usb_port port,
++			 enum usb_function func)
++{
++	int ret;
++
++	switch (func) {
++	case USB_FUNC_EHCI_VHUB_AND_XHCI_PHY:
++	case USB_FUNC_XHCI_PHY:
++	case USB_FUNC_XHCI_VHUB:
++		/* Initialize USB PHY3 and XHCI controller */
++		ret = usb_usb3_init(scu, port);
++		if (ret)
++			return ret;
++		/* fall through to also init USB2 */
++		/* fallthrough */
++	case USB_FUNC_EHCI_VHUB:
++	case USB_FUNC_VHUB_PHY:
++	case USB_FUNC_EHCI_PHY:
++		/* Initialize USB2 EHCI and vHUB (also PHY2) */
++		ret = usb_usb2_init(scu, port, func);
++		if (ret)
++			return ret;
++		break;
++	default:
++		break;
++	}
++
++	return 0;
++}
++
+ static int usb_init(void)
+ {
+-	int nodeoffset;
+-	ofnode node;
+-	struct ast2700_scu0 *scu;
+-
+-	/* find the offset of compatible node */
+-	nodeoffset = fdt_node_offset_by_compatible(gd->fdt_blob, -1,
+-						   "aspeed,ast2700-scu0");
+-	if (nodeoffset < 0)
+-		printf("%s: failed to get aspeed,ast2700-scu0\n", __func__);
+-
+-	/* get ast2700-scu0 node */
+-	node = offset_to_ofnode(nodeoffset);
+-
+-	scu = (struct ast2700_scu0 *)ofnode_get_addr(node);
+-	if (IS_ERR_OR_NULL(scu))
+-		printf("%s: cannot get SYSCON address pointer\n", __func__);
++	struct ast2700_scu0 *scu = (struct ast2700_scu0 *)ASPEED_CPU_SCU_BASE;
++	/*
++	 * AST2700 A1 policy in this board code is fixed (not DT-driven):
++	 * Port A uses EHCI->vHUB and XHCI->PHY.
++	 * Port B uses XHCI->vHUB.
++	 */
++	enum usb_function porta_func = USB_FUNC_EHCI_VHUB_AND_XHCI_PHY;
++	enum usb_function portb_func = USB_FUNC_XHCI_VHUB;
++	int ret;
+ 
+ 	if (FIELD_GET(SCU_CPU_REVISION_ID_HW, scu->chip_id1) == 0) {
+ 		debug("%s: Do nothing in A0\n", __func__);
+ 		return 0;
+ 	}
+ 
+-	/* clk/reset for vhuba1 (including PortA 2.0 PHY) */
+-	setbits_le32(&scu->clkgate_clr, SCU_CPU_CLKGATE1_USBA);
+-	mdelay(10);
+-	setbits_le32(&scu->modrst2_clr, SCU_CPU_RST2_USBA_VHUB);
+-	mdelay(1);
++	/* Configure USB function routing via SCU0 register */
++	usb_func_init(scu, PORT_A, porta_func);
++	usb_func_init(scu, PORT_B, portb_func);
+ 
+-	/* Set PortA PHY2 Pre-emphasis current {PHYA_B08} [22:21] = b'10 */
+-	clrsetbits_le32((void *)ASPEED_VHUBA1_PHY_CTL_3, GENMASK(22, 21), 2 << 21);
++	ret = usb_port_init(scu, PORT_A, porta_func);
++	if (ret)
++		return ret;
+ 
+-	/* clk/reset for vhubb1 (including PortB 2.0 PHY) */
+-	setbits_le32(&scu->clkgate_clr, SCU_CPU_CLKGATE1_USBB);
+-	mdelay(10);
+-	setbits_le32(&scu->modrst2_clr, SCU_CPU_RST2_USBB_VHUB);
+-	mdelay(1);
+-
+-	/* Set PortB PHY2 Pre-emphasis current {PHYA_B08} [22:21] = b'10 */
+-	clrsetbits_le32((void *)ASPEED_VHUBB1_PHY_CTL_3, GENMASK(22, 21), 2 << 21);
++	ret = usb_port_init(scu, PORT_B, portb_func);
++	if (ret)
++		return ret;
+ 
+ 	return 0;
+ }
+@@ -370,9 +645,9 @@ struct init_callback board_init_seq[] = {
+ 	{"SLI0",	sli0_init},
+ 	{"HSPI",	hspi_init},
+ 	{"DRAM",	dram_init},
++	{"USB",		usb_init},
+ 	{"PCI",		pci_init},
+ 	{"VBIOS",	vbios_init},
+-	{"USB",		usb_init}
+ };
+ 
+ int spl_board_init_f(void)
+-- 
+2.43.0
+

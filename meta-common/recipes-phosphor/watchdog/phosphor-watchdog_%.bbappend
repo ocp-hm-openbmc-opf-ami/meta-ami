@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/phosphor-watchdog.git;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "7ef378d31bf645d9b87c435fa94095e8d2ed7048"
+SRCREV_override = "7b12a643f44cd456dc9fd90970155704c709068a"
 
 SRC_URI += "file://phosphor-watchdog.service \
             file://phosphor-watchdog@.service \

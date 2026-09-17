@@ -1,22 +1,43 @@
 #!/bin/sh
 
 retry=0
+dbus_ready=false
 while [ $retry -lt 10 ]; do
     hostconf_result=$(busctl get-property xyz.openbmc_project.Network /xyz/openbmc_project/network/dns xyz.openbmc_project.Network.DDNS HostConf 2>/dev/null)
-    [ $? -eq 0 ] && break
+    if [ $? -eq 0 ]; then
+        dbus_ready=true
+        break
+    fi
     sleep 1
     retry=$((retry + 1))
 done
 
-if [ $? -eq 0 ]; then
+hw_mac=$(cat /sys/class/net/eth0/address | tr -d ":")
+mac_default="AMIOT-$hw_mac"
+
+if [ "$dbus_ready" = "true" ]; then
     auto_mode=$(echo "$hostconf_result" | awk '{print $2}')
+
+    if [ "$auto_mode" = "true" ]; then
+        [ "$(hostname)" != "$mac_default" ] && hostnamectl set-hostname "$mac_default"
+        exit 0
+    fi
+
     if [ "$auto_mode" != "true" ] && [ -f /etc/hostname ]; then
         manual_hostname=$(cat /etc/hostname)
-        [ "$(hostname)" != "$manual_hostname" ] && hostnamectl set-hostname "$manual_hostname"
+        if printf '%s\n' "$manual_hostname" | grep -Eq "^AMIOT-.*-$hw_mac$"; then
+            [ "$(hostname)" != "$mac_default" ] && hostnamectl set-hostname "$mac_default"
+        elif [ "$(hostname)" != "$manual_hostname" ]; then
+            hostnamectl set-hostname "$manual_hostname"
+        fi
         exit 0
     fi
 elif [ -f /etc/hostname ]; then
     file_hostname=$(cat /etc/hostname)
+    if printf '%s\n' "$file_hostname" | grep -Eq "^AMIOT-.*-$hw_mac$"; then
+        [ "$(hostname)" != "$mac_default" ] && hostnamectl set-hostname "$mac_default"
+        exit 0
+    fi
     if [ "$file_hostname" != "intel-obmc" ] && [ "$(hostname)" != "$file_hostname" ]; then
         hostnamectl set-hostname "$file_hostname"
         exit 0
