@@ -12,8 +12,10 @@ do_install:append:devkit-npcm845() {
         < ${UNPACKDIR}/0002-configure-devkit-npcm845-thermal.patch
 }
 
-SRC_URI:append = " file://EVB-NUVOTON/s997.json"
+# for s997
+SRC_URI:append:s997 = " file://EVB-NUVOTON/s997.json"
 
-do_install:append () {
+# for s997
+do_install:append:s997 () {
     install -m 0644 -D ${UNPACKDIR}/EVB-NUVOTON/s997.json ${D}/usr/share/entity-manager/configurations
 }

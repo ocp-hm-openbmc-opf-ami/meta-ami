@@ -8,8 +8,8 @@ SRC_URI:append:devkit-npcm845 = " \
     file://devkit-npcm845.cfg \
 "
 
-# for s997
-SRC_URI:append = " file://s997.cfg"
+# for s997 (set S997_ENABLE = "0" in the machine conf to build without s997 related changes)
+SRC_URI:append:s997 = " file://s997.cfg"
 
 SRC_URI:append:s997 = " file://dts-arbel-npcm845-s997/"
 
