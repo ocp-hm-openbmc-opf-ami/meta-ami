@@ -1,7 +1,7 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 PROJECT_SRC_DIR := "${THISDIR}/${PN}"
 
-SRCREV_override = "34cda935caf7d9f95cb28417fe1707b3ed33f3fc"
+SRCREV_override = "fc9d2fa9e9de76ecdca56fb2aa240b315d4b9ab1"
 SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/phosphor-sel-logger.git;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
 

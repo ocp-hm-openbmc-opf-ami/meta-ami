@@ -9,7 +9,7 @@ SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/webui-vue;protocol=https;
 
 # Use AUTOREV to get the latest revision from the repository
 # SRCREV = "${AUTOREV}"
-SRCREV_webui = "d8fa6273b3a500ea7f398e8323979b5699c0a28d"
+SRCREV_webui = "4976bc3a40f5743fa003c1b180447391a454b8f5"
 SRCREV_webuilib = "2e641fcbb209e6b64c15ca18498afc857bbd3f16"
 SRCREV_FORMAT = "webui_webuilib"
 

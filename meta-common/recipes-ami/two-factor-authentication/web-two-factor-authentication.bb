@@ -10,7 +10,7 @@ SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/two-factor-authentication
 
 
 
-SRCREV = "eaf5e522197d196fbd9257c5b29487e579e5f6e5"
+SRCREV = "4c93cf5f0f0b1ee52fa7b09e81d2c610bee82ef2"
 
 
 S = "${WORKDIR}/git"

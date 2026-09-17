@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/phosphor-networkd;protocol=https;branch=main;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "c0ec846a3ccb8e7fcebb772aec9807997b23483d"
+SRCREV_override = "896e4be80718a9e04484512a11edbde82eae2c6a"
 
 SRC_URI:append = " \
              file://ipv4-advanced-route.sh \

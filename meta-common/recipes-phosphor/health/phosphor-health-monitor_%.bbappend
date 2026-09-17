@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
 SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/phosphor-health-monitor.git;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "f529cf89154a9f5700468c49953de40036f73105"
+SRCREV_override = "2ecfda0adc367ff398173d0aa4dc5a4e783201ab"
 
 SRC_URI:append = " file://bmc_health_config.json \
                    file://memorycritical.service \

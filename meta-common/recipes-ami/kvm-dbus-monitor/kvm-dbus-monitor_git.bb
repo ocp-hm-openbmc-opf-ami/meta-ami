@@ -6,7 +6,7 @@ DEPENDS = "systemd nlohmann-json sdbusplus phosphor-logging phosphor-dbus-interf
 SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/obmc-ikvm;protocol=https;branch=main"
 
 # Use AUTOREV to get the latest revision from the repository
-SRCREV = "6bd01641ab6674ea1647ea2d33cb6595ededd824"
+SRCREV = "4e6eb7c682d08a04b53ba05bbb5c1dd1552fac10"
 #SRCREV = "${AUTOREV}"
 
 # Set the source directory

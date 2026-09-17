@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI  += "git://git@github.com/ocp-hm-openbmc-opf-ami/phosphor-debug-collector.git;branch=master;protocol=https;name=override; "
 SRCREV_FORMAT = "override"
-SRCREV_override = "c696520d72fb4904bb7325983cbbba8b41261ad9"
+SRCREV_override = "8c7fba8ae272907032a26fbece22fd48b85c38a8"
 
 SRC_URI += "file://plugins.d/arpcntlconf \
 	    file://plugins.d/arptableinfo  \

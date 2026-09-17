@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/service-config-manager.git;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "10e455b768fb149334cce8b7fd0ebe52e2dd2933"
+SRCREV_override = "5a575483166e1d88b67c707307ed41aac58aa2e2"
 
 SRC_URI += "\
                 file://srvcfg.json \
