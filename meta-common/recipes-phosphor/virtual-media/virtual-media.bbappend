@@ -3,7 +3,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/virtual-media.git;protocol=https;branch=main"
 
 
-SRCREV = "4fb6e0ba606dd8fb053dea4840e9a6d2b67b690d"
+SRCREV = "9cfeb2ee9169dbb44894364c497017b43a1a3f02"
 
 RDEPENDS:${PN} = "nbd-client nbdkit nfs-export-root"
 

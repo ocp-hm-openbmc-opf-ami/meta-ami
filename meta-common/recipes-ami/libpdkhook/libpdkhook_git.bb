@@ -8,7 +8,7 @@ SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/libpdkhook.git;protocol=h
 SRC_URI += " \
            file://0001-fix-boost-asio-compatibility.patch \
           "
-SRCREV = "53be2ba6c08970716e5f085969c76de372a5a700"
+SRCREV = "8f632f70b8c91dfbc923169652328f4e42032213"
 
 S = "${WORKDIR}/git"
 PV = "1.0"

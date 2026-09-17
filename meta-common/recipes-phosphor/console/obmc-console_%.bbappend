@@ -5,7 +5,7 @@ RDEPENDS:${PN} += "bash"
 
 SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/obmc-console.git;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "3d271b52351a344064ca03a91aa2136b1ea7b6e0"
+SRCREV_override = "5097e42a84231114cf5e00a6aec086dcdfd57b54"
 
 Single_SOL_SRC_URI = "file://single_sol_conf.ttyS2.conf \
 		     "

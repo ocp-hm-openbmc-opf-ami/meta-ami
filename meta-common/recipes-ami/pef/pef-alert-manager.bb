@@ -3,7 +3,7 @@ SUMMARY = "PEF and alert management application"
 SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/platform-event-filter.git;protocol=https;branch=main"
 
 
-SRCREV = "d842dc4a9f2ca47548c5368b5adf26970bb28b29"
+SRCREV = "21bf460b5d6df536656c7febf2df4b3dbae549fd"
 
 SRC_URI += "file://pef-alert-manager.json \
             file://pef-lan-param-config.json \
