@@ -1,0 +1,124 @@
+From: Mahalakshmi Kailasam <mahalakshmik@ami.com>
+Date: Wed, 16 Sep 2026 06:00:00 +0000
+Subject: [PATCH] srvcfg: handle socket services and update errors
+
+Read enabled and running states from the socket when one is associated with
+a service. This prevents start-ipkvm from being reported disabled while its
+socket is enabled without changing service stop and restart behavior.
+
+Merge newly discovered units directly into the persisted topology. Using
+set_difference on unordered maps can omit services unpredictably.
+
+Ensure updateInProgress is cleared when a systemd operation throws. Without
+this, a transient daemon-reload timeout permanently rejects subsequent
+property updates.
+
+Signed-off-by: Mahalakshmi Kailasam <mahalakshmik@ami.com>
+Upstream-Status: Inappropriate [platform specific]
+---
+ src/main.cpp           | 17 ++++++++---------
+ src/srvcfg_manager.cpp | 46 ++++++++++++++++++++++++++++++----------------
+ 2 files changed, 38 insertions(+), 25 deletions(-)
+
+diff --git a/src/main.cpp b/src/main.cpp
+index 1111111..2222222 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -313,19 +313,18 @@ static inline void handleListUnitsResponse(
+             MonitorListMap savedMonitorList;
+             archive(savedMonitorList);
+ 
+-            // compare the unit list read from systemd1 and the save list.
+-            MonitorListMap diffMap;
+-            std::set_difference(begin(unitsToMonitor), end(unitsToMonitor),
+-                                begin(savedMonitorList), end(savedMonitorList),
+-                                std::inserter(diffMap, begin(diffMap)));
+-            for (auto& unitIt : diffMap)
++            for (const auto& unitIt : unitsToMonitor)
+             {
+-                auto it = savedMonitorList.find(unitIt.first);
+-                if (it == savedMonitorList.end())
++                auto [it, inserted] = savedMonitorList.emplace(unitIt);
++                if (inserted)
+                 {
+-                    savedMonitorList.insert(unitIt);
+                     updateRequired = true;
+                 }
++                else if (it->second != unitIt.second)
++                {
++                    it->second = unitIt.second;
++                    updateRequired = true;
++                }
+             }
+             unitsToMonitor = savedMonitorList;
+         }
+         catch (const std::exception& e)
+diff --git a/src/srvcfg_manager.cpp b/src/srvcfg_manager.cpp
+index 3333333..4444444 100644
+--- a/src/srvcfg_manager.cpp
++++ b/src/srvcfg_manager.cpp
+@@ -314,7 +314,7 @@ void ServiceConfig::queryAndUpdateProperties(bool isRestore = false)
+ {
+     std::string objectPath =
+-        isSocketActivatedService ? socketObjectPath : serviceObjectPath;
++        !socketObjectPath.empty() ? socketObjectPath : serviceObjectPath;
+     if (objectPath.empty())
+     {
+         return;
+     }
+@@ -706,27 +706,41 @@ void ServiceConfig::startServiceRestartTimer()
+         updateInProgress = true;
+         boost::asio::spawn(
+             conn->get_io_context(),
+             [this](boost::asio::yield_context yield) {
+-                // Stop and apply configuration for all objects
+-                for (auto& srvMgrObj : srvMgrObjects)
++                try
+                 {
+-                    auto& srvObj = srvMgrObj.second;
+-                    if (srvObj->updatedFlag)
++                    // Stop and apply configuration for all objects
++                    for (auto& srvMgrObj : srvMgrObjects)
+                     {
+-                        srvObj->stopAndApplyUnitConfig(yield);
++                        auto& srvObj = srvMgrObj.second;
++                        if (srvObj->updatedFlag)
++                        {
++                            srvObj->stopAndApplyUnitConfig(yield);
++                        }
+                     }
+-                }
+-                // Do system reload
+-                systemdDaemonReload(conn, yield);
+-                // restart unit config.
+-                for (auto& srvMgrObj : srvMgrObjects)
+-                {
+-                    auto& srvObj = srvMgrObj.second;
+-                    if (srvObj->updatedFlag)
++                    // Do system reload
++                    systemdDaemonReload(conn, yield);
++                    // restart unit config.
++                    for (auto& srvMgrObj : srvMgrObjects)
+                     {
+-                        srvObj->restartUnitConfig(yield);
++                        auto& srvObj = srvMgrObj.second;
++                        if (srvObj->updatedFlag)
++                        {
++                            srvObj->restartUnitConfig(yield);
++                        }
+                     }
+                 }
++                catch (const std::exception& e)
++                {
++                    lg2::error(
++                        "Failed to apply service configuration: {ERROR}",
++                        "ERROR", e.what());
++                }
++                catch (...)
++                {
++                    lg2::error(
++                        "Failed to apply service configuration: unknown error");
++                }
+                 updateInProgress = false;
+             },
+             boost::asio::detached);
