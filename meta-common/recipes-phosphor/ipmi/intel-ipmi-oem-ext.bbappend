@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/intel-ipmi-oem-ext.git;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "20a0f71b01ac4c607de640fef8f41655c0e44002"
+SRCREV_override = "4a3589cc729202a4bb8b85b1e2d97e1afb9afabe"
 
 EXTRA_OECMAKE +=" if-non-intel-disable=OFF"
 
