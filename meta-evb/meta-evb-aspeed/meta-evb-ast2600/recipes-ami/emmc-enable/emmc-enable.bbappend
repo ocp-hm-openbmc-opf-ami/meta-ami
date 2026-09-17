@@ -2,7 +2,6 @@ FILESEXTRAPATHS:append := ":${THISDIR}/files"
 
 SRC_URI:append = " \
     file://sd_partition_info_rwfs.json \
-    file://sd_partition_info_bmc_recovery.json \
 "
 
 
@@ -11,9 +10,8 @@ python do_convert_json_to_conf() {
     import json
     import os
 
-    if bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-bmc-auto-recovery', True, False, d):
-        json_name = 'sd_partition_info_bmc_recovery.json'
-    elif bb.utils.contains('IMAGE_FEATURES', 'onetree-dual-image-common-conf', True, False, d):
+    if bb.utils.contains('IMAGE_FEATURES', 'onetree-dual-image-common-conf', True, False, d) or \
+       bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-bmc-auto-recovery', True, False, d):
         json_name = 'sd_partition_info_rwfs.json'
     else:
         json_name = 'sd_partition_info.json'
