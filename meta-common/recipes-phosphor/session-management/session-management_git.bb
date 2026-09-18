@@ -6,6 +6,8 @@ LICENSE = "CLOSED"
 SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/session-manager.git;protocol=https;branch=main"
 SRCREV = "d61120667173d069c6dfc0e057023037a862a2e0"
 
+CXXFLAGS:append = " -Wno-missing-field-initializers"
+
 S = "${UNPACKDIR}/git"
 PV = "1.0+git${SRCPV}"
 
