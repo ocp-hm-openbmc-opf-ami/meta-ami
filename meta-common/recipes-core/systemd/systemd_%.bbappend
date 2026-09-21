@@ -12,7 +12,10 @@ SRC_URI += "file://0001-Support-DHCPv6-Transmission-Retransmission-Timing-Parame
         file://0007-Handle-NTPSec-mode-separately-in-timedated-persist.patch \
         file://journald.conf \
 	file://CVE-2026-40226.patch \
-        file://serial-getty-nolimit.conf"
+        file://serial-getty-nolimit.conf \
+        file://CVE-2025-4598.patch \
+        file://CVE-2026-29111.patch \
+        file://CVE-2026-40225.patch "
 
 do_install:append() {
     install -d ${D}${sysconfdir}/systemd

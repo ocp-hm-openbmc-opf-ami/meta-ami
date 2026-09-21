@@ -3,7 +3,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/obmc-ikvm;protocol=https;branch=main"
 
 
-SRCREV = "a9328907bbc6235e8ffe04caf16802693c5145a2"
+SRCREV = "4e6eb7c682d08a04b53ba05bbb5c1dd1552fac10"
 SYSTEMD_SERVICE:${PN}:remove = "obmc-ikvm.service"
 SYSTEMD_SERVICE:${PN} += "start-ipkvm.socket start-dummy-ipkvm-client.service"
 SYSTEMD_SERVICE:${PN} += "${@bb.utils.contains('MULTI_HOST_DEFAULT_MODE', '1', 'start-ipkvm1.service start-ipkvm1.socket', '', d)}"

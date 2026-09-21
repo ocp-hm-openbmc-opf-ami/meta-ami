@@ -43,6 +43,7 @@ SRC_URI += " \
               file://0244-Fixed-Rename-User-LF.patch \
               file://0245-Exclude-dot-on-username.patch \
               file://0215-Added-User-Type.patch \
+              file://0248-Cordump-Fix-UserManagement.patch \
            "
 #OEM Privilege
 SRC_URI_OEM_PRIV:append = "file://upgrade_media_group.sh \
