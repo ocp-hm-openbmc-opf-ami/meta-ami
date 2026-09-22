@@ -1,0 +1,310 @@
+From 6e23c3fda8cd29187b09637d5a80e3ac8c41fe02 Mon Sep 17 00:00:00 2001
+From: Shreyash Damanwala <shreyash.damanwala@nxp.com>
+Date: Tue, 7 Apr 2026 13:27:38 +0530
+Subject: [PATCH] PCI: endpoint: pci-epf-test: Add VRAM streaming support via
+BAR2
+
+Reserve 16MB VRAM and map it to BAR2 to allow host-driven framebuffer
+streaming. Add START/STOP stream commands and a workqueue to copy data
+from BAR2 to the local framebuffer (~60 FPS).
+
+Upstream-Status: Pending
+---
+ .../boot/dts/freescale/imx95-19x19-evk.dts    |   5 +
+ drivers/pci/endpoint/functions/pci-epf-test.c | 126 +++++++++++++++++-
+ drivers/pci/endpoint/pci-epf-core.c           |  24 +++-
+ 3 files changed, 147 insertions(+), 8 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx95-19x19-evk.dts b/arch/arm64/boot/dts/freescale/imx95-19x19-evk.dts
+index f7b5b6afe70a..ed4587003262 100644
+--- a/arch/arm64/boot/dts/freescale/imx95-19x19-evk.dts
++++ b/arch/arm64/boot/dts/freescale/imx95-19x19-evk.dts
+@@ -114,6 +114,11 @@ rsc_table: rsc-table@88220000 {
+ 			no-map;
+ 		};
+
++		vram: vram@9E000000 {
++			reg = <0 0x9E000000 0 0x01000000>; /* 16MB */
++			no-map;
++		};
++
+ 		vdevbuffer: vdevbuffer@88020000 {
+ 			compatible = "shared-dma-pool";
+ 			reg = <0 0x88020000 0 0x100000>;
+diff --git a/drivers/pci/endpoint/functions/pci-epf-test.c b/drivers/pci/endpoint/functions/pci-epf-test.c
+index 635a5a8e7bf9..db888110b96b 100644
+--- a/drivers/pci/endpoint/functions/pci-epf-test.c
++++ b/drivers/pci/endpoint/functions/pci-epf-test.c
+@@ -37,6 +37,8 @@
+ #define COMMAND_READ			BIT(3)
+ #define COMMAND_WRITE			BIT(4)
+ #define COMMAND_COPY			BIT(5)
++#define COMMAND_START_STREAM      BIT(6)
++#define COMMAND_STOP_STREAM       BIT(7)
+
+ #define STATUS_READ_SUCCESS		BIT(0)
+ #define STATUS_READ_FAIL		BIT(1)
+@@ -53,7 +55,7 @@
+ #define TIMER_RESOLUTION		1
+
+ static struct workqueue_struct *kpcitest_workqueue;
+-
++static struct workqueue_struct *stream_wq;
+ struct pci_epf_test {
+ 	void			*reg[PCI_STD_NUM_BARS];
+ 	struct pci_epf		*epf;
+@@ -70,6 +72,8 @@ struct pci_epf_test {
+ 	bool			dma_supported;
+ 	bool			dma_private;
+ 	const struct pci_epc_features *epc_features;
++	struct delayed_work stream_work;
++	atomic_t streaming;
+ };
+
+ struct pci_epf_test_reg {
+@@ -83,6 +87,7 @@ struct pci_epf_test_reg {
+ 	u32	irq_type;
+ 	u32	irq_number;
+ 	u32	flags;
++	u32	start;
+ } __packed;
+
+ static struct pci_epf_header test_header = {
+@@ -92,7 +97,7 @@ static struct pci_epf_header test_header = {
+ 	.interrupt_pin	= PCI_INTERRUPT_INTA,
+ };
+
+-static size_t bar_size[] = { 512, 512, 1024, 16384, 4194304, 1048576};
++static size_t bar_size[] = { 512, 512, 16777216, 16384, 4194304, 1048576};
+
+ static void pci_epf_test_dma_callback(void *param)
+ {
+@@ -193,7 +198,7 @@ static int pci_epf_test_data_transfer(struct pci_epf_test *epf_test,
+ 	}
+
+ terminate:
+-	dmaengine_terminate_sync(chan);
++        dmaengine_terminate_sync(chan);
+
+ 	return ret;
+ }
+@@ -561,6 +566,72 @@ static void pci_epf_test_read(struct pci_epf_test *epf_test,
+ 		reg->status |= STATUS_READ_FAIL;
+ }
+
++static void pci_epf_test_stream(struct pci_epf_test *epf_test,
++                                struct pci_epf_test_reg *reg)
++{
++    struct fb_info *info;
++    struct device *dev = &epf_test->epf->dev;
++    void __iomem *bar2;
++    u32 *bar2_ptr;
++    u32 pixels;
++    u32 i;
++
++    if (!atomic_read(&epf_test->streaming)) {
++        dev_info(dev, "Streaming disabled\n");
++        return;
++    }
++
++    info = registered_fb[0];
++    if (!info) {
++        dev_err(dev, "No framebuffer registered\n");
++        return;
++    }
++
++    if (!info->screen_base) {
++        dev_err(dev, "Framebuffer base NULL\n");
++        return;
++    }
++
++    fb_ptr = info->screen_base;
++
++    bar2 = (void __iomem *)epf_test->epf->bar[BAR_2].addr;
++    if (!bar2) {
++        dev_err(dev, "BAR2 not mapped\n");
++        return;
++    }
++
++    memcpy_fromio(fb_ptr, bar2, info->screen_size);
++}
++
++static void pci_epf_stream_worker(struct work_struct *work)
++{
++    struct pci_epf_test *epf_test =
++        container_of(work, struct pci_epf_test, stream_work.work);
++
++    struct pci_epf_test_reg *reg =
++        epf_test->reg[epf_test->test_reg_bar];
++
++    struct device *dev = &epf_test->epf->dev;
++
++    dev_info(dev, "Stream worker triggered\n");
++
++    if (!atomic_read(&epf_test->streaming)) {
++        dev_info(dev, "Streaming stopped\n");
++        return;
++    }
++
++    pci_epf_test_stream(epf_test, reg);
++
++    if (!atomic_read(&epf_test->streaming))
++        return;
++
++    dev_info(dev, "Queue next frame\n");
++
++    queue_delayed_work(stream_wq,
++                       &epf_test->stream_work,
++                       msecs_to_jiffies(16)); /* ~60 FPS */
++}
++
+ static void pci_epf_test_write(struct pci_epf_test *epf_test,
+ 			       struct pci_epf_test_reg *reg)
+ {
+@@ -821,6 +892,26 @@ static void pci_epf_test_cmd_handler(struct work_struct *work)
+ 		pci_epf_test_copy(epf_test, reg);
+ 		pci_epf_test_raise_irq(epf_test, reg);
+ 		break;
++	case COMMAND_START_STREAM:
++		dev_info(dev, "Stream start\n");
++		if (atomic_read(&epf_test->streaming)) {
++			dev_info(dev, "Stream already running\n");
++			break;
++		}
++		reg->start = 1;
++		fb_offset = 0;
++		atomic_set(&epf_test->streaming, 1);
++		queue_delayed_work(stream_wq, &epf_test->stream_work, 0);
++		pci_epf_test_raise_irq(epf_test, reg);
++		break;
++	case COMMAND_STOP_STREAM:
++		dev_info(dev, "Stream stop\n");
++		reg->start = 0;
++		atomic_set(&epf_test->streaming, 0);
++		cancel_delayed_work_sync(&epf_test->stream_work);
++		fb_offset = 0;
++		pci_epf_test_raise_irq(epf_test, reg);
++		break;
+ 	default:
+ 		dev_err(dev, "Invalid command 0x%x\n", command);
+ 		break;
+@@ -953,11 +1044,15 @@ static int pci_epf_test_link_up(struct pci_epf *epf)
+
+ static int pci_epf_test_link_down(struct pci_epf *epf)
+ {
+-	struct pci_epf_test *epf_test = epf_get_drvdata(epf);
++    struct pci_epf_test *epf_test = epf_get_drvdata(epf);
+
+-	cancel_delayed_work_sync(&epf_test->cmd_handler);
++    dev_info(&epf->dev, "PCIe link down - stopping stream\n");
++    atomic_set(&epf_test->streaming, 0);
++    cancel_delayed_work_sync(&epf_test->stream_work);
++    cancel_delayed_work_sync(&epf_test->cmd_handler);
++    fb_offset = 0;
+
+-	return 0;
++    return 0;
+ }
+
+ static const struct pci_epc_event_ops pci_epf_test_event_ops = {
+@@ -1069,6 +1164,10 @@ static void pci_epf_test_unbind(struct pci_epf *epf)
+ 	struct pci_epc *epc = epf->epc;
+
+ 	cancel_delayed_work(&epf_test->cmd_handler);
++
++	atomic_set(&epf_test->streaming, 0);
++	cancel_delayed_work_sync(&epf_test->stream_work);
++
+ 	if (epc->init_complete) {
+ 		pci_epf_test_clean_dma_chan(epf_test);
+ 		pci_epf_test_clear_bar(epf);
+@@ -1096,6 +1195,8 @@ static int pci_epf_test_probe(struct pci_epf *epf,
+ 	epf->header = &test_header;
+ 	epf_test->epf = epf;
+
++	INIT_DELAYED_WORK(&epf_test->stream_work, pci_epf_stream_worker);
++
+ 	INIT_DELAYED_WORK(&epf_test->cmd_handler, pci_epf_test_cmd_handler);
+
+ 	epf->event_ops = &pci_epf_test_event_ops;
+@@ -1128,6 +1229,15 @@ static int __init pci_epf_test_init(void)
+ 		return -ENOMEM;
+ 	}
+
++	stream_wq = alloc_workqueue("pcie_stream",
++								WQ_UNBOUND | WQ_HIGHPRI,
++								1);
++	if (!stream_wq) {
++		pr_err("Failed to allocate the stream_wq work queue\n");
++		return -ENOMEM;
++	}
++
++
+ 	ret = pci_epf_register_driver(&test_driver);
+ 	if (ret) {
+ 		destroy_workqueue(kpcitest_workqueue);
+@@ -1143,6 +1253,10 @@ static void __exit pci_epf_test_exit(void)
+ {
+ 	if (kpcitest_workqueue)
+ 		destroy_workqueue(kpcitest_workqueue);
++
++	if (stream_wq)
++		destroy_workqueue(stream_wq);
++
+ 	pci_epf_unregister_driver(&test_driver);
+ }
+ module_exit(pci_epf_test_exit);
+diff --git a/drivers/pci/endpoint/pci-epf-core.c b/drivers/pci/endpoint/pci-epf-core.c
+index a235eb8a2a5e..144e3476ea65 100644
+--- a/drivers/pci/endpoint/pci-epf-core.c
++++ b/drivers/pci/endpoint/pci-epf-core.c
+@@ -16,6 +16,7 @@
+ #include <linux/pci-ep-cfs.h>
+
+ #define DPU95_ADDRESS_SPACE 0x4b400000
++#define VRAM_PHYS 0x9E000000
+ static DEFINE_MUTEX(pci_epf_mutex);
+
+ static const struct bus_type pci_epf_bus_type;
+@@ -306,11 +307,25 @@ void *pci_epf_alloc_space(struct pci_epf *epf, size_t size, enum pci_barno bar,
+
+ 	dev = epc->dev.parent;
+ 	//space = dma_alloc_coherent(dev, aligned_size, &phys_addr, GFP_KERNEL);
+-	if (epf_bar == 4) {
++	if (bar == BAR_4) {
+ 		void __iomem *vaddr = ioremap(DPU95_ADDRESS_SPACE, size);
+-		space = vaddr;
++		space = (__force void *)vaddr;
++
++	} else if (bar == BAR_2) {
++
++		void __iomem *vaddr_fb = ioremap_wc(VRAM_PHYS, size);
++
++		if (!vaddr_fb) {
++			dev_err(&epf->dev, "Failed to remap framebuffer\n");
++			return NULL;
++		}
++
++		space = (__force void *)vaddr_fb;
++
+ 	} else {
++
+ 		space = dma_alloc_coherent(dev, size, &phys_addr, GFP_KERNEL);
++
+ 	}
+
+ 	if (!space) {
+@@ -326,6 +341,11 @@ void *pci_epf_alloc_space(struct pci_epf *epf, size_t size, enum pci_barno bar,
+ 		epf_bar[bar].phys_addr = DPU95_ADDRESS_SPACE;
+ 		epf_bar[bar].size = size;
+ 	}
++	else if (bar == BAR_2) {
++		epf_bar[bar].phys_addr = VRAM_PHYS;
++		epf_bar[bar].size = size;
++		epf_bar[bar].flags |= PCI_BASE_ADDRESS_MEM_PREFETCH | PCI_BASE_ADDRESS_SPACE_MEMORY;
++	}
+ 	epf_bar[bar].barno = bar;
+ 	if (upper_32_bits(size) || epc_features->bar[bar].only_64bit)
+ 		epf_bar[bar].flags |= PCI_BASE_ADDRESS_MEM_TYPE_64;
+--
+ 2.34.1

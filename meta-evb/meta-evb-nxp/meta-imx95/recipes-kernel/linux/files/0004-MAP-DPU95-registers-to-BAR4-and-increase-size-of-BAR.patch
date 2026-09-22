@@ -1,0 +1,95 @@
+From 5dc01eebbc2f3697ea98b78c4184832f1ed5ab2e Mon Sep 17 00:00:00 2001
+From: Riddhi Parekh <riddhi.parekh@nxp.com>
+Date: Tue, 24 Feb 2026 15:32:45 +0530
+Subject: [PATCH 4/5] MAP DPU95 registers to BAR4 and increase size of BAR to
+ 4MB
+
+Upstream-Status: Pending
+Signed-off-by: Riddhi Parekh <riddhi.parekh@nxp.com>
+---
+ drivers/gpu/drm/imx/dpu95/dpu95-blit.c        |  2 ++
+ drivers/pci/endpoint/functions/pci-epf-test.c |  9 ++++++++-
+ drivers/pci/endpoint/pci-epf-core.c           | 14 +++++++++++++-
+ 3 files changed, 23 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/imx/dpu95/dpu95-blit.c b/drivers/gpu/drm/imx/dpu95/dpu95-blit.c
+index fcea7d2f4076..ce5f60811cd6 100644
+--- a/drivers/gpu/drm/imx/dpu95/dpu95-blit.c
++++ b/drivers/gpu/drm/imx/dpu95/dpu95-blit.c
+@@ -495,6 +495,8 @@ static int dpu95_bliteng_init(struct dpu_bliteng *dpu_bliteng)
+ 	dpu_bliteng->base = base;
+ 	dpu_bliteng->dpu = dpu;
+
++	dev_err(dpu->dev, "IP identifier: 0x%x\n",dpu95_be_read(dpu_bliteng, 0));
++
+ 	mutex_init(&dpu_bliteng->mutex);
+
+ 	/* Init the uints used by blit engine */
+diff --git a/drivers/pci/endpoint/functions/pci-epf-test.c b/drivers/pci/endpoint/functions/pci-epf-test.c
+index 4a4b178859c1..14f533875828 100644
+--- a/drivers/pci/endpoint/functions/pci-epf-test.c
++++ b/drivers/pci/endpoint/functions/pci-epf-test.c
+@@ -90,7 +90,7 @@ static struct pci_epf_header test_header = {
+ 	.interrupt_pin	= PCI_INTERRUPT_INTA,
+ };
+
+-static size_t bar_size[] = { 512, 512, 1024, 16384, 131072, 1048576 };
++static size_t bar_size[] = { 512, 512, 1024, 16384, 4194304, 1048576 };
+
+ static void pci_epf_test_dma_callback(void *param)
+ {
+@@ -502,6 +502,13 @@ static void pci_epf_test_read(struct pci_epf_test *epf_test,
+ 		ktime_get_ts64(&end);
+ 		dma_unmap_single(dma_dev, dst_phys_addr, reg->size,
+ 				DMA_FROM_DEVICE);
++
++    if (info->fbops && info->fbops->fb_fillrect) {
++          struct fb_fillrect poke = { .dx = 0, .dy = 0, .width = 1, .height = 1,
++                                            .color = 0, .rop = ROP_COPY };
++              info->fbops->fb_fillrect(info, &poke);
++    }
++
+ 	} else {
+ 		ktime_get_ts64(&start);
+ 		printk("EPF_Read 0x%lx bytes:\n", fb_offset);
+diff --git a/drivers/pci/endpoint/pci-epf-core.c b/drivers/pci/endpoint/pci-epf-core.c
+index 9e7166a75579..a235eb8a2a5e 100644
+--- a/drivers/pci/endpoint/pci-epf-core.c
++++ b/drivers/pci/endpoint/pci-epf-core.c
+@@ -15,6 +15,7 @@
+ #include <linux/pci-epf.h>
+ #include <linux/pci-ep-cfs.h>
+
++#define DPU95_ADDRESS_SPACE 0x4b400000
+ static DEFINE_MUTEX(pci_epf_mutex);
+
+ static const struct bus_type pci_epf_bus_type;
+@@ -304,7 +305,14 @@ void *pci_epf_alloc_space(struct pci_epf *epf, size_t size, enum pci_barno bar,
+ 	}
+
+ 	dev = epc->dev.parent;
+-	space = dma_alloc_coherent(dev, aligned_size, &phys_addr, GFP_KERNEL);
++	//space = dma_alloc_coherent(dev, aligned_size, &phys_addr, GFP_KERNEL);
++	if (epf_bar == 4) {
++		void __iomem *vaddr = ioremap(DPU95_ADDRESS_SPACE, size);
++		space = vaddr;
++	} else {
++		space = dma_alloc_coherent(dev, size, &phys_addr, GFP_KERNEL);
++	}
++
+ 	if (!space) {
+ 		dev_err(dev, "failed to allocate mem space\n");
+ 		return NULL;
+@@ -314,6 +322,10 @@ void *pci_epf_alloc_space(struct pci_epf *epf, size_t size, enum pci_barno bar,
+ 	epf_bar[bar].addr = space;
+ 	epf_bar[bar].size = size;
+ 	epf_bar[bar].aligned_size = aligned_size;
++	if (bar == BAR_4) {
++		epf_bar[bar].phys_addr = DPU95_ADDRESS_SPACE;
++		epf_bar[bar].size = size;
++	}
+ 	epf_bar[bar].barno = bar;
+ 	if (upper_32_bits(size) || epc_features->bar[bar].only_64bit)
+ 		epf_bar[bar].flags |= PCI_BASE_ADDRESS_MEM_TYPE_64;
+--
+ 2.34.1
