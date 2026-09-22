@@ -1,37 +1,10 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 
-SRC_URI_NON_PFR:append = "file://0001-AMI-Combined-all-firmware-update-patches.patch \
-                file://0004-pldm-bundle-raw-upload-and-activation-improvements.patch \
-                file://0005-pldm-package-parser-libpldm-api-compat.patch \
-                file://0006-Added-Parallel-FW-update-support.patch \
-                file://0007-Compare_the_blacklist_and_whitelist_druing_factory_r.patch \
-                file://0014-Run-deferred-image-deletes-on-main-async-context.patch \
-   "
-
 SRC_URI:append = " file://fwupdinband@.service \
          file://inband-fwupd.sh \
-      file://0004-Fix-startUpdate-signature-for-new-sdbusplus-server.patch \
-         file://fwupd-reboot-decision.sh \
+         file://0004-Fix-startUpdate-signature-for-new-sdbusplus-server.patch \
 "
-
-DEPENDS:append = " libpldm"
-DEPENDS:remove = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-pldm', 'libpldm', '', d)}"
-DEPENDS:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-pldm', ' ot-libpldm', '', d)}"
-
-DEPENDS:remove = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-nvidiasipack', 'libpldm', '', d)}"
-DEPENDS:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-nvidiasipack', ' pldm', '', d)}"
-
-RDEPENDS:${PN}-updater:append = " libpldm"
-RDEPENDS:${PN}-updater:remove = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-pldm', 'libpldm', '', d)}"
-RDEPENDS:${PN}-updater:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-pldm', ' ot-libpldm', '', d)}"
-
-RDEPENDS:${PN}-updater:remove = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-nvidiasipack', 'libpldm', '', d)}"
-RDEPENDS:${PN}-updater:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-nvidiasipack', ' pldm', '', d)}"
-
-# NVIDIA's libpldm still uses the original symbol name crc32()
-# libpldm renamed it to pldm_edac_crc32() in 0004 patch via the PACKAGE_HEADER_CRC32 macro. 
-CXXFLAGS:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-nvidiasipack', ' -Dpldm_edac_crc32=crc32', '', d)}"
 
 SRC_URI:append = " \
    file://reboot-guard-enable.service \
@@ -39,15 +12,13 @@ SRC_URI:append = " \
 "
 
 EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', bb.utils.contains('BBFILE_COLLECTIONS', 'intel-features', ' -Dfwupd-intel-features=enabled','', d), d)}"
-SRC_URI:append = " ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
 
 PACKAGECONFIG:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-bios-update', ' flash_bios ','', d)}"
 PACKAGECONFIG:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-image-sign', ' verify_signature ','', d)}"
 PACKAGECONFIG:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-dual-image', ' static-dual-image ','', d)}"
 PACKAGECONFIG:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-sync-conf', ' sync_bmc_files ','', d)}"
 
-OPTIONAL_IMAGES = "image-bios,image-cpld,image-pldm,image-raid,image-psu,image-nvme"
-EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '','-Dfwupd-script=enabled', d)}"
+OPTIONAL_IMAGES = "image-bios,image-cpld,image-pldm,image-raid,image-psu"
 EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '','-Doptional-images=${OPTIONAL_IMAGES}', d)}"
 EXTRA_OEMESON += "${@bb.utils.contains('PACKAGECONFIG', 'static-dual-image','-Dactive-bmc-max-allowed=3', '-Dactive-bmc-max-allowed=2', d)}"
 EXTRA_OEMESON:append:intel-ast2600 = "${@bb.utils.contains('PACKAGECONFIG', 'sync_bmc_files',' -Dalt-rwfs-dir="/run/media/rwfs-alt/.overlay"', '', d)}"
@@ -81,13 +52,10 @@ FILES:${PN}-updater:append = "${@bb.utils.contains('PACKAGECONFIG', 'sync_bmc_fi
 FILES:${PN}-updater:append = "${@bb.utils.contains('PACKAGECONFIG', 'sync_bmc_files', ' /etc/sync-enable ', '', d)}"
 FILES:${PN}-updater:append = "${@bb.utils.contains('PACKAGECONFIG', 'sync_bmc_files', ' ${systemd_unitdir}/system/xyz.openbmc_project.Software.Sync.service.d/10-conditional.conf ', '', d)}"
 FILES:${PN}-updater:append = "${bindir}/inband-fwupd.sh"
-FILES:${PN}-updater:append = " ${bindir}/fwupd-reboot-decision.sh"
-FILES:${PN}-updater:append = " ${libexecdir}/phosphor-code-mgmt/pldm-bundle-extraction-tool"
-# pldm-bundle-extraction-tool is built directly from bmc/pldm_bundle_tool.cpp in the source tree
+FILES:${PN}-updater:append = " ${systemd_unitdir}/system/fwupd@.service"
 
 do_install:append () {
       install -m 0755 ${UNPACKDIR}/inband-fwupd.sh ${D}${bindir}/inband-fwupd.sh
-   install -m 0755 ${UNPACKDIR}/fwupd-reboot-decision.sh ${D}${bindir}/fwupd-reboot-decision.sh
       install -m 0644 ${UNPACKDIR}/fwupdinband@.service ${D}${systemd_unitdir}/system/fwupd@.service
    install -m 0644 ${UNPACKDIR}/reboot-guard-enable.service ${D}${systemd_unitdir}/system/reboot-guard-enable.service
    install -m 0644 ${UNPACKDIR}/reboot-guard-disable.service ${D}${systemd_unitdir}/system/reboot-guard-disable.service
