@@ -1,5 +1,3 @@
 FILESEXTRAPATHS:append := "${THISDIR}/${PN}:"
 
-SRC_URI += " \ 
-	file://CVE-2025-1390.patch \
-	"
+# CVE-2025-1390 is fixed in libcap 2.76.

@@ -9,6 +9,7 @@ DEPENDS:append = " libpdkhook "
 RDEPENDS:${PN}:append = " libpdkhook "
 
 SRC_URI += " \
+           file://merge_yamls.py \
            file://phosphor-ipmi-host-ami.service \
            file://phosphor-ipmi-host-evb-ami.service \
            "
