@@ -1,7 +1,7 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 inherit obmc-phosphor-systemd
 
-SRC_URI = "git://github.com/ocp-hm-openbmc-opf-ami/mctp.git;protocol=https;branch=main \
+SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/mctp.git;protocol=https;branch=main \
            "
 SRCREV = "3a6d65a5527a025d63fc00aa85ef388324d1b9e7"
 
