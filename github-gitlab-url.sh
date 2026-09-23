@@ -66,7 +66,7 @@
 	
 	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/libmctp.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/libmctp.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/libmctp/libmctp_%.bbappend
 	
-	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/host-error-monitor.git;branch=master;protocol=https;name=override/github.com\/ocp-hm-openbmc-opf-ami\/host-error-monitor;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-ami/libpdkhook/libpdkhook_git.bb
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/host-error-monitor.git;branch=master;protocol=https;name=override/github.com\/ocp-hm-openbmc-opf-ami\/host-error-monitor;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-core/host-error-monitor/host-error-monitor_%.bbappend
 	
 	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/mctp-ext.git;protocol=https;branch=main/github.com\/ocp-hm-openbmc-opf-ami\/mctp-ext.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-networking/mctp-ext/mctp-ext_git.bb
 	
