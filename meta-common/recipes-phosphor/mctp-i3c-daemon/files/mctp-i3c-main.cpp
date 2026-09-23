@@ -792,10 +792,6 @@ void handleMctpControlCommand(const boost::system::error_code& ec)
                     offsetof(getRoutingTableEntry, physAddressSize);
                 int entry_offset = copy_size + 2;
 
-                const int maxEntries =
-                    (sizeof(buffer) - sizeof(mctpCtrlRespGetRoutingTable)) /
-                    sizeof(getRoutingTableEntry);
-
                 if (mode == MCTP_INTEL_I3C_BRIDGE)
                 {
                     /// If request comes from CPU1 or PFR
@@ -803,7 +799,7 @@ void handleMctpControlCommand(const boost::system::error_code& ec)
                     {
                         /// Traverse the routing table
                         auto tempEntry = g_routing_table_entries;
-                        while (tempEntry != NULL && entries_count < maxEntries)
+                        while (tempEntry != NULL)
                         {
                             if (tempEntry->routeVia != secondaryBusOwnerEid)
                             {
@@ -829,7 +825,7 @@ void handleMctpControlCommand(const boost::system::error_code& ec)
                     {
                         /// If request comes from CPU2
                         auto tempEntry = g_routing_table_entries;
-                        while (tempEntry != NULL && entries_count < maxEntries)
+                        while (tempEntry != NULL)
                         {
                             if (tempEntry->routeVia != busOwnerEid)
                             {
@@ -856,7 +852,7 @@ void handleMctpControlCommand(const boost::system::error_code& ec)
                 {
                     /// Copy entire routing table
                     auto tempEntry = g_routing_table_entries;
-                    while (tempEntry != NULL && entries_count < maxEntries)
+                    while (tempEntry != NULL)
                     {
                         memcpy(&buffer[pos], &tempEntry->routingTable,
                                sizeof(getRoutingTableEntry));
