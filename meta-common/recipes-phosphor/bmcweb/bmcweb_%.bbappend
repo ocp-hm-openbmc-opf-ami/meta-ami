@@ -1,6 +1,7 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 EXTRA_OEMESON:append = " \
+    -Dinsecure-enable-redfish-query=enabled \
     -Dredfish-provisioning-feature=enabled \
     ${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb-ast2600', ' -Dupdate_timeout=30','', d)} \
 "
