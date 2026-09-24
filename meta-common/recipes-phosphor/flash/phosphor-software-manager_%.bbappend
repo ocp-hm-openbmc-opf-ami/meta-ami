@@ -4,7 +4,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 SRC_URI:append = " file://fwupdinband@.service \
          file://inband-fwupd.sh \
          file://0003-update-whitelist-file-based-on-user-selection-and-tr.patch \
-      file://0004-Fix-startUpdate-signature-for-new-sdbusplus-server.patch \
+         file://0004-Fix-startUpdate-signature-for-new-sdbusplus-server.patch \
          file://0007-Compare_the_blacklist_and_whitelist_druing_factory_r.patch \
 "
 
@@ -13,7 +13,7 @@ SRC_URI:append = " \
    file://reboot-guard-disable.service \
 "
 
-EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'intel-features', ' -Dfwupd-intel-features=enabled','', d)}"
+EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', bb.utils.contains('BBFILE_COLLECTIONS', 'intel-features', ' -Dfwupd-intel-features=enabled','', d), d)}"
 
 PACKAGECONFIG:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-bios-update', ' flash_bios ','', d)}"
 PACKAGECONFIG:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-image-sign', ' verify_signature ','', d)}"

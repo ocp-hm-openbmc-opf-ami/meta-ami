@@ -8,7 +8,7 @@ LIC_FILES_CHKSUM = "file://${COREBASE}/meta/files/common-licenses/Apache-2.0;md5
 SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/libapisensor.git;protocol=https;branch=main \
            file://0001-meson-avoid-absolute-Boost-library-path.patch \
            "
-SRCREV = "0916ddd437852a1e4ada30629f3c960b86f0940b"
+SRCREV = "c04ea83f44b5514c84fc6e0fbd5e7e4b4b51676c"
  
 PV = "1.0.0"
  
