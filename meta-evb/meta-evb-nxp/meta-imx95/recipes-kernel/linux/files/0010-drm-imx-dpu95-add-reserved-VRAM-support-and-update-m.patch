@@ -1,0 +1,117 @@
+From 205958ea9440eb7600a436ab816c8b362ba3afb2 Mon Sep 17 00:00:00 2001
+From: Shreyash Damanwala <shreyash.damanwala@nxp.com>
+Date: Fri, 24 Apr 2026 10:37:36 +0530
+Subject: [PATCH] drm/imx/dpu95: add reserved VRAM support and update memory
+mapping
+
+* Move VRAM reserved memory region from 0x9E000000 to 0xA2000000
+* Mark VRAM as "shared-dma-pool" in device tree
+* Attach reserved memory to DPU via memory-region property
+* Initialize reserved memory in dpu95 driver using of_reserved_mem_device_init()
+* Set DMA mask to 32-bit for DPU device
+* Remove drm_fbdev_dma_setup() to avoid conflicts with reserved memory usage
+
+PCI endpoint updates:
+
+* Update VRAM physical address to 0xA2000000 in pci-epf core and test driver
+* Adjust mmap physical base accordingly
+
+These changes enable DPU95 to use a dedicated reserved memory pool for framebuffer/VRAM instead of relying on CMA.
+
+Upstream-Status: Pending
+---
+ arch/arm64/boot/dts/freescale/imx95-19x19-evk.dts |  6 ++++--
+ drivers/gpu/drm/imx/dpu95/dpu95-drv.c             | 12 ++++++++++--
+ drivers/pci/endpoint/functions/pci-epf-test.c     |  2 +-
+ drivers/pci/endpoint/pci-epf-core.c               |  2 +-
+ 4 files changed, 16 insertions(+), 6 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx95-19x19-evk.dts b/arch/arm64/boot/dts/freescale/imx95-19x19-evk.dts
+index b624c5fbb3a9..1ba4fcd8d8ad 100644
+--- a/arch/arm64/boot/dts/freescale/imx95-19x19-evk.dts
++++ b/arch/arm64/boot/dts/freescale/imx95-19x19-evk.dts
+@@ -114,8 +114,9 @@ rsc_table: rsc-table@88220000 {
+ 			no-map;
+ 		};
+
+-		vram: vram@9E000000 {
+-			reg = <0 0x9E000000 0 0x02000000>; /* 32MB */
++		vram: vram@A2000000 {
++			compatible = "shared-dma-pool";
++			reg = <0 0xA2000000 0 0x02000000>; /* 32MB */
+ 			no-map;
+ 		};
+
+@@ -371,6 +372,7 @@ &displaymix_irqsteer {
+ };
+
+ &dpu {
++	memory-region = <&vram>;
+ 	status = "okay";
+ };
+
+diff --git a/drivers/gpu/drm/imx/dpu95/dpu95-drv.c b/drivers/gpu/drm/imx/dpu95/dpu95-drv.c
+index 949f94b9d269..d4c15596d118 100644
+--- a/drivers/gpu/drm/imx/dpu95/dpu95-drv.c
++++ b/drivers/gpu/drm/imx/dpu95/dpu95-drv.c
+@@ -9,6 +9,8 @@
+ #include <linux/platform_device.h>
+ #include <linux/pm.h>
+ #include <linux/pm_runtime.h>
++#include <linux/of_reserved_mem.h>
++#include <linux/dma-mapping.h>
+
+ #include <drm/drm_atomic_helper.h>
+ #include <drm/drm_drv.h>
+@@ -72,6 +74,14 @@ static int dpu95_probe(struct platform_device *pdev)
+ 	struct drm_device *drm;
+ 	int ret;
+
++    ret = of_reserved_mem_device_init(dev);
++	if (ret)
++		dev_warn(dev, "No reserved memory, using CMA\n");
++	else
++		dev_info(dev, "Reserved VRAM attached\n");
++
++	dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32));
++
+ 	dpu_drm = devm_drm_dev_alloc(dev, &dpu95_drm_driver,
+ 				     struct dpu95_drm_device, base);
+ 	if (IS_ERR(dpu_drm)) {
+@@ -94,8 +104,6 @@ static int dpu95_probe(struct platform_device *pdev)
+ 	if (ret)
+ 		goto unload;
+
+-	drm_fbdev_dma_setup(drm, 0);
+-
+ 	return 0;
+ unload:
+ 	dpu95_unload(dpu_drm);
+diff --git a/drivers/pci/endpoint/functions/pci-epf-test.c b/drivers/pci/endpoint/functions/pci-epf-test.c
+index 931526f5d23c..41464401ff28 100644
+--- a/drivers/pci/endpoint/functions/pci-epf-test.c
++++ b/drivers/pci/endpoint/functions/pci-epf-test.c
+@@ -1230,7 +1230,7 @@ static int pci_epf_test_probe(struct pci_epf *epf,
+
+ static int stream_mmap_pci(struct file *filp, struct vm_area_struct *vma)
+ {
+-    phys_addr_t phys = 0x9E000000;    // use BAR2 physical address
++    phys_addr_t phys = 0xA2000000;    // use BAR2 physical address
+     size_t size = bar_size[BAR_2];
+
+     if ((vma->vm_end - vma->vm_start) > size)
+diff --git a/drivers/pci/endpoint/pci-epf-core.c b/drivers/pci/endpoint/pci-epf-core.c
+index 144e3476ea65..39f40f5f4615 100644
+--- a/drivers/pci/endpoint/pci-epf-core.c
++++ b/drivers/pci/endpoint/pci-epf-core.c
+@@ -16,7 +16,7 @@
+ #include <linux/pci-ep-cfs.h>
+
+ #define DPU95_ADDRESS_SPACE 0x4b400000
+-#define VRAM_PHYS 0x9E000000
++#define VRAM_PHYS 0xA2000000
+ static DEFINE_MUTEX(pci_epf_mutex);
+
+ static const struct bus_type pci_epf_bus_type;
+--
+ 2.34.1

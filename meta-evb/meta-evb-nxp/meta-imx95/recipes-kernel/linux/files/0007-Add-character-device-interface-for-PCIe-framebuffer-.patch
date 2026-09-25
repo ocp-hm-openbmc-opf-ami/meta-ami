@@ -1,0 +1,171 @@
+From 5ed966df1ba26e12813197a1f57910218b940059 Mon Sep 17 00:00:00 2001
+From: Shreyash Damanwala <shreyash.damanwala@nxp.com>
+Date: Thu, 9 Apr 2026 17:36:54 +0530
+Subject: [PATCH] Add character device interface for PCIe framebuffer streaming
+Expose BAR2 via mmap and read, initialize device in pci-epf-test driver
+
+Upstream-Status: Pending
+---
+ drivers/pci/endpoint/functions/pci-epf-test.c | 98 +++++++++++++++++--
+ 1 file changed, 89 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/pci/endpoint/functions/pci-epf-test.c b/drivers/pci/endpoint/functions/pci-epf-test.c
+index 78555913a3a9..ff8d9975fc06 100644
+--- a/drivers/pci/endpoint/functions/pci-epf-test.c
++++ b/drivers/pci/endpoint/functions/pci-epf-test.c
+@@ -26,6 +26,13 @@
+ #include <linux/pci-epc.h>
+ #include <linux/pci-epf.h>
+ #include <linux/pci_regs.h>
++#include <linux/cdev.h>
++
++static dev_t stream_dev;
++static struct cdev stream_cdev;
++static struct class *stream_class;
++
++static struct pci_epf_test *global_epf_test;
+
+ #define IRQ_TYPE_INTX			0
+ #define IRQ_TYPE_MSI			1
+@@ -576,11 +583,6 @@ static void pci_epf_test_stream(struct pci_epf_test *epf_test,
+     u32 pixels;
+     u32 i;
+
+-    if (!atomic_read(&epf_test->streaming)) {
+-        dev_info(dev, "Streaming disabled\n");
+-        return;
+-    }
+-
+     info = registered_fb[0];
+     if (!info) {
+         dev_err(dev, "No framebuffer registered\n");
+@@ -613,8 +615,6 @@ static void pci_epf_stream_worker(struct work_struct *work)
+
+     struct device *dev = &epf_test->epf->dev;
+
+-    dev_info(dev, "Stream worker triggered\n");
+-
+     if (!atomic_read(&epf_test->streaming)) {
+         dev_info(dev, "Streaming stopped\n");
+         return;
+@@ -625,8 +625,6 @@ static void pci_epf_stream_worker(struct work_struct *work)
+     if (!atomic_read(&epf_test->streaming))
+         return;
+
+-    dev_info(dev, "Queue next frame\n");
+-
+     queue_delayed_work(stream_wq,
+                        &epf_test->stream_work,
+                        msecs_to_jiffies(16)); /* ~60 FPS */
+@@ -1194,6 +1192,7 @@ static int pci_epf_test_probe(struct pci_epf *epf,
+
+ 	epf->header = &test_header;
+ 	epf_test->epf = epf;
++	global_epf_test = epf_test;
+
+ 	INIT_DELAYED_WORK(&epf_test->stream_work, pci_epf_stream_worker);
+
+@@ -1205,6 +1204,71 @@ static int pci_epf_test_probe(struct pci_epf *epf,
+ 	return 0;
+ }
+
++static int stream_mmap_pci(struct file *filp, struct vm_area_struct *vma)
++{
++    phys_addr_t phys = 0x9E000000;    // use BAR2 physical address
++    size_t size = bar_size[BAR_2];
++
++    if ((vma->vm_end - vma->vm_start) > size)
++        return -EINVAL;
++
++    // write-combined for framebuffer
++    vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
++
++    return remap_pfn_range(vma,
++                           vma->vm_start,
++                           phys >> PAGE_SHIFT,
++                           vma->vm_end - vma->vm_start,
++                           vma->vm_page_prot);
++}
++
++static int stream_open_pci(struct inode *inode, struct file *file)
++{
++    if (!global_epf_test)
++        return -ENODEV;
++
++    return 0;
++}
++
++static ssize_t stream_read_pci(struct file *file,
++                           char __user *buf,
++                           size_t len,
++                           loff_t *off)
++{
++    struct pci_epf_test *epf_test = global_epf_test;
++    void *src;
++    size_t size;
++
++    if (!epf_test)
++        return -ENODEV;
++
++    src = epf_test->reg[BAR_2];
++    size = bar_size[BAR_2];
++
++    if (!src)
++        return -EINVAL;
++
++    if (*off >= size)
++        return 0;
++
++    if (len > size - *off)
++        len = size - *off;
++
++    if (copy_to_user(buf, src + *off, len))
++        return -EFAULT;
++
++    *off += len;
++
++    return len;
++}
++
++static const struct file_operations stream_fops = {
++    .owner = THIS_MODULE,
++    .open  = stream_open_pci,
++    .read  = stream_read_pci,
++    .mmap  = stream_mmap_pci,
++};
++
+ static const struct pci_epf_ops ops = {
+ 	.unbind	= pci_epf_test_unbind,
+ 	.bind	= pci_epf_test_bind,
+@@ -1245,6 +1309,17 @@ static int __init pci_epf_test_init(void)
+ 		return ret;
+ 	}
+
++	alloc_chrdev_region(&stream_dev, 0, 1, "stream");
++
++	cdev_init(&stream_cdev, &stream_fops);
++	cdev_add(&stream_cdev, stream_dev, 1);
++
++	stream_class = class_create("pcie_stream");
++	if (IS_ERR(stream_class))
++		return PTR_ERR(stream_class);
++
++	device_create(stream_class, NULL, stream_dev, NULL, "stream");
++
+ 	return 0;
+ }
+ module_init(pci_epf_test_init);
+@@ -1257,6 +1332,11 @@ static void __exit pci_epf_test_exit(void)
+ 	if (stream_wq)
+ 		destroy_workqueue(stream_wq);
+
++	device_destroy(stream_class, stream_dev);
++	class_destroy(stream_class);
++	cdev_del(&stream_cdev);
++	unregister_chrdev_region(stream_dev, 1);
++
+ 	pci_epf_unregister_driver(&test_driver);
+ }
+ module_exit(pci_epf_test_exit);
+--
+ 2.34.1

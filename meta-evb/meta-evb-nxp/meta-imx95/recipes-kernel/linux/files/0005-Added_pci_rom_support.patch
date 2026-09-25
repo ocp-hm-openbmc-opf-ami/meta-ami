@@ -1,0 +1,170 @@
+From 8079fc2d15e95e5c319e04cb8f6a39e7f0b88167 Mon Sep 17 00:00:00 2001
+From: Shreyash Damanwala <shreyash.damanwala@picus.in>
+Date: Tue, 17 Mar 2026 10:10:21 +0530
+Subject: [PATCH 5/5] Added_pci_rom_support
+
+Upstream-Status: Pending
+---
+ .../pci/controller/dwc/pcie-designware-ep.c   | 18 ++++
+ drivers/pci/endpoint/functions/pci-epf-test.c | 85 ++++++++++++++++++-
+ 2 files changed, 101 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/pci/controller/dwc/pcie-designware-ep.c b/drivers/pci/controller/dwc/pcie-designware-ep.c
+index 00289948f9c1..723d41ec685f 100644
+--- a/drivers/pci/controller/dwc/pcie-designware-ep.c
++++ b/drivers/pci/controller/dwc/pcie-designware-ep.c
+@@ -215,6 +215,24 @@ static int dw_pcie_ep_set_bar(struct pci_epc *epc, u8 func_no, u8 vfunc_no,
+ 	int ret, type;
+ 	u32 reg;
+
++	if (bar == PCI_ROM_RESOURCE) {
++
++			dw_pcie_dbi_ro_wr_en(pci);
++
++			dw_pcie_ep_writel_dbi(ep, func_no, PCI_ROM_ADDRESS,
++					lower_32_bits(epf_bar->phys_addr) |
++					PCI_ROM_ADDRESS_ENABLE);
++
++			dw_pcie_dbi_ro_wr_dis(pci);
++
++			ret = dw_pcie_ep_inbound_atu(ep, func_no,
++							PCIE_ATU_TYPE_MEM,
++							epf_bar->phys_addr,
++							bar);
++
++			return ret;
++	}
++
+ 	/*
+ 	 * DWC does not allow BAR pairs to overlap, e.g. you cannot combine BARs
+ 	 * 1 and 2 to form a 64-bit BAR.
+diff --git a/drivers/pci/endpoint/functions/pci-epf-test.c b/drivers/pci/endpoint/functions/pci-epf-test.c
+index 14f533875828..a3e6191ad8b4 100644
+--- a/drivers/pci/endpoint/functions/pci-epf-test.c
++++ b/drivers/pci/endpoint/functions/pci-epf-test.c
+@@ -21,6 +21,7 @@
+ #include <linux/fb.h>
+ #include <linux/device.h>
+ #include <linux/dma-map-ops.h>
++#include <linux/firmware.h>
+
+ #include <linux/pci-epc.h>
+ #include <linux/pci-epf.h>
+@@ -56,6 +57,7 @@ static struct workqueue_struct *kpcitest_workqueue;
+ struct pci_epf_test {
+ 	void			*reg[PCI_STD_NUM_BARS];
+ 	struct pci_epf		*epf;
++	struct pci_epf_bar rom_bar;   /* ROM BAR */
+ 	enum pci_barno		test_reg_bar;
+ 	size_t			msix_table_offset;
+ 	struct delayed_work	cmd_handler;
+@@ -85,12 +87,12 @@ struct pci_epf_test_reg {
+
+ static struct pci_epf_header test_header = {
+ 	.vendorid	= 0x1131,
+-	.deviceid	= 0x0000,
++	.deviceid	= 0x1234,
+ 	.baseclass_code = PCI_BASE_CLASS_DISPLAY,
+ 	.interrupt_pin	= PCI_INTERRUPT_INTA,
+ };
+
+-static size_t bar_size[] = { 512, 512, 1024, 16384, 4194304, 1048576 };
++static size_t bar_size[] = { 512, 512, 1024, 16384, 4194304, 1048576};
+
+ static void pci_epf_test_dma_callback(void *param)
+ {
+@@ -651,6 +653,81 @@ static void pci_epf_test_write(struct pci_epf_test *epf_test,
+ 		reg->status |= STATUS_WRITE_FAIL;
+ }
+
++static int pci_epf_load_option_rom(struct pci_epf *epf)
++{
++	const struct firmware *fw;
++	struct pci_epf_test *epf_test = epf_get_drvdata(epf);
++	void *rom_base;
++	size_t rom_size;
++	int ret;
++
++	dev_info(&epf->dev, "Loading PCIe Option ROM\n");
++
++	ret = request_firmware(&fw, "OptionRom.rom", &epf->dev);
++	if (ret) {
++		dev_err(&epf->dev, "Failed to load Option ROM (%d)\n", ret);
++		return ret;
++	}
++
++	dev_info(&epf->dev, "Option ROM size: %zu\n", fw->size);
++
++	/* PCI spec requires ROM BAR window >= 64KB */
++	rom_size = max_t(size_t, roundup_pow_of_two(fw->size), 65536);
++
++	memset(&epf_test->rom_bar, 0, sizeof(epf_test->rom_bar));
++
++	epf_test->rom_bar.barno = PCI_ROM_RESOURCE;
++	epf_test->rom_bar.flags = PCI_BASE_ADDRESS_SPACE_MEMORY |
++				  PCI_BASE_ADDRESS_MEM_TYPE_32;
++	epf_test->rom_bar.size = rom_size;
++
++	/* Allocate DMA-safe memory accessible by PCIe */
++	rom_base = dma_alloc_coherent(epf->epc->dev.parent,
++				      rom_size,
++				      &epf_test->rom_bar.phys_addr,
++				      GFP_KERNEL);
++	if (!rom_base) {
++		dev_err(&epf->dev, "Failed to allocate ROM memory\n");
++		release_firmware(fw);
++		return -ENOMEM;
++	}
++
++	/* Copy firmware image into allocated memory */
++	memcpy(rom_base, fw->data, fw->size);
++
++	epf_test->rom_bar.addr = rom_base;
++
++	dev_info(&epf->dev,
++		 "Option ROM mapped: virt=%p phys=%pa size=%zu\n",
++		 rom_base,
++		 &epf_test->rom_bar.phys_addr,
++		 rom_size);
++
++	/* Configure ROM BAR in endpoint controller */
++	ret = pci_epc_set_bar(epf->epc,
++			      epf->func_no,
++			      epf->vfunc_no,
++			      &epf_test->rom_bar);
++
++	if (ret) {
++		dev_err(&epf->dev, "Failed to configure ROM BAR (%d)\n", ret);
++
++		dma_free_coherent(epf->epc->dev.parent,
++				  rom_size,
++				  rom_base,
++				  epf_test->rom_bar.phys_addr);
++
++		release_firmware(fw);
++		return ret;
++	}
++
++	dev_info(&epf->dev, "ROM BAR configured successfully (%zu bytes)\n", rom_size);
++
++	release_firmware(fw);
++
++	return 0;
++}
++
+ static void pci_epf_test_raise_irq(struct pci_epf_test *epf_test,
+ 				   struct pci_epf_test_reg *reg)
+ {
+@@ -844,6 +921,10 @@ static int pci_epf_test_epc_init(struct pci_epf *epf)
+ 		}
+ 	}
+
++	ret = pci_epf_load_option_rom(epf);
++	if (ret)
++			dev_err(&epf->dev, "Failed to expose Option ROM\n");
++
+ 	linkup_notifier = epc_features->linkup_notifier;
+ 	if (!linkup_notifier)
+ 		queue_work(kpcitest_workqueue, &epf_test->cmd_handler.work);
+--
+ 2.34.1

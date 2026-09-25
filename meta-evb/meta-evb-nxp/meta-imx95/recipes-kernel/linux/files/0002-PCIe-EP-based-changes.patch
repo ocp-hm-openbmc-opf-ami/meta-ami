@@ -1,0 +1,269 @@
+From 520c41d4d8a1920719396cf81e19f171b32f8402 Mon Sep 17 00:00:00 2001
+From: Riddhi Parekh <riddhi.parekh@nxp.com>
+Date: Tue, 24 Feb 2026 12:35:36 +0530
+Subject: [PATCH 2/5] PCIe EP based changes: 	Enable PCIe EP dtb generation
+ During PCIe write from host copy data to fbdev framebuffer 	Enable
+ contiguous memeory allocation for 4k framebuffer transfer in pci test
+
+Upstream-Status: Pending
+Signed-off-by: Riddhi Parekh <riddhi.parekh@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/Makefile        |  6 ++
+ drivers/gpu/drm/drm_fb_helper.c               |  2 +-
+ drivers/gpu/drm/drm_fbdev_dma.c               |  4 +-
+ drivers/gpu/drm/drm_file.c                    |  1 +
+ drivers/gpu/drm/imx/dpu95/dpu95-drv.c         |  2 +-
+ drivers/pci/endpoint/functions/pci-epf-test.c | 95 +++++++++++++++----
+ 6 files changed, 90 insertions(+), 20 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/freescale/Makefile b/arch/arm64/boot/dts/freescale/Makefile
+index 0bf63f8fff03..c3317e8d844f 100644
+--- a/arch/arm64/boot/dts/freescale/Makefile
++++ b/arch/arm64/boot/dts/freescale/Makefile
+@@ -788,6 +788,12 @@ dtb-$(CONFIG_ARCH_MXC) += imx95-19x19-evk-it6263-lvds-two-disp.dtb
+ imx95-19x19-evk-it6263-lvds-dual-dtbs := imx95-19x19-evk.dtb imx95-19x19-evk-it6263-lvds-dual.dtbo
+ dtb-$(CONFIG_ARCH_MXC) += imx95-19x19-evk-it6263-lvds-dual.dtb
+
++imx95-19x19-evk-it6263-lvds-dual-ep-dtbs := imx95-19x19-evk.dtb imx95-19x19-evk-it6263-lvds-dual.dtbo imx95-19x19-evk-pcie1-ep.dtbo
++dtb-$(CONFIG_ARCH_MXC) += imx95-19x19-evk-it6263-lvds-dual-ep.dtb
++
++imx95-19x19-evk-ep-adv7535-dtbs := imx95-19x19-evk.dtb imx95-19x19-evk-adv7535.dtbo imx95-19x19-evk-pcie1-ep.dtbo
++dtb-$(CONFIG_ARCH_MXC) += imx95-19x19-evk-ep-adv7535.dtb
++
+ imx95-19x19-evk-jdi-wuxga-lvds-panel-dtbs := imx95-19x19-evk.dtb imx95-19x19-evk-jdi-wuxga-lvds-panel.dtbo
+ dtb-$(CONFIG_ARCH_MXC) += imx95-19x19-evk-jdi-wuxga-lvds-panel.dtb
+
+diff --git a/drivers/gpu/drm/drm_fb_helper.c b/drivers/gpu/drm/drm_fb_helper.c
+index b15ddbd65e7b..8fbbd5a204d0 100644
+--- a/drivers/gpu/drm/drm_fb_helper.c
++++ b/drivers/gpu/drm/drm_fb_helper.c
+@@ -1835,7 +1835,7 @@ __drm_fb_helper_initial_config_and_unlock(struct drm_fb_helper *fb_helper)
+ 	if (ret < 0)
+ 		return ret;
+
+-	drm_info(dev, "fb%d: %s frame buffer device\n",
++	drm_info(dev, "fb%d: %s PCIe frame buffer device\n",
+ 		 info->node, info->fix.id);
+
+ 	mutex_lock(&kernel_fb_helper_lock);
+diff --git a/drivers/gpu/drm/drm_fbdev_dma.c b/drivers/gpu/drm/drm_fbdev_dma.c
+index 6fcf2a8bf676..68ce7346a4e0 100644
+--- a/drivers/gpu/drm/drm_fbdev_dma.c
++++ b/drivers/gpu/drm/drm_fbdev_dma.c
+@@ -20,6 +20,7 @@ static int drm_fbdev_dma_fb_open(struct fb_info *info, int user)
+ {
+ 	struct drm_fb_helper *fb_helper = info->par;
+
++	printk("In %s\n", __func__);
+ 	/* No need to take a ref for fbcon because it unbinds on unregister */
+ 	if (user && !try_module_get(fb_helper->dev->driver->fops->owner))
+ 		return -ENODEV;
+@@ -40,6 +41,7 @@ static int drm_fbdev_dma_fb_release(struct fb_info *info, int user)
+ static int drm_fbdev_dma_fb_mmap(struct fb_info *info, struct vm_area_struct *vma)
+ {
+ 	struct drm_fb_helper *fb_helper = info->par;
++	printk("In %s\n", __func__);
+
+ 	return drm_gem_prime_mmap(fb_helper->buffer->gem, vma);
+ }
+@@ -287,7 +289,7 @@ int drm_fbdev_dma_driver_fbdev_probe(struct drm_fb_helper *fb_helper,
+ 	struct iosys_map map;
+ 	int ret;
+
+-	drm_dbg_kms(dev, "surface width(%d), height(%d) and bpp(%d)\n",
++	drm_warn(dev, "surface width(%d), height(%d) and bpp(%d)\n",
+ 		    sizes->surface_width, sizes->surface_height,
+ 		    sizes->surface_bpp);
+
+diff --git a/drivers/gpu/drm/drm_file.c b/drivers/gpu/drm/drm_file.c
+index e2cf118ff01d..5cc9ec6fdbb4 100644
+--- a/drivers/gpu/drm/drm_file.c
++++ b/drivers/gpu/drm/drm_file.c
+@@ -365,6 +365,7 @@ int drm_open(struct inode *inode, struct file *filp)
+
+ 	atomic_fetch_inc(&dev->open_count);
+
++	drm_err(dev, "PCIe open_count \n");
+ 	/* share address_space across all char-devs of a single device */
+ 	filp->f_mapping = dev->anon_inode->i_mapping;
+
+diff --git a/drivers/gpu/drm/imx/dpu95/dpu95-drv.c b/drivers/gpu/drm/imx/dpu95/dpu95-drv.c
+index 21fd31f9a9dc..ad838be100eb 100644
+--- a/drivers/gpu/drm/imx/dpu95/dpu95-drv.c
++++ b/drivers/gpu/drm/imx/dpu95/dpu95-drv.c
+@@ -22,7 +22,7 @@
+ #include "dpu95.h"
+ #include "dpu95-drv.h"
+
+-#define DRIVER_NAME	"imx95-dpu"
++#define DRIVER_NAME	"imx95-dpu-PCIe"
+
+ DEFINE_DRM_GEM_DMA_FOPS(dpu95_drm_driver_fops);
+
+diff --git a/drivers/pci/endpoint/functions/pci-epf-test.c b/drivers/pci/endpoint/functions/pci-epf-test.c
+index 21aa3709e257..3766f613b6ef 100644
+--- a/drivers/pci/endpoint/functions/pci-epf-test.c
++++ b/drivers/pci/endpoint/functions/pci-epf-test.c
+@@ -14,6 +14,13 @@
+ #include <linux/slab.h>
+ #include <linux/pci_ids.h>
+ #include <linux/random.h>
++#include <linux/fs.h>
++#include <linux/file.h>
++#include <linux/uaccess.h>
++#include <linux/kernel.h>
++#include <linux/fb.h>
++#include <linux/device.h>
++#include <linux/dma-map-ops.h>
+
+ #include <linux/pci-epc.h>
+ #include <linux/pci-epf.h>
+@@ -408,6 +415,10 @@ static void pci_epf_test_copy(struct pci_epf_test *epf_test,
+ 		reg->status |= STATUS_COPY_FAIL;
+ }
+
++struct fb_info *info = NULL;
++uint8_t * fb_ptr = NULL;
++static long int fb_offset = 0;
++
+ static void pci_epf_test_read(struct pci_epf_test *epf_test,
+ 			      struct pci_epf_test_reg *reg)
+ {
+@@ -423,6 +434,13 @@ static void pci_epf_test_read(struct pci_epf_test *epf_test,
+ 	struct pci_epc *epc = epf->epc;
+ 	struct device *dma_dev = epf->epc->dev.parent;
+
++	char *buff_c;
++	struct page *pages;
++
++	info = registered_fb[0];
++	fb_ptr = info->screen_base;
++	//printk("Screen Size 0x%lx 0x%x\n", info->screen_size, reg->size);
++
+ 	src_addr = pci_epc_mem_alloc_addr(epc, &phys_addr, reg->size);
+ 	if (!src_addr) {
+ 		dev_err(dev, "Failed to allocate address\n");
+@@ -438,47 +456,88 @@ static void pci_epf_test_read(struct pci_epf_test *epf_test,
+ 		reg->status = STATUS_SRC_ADDR_INVALID;
+ 		goto err_addr;
+ 	}
+-
+-	buf = kzalloc(reg->size, GFP_KERNEL);
+-	if (!buf) {
+-		ret = -ENOMEM;
+-		goto err_map_addr;
+-	}
+-
+-	if (reg->flags & FLAG_USE_DMA) {
++
++	if ((reg->size > 0x200000) && (reg->flags & FLAG_USE_DMA))  {
++		//printk("in DMA alloc  \n");
++		pages	= dma_alloc_from_contiguous(dev, reg->size >> PAGE_SHIFT,get_order(reg->size), false);
++		if (!pages) {
++			pr_err("CMA	allocation failed\n");
++			goto err_map_addr;
++		}
++		dst_phys_addr = page_to_phys(pages);
++		buf	= page_address(pages);
++	} else {
++		buf = kzalloc(reg->size, GFP_KERNEL);
++		if (!buf) {
++			goto err_map_addr;
++		}
+ 		dst_phys_addr = dma_map_single(dma_dev, buf, reg->size,
+-					       DMA_FROM_DEVICE);
++				DMA_FROM_DEVICE);
+ 		if (dma_mapping_error(dma_dev, dst_phys_addr)) {
+ 			dev_err(dev, "Failed to map destination buffer addr\n");
+ 			ret = -ENOMEM;
+ 			goto err_dma_map;
+ 		}
++	}
++
++	if (reg->flags & FLAG_USE_DMA) {
++
++		//printk("in DMA transfer \n");
+
+ 		ktime_get_ts64(&start);
+-		ret = pci_epf_test_data_transfer(epf_test, dst_phys_addr,
+-						 phys_addr, reg->size,
+-						 reg->src_addr, DMA_DEV_TO_MEM);
++				ret = pci_epf_test_data_transfer(epf_test, (dma_addr_t)(dst_phys_addr),
++				phys_addr, reg->size,
++				reg->src_addr, DMA_DEV_TO_MEM);
++
++		if (fb_offset + reg->size > info->screen_size) {
++			memcpy_fromio(fb_ptr + fb_offset, buf, info->screen_size - fb_offset);
++			fb_offset = 0;
++		} else {
++			memcpy_fromio(fb_ptr + fb_offset, buf, reg->size);
++			fb_offset = fb_offset + reg->size;
++		}
++
+ 		if (ret)
+ 			dev_err(dev, "Data transfer failed\n");
+ 		ktime_get_ts64(&end);
+-
+ 		dma_unmap_single(dma_dev, dst_phys_addr, reg->size,
+-				 DMA_FROM_DEVICE);
++				DMA_FROM_DEVICE);
+ 	} else {
+ 		ktime_get_ts64(&start);
+-		memcpy_fromio(buf, src_addr, reg->size);
++		printk("EPF_Read 0x%lx bytes:\n", fb_offset);
++		if (fb_offset + reg->size > info->screen_size) {
++			printk("Screen size is small dont overcopy ERROR ***********  ERROR *****\n");
++			memcpy_fromio(fb_ptr + fb_offset, src_addr, info->screen_size - fb_offset);
++			fb_offset = 0;
++		} else {
++			memcpy_fromio(fb_ptr + fb_offset, src_addr, reg->size);
++			fb_offset = fb_offset + reg->size;
++		}
+ 		ktime_get_ts64(&end);
+ 	}
+
+-	pci_epf_test_print_rate(epf_test, "READ", reg->size, &start, &end,
++#if 0
++	pci_epf_test_print_rate(epf_test, "PCIe.1 dump READ", reg->size, &start, &end,
+ 				reg->flags & FLAG_USE_DMA);
++#endif
+
+ 	crc32 = crc32_le(~0, buf, reg->size);
+ 	if (crc32 != reg->checksum)
+ 		ret = -EIO;
+
++#if 0
++	buff_c = buf;
++	dev_err(dev, "EPF_Read %d bytes:\n", reg->size);
++	for (int i = 0; i < reg->size; i++) {
++		printk("%x \t", buff_c[i]);
++	}
++#endif
++
+ err_dma_map:
+-	kfree(buf);
++	if (reg->flags & FLAG_USE_DMA)
++		dma_release_from_contiguous(dev, pages, reg->size >> PAGE_SHIFT);
++	else
++		kfree(buf);
+
+ err_map_addr:
+ 	pci_epc_unmap_addr(epc, epf->func_no, epf->vfunc_no, phys_addr);
+@@ -507,6 +566,7 @@ static void pci_epf_test_write(struct pci_epf_test *epf_test,
+ 	struct pci_epc *epc = epf->epc;
+ 	struct device *dma_dev = epf->epc->dev.parent;
+
++	fb_offset = 0;
+ 	dst_addr = pci_epc_mem_alloc_addr(epc, &phys_addr, reg->size);
+ 	if (!dst_addr) {
+ 		dev_err(dev, "Failed to allocate address\n");
+@@ -644,6 +704,7 @@ static void pci_epf_test_cmd_handler(struct work_struct *work)
+ 	if (!command)
+ 		goto reset_handler;
+
++	//printk("%s %d\n", __func__, command);
+ 	WRITE_ONCE(reg->command, 0);
+ 	WRITE_ONCE(reg->status, 0);
+
+--
+ 2.34.1
