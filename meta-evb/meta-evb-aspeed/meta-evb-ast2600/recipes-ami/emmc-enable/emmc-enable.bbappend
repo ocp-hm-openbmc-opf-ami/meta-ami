@@ -1,6 +1,7 @@
 FILESEXTRAPATHS:append := ":${THISDIR}/files"
 
-SRC_URI:append= "file://sd_partition_info_rwfs.json \
+SRC_URI:append = " \
+    file://sd_partition_info_rwfs.json \
 "
 
 
