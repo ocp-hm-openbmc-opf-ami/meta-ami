@@ -1,7 +1,7 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 RDEPENDS:${PN} += " libapisensor"
-SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/dbus-sensors;protocol=https;branch=master;name=override;"
+SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/dbus-sensors.git;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
 SRCREV_override = "a0ff03d9b4c55a17da112423dcce9f7ac0dc8fbb"
 

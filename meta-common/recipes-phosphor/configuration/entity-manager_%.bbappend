@@ -1,6 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/entity-manager.git;branch=master;protocol=https;name=override;"
+SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/entity-manager.git;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
 SRCREV_override = "9af5356abd0d4303f4832c8a13dab53e00ebf0ed"
 
