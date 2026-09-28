@@ -21,6 +21,8 @@ SRCREV = "5bafde6f7769e314feb7d091d50f20f6631fbb06"
 # assembled string regardless of how/when they were added.
 EXTRA_OEMESON:remove = "-Dsel-extended=true"
 EXTRA_OEMESON:remove = "-Dlog-crash=false"
+EXTRA_OEMESON:remove = "-Dsel-delete=true"
+EXTRA_OEMESON:remove = "-Dsel-delete=false"
 PACKAGECONFIG:remove = "log-crash"
 
 EXTRA_OEMESON:remove = "-Dstatic-sensor-number=true"

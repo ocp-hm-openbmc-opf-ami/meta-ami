@@ -116,16 +116,7 @@ index 74fa52c..6f06dff 100644
  
  // RAII support for openSSL functions.
  using X509StorePtr = std::unique_ptr<X509_STORE, decltype(&::X509_STORE_free)>;
-@@ -41,6 +65,8 @@ using X509Ptr = std::unique_ptr<X509, de
- using BIOMemPtr = std::unique_ptr<BIO, decltype(&::BIO_free)>;
- using ASN1TimePtr = std::unique_ptr<ASN1_TIME, decltype(&ASN1_STRING_free)>;
- using SSLCtxPtr = std::unique_ptr<SSL_CTX, decltype(&::SSL_CTX_free)>;
-+using EVPPkeyPtr = std::unique_ptr<EVP_PKEY, decltype(&::EVP_PKEY_free)>;
-+using EVPPkeyTypePtr = std::unique_ptr<EVP_PKEY, decltype(&::EVP_PKEY_free)>;
-
- // Trust chain related errors.`
- constexpr bool isTrustChainError(int error)
-@@ -135,8 +161,60 @@ void validateCertificateStartDate(X509&
+@@ -137,8 +161,8 @@ void validateCertificateStartDate(X509& cert)
      if (days < 0 || secs < 0)
      {
          lg2::error("Certificate valid date starts before the Unix Epoch");
@@ -133,52 +124,19 @@ index 74fa52c..6f06dff 100644
 -            Reason("NotBefore should after 19700101000000Z"));
 +        elog<VerifyCertificateFileFailed>(
 +            VerifyCertificateFileFailedReason("NotBefore should after 19700101000000Z"));
-+    }
-+}
-+
-+int validateCertificateKeyType(X509& cert)
-+{
-+    EVPPkeyTypePtr pubKey(X509_get_pubkey(&cert), ::EVP_PKEY_free);
-+    if (!pubKey)
-+    {
-+        lg2::error("X509_get_pubkey() failed, ERRCODE:{ERRCODE}", "ERRCODE",  ERR_get_error());
-+        elog<InvalidCertificate>(Reason("Failed to get public key info"));
-+    }
-+    int keyType = EVP_PKEY_id(pubKey.get());
-+    int pkeyType = EVP_PKEY_type(keyType);
-+    lg2::info("Certificate cryptographic keyType, KEYTYPE:{KEYTYPE}", "KEYTYPE",  pkeyType);
-+    return pkeyType;
-+}
-+void validateCertificateKeyLength(X509& cert)
-+{
-+    EVPPkeyPtr pubKey(X509_get_pubkey(&cert), ::EVP_PKEY_free);
-+    if (!pubKey)
-+    {
-+        lg2::error("X509_get_pubkey() failed, ERRCODE:{ERRCODE}", "ERRCODE",  ERR_get_error());
-+        elog<InvalidCertificate>(Reason("Failed to get public key info"));
-+    }
-+    int minKeyBitLength = 0;
-+    int maxKeyBitLength = 4096;
-+    int pkeyType = validateCertificateKeyType(cert);
-+    int keyLen = EVP_PKEY_bits(pubKey.get());
-+    if (pkeyType == EVP_PKEY_RSA)
-+    {
-+        minKeyBitLength = 2048;
-+    }
-+    else if (pkeyType == EVP_PKEY_EC)
-+    {
-+        minKeyBitLength = 256;
-+    }
-+    else
-+    {
-+        lg2::error("Invalid cryptographic KeyType certificate uploaded, KEYTYPE:{KEYTYPE}", "KEYTYPE",  pkeyType);
-+        elog<InvalidCertificate>(Reason("Invalid key type certificate"));
-+    }
-+    lg2::info("Certificate cryptographic length, KEYLENGTH:{KEYLENGTH}", "KEYLENGTH",  keyLen);
+     }
+ }
+ 
+@@ -183,10 +207,16 @@ void validateCertificateKeyLength(X509& cert)
+         elog<InvalidCertificate>(Reason("Invalid key type certificate"));
+     }
+     lg2::info("Certificate cryptographic length, KEYLENGTH:{KEYLENGTH}", "KEYLENGTH",  keyLen);
+-    if (keyLen < minKeyBitLength || keyLen > maxKeyBitLength )
 +
 +    if (keyLen < minKeyBitLength)
-+    {
-+        lg2::error("Invalid cryptographic length certificate uploaded, KEYLENGTH:{KEYLENGTH}", "KEYLENGTH",  keyLen);
+     {
+         lg2::error("Invalid cryptographic length certificate uploaded, KEYLENGTH:{KEYLENGTH}", "KEYLENGTH",  keyLen);
+-        elog<InvalidCertificate>(Reason("Invalid key length certificate"));
 +        elog<CertificateKeyLengthTooSmall>(CertificateKeyLengthTooSmallReason("Invalid key length certificate"));
 +    }
 +    else if(keyLen > maxKeyBitLength)
@@ -188,16 +146,16 @@ index 74fa52c..6f06dff 100644
      }
  }
  
-@@ -197,7 +275,7 @@ void validateCertificateAgainstStore(X50
+@@ -247,7 +277,7 @@ void validateCertificateAgainstStore(X509_STORE& x509Store, X509& cert)
          if (errCode == X509_V_ERR_CERT_HAS_EXPIRED)
          {
              lg2::error("Expired certificate ");
 -            elog<InvalidCertificate>(Reason("Expired Certificate"));
 +            elog<CertificateFileExpired>(CertificateFileExpiredReason("Expired Certificate"));
          }
-         // Logging general error here.
+         // Loging general error here.
          lg2::error(
-@@ -259,4 +337,34 @@ std::unique_ptr<X509, decltype(&::X509_f
+@@ -309,4 +339,34 @@ std::unique_ptr<X509, decltype(&::X509_free)> parseCert(const std::string& pem)
      }
      return cert;
  }
@@ -236,23 +194,10 @@ diff --git a/x509_utils.hpp b/x509_utils.hpp
 index 4947b45..b3bd9d0 100644
 --- a/x509_utils.hpp
 +++ b/x509_utils.hpp
-@@ -33,2 +33,23 @@ std::unique_ptr<X509, decltype(&::X509_f
+@@ -32,6 +32,13 @@ std::unique_ptr<X509, decltype(&::X509_free)>
+  */
  void validateCertificateStartDate(X509& cert);
  
-+/**
-+ * @brief Validates the certificate key type
-+ * @param[in] cert Reference to certificate object
-+ * @return int key type (EVP_PKEY_RSA, EVP_PKEY_EC, etc.)
-+ */
-+int validateCertificateKeyType(X509& cert);
-+
-+/**
-+ * @brief Validates the certificate key length
-+ * @param[in] cert Reference to certificate object
-+ * @return void
-+ */
-+void validateCertificateKeyLength(X509& cert);
-+
 +/**
 + * @brief verify the encryption of the private key
 + * @param[in] certFilePath refrence to the certificate object with private key.
@@ -260,4 +205,9 @@ index 4947b45..b3bd9d0 100644
 + */
 +void validatePrivateKeyEncryption(const std::string& certFilePath);
 +
+ /**
+  * @brief Parses the certificate and throws error if certificate key length
+  * is in not supported range
+-- 
+2.34.1
 
