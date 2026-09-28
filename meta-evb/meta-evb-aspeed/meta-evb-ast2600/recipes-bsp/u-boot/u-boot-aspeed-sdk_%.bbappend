@@ -6,6 +6,12 @@ SRC_URI:append:emmc-sw-ami = " \
 	file://emmc-support.cfg  \
 	"
 
+BMC_RECOVERY_SRC_URI = " \
+    file://0009-add-bmc-auto-recovery.patch \
+    file://bmc-auto-recovery.cfg \
+    "
+SRC_URI:append = " ${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-bmc-auto-recovery', BMC_RECOVERY_SRC_URI, '', d)}"
+
 NCSI_SRC_URI = "file://ncsi.cfg \
                 file://0001-Update-DTS-File-for-Uboot-Enable-NCSI-on-MAC3-and-Disable-MAC2.patch \
                "
