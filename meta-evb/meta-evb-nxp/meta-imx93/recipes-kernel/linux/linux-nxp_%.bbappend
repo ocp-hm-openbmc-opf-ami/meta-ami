@@ -1,5 +1,3 @@
-require conf/machine/include/imx93.inc
-
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
 SRC_URI += "file://imx_openbmc_defconfig"
