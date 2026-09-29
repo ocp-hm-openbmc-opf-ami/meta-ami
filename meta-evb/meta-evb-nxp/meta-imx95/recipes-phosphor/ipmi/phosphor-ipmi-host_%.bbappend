@@ -1,0 +1,1 @@
+SRC_URI:append:evb-imx95 = " file://merge_yamls.py"

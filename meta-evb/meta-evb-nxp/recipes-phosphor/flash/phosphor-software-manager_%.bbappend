@@ -21,3 +21,13 @@ SRC_URI:remove = " \
 	file://0006-Added-Parallel-FW-update-support.patch \
 	file://0014-Run-deferred-image-deletes-on-main-async-context.patch \
 "
+
+FILESEXTRAPATHS:prepend:evb-imx95 := "${THISDIR}/${PN}:"
+SRC_URI:append:evb-imx95 = " file://0015-fix-fwupd-intel-meson-option.patch;apply=no"
+EXTRA_OEMESON:remove:evb-imx95 = "-Dfwupd-script=enabled"
+
+do_configure:prepend:evb-imx95() {
+	if ! patch -d "${S}" -p1 -R --dry-run < "${UNPACKDIR}/0015-fix-fwupd-intel-meson-option.patch" >/dev/null 2>&1; then
+		patch -d "${S}" -p1 < "${UNPACKDIR}/0015-fix-fwupd-intel-meson-option.patch" || bbfatal "Could not fix the fwupd Intel Meson option"
+	fi
+}
