@@ -9,7 +9,7 @@ SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/webui-vue.git;branch=mai
 
 # Use AUTOREV to get the latest revision from the repository
 # SRCREV = "${AUTOREV}"
-SRCREV_webui = "4976bc3a40f5743fa003c1b180447391a454b8f5"
+SRCREV_webui = "ad043f50047fc4af5c46480ebf04b7be5d9d4bc0"
 SRCREV_webuilib = "2e641fcbb209e6b64c15ca18498afc857bbd3f16"
 SRCREV_FORMAT = "webui_webuilib"
 

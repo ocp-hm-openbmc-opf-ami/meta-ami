@@ -1,6 +1,7 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 EXTRA_OEMESON:append = " \
+    -Dinsecure-enable-redfish-query=enabled \
     -Dredfish-provisioning-feature=enabled \
     ${@bb.utils.contains('BBFILE_COLLECTIONS', 'evb-ast2600', ' -Dupdate_timeout=30','', d)} \
 "
@@ -15,7 +16,7 @@ GROUPADD_PARAM:${PN}:append = ";redfish-hostiface"
 
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/bmcweb;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "83aeb0774127d4d9db45e9f317d735f4918bae8b"
+SRCREV_override = "6722b383b481e8daa1f6a55ab32f1b9b1cecea78"
 
 #EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '-Dintel-pfr=enabled',' ', d)}"
 #EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'meta-mgx','-Dredfish-intel-feature=enabled','', d)}"
