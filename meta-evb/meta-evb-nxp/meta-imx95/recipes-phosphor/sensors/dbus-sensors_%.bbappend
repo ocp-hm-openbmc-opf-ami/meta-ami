@@ -1,0 +1,5 @@
+PACKAGECONFIG = " \
+    hwmontempsensor \
+    fansensor \
+    adcsensor \
+    "

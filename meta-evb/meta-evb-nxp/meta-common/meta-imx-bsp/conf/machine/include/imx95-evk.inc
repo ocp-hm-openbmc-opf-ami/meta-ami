@@ -1,0 +1,67 @@
+require conf/machine/include/imx-base.inc
+MACHINEOVERRIDES =. "mx95-generic-bsp:"
+MACHINE_FEATURES += "pci wifi bluetooth"
+MACHINE_FEATURES:append:use-nxp-bsp = " nxpwifi-all-pcie nxpwifi-all-sdio jailhouse dpdk xen"
+
+KERNEL_DEVICETREE = " \
+    freescale/${KERNEL_DEVICETREE_BASENAME}.dtb \
+"
+UBOOT_DTB_NAME = "${KERNEL_DEVICETREE_BASENAME}.dtb"
+
+IMX_DEFAULT_BOOTLOADER:use-nxp-bsp = "u-boot-imx"
+IMX_DEFAULT_BOOTLOADER:use-mainline-bsp = "u-boot-fslc"
+
+LOADADDR = ""
+UBOOT_SUFFIX = "bin"
+UBOOT_MAKE_TARGET = ""
+
+SPL_BINARY = "spl/u-boot-spl.bin"
+
+UBOOT_CONFIG ??= "sd"
+UBOOT_CONFIG[sd] = "${UBOOT_CONFIG_BASENAME}_defconfig,sdcard"
+UBOOT_CONFIG[fspi] = "${UBOOT_CONFIG_BASENAME}_fspi_defconfig"
+
+BOOT_STAGING = "${S}/iMX95"
+
+SOC_FAMILY = "mx95"
+
+ATF_PLATFORM = "imx95"
+OEI_CONFIGS = "ddr ${OEI_CONFIGS_TCM}"
+OEI_CONFIGS_TCM = "${@'tcm' if d.getVar('IMX_SOC_REV')[0] == 'A' else ''}"
+OEI_CORE   = "m33"
+OEI_SOC    = "mx95"
+OEI_BOARD  ?= "mx95lp5"
+DDR_TYPE   ?= "lpddr5"
+
+IMXBOOT_VARIANTS = "alt jailhouse netc rpmsg sof"
+
+# Multiple system manager configs by IMXBOOT_VARIANT
+SYSTEM_MANAGER_CONFIG = \
+    "${@bb.utils.contains('IMXBOOT_VARIANT', 'alt',       'mx95alt', \
+        bb.utils.contains('IMXBOOT_VARIANT', 'jailhouse', 'mx95evkjailhouse', \
+        bb.utils.contains('IMXBOOT_VARIANT', 'netc',      'mx95netc', \
+        bb.utils.contains('IMXBOOT_VARIANT', 'rpmsg',     'mx95evkrpmsg', \
+        bb.utils.contains('IMXBOOT_VARIANT', 'sof',       'mx95evksof', \
+                                                          'mx95evk', d), d), d), d), d)}"
+
+# imx-boot (flash.bin) targets based on UBOOT_CONFIG and IMXBOOT_VARIANT
+IMXBOOT_TARGETS_SD = " \
+    ${@bb.utils.contains('IMXBOOT_VARIANT', 'alt',       '${IMXBOOT_TARGETS_BASENAME}_alt', \
+       bb.utils.contains('IMXBOOT_VARIANT', 'jailhouse', '${IMXBOOT_TARGETS_BASENAME}_jailhouse', \
+       bb.utils.contains('IMXBOOT_VARIANT', 'netc',      '${IMXBOOT_TARGETS_BASENAME}_netc', \
+       bb.utils.contains('IMXBOOT_VARIANT', 'rpmsg',     '${IMXBOOT_TARGETS_BASENAME}_lpboot_sm_a55', \
+       bb.utils.contains('IMXBOOT_VARIANT', 'sof',       '${IMXBOOT_TARGETS_BASENAME}_a55', \
+                                                         '${IMXBOOT_TARGETS_BASENAME}_all ${IMXBOOT_TARGETS_BASENAME}_a55', d), d), d), d), d)} \
+"
+
+IMXBOOT_TARGETS = " \
+    ${@bb.utils.contains('UBOOT_CONFIG', 'fspi', '${IMXBOOT_TARGETS_BASENAME}_a55_flexspi', '${IMXBOOT_TARGETS_SD}', d)} \
+"
+
+IMX_BOOT_SOC_TARGET = "iMX95"
+IMX_BOOT_SEEK = "32"
+
+# We have to disable SERIAL_CONSOLE due to auto-serial-console
+SERIAL_CONSOLES = "115200;ttyLP0"
+
+IMX_DEFAULT_BSP = "nxp"

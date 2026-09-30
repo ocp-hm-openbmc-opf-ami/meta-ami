@@ -1,0 +1,1 @@
+SRC_URI:remove = "${@'file://CVE-2025-1390.patch' if bb.utils.vercmp_string(d.getVar('PV'), '2.76') >= 0 else ''}"
