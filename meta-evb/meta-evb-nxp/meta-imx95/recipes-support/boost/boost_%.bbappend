@@ -1,0 +1,1 @@
+BOOST_LIBS:append:evb-imx95 = " serialization filesystem atomic"
