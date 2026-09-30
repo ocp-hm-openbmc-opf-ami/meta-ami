@@ -14,7 +14,7 @@ PACKAGECONFIG:append = " \
 # add "redfish-hostiface" group
 GROUPADD_PARAM:${PN}:append = ";redfish-hostiface"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/bmcweb;branch=master;protocol=https;name=override;"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/bmcweb;protocol=https;branch=integrate-onetree-latest;name=override;"
 SRCREV_FORMAT = "override"
 SRCREV_override = "6722b383b481e8daa1f6a55ab32f1b9b1cecea78"
 

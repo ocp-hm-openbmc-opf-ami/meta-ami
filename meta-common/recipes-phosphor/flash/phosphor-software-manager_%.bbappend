@@ -39,7 +39,7 @@ SRC_URI:append = " \
    file://reboot-guard-disable.service \
 "
 
-EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'intel-features', ' -Dfwupd-intel-features=enabled','', d)}"
+EXTRA_OEMESON += "${@' -Dfwupd-intel-features=disabled ' if d.getVar('INITRAMFS_IMAGE') else ' -Dfwupd-intel-features=enabled '}"
 SRC_URI:append = " ${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '', SRC_URI_NON_PFR, d)}"
 
 PACKAGECONFIG:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-bios-update', ' flash_bios ','', d)}"

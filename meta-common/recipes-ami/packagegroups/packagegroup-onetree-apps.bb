@@ -58,8 +58,6 @@ PACKAGES = "\
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-ipmi-blobs', '${PN}-ipmi-blobs', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-biosconfig-manager', '${PN}-biosconfig-manager', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-spdm', '${PN}-spdm', '', d)} \
-		${@'${PN}-intel-pldm' if (bb.utils.contains('IMAGE_FEATURES', 'onetree-intel-pldm', True, False, d) and not bb.utils.contains('IMAGE_FEATURES', 'onetree-pldm', True, False, d)) else ''} \
-		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-intel-mctp', '${PN}-intel-mctp', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-network', '${PN}-network', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-network-system-firewall-support', '${PN}-network-system-firewall-support', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-network-advanced-route-support', '${PN}-network-advanced-route-support', '', d)} \
@@ -75,7 +73,6 @@ PACKAGES = "\
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-dual-image-common-conf', '${PN}-dual-image-common-conf', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-hw-failsafe-boot', '${PN}-hw-failsafe-boot', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-single-spi-abr', '${PN}-single-spi-abr', '', d)} \
-		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-bmc-auto-recovery', '${PN}-bmc-auto-recovery', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-sync-conf', '${PN}-sync-conf', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-ipmi-ssif', '${PN}-ipmi-ssif', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-nvidiasipack', '${PN}-nvidiasipack', '', d)} \
@@ -89,7 +86,6 @@ PACKAGES = "\
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-network-persist-mac-support', '${PN}-network-persist-mac-support', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-network-avahi-support', '${PN}-network-avahi-support', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-phosphor-ipmi-flash', '${PN}-phosphor-ipmi-flash', '', d)} \
-		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-mctp-i3c-sock', '${PN}-mctp-i3c-sock', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-pldm', '${PN}-pldm', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-bmc-services-ready', '${PN}-bmc-services-ready', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-cxl-mgmt', '${PN}-cxl-mgmt', '', d)} \
@@ -106,14 +102,6 @@ PACKAGES = "\
                 ${@bb.utils.contains('IMAGE_FEATURES', 'onetree-phosphor-health-monitor', '${PN}-phosphor-health-monitor', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-mac-eeprom-support', '${PN}-onetree-mac-eeprom-support','', d)} \
 		"
-
-
-SUMMARY:${PN}-mctp-i3c-sock = "MCTP I3C Socket based Daemon"
-DESCRIPTION:${PN}-mctp-i3c-sock = "Implemented a socket-based MCTP over I3C application independent of libmctp, using the Linux MCTP socket (AF_MCTP) and MCTP I3C transport drivers. The application establishes connections based on Endpoint ID (EID) and message type, following the MCTP over I3C (DSP0233) specification."
-RDEPENDS:${PN}-mctp-i3c-sock = " mctp-i3c-daemon "
-SUPPORTED_VENDOR:${PN}-mctp-i3c-sock = "INTEL"
-#-----------------------------------#
-
 
 SUMMARY:${PN}-brcmraid = "EP : Broadcom RAID"
 DESCRIPTION:${PN}-brcmraid = "Service that manage Broadcom Storelib7 RAID/HBA controllers"
@@ -256,18 +244,6 @@ SUMMARY:${PN}-intelsipack = "EP : Intel Silicon Technology Expansion Package"
 DESCRIPTION:${PN}-intelsipack = "This EP includes a set of Intel silicon-specific features,  such as RAS (Reliability, Availability, and Serviceability) offload, Platform Monitoring Technology (PMT),  Node Manager (NM) , and Compute Usage Per Second  (CUPS) "
 RDEPENDS:${PN}-intelsipack = " "
 SUPPORTED_VENDOR:${PN}-intelsipack = "INTEL"
-#-----------------------------------#
-
-SUMMARY:${PN}-intel-pldm = "Intel PLDM stack"
-DESCRIPTION:${PN}-intel-pldm = "Implementation of the PLDM specifications"
-RDEPENDS:${PN}-intel-pldm = " pldmd"
-SUPPORTED_VENDOR:${PN}-intel-pldm = "INTEL"
-#-----------------------------------#
-
-SUMMARY:${PN}-intel-mctp = "Intel MCTP stack"
-DESCRIPTION:${PN}-intel-mctp = "Implementation of the MCTP specifications"
-RDEPENDS:${PN}-intel-mctp = " pmci-launcher mctpd"
-SUPPORTED_VENDOR:${PN}-intel-mctp = "INTEL"
 #-----------------------------------#
 
 SUMMARY:${PN}-kvm = "AMI Core Features: KVM Support"
@@ -864,15 +840,6 @@ SUMMARY:${PN}-bmc-services-ready = "AMI Core Features: OneTree BMC services read
 DESCRIPTION:${PN}-bmc-services-ready = "Ensure BMC readiness for the customized services"
 RDEPENDS:${PN}-bmc-services-ready = "bmc-services-ready"
 SUPPORTED_VENDOR:${PN}-bmc-services-ready = "ALL"
-#-----------------------------------#
-
-SUMMARY:${PN}-bmc-auto-recovery = "AMI Core Features: BMC Firmware Auto-Recovery (Single Image)"
-DESCRIPTION:${PN}-bmc-auto-recovery = "Provides automatic BMC firmware recovery using eMMC with TFTP fallback."
-RDEPENDS:${PN}-bmc-auto-recovery = "bmc-auto-recovery \
-	                                 emmc-enable \
-                                     u-boot-fw-utils \
-									 intel-ipmi-oem"
-SUPPORTED_VENDOR:${PN}-bmc-auto-recovery = "ALL"
 #-----------------------------------#
 
 SUMMARY:${PN}-pdk = "AMI Core Features: OneTree PDK"

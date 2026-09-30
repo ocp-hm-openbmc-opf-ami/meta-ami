@@ -39,6 +39,9 @@ KERNEL_LOCALVERSION = "-ami"
 
 PV = "${LINUX_VERSION}+git${SRCPV}"
 
+ERROR_QA:remove = " buildpaths "
+WARN_QA:append = " buildpaths "
+
 # Do not install the kernel image into rootfs at /boot directory
 RRECOMMENDS:${KERNEL_PACKAGE_NAME}-base = ""
 

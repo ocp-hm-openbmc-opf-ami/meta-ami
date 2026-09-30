@@ -16,10 +16,10 @@ DEPENDS += "sdeventplus"
 DEPENDS += "phosphor-dbus-interfaces"
 DEPENDS += "net-snmp"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/snmp-agent.git;branch=main;protocol=https"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/snmp-agent;protocol=https;branch=integrate-onetree-latest"
 SRC_URI += "file://xyz.openbmc_project.Snmp.Conf.service"
 
-SRCREV = "ba165a279ebfef809f2aee504dcaac3070521327"
+SRCREV = "dedac5329b66245962e3367759d7cb4bfc76309c"
 
 S = "${WORKDIR}/git"
 

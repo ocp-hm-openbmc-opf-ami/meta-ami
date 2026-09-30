@@ -1,0 +1,1113 @@
+From 1534db25f7acc5e072e777fe665e9de66238a9ff Mon Sep 17 00:00:00 2001
+From: Jacky Chou <jacky_chou@aspeedtech.com>
+Date: Tue, 5 May 2026 13:30:01 +0800
+Subject: [PATCH] arm: mach-aspeed: add AST2705 SoC support
+
+Add CONFIG_ASPEED_AST2705 Kconfig option as a standalone SoC choice,
+separate from AST2700. Wire in the ast2705 machine directory covering
+low-level init, clock, SPI, SDRAM, MMU, CPU info and SCU info.
+
+Upstream-Status: Backport [SDK v11.03 migration]
+Signed-off-by: Jacky Chou <jacky_chou@aspeedtech.com>
+Change-Id: I32ce21cf2a89aecfbd79b4b0358a332ef9acbd3e
+Signed-off-by: rupeshs <rupeshs@ami.com>
+---
+ arch/arm/mach-aspeed/Kconfig                 |  10 +
+ arch/arm/mach-aspeed/Makefile                |   1 +
+ arch/arm/mach-aspeed/ast2705/Kconfig         |  39 ++++
+ arch/arm/mach-aspeed/ast2705/Makefile        |   2 +
+ arch/arm/mach-aspeed/ast2705/arm64-mmu.c     |  43 ++++
+ arch/arm/mach-aspeed/ast2705/board_common.c  | 121 ++++++++++
+ arch/arm/mach-aspeed/ast2705/clk.c           | 106 +++++++++
+ arch/arm/mach-aspeed/ast2705/cpu-info.c      | 111 +++++++++
+ arch/arm/mach-aspeed/ast2705/lowlevel_init.S | 132 +++++++++++
+ arch/arm/mach-aspeed/ast2705/platform.c      |  59 +++++
+ arch/arm/mach-aspeed/ast2705/scu_info.c      | 129 ++++++++++
+ arch/arm/mach-aspeed/ast2705/spi.c           | 234 +++++++++++++++++++
+ 12 files changed, 987 insertions(+)
+ create mode 100644 arch/arm/mach-aspeed/ast2705/Kconfig
+ create mode 100644 arch/arm/mach-aspeed/ast2705/Makefile
+ create mode 100644 arch/arm/mach-aspeed/ast2705/arm64-mmu.c
+ create mode 100644 arch/arm/mach-aspeed/ast2705/board_common.c
+ create mode 100644 arch/arm/mach-aspeed/ast2705/clk.c
+ create mode 100644 arch/arm/mach-aspeed/ast2705/cpu-info.c
+ create mode 100644 arch/arm/mach-aspeed/ast2705/lowlevel_init.S
+ create mode 100644 arch/arm/mach-aspeed/ast2705/platform.c
+ create mode 100644 arch/arm/mach-aspeed/ast2705/scu_info.c
+ create mode 100644 arch/arm/mach-aspeed/ast2705/spi.c
+
+diff --git a/arch/arm/mach-aspeed/Kconfig b/arch/arm/mach-aspeed/Kconfig
+index b39c027d82..a36d80f7b5 100644
+--- a/arch/arm/mach-aspeed/Kconfig
++++ b/arch/arm/mach-aspeed/Kconfig
+@@ -44,6 +44,15 @@ config ASPEED_AST2700
+ 	  The Aspeed AST2700 is a ARM-based SoC with Cortex-A35 CPU.
+ 	  It is used as Board Management Controller on many server boards,
+ 	  which is enabled by support of LPC and eSPI peripherals.
++
++config ASPEED_AST2705
++	bool "Support Aspeed AST2705 SoC"
++	select ARM64
++	select SYS_ARCH_TIMER
++	help
++	  The Aspeed AST2705 is a ARM-based SoC with Cortex-A35 CPU.
++	  It is used as Board Management Controller on many server boards,
++	  which is enabled by support of LPC and eSPI peripherals.
+ endchoice
+ 
+ config ASPEED_DEFAULT_SPI_FREQUENCY
+@@ -56,5 +65,6 @@ config ASPEED_DEFAULT_SPI_FREQUENCY
+ source "arch/arm/mach-aspeed/ast2500/Kconfig"
+ source "arch/arm/mach-aspeed/ast2600/Kconfig"
+ source "arch/arm/mach-aspeed/ast2700/Kconfig"
++source "arch/arm/mach-aspeed/ast2705/Kconfig"
+ 
+ endif
+diff --git a/arch/arm/mach-aspeed/Makefile b/arch/arm/mach-aspeed/Makefile
+index 2b821873dc..2d23c0a054 100644
+--- a/arch/arm/mach-aspeed/Makefile
++++ b/arch/arm/mach-aspeed/Makefile
+@@ -7,3 +7,4 @@ obj-$(CONFIG_ARCH_ASPEED) += ast_wdt.o
+ obj-$(CONFIG_ASPEED_AST2500) += ast2500/
+ obj-$(CONFIG_ASPEED_AST2600) += ast2600/
+ obj-$(CONFIG_ASPEED_AST2700) += ast2700/
++obj-$(CONFIG_ASPEED_AST2705) += ast2705/
+diff --git a/arch/arm/mach-aspeed/ast2705/Kconfig b/arch/arm/mach-aspeed/ast2705/Kconfig
+new file mode 100644
+index 0000000000..a976975b7d
+--- /dev/null
++++ b/arch/arm/mach-aspeed/ast2705/Kconfig
+@@ -0,0 +1,39 @@
++if ASPEED_AST2705
++
++config SYS_CPU
++	default "armv8"
++
++config SPI_KERNEL_FIT_ADDR
++	hex "SPI address of kernel FIT image"
++	default 0x100420000
++	help
++	  Kernel FIT start address in the SPI flash.
++
++choice
++	prompt "AST2705 board select"
++	depends on ASPEED_AST2705
++	default TARGET_EVB_AST2705
++
++config TARGET_EVB_AST2705
++	bool "EVB-AST2705"
++	depends on ASPEED_AST2705
++	select ARCH_MISC_INIT
++	help
++	  EVB-AST2705 is Aspeed evaluation board for AST2705 chip.
++	  It has 512M of RAM, 32M of SPI flash, two Ethernet ports,
++	  4 Serial ports, 4 USB ports, VGA port, PCIe, SD card slot,
++	  20 pin JTAG, pinouts for 14 I2Cs, 3 SPIs and eSPI, 8 PWMs.
++
++config TARGET_AST2705_DCSCM
++	bool "AST2705-DCSCM"
++	depends on ASPEED_AST2705
++	select ARCH_MISC_INIT
++	help
++	  AST2705_DCSCM is an Aspeed demo board in DCSCM form factor.
++
++endchoice
++
++source "board/aspeed/evb_ast2705/Kconfig"
++source "board/aspeed/ast2705_dcscm/Kconfig"
++
++endif
+diff --git a/arch/arm/mach-aspeed/ast2705/Makefile b/arch/arm/mach-aspeed/ast2705/Makefile
+new file mode 100644
+index 0000000000..c4b7d9b74e
+--- /dev/null
++++ b/arch/arm/mach-aspeed/ast2705/Makefile
+@@ -0,0 +1,2 @@
++obj-y   += lowlevel_init.o board_common.o arm64-mmu.o platform.o spi.o clk.o scu_info.o
++obj-$(CONFIG_DISPLAY_CPUINFO) += cpu-info.o
+diff --git a/arch/arm/mach-aspeed/ast2705/arm64-mmu.c b/arch/arm/mach-aspeed/ast2705/arm64-mmu.c
+new file mode 100644
+index 0000000000..a068e6ede9
+--- /dev/null
++++ b/arch/arm/mach-aspeed/ast2705/arm64-mmu.c
+@@ -0,0 +1,43 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright (C) ASPEED Technology Inc.
++ */
++
++#include <dm.h>
++#include <asm/armv8/mmu.h>
++
++static struct mm_region aspeed2700_mem_map[] = {
++	{
++		.virt =         0x0UL,
++		.phys =         0x0UL,
++		.size =  0x40000000UL,
++		.attrs = PTE_BLOCK_MEMTYPE(MT_DEVICE_NGNRNE) |
++			 PTE_BLOCK_NON_SHARE |
++			 PTE_BLOCK_PXN | PTE_BLOCK_UXN,
++	},
++	{
++		.virt =  0x40000000UL,
++		.phys =  0x40000000UL,
++		.size = 0x2C0000000UL,
++		.attrs = PTE_BLOCK_MEMTYPE(MT_DEVICE_NGNRNE) |
++			 PTE_BLOCK_NON_SHARE,
++	},
++	{
++		.virt = 0x400000000UL,
++		.phys = 0x400000000UL,
++		.size = 0x200000000UL,
++		.attrs = PTE_BLOCK_MEMTYPE(MT_NORMAL) |
++			 PTE_BLOCK_INNER_SHARE,
++	},
++	{
++		/* List terminator */
++		0,
++	}
++};
++
++struct mm_region *mem_map = aspeed2700_mem_map;
++
++u64 get_page_table_size(void)
++{
++	return 0x80000;
++}
+diff --git a/arch/arm/mach-aspeed/ast2705/board_common.c b/arch/arm/mach-aspeed/ast2705/board_common.c
+new file mode 100644
+index 0000000000..b9a4cbafd7
+--- /dev/null
++++ b/arch/arm/mach-aspeed/ast2705/board_common.c
+@@ -0,0 +1,121 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright (C) ASPEED Technology Inc.
++ */
++
++#include <dm.h>
++#include <ram.h>
++#include <init.h>
++#include <timer.h>
++#include <asm/io.h>
++#include <asm/arch/timer.h>
++#include <linux/bitfield.h>
++#include <linux/bitops.h>
++#include <linux/err.h>
++#include <dm/uclass.h>
++#include <power/regulator.h>
++#include <asm/arch-aspeed/scu_ast2700.h>
++#include <g_dnl.h>
++
++#define AHBC_GROUP(x)				(0x40 * (x))
++#define AHBC_HREADY_WAIT_CNT_REG		0x34
++#define   AHBC_HREADY_WAIT_CNT_MAX		0x3f
++
++DECLARE_GLOBAL_DATA_PTR;
++
++int dram_init(void)
++{
++	int ret;
++	struct udevice *dev;
++	struct ram_info ram;
++
++	ret = uclass_get_device(UCLASS_RAM, 0, &dev);
++	if (ret) {
++		debug("cannot get DRAM driver\n");
++		return ret;
++	}
++
++	ret = ram_get_info(dev, &ram);
++	if (ret) {
++		debug("cannot get DRAM information\n");
++		return ret;
++	}
++
++	gd->ram_size = ram.size;
++	return 0;
++}
++
++#ifdef CONFIG_USB_GADGET_DOWNLOAD
++int g_dnl_get_board_bcd_device_number(int gcnum)
++{
++	/* TODO: Use 0 as spl. */
++	return 0;//FIELD_GET(SCU_CPU_REVISION_ID_HW, readl(ASPEED_CPU_REVISION_ID));
++}
++
++#define SCU1_CHIP_UNIQ_ID0	(ASPEED_IO_SCU_BASE + 0x810)
++#define SCU1_CHIP_UNIQ_ID1	(ASPEED_IO_SCU_BASE + 0x814)
++int g_dnl_bind_fixup(struct usb_device_descriptor *dev, const char *name)
++{
++	char bString[17];
++	static const char hexmap[] = "0123456789ABCDEF";
++	uint8_t byte;
++	uint32_t id[2] = {
++		readl(SCU1_CHIP_UNIQ_ID0),
++		readl(SCU1_CHIP_UNIQ_ID1)
++	};
++	for (int i = 0; i < 8; i++) {
++		byte = (id[1 - (i / 4)] >> ((3 - (i % 4)) * 8)) & 0xFF;
++		bString[i * 2] = hexmap[(byte >> 4) & 0xF];
++		bString[i * 2 + 1] = hexmap[byte & 0xF];
++	}
++	bString[16] = 0;
++	g_dnl_set_serialnumber(bString);
++	return 0;
++}
++#endif /* CONFIG_USB_GADGET_DOWNLOAD */
++
++static void ahbc_init(void)
++{
++	uint32_t reg_val;
++	int i;
++
++	reg_val = readl(ASPEED_CPU_REVISION_ID);
++	if (FIELD_GET(SCU_CPU_REVISION_ID_HW, reg_val))
++		return;
++
++	/* CPU-die AHBC timeout counter */
++	for (i = 0; i < 4; i++)
++		writel(AHBC_HREADY_WAIT_CNT_MAX,
++		       (void *)ASPEED_CPU_AHBC_BASE + AHBC_GROUP(i) + AHBC_HREADY_WAIT_CNT_REG);
++
++	/* IO-die AHBC timeout counter */
++	for (i = 0; i < 8; i++)
++		writel(AHBC_HREADY_WAIT_CNT_MAX,
++		       (void *)ASPEED_IO_AHBC_BASE + AHBC_GROUP(i) + AHBC_HREADY_WAIT_CNT_REG);
++}
++
++int board_init(void)
++{
++	struct udevice *dev;
++	int i = 0;
++	int ret;
++
++	ahbc_init();
++
++	regulators_enable_boot_on(0);
++
++	/*
++	 * Loop over all MISC uclass drivers to call the comphy code
++	 * and init all CP110 devices enabled in the DT
++	 */
++	while (1) {
++		/* Call the comphy code via the MISC uclass driver */
++		ret = uclass_get_device(UCLASS_MISC, i++, &dev);
++
++		/* We're done, once no further CP110 device is found */
++		if (ret)
++			break;
++	}
++
++	return 0;
++}
+diff --git a/arch/arm/mach-aspeed/ast2705/clk.c b/arch/arm/mach-aspeed/ast2705/clk.c
+new file mode 100644
+index 0000000000..86c2804e01
+--- /dev/null
++++ b/arch/arm/mach-aspeed/ast2705/clk.c
+@@ -0,0 +1,106 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright (C) ASPEED Technology Inc.
++ */
++
++#include <clk.h>
++#include <dm.h>
++#include <init.h>
++#include <malloc.h>
++#include <asm/global_data.h>
++#include <dt-bindings/clock/ast2700-clock.h>
++
++DECLARE_GLOBAL_DATA_PTR;
++
++struct aspeed_clks {
++	ulong id;
++	const char *name;
++};
++
++static struct aspeed_clks ast2700_clk0_names[] = {
++	{ SCU0_CLK_PSP, "cpu clk" },     { SCU0_CLK_HPLL, "hpll" },
++	{ SCU0_CLK_DPLL, "dpll" },     { SCU0_CLK_MPLL, "mpll" },
++	{ SCU0_CLK_AXI1, "axi1" },     { SCU0_CLK_AHB, "hclk" },
++	{ SCU0_CLK_APB, "pclk" },
++};
++
++static struct aspeed_clks ast2700_clk1_names[] = {
++	{ SCU1_CLK_HPLL, "hpll" },     { SCU1_CLK_APLL, "apll" },
++	{ SCU1_CLK_DPLL, "dpll" },     { SCU1_CLK_AHB, "hclk" },
++	{ SCU1_CLK_APB, "pclk" },
++};
++
++/**
++ * soc_clk_dump() - Print clock frequencies
++ * Returns zero on success
++ *
++ * Implementation for the clk dump command.
++ */
++int soc_clk_dump(void)
++{
++	struct udevice *dev;
++	struct clk clk;
++	unsigned long rate;
++	int i, ret;
++
++	ret = uclass_get_device_by_driver(UCLASS_CLK, DM_DRIVER_GET(aspeed_ast2700_soc0_clk), &dev);
++	if (ret)
++		return ret;
++
++	printf("soc0 clk\tfrequency\n");
++	for (i = 0; i < ARRAY_SIZE(ast2700_clk0_names); i++) {
++		clk.id = ast2700_clk0_names[i].id;
++		ret = clk_request(dev, &clk);
++		if (ret < 0)
++			return ret;
++
++		rate = clk_get_rate(&clk);
++
++		clk_free(&clk);
++
++		if (ret == -ENOTSUPP) {
++			printf("clk ID %lu not supported yet\n",
++			       ast2700_clk0_names[i].id);
++			continue;
++		}
++		if (ret < 0) {
++			printf("%s %lu: get_rate err: %d\n", __func__,
++			       ast2700_clk0_names[i].id, ret);
++			continue;
++		}
++		printf("%s(%3lu):\t%lu\n", ast2700_clk0_names[i].name,
++		       ast2700_clk0_names[i].id, rate);
++	}
++
++	ret = uclass_get_device_by_driver(UCLASS_CLK, DM_DRIVER_GET(aspeed_ast2700_soc1_clk), &dev);
++	if (ret)
++		return ret;
++
++	printf("soc1 clk\tfrequency\n");
++	for (i = 0; i < ARRAY_SIZE(ast2700_clk1_names); i++) {
++		clk.id = ast2700_clk1_names[i].id;
++		ret = clk_request(dev, &clk);
++		if (ret < 0)
++			return ret;
++
++		rate = clk_get_rate(&clk);
++
++		clk_free(&clk);
++
++		if (ret == -ENOTSUPP) {
++			printf("clk ID %lu not supported yet\n",
++			       ast2700_clk1_names[i].id);
++			continue;
++		}
++		if (ret < 0) {
++			printf("%s %lu: get_rate err: %d\n", __func__,
++			       ast2700_clk1_names[i].id, ret);
++			continue;
++		}
++
++		printf("%s(%3lu):\t%lu\n", ast2700_clk1_names[i].name,
++		       ast2700_clk1_names[i].id, rate);
++	}
++
++	return 0;
++}
+diff --git a/arch/arm/mach-aspeed/ast2705/cpu-info.c b/arch/arm/mach-aspeed/ast2705/cpu-info.c
+new file mode 100644
+index 0000000000..28fcf0c55c
+--- /dev/null
++++ b/arch/arm/mach-aspeed/ast2705/cpu-info.c
+@@ -0,0 +1,111 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright (C) ASPEED Technology Inc.
++ * Ryan Chen <ryan_chen@aspeedtech.com>
++ */
++
++#include <command.h>
++#include <asm/io.h>
++#include <asm/arch/platform.h>
++#include <asm/arch/scu_ast2700.h>
++
++/* SoC mapping Table */
++#define SOC_ID(str, rev) { .name = str, .rev_id = rev, }
++
++struct soc_id {
++	const char *name;
++	u64 rev_id;
++};
++
++static struct soc_id soc_map_table[] = {
++	SOC_ID("AST2755-A0", 0x0600000506020003),
++	SOC_ID("AST2705-A0", 0x0600010506020103),
++	SOC_ID("AST2725-A0", 0x0600020506020203),
++};
++
++void ast2700_print_soc_id(void)
++{
++	int i;
++	u64 rev_id;
++
++	rev_id = readl(ASPEED_CPU_REVISION_ID);
++	rev_id = ((u64)readl(ASPEED_IO_REVISION_ID) << 32) | rev_id;
++
++	for (i = 0; i < ARRAY_SIZE(soc_map_table); i++) {
++		if (rev_id == soc_map_table[i].rev_id)
++			break;
++	}
++	if (i == ARRAY_SIZE(soc_map_table))
++		printf("UnKnow-SOC: %llx\n", rev_id);
++	else
++		printf("SOC: %4s\n", soc_map_table[i].name);
++}
++
++#define SYS_DRAM_ECCRST	BIT(3)
++#define SYS_ABRRST		BIT(2)
++#define SYS_EXTRST		BIT(1)
++#define SYS_SRST		BIT(0)
++
++#define WDT_RST_BIT_MASK(s)	(GENMASK(3, 0) << (s))
++#define BIT_WDT_FULL(s)		(BIT(0) << (s))
++#define BIT_WDT_ARM(s)		(BIT(1) << (s))
++#define BIT_WDT_SOC(s)		(BIT(2) << (s))
++#define BIT_WDT_SW(s)		(BIT(3) << (s))
++
++void ast2700_print_wdtrst_info(void)
++{
++	u32 wdt_rst = readl(ASPEED_IO_RESET_LOG4);
++	int i;
++
++	for (i = 0; i < 8; i++) {
++		if (wdt_rst & WDT_RST_BIT_MASK(i * 4)) {
++			printf("RST: WDT%d ", i);
++			if (wdt_rst & BIT_WDT_SOC(i * 4)) {
++				printf("SOC ");
++				writel(BIT_WDT_SOC(i * 4), ASPEED_IO_RESET_LOG4);
++			}
++			if (wdt_rst & BIT_WDT_FULL(i * 4)) {
++				printf("FULL ");
++				writel(BIT_WDT_FULL(i * 4), ASPEED_IO_RESET_LOG4);
++			}
++			if (wdt_rst & BIT_WDT_ARM(i * 4)) {
++				printf("ARM ");
++				writel(BIT_WDT_ARM(i * 4), ASPEED_IO_RESET_LOG4);
++			}
++			if (wdt_rst & BIT_WDT_SW(i * 4)) {
++				printf("SW ");
++				writel(BIT_WDT_SW(i * 4), ASPEED_IO_RESET_LOG4);
++			}
++			printf("\n");
++		}
++	}
++}
++
++#define SYS_EXTRST		BIT(1)
++#define SYS_SRST		BIT(0)
++
++void ast2700_print_sysrst_info(void)
++{
++	u32 sys_rst = readl(ASPEED_CPU_RESET_LOG1);
++
++	if (sys_rst & SYS_SRST) {
++		printf("RST: Power On\n");
++		writel(SYS_SRST, ASPEED_CPU_RESET_LOG1);
++	} else if (sys_rst & SYS_EXTRST) {
++		printf("RST: EXTRST\n");
++		writel(SYS_EXTRST, ASPEED_CPU_RESET_LOG1);
++	} else {
++		ast2700_print_wdtrst_info();
++	}
++}
++
++int print_cpuinfo(void)
++{
++	ast2700_print_soc_id();
++	ast2700_print_sysrst_info();
++	aspeed_print_2nd_wdt_mode();
++	aspeed_print_fmc_aux_ctrl();
++	aspeed_print_spi_misc_func();
++
++	return 0;
++}
+diff --git a/arch/arm/mach-aspeed/ast2705/lowlevel_init.S b/arch/arm/mach-aspeed/ast2705/lowlevel_init.S
+new file mode 100644
+index 0000000000..9b78fed0b2
+--- /dev/null
++++ b/arch/arm/mach-aspeed/ast2705/lowlevel_init.S
+@@ -0,0 +1,132 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * Copyright (c) ASPEED Technology Inc.
++ */
++#include <config.h>
++#include <linux/linkage.h>
++
++/*
++ *        SMP mailbox
++ * +-----------------------+ 0x40
++ * |                       |
++ * | mailbox insn. for     |
++ * | cpuN GO sign polling  |
++ * |                       |
++ * +-----------------------+ 0x20
++ * | cpu3 entrypoint       |
++ * +-----------------------+ 0x18
++ * | cpu2 entrypoint       |
++ * +-----------------------+ 0x10
++ * | cpu1 entrypoint       |
++ * +-----------------------+ 0x8
++ * | reserved              |
++ * +-----------------------+ 0x4
++ * | mailbox ready         |
++ * +-----------------------+ SCU_CPU + 0x780
++ */
++
++#define SCU_CPU_BASE		0x12c02000
++#define SCU_CPU_SMP_READY	(SCU_CPU_BASE + 0x780)
++#define SCU_CPU_SMP_EP1		(SCU_CPU_BASE + 0x788)
++#define SCU_CPU_SMP_EP2		(SCU_CPU_BASE + 0x790)
++#define SCU_CPU_SMP_EP3		(SCU_CPU_BASE + 0x798)
++#define SCU_CPU_SMP_POLLINSN	(SCU_CPU_BASE + 0x7a0)
++
++ENTRY(lowlevel_init)
++	/* backup LR */
++	mov	x29, lr
++
++#if !CONFIG_IS_ENABLED(SKIP_LOWLEVEL_INIT)
++	/* reset SMP mailbox ASAP */
++	ldr	x0, =SCU_CPU_SMP_READY
++	str	wzr, [x0]
++
++	/*
++	 * get cpu core id
++	 *
++	 * ast2700 has 1-cluster, 4-cores CPU topology.
++	 * Affinity level 0 in MPIDR is sufficient.
++	 */
++	mrs	x4, mpidr_el1
++	ands	x4, x4, #0xff
++
++	/* cpu0 is the primary core to setup SMP mailbox */
++	beq	do_primary_core_setup
++
++	/* hold cpuN until mailbox is ready */
++	ldr	x0, =SCU_CPU_SMP_READY
++	movz	w1, #0xcafe
++	movk	w1, #0xbabe, lsl #16
++
++poll_mailbox_ready:
++	wfe
++	ldr	w2, [x0]
++	cmp	w1, w2
++	bne	poll_mailbox_ready
++
++	/*
++	 * parameters for relocated SMP go polling insn.
++	 *  x4 = cpu id
++	 *  x5 = SCU_CPU_SMP_EPx
++	 */
++	add	x5, x0, x4, lsl #3
++
++	/* jump to the polling loop in SMP mailbox, no return */
++	ldr	x0, =SCU_CPU_SMP_POLLINSN
++	br	x0
++
++do_primary_core_setup:
++	/* relocate mailbox insn. for cpuN to poll for SMP go signal */
++	adr	x0, smp_mbox_insn
++	adr	x1, smp_mbox_insn_end
++	ldr	x2, =SCU_CPU_SMP_POLLINSN
++
++relocate_smp_mbox_insn:
++	ldr	w3, [x0], #0x4
++	str	w3, [x2], #0x4
++	cmp	x0, x1
++	bne relocate_smp_mbox_insn
++
++	/* reset cpuN entrypoints */
++	ldr	x0, =SCU_CPU_SMP_EP1
++	str	xzr, [x0], #8
++	str	xzr, [x0], #8
++	str	xzr, [x0]
++
++	/* notify cpuN that SMP mailbox is ready */
++	movz	w0, #0xcafe
++	movk	w0, #0xbabe, lsl #16
++	ldr	x1, =SCU_CPU_SMP_READY
++	str	w0, [x1]
++
++	sev
++#endif	/* !CONFIG_IS_ENABLED(SKIP_LOWLEVEL_INIT) */
++
++	/* back to arch calling code */
++	mov	lr, x29
++	ret
++ENDPROC(lowlevel_init)
++
++/*
++ * insn. inside mailbox to poll SMP go signal.
++ *
++ * Note that this code will be relocated, any absolute
++ * addressing should NOT be used.
++ */
++smp_mbox_insn:
++	/*
++	 * x4 = cpu id
++	 * x5 = SCU_CPU_SMP_EPx
++	 */
++poll_smp_mbox_go:
++	wfe
++	ldr	x0, [x5]
++	cmp	x0, xzr
++	beq	poll_smp_mbox_go
++
++	/* jump to secondary core entrypoint */
++	br	x0
++
++smp_mbox_insn_end:
++	/* should never reach */
++	b	.
+diff --git a/arch/arm/mach-aspeed/ast2705/platform.c b/arch/arm/mach-aspeed/ast2705/platform.c
+new file mode 100644
+index 0000000000..abf70b5ede
+--- /dev/null
++++ b/arch/arm/mach-aspeed/ast2705/platform.c
+@@ -0,0 +1,59 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright (C) ASPEED Technology Inc.
++ */
++
++#include <dm.h>
++#include <asm/arch-aspeed/scu_ast2700.h>
++#include <asm/arch-aspeed/spi.h>
++#include <asm/global_data.h>
++#include <asm/io.h>
++#include <env.h>
++#include <env_internal.h>
++
++DECLARE_GLOBAL_DATA_PTR;
++
++enum env_location env_get_location(enum env_operation op, int prio)
++{
++	enum env_location env_loc = ENVL_UNKNOWN;
++
++	if (prio)
++		return env_loc;
++
++	if (IS_ENABLED(CONFIG_ENV_IS_NOWHERE)) {
++		env_loc = ENVL_NOWHERE;
++	} else {
++		if ((readl(ASPEED_IO_HW_STRAP1) & SCU_IO_HWSTRAP_EMMC)) {
++			if ((readl(ASPEED_IO_HW_STRAP1) & SCU_IO_HWSTRAP_UFS))
++				env_loc =  ENVL_UFS;
++			else
++				env_loc =  ENVL_MMC;
++		} else {
++			env_loc =  ENVL_SPI_FLASH;
++		}
++	}
++
++	return env_loc;
++}
++
++int arch_misc_init(void)
++{
++	if (IS_ENABLED(CONFIG_ARCH_MISC_INIT)) {
++		if ((readl(ASPEED_IO_HW_STRAP1) & SCU_IO_HWSTRAP_EMMC)) {
++			if ((readl(ASPEED_IO_HW_STRAP1) & SCU_IO_HWSTRAP_UFS))
++				env_set("boot_device", "ufs");
++			else
++				env_set("boot_device", "mmc");
++		} else {
++			env_set("boot_device", "spi");
++			spi_bootarg_config();
++		}
++
++		if ((readl(ASPEED_IO_HW_STRAP1) & SCU_IO_HWSTRAP_SECBOOT))
++			env_set("verify", "yes");
++		else
++			env_set("verify", "no");
++	}
++
++	return 0;
++}
+diff --git a/arch/arm/mach-aspeed/ast2705/scu_info.c b/arch/arm/mach-aspeed/ast2705/scu_info.c
+new file mode 100644
+index 0000000000..be8aff3907
+--- /dev/null
++++ b/arch/arm/mach-aspeed/ast2705/scu_info.c
+@@ -0,0 +1,129 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright (C) ASPEED Technology Inc.
++ * Ryan Chen <ryan_chen@aspeedtech.com>
++ */
++
++#include <errno.h>
++#include <asm/io.h>
++#include <asm/arch/platform.h>
++#include <asm/arch/scu_ast2700.h>
++#include <asm/arch/spi.h>
++
++int aspeed_get_mac_phy_interface(u8 num)
++{
++	return 0;
++}
++
++void aspeed_print_security_info(void)
++{
++}
++
++void aspeed_print_dram_initializer(void)
++{
++}
++
++void aspeed_print_2nd_wdt_mode(void)
++{
++	struct ast2700_scu0 *scu0 = (struct ast2700_scu0 *)ASPEED_CPU_SCU_BASE;
++	struct ast2700_scu1 *scu1 = (struct ast2700_scu1 *)ASPEED_IO_SCU_BASE;
++	u32 scu1_hwstrap1 = readl(&scu1->hwstrap1); /* SCU1_010 */
++	u32 scu1_hwstrap2 = readl(&scu1->hwstrap2); /* SCU1_030 */
++	u32 boot_indicator = readl(ASPEED_WDTA_BASE + 0x4c) & BIT(1);
++
++	if (readl(&scu0->sysrest_log2) & BIT(31)) {
++		printf("RST: WDTA\n");
++		writel(BIT(31), &scu0->sysrest_log2);
++	}
++
++	/* ABR enable */
++	if (spi_abr_enabled()) {
++		/* boot from eMMC */
++		if (scu1_hwstrap1 & BIT(11)) {
++			if (scu1_hwstrap1 & BIT(23))
++				printf("UFS 2nd Boot (ABR): Enable");
++			else
++				printf("eMMC 2nd Boot (ABR): Enable");
++
++			printf(", boot partition: %s",
++			       !!boot_indicator ? "2" : "1");
++		} else { /* boot from SPI */
++			printf("FMC 2nd Boot (ABR): Enable");
++			if (scu1_hwstrap2 & BIT(29))
++				printf(", Single flash");
++			else
++				printf(", Dual flashes");
++
++			printf(", Source: %s",
++			       !!boot_indicator ? "Alternate" : "Primary");
++
++			if (spi_get_flash_sz_strap()) {
++				printf(", BSPI_size: %d MB",
++				       spi_get_flash_sz_strap() / 0x100000);
++			}
++		}
++
++		if (scu1_hwstrap2 & BIT(27))
++			printf(", infinite ABR\n");
++		else
++			printf("\n");
++	}
++}
++
++void aspeed_print_fmc_aux_ctrl(void)
++{
++	struct ast2700_scu1 *scu1 = (struct ast2700_scu1 *)ASPEED_IO_SCU_BASE;
++	u32 scu1_hwstrap2 = readl(&scu1->hwstrap2);
++	u32 boot_indicator = readl(ASPEED_WDTA_BASE + 0x4c) & BIT(1);
++
++	if (spi_aux_bit_enabled()) {
++		printf("FMC aux control: Enable");
++		/* gpioY6 : BSPI_ABR */
++		if (spi_ext_abr_signal())
++			printf(", Force Alt boot");
++		else
++			printf(", Default mode");
++
++		if (scu1_hwstrap2 & BIT(29))
++			printf(", Single flash");
++		else
++			printf(", Dual flashes");
++
++		printf(", Source: %s",
++		       !!boot_indicator ? "Alternate" : "Primary");
++
++		if (spi_get_flash_sz_strap()) {
++			printf(", BSPI_size: %d MB",
++			       spi_get_flash_sz_strap() / 0x100000);
++		}
++
++		printf("\n");
++	}
++}
++
++void aspeed_print_spi_misc_func(void)
++{
++	struct ast2700_scu1 *scu1 = (struct ast2700_scu1 *)ASPEED_IO_SCU_BASE;
++	u32 scu1_hwstrap1 = readl(&scu1->hwstrap1); /* SCU1_010 */
++	u32 scu1_hwstrap2 = readl(&scu1->hwstrap2); /* SCU1_030 */
++
++	if ((scu1_hwstrap1 & BIT(24)) || (scu1_hwstrap1 & BIT(25)) ||
++	    (scu1_hwstrap2 & BIT(25))) {
++		printf("SPI: force");
++		if (scu1_hwstrap1 & BIT(25))
++			printf(", 4-byte addr mode");
++		if (scu1_hwstrap1 & BIT(24))
++			printf(", wait for ready");
++		if (scu1_hwstrap2 & BIT(25))
++			printf(", check SFDP");
++		printf("\n");
++	}
++}
++
++void aspeed_print_espi_mode(void)
++{
++}
++
++void aspeed_print_mac_info(void)
++{
++}
+diff --git a/arch/arm/mach-aspeed/ast2705/spi.c b/arch/arm/mach-aspeed/ast2705/spi.c
+new file mode 100644
+index 0000000000..3f426531dd
+--- /dev/null
++++ b/arch/arm/mach-aspeed/ast2705/spi.c
+@@ -0,0 +1,234 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright (c) Aspeed Technology Inc.
++ */
++
++#include <asm/arch/platform.h>
++#include <asm/arch-aspeed/spi.h>
++#include <asm/io.h>
++#include <env.h>
++#include <env_internal.h>
++#include <malloc.h>
++
++#define SCU_SPI_ABR_REG		(ASPEED_IO_SCU_BASE + 0x030)
++#define SPI_ABR_MODE		BIT(29)
++#define SPI_AUX_EN		BIT(16)
++#define SPI_ABR_EN		BIT(0)
++
++#define SCU1_PINMUX_GRP_P	(ASPEED_IO_SCU_BASE + 0x43c)
++#define   SCU1_PINMUX_PIN7	GENMASK(31, 28)
++
++#define GPIOP7_REG		(ASPEED_IO_GPIO_BASE + 0x37c)
++#define GPIO_DATA_IN		BIT(13)
++#define GPIO_DIRECT		BIT(1)
++
++#define WDT_ABR_CTRL		(ASPEED_WDTA_BASE + 0x04c)
++#define WDT_ABR_INDICATOR	BIT(1)
++
++bool spi_abr_enabled(void)
++{
++	u32 abr_val;
++
++	abr_val = readl((void *)SCU_SPI_ABR_REG) & SPI_ABR_EN;
++
++	return (abr_val != 0) ? true : false;
++}
++
++bool spi_aux_bit_enabled(void)
++{
++	u32 spi_aux;
++
++	spi_aux = readl((void *)SCU_SPI_ABR_REG) & SPI_AUX_EN;
++
++	return (spi_aux != 0) ? true : false;
++}
++
++u32 spi_ext_abr_signal(void)
++{
++	uint32_t reg;
++
++	/* force to change to GPIO mode */
++	reg = readl(SCU1_PINMUX_GRP_P);
++	reg &= ~(SCU1_PINMUX_PIN7);
++	writel(reg, SCU1_PINMUX_GRP_P);
++
++	/* input direction */
++	reg = readl(GPIOP7_REG);
++	reg &= ~(GPIO_DIRECT);
++	writel(reg, GPIOP7_REG);
++
++	return !!(readl(GPIOP7_REG) & GPIO_DATA_IN);
++}
++
++u32 spi_get_abr_indictor(void)
++{
++	u32 wdt_abr_ctrl;
++
++	wdt_abr_ctrl = readl((void *)WDT_ABR_CTRL);
++
++	return (wdt_abr_ctrl & WDT_ABR_INDICATOR) >> 1;
++}
++
++enum spi_abr_mode get_spi_flash_abr_mode(void)
++{
++	u32 abr_mode;
++
++	abr_mode = readl((void *)SCU_SPI_ABR_REG) & SPI_ABR_MODE;
++
++	return (abr_mode != 0) ? SINGLE_FLASH_ABR : DUAL_FLASH_ABR;
++}
++
++/*
++ * SCU flash size: SCU030[15:13]
++ * 7: 512MB
++ * 6: 256MB
++ * 5: 128MB
++ * 4: 64MB
++ * 3: 32MB
++ * 2: 16MB
++ * 1: 8MB
++ * 0: disabled
++ */
++u32 spi_get_flash_sz_strap(void)
++{
++	u32 scu_flash_sz;
++	u32 flash_sz_phy;
++
++	scu_flash_sz = (readl((void *)SCU_SPI_ABR_REG) >> 13) & 0x7;
++	switch (scu_flash_sz) {
++	case 0x7:
++		flash_sz_phy = SNOR_SZ_512MB;
++		break;
++	case 0x6:
++		flash_sz_phy = SNOR_SZ_256MB;
++		break;
++	case 0x5:
++		flash_sz_phy = SNOR_SZ_128MB;
++		break;
++	case 0x4:
++		flash_sz_phy = SNOR_SZ_64MB;
++		break;
++	case 0x3:
++		flash_sz_phy = SNOR_SZ_32MB;
++		break;
++	case 0x2:
++		flash_sz_phy = SNOR_SZ_16MB;
++		break;
++	case 0x1:
++		flash_sz_phy = SNOR_SZ_8MB;
++		break;
++	case 0x0:
++		flash_sz_phy = SNOR_SZ_UNSET;
++		break;
++	default:
++		flash_sz_phy = SNOR_SZ_UNSET;
++		break;
++	}
++
++	return flash_sz_phy;
++}
++
++u32 aspeed_spi_abr_offset(void)
++{
++	/* no need for dual flash ABR */
++	if (get_spi_flash_abr_mode() == DUAL_FLASH_ABR)
++		return 0;
++
++	/* no need when ABR is not triggerred */
++	if (spi_get_abr_indictor() == 0)
++		return 0;
++
++	return (spi_get_flash_sz_strap() / 2);
++}
++
++void spi_bootarg_config(void)
++{
++	char *bootargs = NULL;
++	char *bootargs_rofs = NULL;
++	u32 bootargs_len;
++
++	env_set_hex("fdtspiaddr",
++		    CONFIG_SPI_KERNEL_FIT_ADDR + aspeed_spi_abr_offset());
++
++	if (get_spi_flash_abr_mode() == SINGLE_FLASH_ABR &&
++	    (spi_abr_enabled() || spi_aux_bit_enabled())) {
++		bootargs = env_get("bootargs");
++		if (!bootargs) {
++			printf("fail to get bootargs!\n");
++			return;
++		}
++
++		bootargs_len = strlen(bootargs) + 1 + 15;
++		bootargs_rofs = malloc(bootargs_len);
++		memset(bootargs_rofs, '\0', bootargs_len);
++		strlcpy(bootargs_rofs, bootargs, strlen(bootargs) + 1);
++
++		if (spi_get_abr_indictor() == 0) {
++			env_set("rootfs", "rofs-a");
++			strlcat(bootargs_rofs, " rootfs=rofs-a", bootargs_len);
++		} else {
++			env_set("rootfs", "rofs-b");
++			strlcat(bootargs_rofs, " rootfs=rofs-b", bootargs_len);
++		}
++
++		env_set("bootargs", bootargs_rofs);
++
++		free(bootargs_rofs);
++	} else {
++		env_set("rootfs", "rofs");
++	}
++}
++
++size_t aspeed_memmove_dma_op(void *dest, const void *src, size_t count)
++{
++	u32 dma_busy = 0;
++	u64 dma_dest = (u64)dest;
++	u64 dma_src = (u64)src;
++	u32 remaining = (u32)count;
++	u32 dma_len = (u32)count;
++	u32 dma_addr_hi;
++
++	if (dma_dest == dma_src)
++		return 0;
++
++	if (dma_dest % 4 != 0 || dma_src % 4 != 0)
++		return 0;
++
++	if (dma_src >= ASPEED_FMC_CS0_BASE &&
++	    dma_src + dma_len < (ASPEED_FMC_CS0_BASE + ASPEED_FMC_CS0_SIZE) &&
++	    dma_dest >= ASPEED_DRAM_BASE) {
++		while (remaining > 0) {
++			if (remaining > SPI_DMA_MAX_LEN)
++				dma_len = SPI_DMA_MAX_LEN;
++			else
++				dma_len = remaining;
++
++			dma_addr_hi = 0;
++			if (dma_dest >= ASPEED_DRAM_BASE)
++				dma_addr_hi = (u32)((dma_dest) >> 32) & 0xff;
++
++			writel(dma_addr_hi, (void *)DRAM_HI_ADDR);
++
++			writel((u32)(dma_dest - ASPEED_DRAM_BASE),
++			       (void *)DMA_RAM_ADDR);
++			writel((u32)(dma_src - ASPEED_FMC_CS0_BASE),
++			       (void *)DMA_FLASH_ADDR);
++			writel(dma_len - 1, (void *)DMA_LEN);
++
++			writel(DMA_ENABLE, (void *)DMA_CTRL);
++
++			do {
++				dma_busy = readl((void *)INTR_CTRL) & SPI_DMA_DONE;
++			} while (dma_busy == 0);
++
++			writel(0x0, (void *)DMA_CTRL);
++			dma_dest += dma_len;
++			dma_src += dma_len;
++			remaining -= dma_len;
++		}
++
++		return count;
++	}
++	return 0;
++}
++
+-- 
+2.43.0
+

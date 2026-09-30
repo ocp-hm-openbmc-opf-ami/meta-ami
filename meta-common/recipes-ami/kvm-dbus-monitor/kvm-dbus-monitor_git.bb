@@ -3,10 +3,10 @@ DESCRIPTION = "Service providing dbus interface and monitoring for KVM"
 LICENSE = "CLOSED"
 DEPENDS = "systemd nlohmann-json sdbusplus phosphor-logging phosphor-dbus-interfaces"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/obmc-ikvm;protocol=https;branch=main"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/obmc-ikvm;protocol=https;branch=integrate-onetree-latest"
 
 # Use AUTOREV to get the latest revision from the repository
-SRCREV = "4e6eb7c682d08a04b53ba05bbb5c1dd1552fac10"
+SRCREV = "506f145dd1bb303130b55c53ccc4277b10b2f34b"
 #SRCREV = "${AUTOREV}"
 
 # Set the source directory

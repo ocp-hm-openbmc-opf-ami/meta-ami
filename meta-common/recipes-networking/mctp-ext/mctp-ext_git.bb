@@ -4,9 +4,9 @@ LICENSE = "GPL-2.0-only"
 
 LIC_FILES_CHKSUM = "file://LICENSE;md5=4cc91856b08b094b4f406a29dc61db21"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/mctp-ext.git;protocol=https;branch=main \
+SRC_URI = "git://github.com/ocp-hm-openbmc-opf-ami/mctp-ext.git;protocol=https;branch=integrate-onetree-latest \
            "
-SRCREV = "ab4c2e1c46d44178d6678cc472650a1b7ec32cb8"
+SRCREV = "0aa80775bbf78d4d35eddbe6a1365a6a80b9e093"
 PV = "1.0+git${SRCPV}"
 
 S = "${WORKDIR}/git"
@@ -26,7 +26,7 @@ SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 RDEPENDS:${PN} = " bash "
 DEPENDS:append = " libusb1 json-c boost sdbusplus phosphor-logging i2c-tools "
 
-FILES:${PN} += "${datadir}/mctp/mctp_ext_options.json"
+FILES:${PN} += "${datadir}/mctp"
 
 SRC_URI:append = " \
 	file://mctpreactor.service \
@@ -42,4 +42,3 @@ do_install:append () {
 	install -d ${D}${systemd_system_unitdir}
 	install -m 0644 ${UNPACKDIR}/mctpreactor.service ${D}${systemd_system_unitdir}/mctpreactor.service
 }
-
