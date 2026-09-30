@@ -10,11 +10,11 @@ KERNEL_VERSION_SANITY_SKIP = "1"
 
 EXTRA_OEMAKE += "KCFLAGS=-DCONFIG_I3C_MCTP_HELPERS"
 
-#KSRC = "git://git.ami.com/core/ami-bmc/base-tech/linux-lf.git;protocol=https;branch=onetree-dev-6.6"
+#KSRC = "git://git@github.com/ocp-hm-openbmc-opf-ami/linux.git;protocol=https;branch=onetree-dev-6.6"
 
 # Include this as a comment only for downstream auto-bump
 # SRC_URI = "git://git@github.com/intel-bmc/os.linux.kernel.openbmc.linux.git;protocol=ssh;branch=dev-6.1-intel"
-SRC_URI:append = "git://git.ami.com/core/ami-bmc/base-tech/linux-lf.git;protocol=https;branch=onetree-dev-6.6 "
+SRC_URI:append = "git://git@github.com/ocp-hm-openbmc-opf-ami/linux.git;protocol=https;branch=onetree-dev-6.6 "
 
 # KBRANCH is added for devtool to checkout to the same branch as the linux-lf branch. This variable is only used by the devtool utility and must be updated whenever the linux-lf branch changes.
 KBRANCH = "onetree-dev-6.6"
@@ -29,29 +29,29 @@ do_compile:prepend(){
    export DTC_FLAGS=-@
 }
 
-SRC_URI += "file://dts-ami/ \
-	    file://Enable_I3C.cfg \
-	    file://eth_over_usb.cfg \
- 	    file://nfs_cifs.cfg \
-	    file://bootlogo.cfg \
-	    file://Enable_i2c_slave.cfg \
-	    file://iptables.cfg \
-	    file://CVE-2025-21786.patch \
-	    file://0003-Add-I2C-slave-mqueue-support.patch \
-	    file://0004-Fix-I2C-Coverity-for-linux-onetree.patch \
-	    file://0004-Fix-common-kernel-I2C-patch-error-in-OT-AMD.patch \
-	    file://0005-Add-the-M-Hold-patch-and-I2C-Driver-change-from-INTEL.patch \
-	    file://CVE-2025-38335.patch \
-	    file://CVE-2025-38622.patch \
-	    file://CVE-2025-38653.patch \
-	    file://CVE-2025-38572.patch \
-	    file://CVE-2025-3857.patch \
-	    file://CVE-2025-38566.patch \
+SRC_URI += " file://dts-ami/ \
+            file://Enable_I3C.cfg \
+            file://eth_over_usb.cfg \
+            file://nfs_cifs.cfg \
+            file://bootlogo.cfg \
+            file://Enable_i2c_slave.cfg \
+            file://iptables.cfg \
+            file://CVE-2025-21786.patch \
+            file://0003-Add-I2C-slave-mqueue-support.patch \
+            file://0004-Fix-I2C-Coverity-for-linux-onetree.patch \
+            file://0004-Fix-common-kernel-I2C-patch-error-in-OT-AMD.patch \
+            file://0005-Add-the-M-Hold-patch-and-I2C-Driver-change-from-INTEL.patch \
+            file://CVE-2025-38335.patch \
+            file://CVE-2025-38622.patch \
+            file://CVE-2025-38653.patch \
+            file://CVE-2025-38572.patch \
+            file://CVE-2025-3857.patch \
+            file://CVE-2025-38566.patch \
             file://CVE-2025-38639.patch \
-	    file://CVE-2025-38670.patch \
-	    file://CVE-2025-38555.patch \
-	    file://CVE-2025-38565.patch \
-	    file://CVE-2025-38563.patch \
+            file://CVE-2025-38670.patch \
+            file://CVE-2025-38555.patch \
+            file://CVE-2025-38565.patch \
+            file://CVE-2025-38563.patch \
             file://CVE-2025-38694.patch \
             file://CVE-2025-38725.patch \
             file://CVE-2025-38716.patch \
@@ -94,9 +94,9 @@ SRC_URI += "file://dts-ami/ \
             file://CVE-2025-39881.patch \
             file://CVE-2025-39877.patch \
             file://CVE-2025-39880.patch \
-	    file://CVE-2025-39827.patch \
-	    file://CVE-2025-39826.patch \
-	    file://CVE-2025-38632.patch \
+            file://CVE-2025-39827.patch \
+            file://CVE-2025-39826.patch \
+            file://CVE-2025-38632.patch \
             file://CVE-2025-38681.patch \
             file://CVE-2025-38701.patch \
             file://CVE-2025-38702.patch \
@@ -223,7 +223,7 @@ SRC_URI += "file://dts-ami/ \
             file://CVE-2026-31700.patch \
             file://CVE-2026-31675.patch \
             file://CVE-2026-31673.patch \
-	    file://CVE-2026-31392.patch \
+            file://CVE-2026-31392.patch \
             file://CVE-2025-68219.patch \
             file://CVE-2026-43112.patch \
             file://CVE-2025-40099.patch \
@@ -248,8 +248,8 @@ SRC_URI += "file://dts-ami/ \
             file://CVE-2026-43499.patch \
             file://CVE-2026-23340.patch \
             file://CVE-2026-43194.patch \
-	    file://CVE-2026-23351.patch \
-	    file://CVE-2025-68231.patch \
+            file://CVE-2026-23351.patch \
+            file://CVE-2025-68231.patch \
             file://CVE-2026-43350.patch \
             file://CVE-2026-46244.patch \
             file://CVE-2026-46266.patch \
@@ -268,7 +268,6 @@ SRC_URI += "file://dts-ami/ \
             file://CVE-2026-23025.patch \
             file://CVE-2026-46242.patch \
             file://CVE-2026-45942.patch \
-            file://Fix-crypto-compilation-issue.patch \
             file://CVE-2026-31677.patch \
             file://CVE-2026-43043.patch \
             file://CVE-2025-40080.patch \
@@ -419,6 +418,14 @@ SRC_URI += "file://dts-ami/ \
             file://CVE-2025-68795.patch \
             file://CVE-2026-23047.patch \
             file://CVE-2026-45892.patch \
+            file://CVE-2025-38556.patch \
+            file://CVE-2025-38704.patch \
+            file://CVE-2025-22121.patch \
+            file://Compilation-fix-CVE-2025-22121.patch \
+            file://CVE-2026-46289.patch \
+            file://CVE-2026-52999.patch \
+            file://CVE-2026-53006.patch \
+            file://CVE-2026-53131.patch \
             "
 
 # Include the below cfg file to get the proper mounting of the SD card partitions in Slot 1.
@@ -428,6 +435,7 @@ SRC_URI += "file://dts-ami/ \
 
 SRC_CPLD_SPI = " file://cpld-spidev.cfg \
                  file://0006-enable-spidev-in-driver-file.patch \
+		 file://0001-spi-aspeed-smc-enable-cpld-spidev-transfers.patch \
                "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-fwupdate', SRC_CPLD_SPI,'', d)}"
 
@@ -435,7 +443,7 @@ SRC_IPMI_SSIF = " file://0006-Add-SSIF-and-SBMR-support.patch \
                 "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-ipmi-ssif', SRC_IPMI_SSIF,'', d)}"
 
-SRC_URI_NM += "file://disable_nm_sensor.cfg \
+SRC_URI_NM += " file://disable_nm_sensor.cfg \
                file://disable_smart.cfg \
                "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-intelsipack', '', SRC_URI_NM, d)}"
@@ -446,14 +454,14 @@ SRC_USB_Gadget_Device = " file://USB-Port-B-as-Gadget-Device.cfg \
 SRC_USB_HOST_Controller = " file://USB-Port-B-as-HOST-Controller.cfg "
 SRC_URI:append = "${@bb.utils.contains('USB_Port_B_Function', 'Gadget-Device', SRC_USB_Gadget_Device, SRC_USB_HOST_Controller, d)}"
 
-NETWORK_BONDING_SRC_URI += "file://bond.cfg \
+NETWORK_BONDING_SRC_URI += " file://bond.cfg \
                            "
 SRC_URI += "${@bb.utils.contains('ENABLE_BONDING', 'network-bond', NETWORK_BONDING_SRC_URI,'', d)}"
 
 SRC_URI:append = " ${@bb.utils.contains('ENABLE_COMMUNITY_MCTP_KERNEL_MODE', '1', ' file://Enable_MCTP_vdm.cfg ', '', d)}"
 
 # ABR mode detection patch for AST2600
-SRC_URI_ABR_PATCH = "file://0001-spi-aspeed-Add-ABR-mode-detection-support-for-AST260.patch"
+SRC_URI_ABR_PATCH = " file://0001-spi-aspeed-Add-ABR-mode-detection-support-for-AST260.patch "
 
 # Apply to evb-ast2600
 SRC_URI:append:evb-ast2600 = " \
@@ -531,3 +539,47 @@ kernel_do_install() {
         ! [ -e Module.symvers ] || install -m 0644 Module.symvers ${D}/${KERNEL_IMAGEDEST}/Module.symvers-${KERNEL_VERSION}
 
 }
+
+SRC_URI += " file://CVE-2025-21884.patch "
+SRC_URI += " file://CVE-2025-38730.patch "
+SRC_URI += " file://CVE-2025-38678.patch "
+SRC_URI += " file://CVE-2025-38162-prereq01-1c4f72fa9699.patch "
+SRC_URI += " file://CVE-2025-38162.patch "
+SRC_URI += " file://CVE-2025-40135-prereq01-1310640f9ae9.patch "
+SRC_URI += " file://CVE-2025-40135.patch "
+SRC_URI += " file://CVE-2026-23171.patch "
+SRC_URI += " file://CVE-2026-23278.patch "
+SRC_URI += " file://CVE-2026-31486.patch "
+SRC_URI += " file://CVE-2026-31527-prereq01-87b3d0105192.patch "
+SRC_URI += " file://CVE-2026-31527-prereq02-64a3ee535bd7.patch "
+SRC_URI += " file://CVE-2026-31527.patch "
+SRC_URI += " file://CVE-2026-43116.patch "
+SRC_URI += " file://CVE-2026-43303.patch "
+SRC_URI += " file://CVE-2026-53366.patch "
+SRC_URI += " file://CVE-2026-46274.patch "
+SRC_URI += " file://CVE-2026-46294.patch "
+SRC_URI += " file://CVE-2026-46306.patch "
+SRC_URI += " file://CVE-2026-52910.patch "
+SRC_URI += " file://CVE-2026-52912.patch "
+SRC_URI += " file://CVE-2026-52915.patch "
+SRC_URI += " file://CVE-2026-52923.patch "
+SRC_URI += " file://CVE-2026-52933.patch "
+SRC_URI += " file://CVE-2026-52942.patch "
+SRC_URI += " file://CVE-2026-52943.patch "
+SRC_URI += " file://CVE-2026-52946.patch "
+SRC_URI += " file://CVE-2026-52981-prereq01-7c299d0bc983.patch "
+SRC_URI += " file://CVE-2026-52981-prereq02-dbe42409bfeb.patch "
+SRC_URI += " file://CVE-2026-52981.patch "
+SRC_URI += " file://CVE-2026-53069.patch "
+SRC_URI += " file://CVE-2026-52998.patch "
+SRC_URI += " file://CVE-2026-52967.patch "
+SRC_URI += " file://CVE-2026-53184.patch "
+SRC_URI += " file://CVE-2026-53185.patch "
+SRC_URI += " file://CVE-2026-53212.patch "
+SRC_URI += " file://CVE-2026-53223.patch "
+SRC_URI += " file://CVE-2026-53267.patch "
+SRC_URI += " file://CVE-2026-53268.patch "
+SRC_URI += " file://CVE-2026-53275.patch "
+SRC_URI += " file://CVE-2026-53362.patch "
+SRC_URI += " file://CVE-2025-21868.patch "
+SRC_URI += " file://CVE-2026-64597.patch "

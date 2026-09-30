@@ -1,9 +1,9 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 inherit obmc-phosphor-systemd
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/mctp.git;protocol=https;branch=main \
+SRC_URI = "git://github.com/ocp-hm-openbmc-opf-ami/mctp.git;protocol=https;branch=integrate-onetree-latest \
            "
-SRCREV = "3a6d65a5527a025d63fc00aa85ef388324d1b9e7"
+SRCREV = "9b7ea1eba0bdc19cda548ef1a940254811e99c9f"
 
 RDEPENDS:${PN} = " bash "
 DEPENDS:append = " libusb1 json-c boost sdbusplus phosphor-logging i2c-tools"
@@ -27,4 +27,3 @@ do_install:append () {
 	install -m 0755 ${UNPACKDIR}/mctp-discovery.sh ${D}${libexecdir}/mctp
 	install -m 0755 ${UNPACKDIR}/mctp-get-routing-table.sh ${D}${libexecdir}/mctp
 }
-

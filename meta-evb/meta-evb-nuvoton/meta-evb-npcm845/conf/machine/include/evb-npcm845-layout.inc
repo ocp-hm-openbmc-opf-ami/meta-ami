@@ -21,11 +21,11 @@ FLASH_KERNEL_SIZE:flash-65536   = "9472"
 
 #SectionName: "rofs"
 FLASH_ROFS_OFFSET:flash-65536 = "13568"
-FLASH_ROFS_SIZE:flash-65536   = "48896"
+FLASH_ROFS_SIZE:flash-65536   = "48960"
 
 #SectionName: "rwfs"
-FLASH_RWFS_OFFSET:flash-65536 = "62464"
-FLASH_RWFS_SIZE:flash-65536   = "3008"
+FLASH_RWFS_OFFSET:flash-65536 = "62528"
+FLASH_RWFS_SIZE:flash-65536   = "2944"
 
 #SectionName: "reserved"
 FLASH_RESERVED_OFFSET:flash-65536 = "65472"

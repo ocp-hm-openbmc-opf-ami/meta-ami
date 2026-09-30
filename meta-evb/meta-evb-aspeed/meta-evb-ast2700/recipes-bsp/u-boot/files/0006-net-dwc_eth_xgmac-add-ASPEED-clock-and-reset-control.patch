@@ -1,0 +1,139 @@
+From 9bb50d0fada863eb3dbaf5a0c663228689518b44 Mon Sep 17 00:00:00 2001
+From: Jacky Chou <jacky_chou@aspeedtech.com>
+Date: Tue, 5 May 2026 17:41:49 +0800
+Subject: [PATCH 06/13] net: dwc_eth_xgmac: add ASPEED clock and reset control
+
+Request and release the ASPEED XGMAC reset and stmmaceth clock
+resources from the glue layer. Assert and deassert reset during
+startup and enable the clock before registering the MDIO bus, so the
+core can access the controller through the platform-specific resource
+hooks.
+
+Signed-off-by: Jacky Chou <jacky_chou@aspeedtech.com>
+Change-Id: Ide466b53f74ed952d08704b443ec125f445d1e86
+Upstream-Status: Backport [SDK v11.03 migration]
+---
+ drivers/net/dwc_eth_xgmac_aspeed.c | 102 +++++++++++++++++++++++++++--
+ 1 file changed, 96 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/net/dwc_eth_xgmac_aspeed.c b/drivers/net/dwc_eth_xgmac_aspeed.c
+index 861ef161ba..a7a64455d0 100644
+--- a/drivers/net/dwc_eth_xgmac_aspeed.c
++++ b/drivers/net/dwc_eth_xgmac_aspeed.c
+@@ -25,17 +25,107 @@
+ #include <dm/device_compat.h>
+ #include "dwc_eth_xgmac.h"
+ 
++static int xgmac_probe_resources_aspeed(struct udevice *dev)
++{
++	struct xgmac_priv *xgmac = dev_get_priv(dev);
++	int ret;
++
++	ret = reset_get_bulk(dev, &xgmac->reset_bulk);
++	if (ret) {
++		pr_err("xgmac reset request failed: %d\n", ret);
++		return ret;
++	}
++
++	ret = clk_get_by_name(dev, "stmmaceth", &xgmac->clk_common);
++	if (ret) {
++		pr_err("xgmac clock request failed: %d\n", ret);
++		return ret;
++	}
++
++	return 0;
++}
++
++static int xgmac_remove_resources_aspeed(struct udevice *dev)
++{
++	struct xgmac_priv *xgmac = dev_get_priv(dev);
++
++	reset_release_bulk(&xgmac->reset_bulk);
++	clk_free(&xgmac->clk_common);
++
++	return 0;
++}
++
++static int xgmac_stop_resets_aspeed(struct udevice *dev)
++{
++	struct xgmac_priv *xgmac = dev_get_priv(dev);
++	int ret;
++
++	ret = reset_assert_bulk(&xgmac->reset_bulk);
++	if (ret < 0)
++		pr_err("xgmac reset assert failed: %d\n", ret);
++
++	return ret;
++}
++
++static int xgmac_start_resets_aspeed(struct udevice *dev)
++{
++	struct xgmac_priv *xgmac = dev_get_priv(dev);
++	int ret;
++
++	ret = reset_assert_bulk(&xgmac->reset_bulk);
++	if (ret < 0) {
++		pr_err("xgmac reset assert failed: %d", ret);
++		return ret;
++	}
++
++	udelay(2);
++
++	ret = reset_deassert_bulk(&xgmac->reset_bulk);
++	if (ret < 0) {
++		pr_err("xgmac reset de-assert failed: %d", ret);
++		return ret;
++	}
++
++	return 0;
++}
++
++static int xgmac_start_clks_aspeed(struct udevice *dev)
++{
++	struct xgmac_priv *xgmac = dev_get_priv(dev);
++	int ret;
++
++	ret = clk_enable(&xgmac->clk_common);
++	if (!ret)
++		xgmac->clk_ck_enabled = true;
++	else
++		pr_err("xgmac clock enable failed: %d\n", ret);
++
++	return ret;
++}
++
++static int xgmac_stop_clks_aspeed(struct udevice *dev)
++{
++	struct xgmac_priv *xgmac = dev_get_priv(dev);
++
++	if (xgmac->clk_ck_enabled) {
++		clk_disable(&xgmac->clk_common);
++		xgmac->clk_ck_enabled = false;
++	}
++
++	return 0;
++}
++
+ static struct xgmac_ops xgmac_aspeed_ops = {
+ 	.xgmac_inval_desc = xgmac_inval_desc_generic,
+ 	.xgmac_flush_desc = xgmac_flush_desc_generic,
+ 	.xgmac_inval_buffer = xgmac_inval_buffer_generic,
+ 	.xgmac_flush_buffer = xgmac_flush_buffer_generic,
+-	.xgmac_probe_resources = xgmac_null_ops,
+-	.xgmac_remove_resources = xgmac_null_ops,
+-	.xgmac_stop_resets = xgmac_null_ops,
+-	.xgmac_start_resets = xgmac_null_ops,
+-	.xgmac_stop_clks = xgmac_null_ops,
+-	.xgmac_start_clks = xgmac_null_ops,
++	.xgmac_probe_resources = xgmac_probe_resources_aspeed,
++	.xgmac_remove_resources = xgmac_remove_resources_aspeed,
++	.xgmac_stop_resets = xgmac_stop_resets_aspeed,
++	.xgmac_start_resets = xgmac_start_resets_aspeed,
++	.xgmac_stop_clks = xgmac_stop_clks_aspeed,
++	.xgmac_start_clks = xgmac_start_clks_aspeed,
+ 	.xgmac_calibrate_pads = xgmac_null_ops,
+ 	.xgmac_disable_calibration = xgmac_null_ops,
+ 	.xgmac_get_enetaddr = xgmac_null_ops,
+-- 
+2.34.1
+

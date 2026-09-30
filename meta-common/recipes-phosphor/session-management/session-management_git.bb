@@ -3,8 +3,8 @@ DESCRIPTION = "Session Management application"
 LICENSE = "CLOSED"
 
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/session-manager.git;protocol=https;branch=main"
-SRCREV = "81872de8da0d6bf2a5208550756d4dc70c06d7a2"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/session-manager.git;protocol=https;branch=integrate-onetree-latest"
+SRCREV = "28809c6c2f6446c1890739bc54700a3c3e0e871e"
 
 S = "${UNPACKDIR}/git"
 PV = "1.0+git${SRCPV}"

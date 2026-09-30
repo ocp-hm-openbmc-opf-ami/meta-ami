@@ -7,10 +7,6 @@ LICENSE = "CLOSED"
 # Source URI pointing to the GitHub repository
 SRC_URI = "git://github.com/rra/pam-krb5.git;branch=main;protocol=https"
 # Todo: Commented out the patch to avoid build failure
-# SRC_URI += " \
-#            file://0001-Fix-build-issue-forKerberos-PAM-module.patch \
-#            "
-
 
 SRCREV = "54deebe6a6f2ec177ac3669391c424d5ea96a718"  
 

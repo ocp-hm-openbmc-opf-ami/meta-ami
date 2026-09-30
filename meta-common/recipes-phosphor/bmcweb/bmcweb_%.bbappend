@@ -13,9 +13,9 @@ PACKAGECONFIG:append = " \
 # add "redfish-hostiface" group
 GROUPADD_PARAM:${PN}:append = ";redfish-hostiface"
 
-SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/bmcweb;branch=master;protocol=https;name=override;"
+SRC_URI = "git://git@github.com/ocp-hm-openbmc-opf-ami/bmcweb;protocol=https;branch=integrate-onetree-latest;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "83aeb0774127d4d9db45e9f317d735f4918bae8b"
+SRCREV_override = "32f169ca22856bb072594d17d8fd0a74c0629814"
 
 #EXTRA_OEMESON += "${@bb.utils.contains('IMAGE_FSTYPES', 'intel-pfr', '-Dintel-pfr=enabled',' ', d)}"
 #EXTRA_OEMESON += "${@bb.utils.contains('BBFILE_COLLECTIONS', 'meta-mgx','-Dredfish-intel-feature=enabled','', d)}"
