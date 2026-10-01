@@ -1474,6 +1474,22 @@ int getRoutingTableEntries(MctpDevice& device)
         /* Check if the routing table exist */
         if (routingTable->numberOfEntries)
         {
+            size_t headerSize = sizeof(struct mctpCtrlRespGetRoutingTable);
+            if (rxLen < headerSize)
+            {
+                mctpPrErr("%s: response shorter than header", __func__);
+                return -1;
+            }
+            size_t maxPossibleEntries =
+                (rxLen - headerSize) / sizeof(struct getRoutingTableEntry);
+            if (routingTable->numberOfEntries > maxPossibleEntries)
+            {
+                mctpPrErr(
+                    "numberOfEntries (%u) exceeds received data (%zu bytes)",
+                    routingTable->numberOfEntries, rxLen);
+                return -1;
+            }
+
             auto entries = routingTable->numberOfEntries;
             struct getRoutingTableEntry* nextRoutingTableEntry =
                 (struct

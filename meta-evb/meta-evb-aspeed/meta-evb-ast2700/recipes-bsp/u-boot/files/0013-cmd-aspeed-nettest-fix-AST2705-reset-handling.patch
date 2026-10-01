@@ -1,0 +1,98 @@
+From a5a966a6e8763397bbce9bcb32aaca36bb576d2f Mon Sep 17 00:00:00 2001
+From: Jacky Chou <jacky_chou@aspeedtech.com>
+Date: Thu, 25 Jun 2026 17:50:22 +0800
+Subject: [PATCH 13/13] cmd: aspeed: nettest: fix AST2705 reset handling
+
+Track the SoC revision in the nettest state and skip the MAC reset
+assert after loopback only on AST2705 A0. Deassert the MAC reset before
+reading or programming AST2705 RGMII delay registers so the delay state is
+accessible.
+
+Stop dumping every byte on packet compare failures and break out after
+the first mismatch so the test reports the failure without excessive
+output.
+
+Signed-off-by: Jacky Chou <jacky_chou@aspeedtech.com>
+Change-Id: Ie19059079c29337b4ce5fbcee7fc95f350c52b3d
+Upstream-Status: Backport [SDK v11.03 migration]
+---
+ cmd/aspeed/nettest/internal.h | 1 +
+ cmd/aspeed/nettest/mac.c      | 2 ++
+ cmd/aspeed/nettest/netdiag.c  | 1 +
+ cmd/aspeed/nettest/nettest.c  | 8 +++-----
+ 4 files changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/cmd/aspeed/nettest/internal.h b/cmd/aspeed/nettest/internal.h
+index df38eeb507..d9bf679230 100644
+--- a/cmd/aspeed/nettest/internal.h
++++ b/cmd/aspeed/nettest/internal.h
+@@ -284,6 +284,7 @@ struct test_s {
+ 	struct parameter_s parm;
+ 
+ 	enum chip_version chip;
++	int chip_revision;
+ 
+ 	struct {
+ 		u32 mode;
+diff --git a/cmd/aspeed/nettest/mac.c b/cmd/aspeed/nettest/mac.c
+index 01f4f3563b..c2deffebf4 100644
+--- a/cmd/aspeed/nettest/mac.c
++++ b/cmd/aspeed/nettest/mac.c
+@@ -511,6 +511,7 @@ void ast2705_clk_set_rgmii_delay(struct mac_s *obj, int speed, u32 tx, u32 rx)
+ 		break;
+ 	}
+ 
++	aspeed_reset_deassert(obj->device);
+ 	reg = readl(base);
+ 	reg &= ~(TX_CLK_IO_DLY_SEL | RX_CLK_IO_DLY_SEL);
+ 	reg |= FIELD_PREP(TX_CLK_IO_DLY_SEL, tx);
+@@ -536,6 +537,7 @@ void ast2705_clk_get_rgmii_delay(struct mac_s *obj, int speed, u32 *tx, u32 *rx)
+ 		break;
+ 	}
+ 
++	aspeed_reset_deassert(obj->device);
+ 	reg = readl(base);
+ 	*tx = FIELD_GET(TX_CLK_IO_DLY_SEL, reg);
+ 	*rx = FIELD_GET(RX_CLK_IO_DLY_SEL, reg);
+diff --git a/cmd/aspeed/nettest/netdiag.c b/cmd/aspeed/nettest/netdiag.c
+index 4b559f4ed3..8801f4ca55 100644
+--- a/cmd/aspeed/nettest/netdiag.c
++++ b/cmd/aspeed/nettest/netdiag.c
+@@ -77,6 +77,7 @@ void net_print_soc_id(struct test_s *obj)
+ 	} else {
+ 		printf("SOC: %4s\n", soc_map_table[i].name);
+ 		obj->chip = soc_map_table[i].chip;
++		obj->chip_revision = (readl(ASPEED_IO_REVISION_ID) >> 16) & 0xff;
+ 	}
+ }
+ 
+diff --git a/cmd/aspeed/nettest/nettest.c b/cmd/aspeed/nettest/nettest.c
+index 5d681d22a5..61f8e9b506 100644
+--- a/cmd/aspeed/nettest/nettest.c
++++ b/cmd/aspeed/nettest/nettest.c
+@@ -102,11 +102,8 @@ loop_start:
+ 			j = memcmp(&rx_pkt_buf[i][ETH_OFFSET_SA], &tx_pkt_buf[i][ETH_OFFSET_SA],
+ 				   ETH_SIZE_SA);
+ 			if (j) {
+-				printf("\n\n");
+-				for (int l = 0; l < rxlen; l++)
+-					printf("pkt#%02x[%02x] got:%02x expected:%02x\n",
+-					       i, k, rx_pkt_buf[i][l], tx_pkt_buf[i][l]);
+ 				ret = FAIL_DATA_COMPARE;
++				break;
+ 			}
+ 		} else {
+ 			debug("pkt#%02x: error: %d\n", i, status);
+@@ -115,7 +112,8 @@ loop_start:
+ 		}
+ 	}
+ 
+-	aspeed_reset_assert(mac_obj->device);
++	if (!(test_obj->chip == AST2705 && test_obj->chip_revision == 0))
++		aspeed_reset_assert(mac_obj->device);
+ 
+ 	if ((++k < parm->loop) && ret == 0)
+ 		goto loop_start;
+-- 
+2.34.1
+

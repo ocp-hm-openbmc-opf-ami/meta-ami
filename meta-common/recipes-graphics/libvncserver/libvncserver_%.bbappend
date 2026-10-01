@@ -10,4 +10,8 @@ SRC_URI += " \
     "
 SRCREV = "784cccbb724517ee4e36d9938f93b9ee168a29e7"
 
+SRC_URI += " \
+    file://CVE-2026-32853.patch \
+    file://CVE-2026-32854.patch \
+    "
 inherit pkgconfig

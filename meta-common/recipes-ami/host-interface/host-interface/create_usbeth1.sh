@@ -13,11 +13,11 @@ detect_platform() {
     if [ -e "/sys/bus/platform/devices/12021000.usb-vhub" ] || [ -e "/sys/bus/platform/devices/12062000.usb-vhub" ]; then
 
         if [ -e "/sys/bus/platform/devices/12021000.usb-vhub" ]; then
-            prefix="12021000.usb-vhub:p"  # For PCIE-XHCI-USB
+            prefix="12021000.usb-vhub:p"  # For vHub-PHY or PCIe-xHCI-vHub
         fi
 
         if [ -e "/sys/bus/platform/devices/12062000.usb-vhub" ]; then
-            prefix="12062000.usb-vhub:p"  # For Physical-USB
+            prefix="12062000.usb-vhub:p"  # For PCIe-EHCI-vHub
         fi
 
         port_count=7

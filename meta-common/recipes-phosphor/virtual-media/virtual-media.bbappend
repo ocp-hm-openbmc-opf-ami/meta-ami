@@ -3,7 +3,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/firmware.bmc.openbmc.applications.virtual-media;branch=main;protocol=https"
 
 
-SRCREV = "9cfeb2ee9169dbb44894364c497017b43a1a3f02"
+SRCREV = "d9e1f333335a067b153ac1560ac03f00ff42b9a3"
 
 RDEPENDS:${PN} = "nbd-client nbdkit nfs-export-root"
 

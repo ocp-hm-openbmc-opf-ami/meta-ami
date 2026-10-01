@@ -1,0 +1,193 @@
+From 9e7324f7aa6c04b06642cc818417700cbd4b43d5 Mon Sep 17 00:00:00 2001
+From: Jacky Chou <jacky_chou@aspeedtech.com>
+Date: Tue, 5 May 2026 18:33:30 +0800
+Subject: [PATCH 07/13] net: dwc_eth_xgmac: configure AXI bus from device tree
+
+Parse the snps,axi-config phandle and use its AXI properties to
+program DMA sysbus mode during start. This lets boards tune the write
+and read outstanding limits, burst lengths, LPI behavior, and fixed
+burst mode from device tree instead of relying on fixed register
+values in the driver.
+
+Signed-off-by: Jacky Chou <jacky_chou@aspeedtech.com>
+Change-Id: I54cfa8a44fed70aa229f747d6c11e2d23f89e17e
+Upstream-Status: Backport [SDK v11.03 migration]
+---
+ drivers/net/dwc_eth_xgmac.c | 116 +++++++++++++++++++++++++++++++-----
+ drivers/net/dwc_eth_xgmac.h |   6 ++
+ 2 files changed, 108 insertions(+), 14 deletions(-)
+
+diff --git a/drivers/net/dwc_eth_xgmac.c b/drivers/net/dwc_eth_xgmac.c
+index a110fbb2e6..aaac30296a 100644
+--- a/drivers/net/dwc_eth_xgmac.c
++++ b/drivers/net/dwc_eth_xgmac.c
+@@ -48,6 +48,17 @@
+ #include <linux/kernel.h>
+ #include "dwc_eth_xgmac.h"
+ 
++#define XGMAC_AXI_BLEN		7
++
++struct xgmac_axi {
++	bool axi_lpi_en;
++	bool axi_xit_frm;
++	bool axi_fb;
++	u32 axi_wr_osr_lmt;
++	u32 axi_rd_osr_lmt;
++	u32 axi_blen[XGMAC_AXI_BLEN];
++};
++
+ static void *xgmac_alloc_descs(struct xgmac_priv *xgmac, unsigned int num)
+ {
+ 	return memalign(ARCH_DMA_MINALIGN, num * xgmac->desc_size);
+@@ -472,6 +483,95 @@ static int xgmac_get_phy_addr(struct xgmac_priv *priv, struct udevice *dev)
+ 	return reg;
+ }
+ 
++static int xgmac_axi_setup(struct udevice *dev, struct xgmac_axi *axi)
++{
++	struct ofnode_phandle_args args;
++	int ret;
++
++	memset(axi, 0, sizeof(*axi));
++
++	ret = dev_read_phandle_with_args(dev, "snps,axi-config", NULL, 0, 0,
++					 &args);
++	if (ret)
++		return ret;
++
++	axi->axi_lpi_en = ofnode_read_bool(args.node, "snps,lpi_en");
++	axi->axi_xit_frm = ofnode_read_bool(args.node, "snps,xit_frm");
++	axi->axi_fb = ofnode_read_bool(args.node, "snps,fb");
++	axi->axi_wr_osr_lmt =
++		ofnode_read_u32_default(args.node, "snps,wr_osr_lmt", 1);
++	axi->axi_rd_osr_lmt =
++		ofnode_read_u32_default(args.node, "snps,rd_osr_lmt", 1);
++	ofnode_read_u32_array(args.node, "snps,blen", axi->axi_blen,
++			      ARRAY_SIZE(axi->axi_blen));
++
++	return 0;
++}
++
++static u32 xgmac_axi_blen_to_bit(u32 blen)
++{
++	switch (blen) {
++	case 256:
++		return XGMAC_DMA_SYSBUS_MODE_BLEN256;
++	case 128:
++		return XGMAC_DMA_SYSBUS_MODE_BLEN128;
++	case 64:
++		return XGMAC_DMA_SYSBUS_MODE_BLEN64;
++	case 32:
++		return XGMAC_DMA_SYSBUS_MODE_BLEN32;
++	case 16:
++		return XGMAC_DMA_SYSBUS_MODE_BLEN16;
++	case 8:
++		return XGMAC_DMA_SYSBUS_MODE_BLEN8;
++	case 4:
++		return XGMAC_DMA_SYSBUS_MODE_BLEN4;
++	default:
++		return 0;
++	}
++}
++
++static void xgmac_config_axi_bus(struct udevice *dev)
++{
++	struct xgmac_priv *xgmac = dev_get_priv(dev);
++	struct xgmac_axi axi;
++	u32 val;
++	int ret;
++	int i;
++
++	ret = xgmac_axi_setup(dev, &axi);
++	if (ret)
++		return;
++
++	val = readl(&xgmac->dma_regs->sysbus_mode);
++
++	if (axi.axi_lpi_en)
++		val |= XGMAC_DMA_SYSBUS_MODE_EN_LPI;
++
++	if (axi.axi_xit_frm)
++		val |= XGMAC_DMA_SYSBUS_MODE_LPI_XIT_PKT;
++
++	val &= ~(XGMAC_DMA_SYSBUS_MODE_WR_OSR_LMT_MASK <<
++		 XGMAC_DMA_SYSBUS_MODE_WR_OSR_LMT_SHIFT);
++	val |= (axi.axi_wr_osr_lmt & XGMAC_DMA_SYSBUS_MODE_WR_OSR_LMT_MASK) <<
++		XGMAC_DMA_SYSBUS_MODE_WR_OSR_LMT_SHIFT;
++
++	val &= ~(XGMAC_DMA_SYSBUS_MODE_RD_OSR_LMT_MASK <<
++		 XGMAC_DMA_SYSBUS_MODE_RD_OSR_LMT_SHIFT);
++	val |= (axi.axi_rd_osr_lmt & XGMAC_DMA_SYSBUS_MODE_RD_OSR_LMT_MASK) <<
++		XGMAC_DMA_SYSBUS_MODE_RD_OSR_LMT_SHIFT;
++
++	if (axi.axi_fb)
++		val &= ~XGMAC_DMA_SYSBUS_MODE_UNDEF;
++	else
++		val |= XGMAC_DMA_SYSBUS_MODE_UNDEF;
++
++	val &= ~XGMAC_DMA_SYSBUS_MODE_BLEN_MASK;
++	for (i = 0; i < ARRAY_SIZE(axi.axi_blen); i++)
++		val |= xgmac_axi_blen_to_bit(axi.axi_blen[i]);
++
++	writel(val, &xgmac->dma_regs->sysbus_mode);
++}
++
+ static int xgmac_start(struct udevice *dev)
+ {
+ 	struct xgmac_priv *xgmac = dev_get_priv(dev);
+@@ -655,8 +755,7 @@ static int xgmac_start(struct udevice *dev)
+ 	/* Configure DMA */
+ 	clrsetbits_le32(&xgmac->dma_regs->sysbus_mode,
+ 			XGMAC_DMA_SYSBUS_MODE_AAL,
+-			XGMAC_DMA_SYSBUS_MODE_EAME |
+-			XGMAC_DMA_SYSBUS_MODE_UNDEF);
++			XGMAC_DMA_SYSBUS_MODE_EAME);
+ 
+ 	/* Enable OSP mode */
+ 	setbits_le32(&xgmac->dma_regs->ch0_tx_control,
+@@ -696,18 +795,7 @@ static int xgmac_start(struct udevice *dev)
+ 			XGMAC_DMA_CH0_RX_CONTROL_RXPBL_SHIFT,
+ 			8 << XGMAC_DMA_CH0_RX_CONTROL_RXPBL_SHIFT);
+ 
+-	/* DMA performance configuration */
+-	val = (XGMAC_DMA_SYSBUS_MODE_RD_OSR_LMT_MASK <<
+-	       XGMAC_DMA_SYSBUS_MODE_RD_OSR_LMT_SHIFT) |
+-	       (XGMAC_DMA_SYSBUS_MODE_WR_OSR_LMT_MASK <<
+-	       XGMAC_DMA_SYSBUS_MODE_WR_OSR_LMT_SHIFT) |
+-	       XGMAC_DMA_SYSBUS_MODE_EAME |
+-	       XGMAC_DMA_SYSBUS_MODE_BLEN16 |
+-	       XGMAC_DMA_SYSBUS_MODE_BLEN8 |
+-	       XGMAC_DMA_SYSBUS_MODE_BLEN4 |
+-	       XGMAC_DMA_SYSBUS_MODE_BLEN32;
+-
+-	writel(val, &xgmac->dma_regs->sysbus_mode);
++	xgmac_config_axi_bus(dev);
+ 
+ 	/* Set up descriptors */
+ 
+diff --git a/drivers/net/dwc_eth_xgmac.h b/drivers/net/dwc_eth_xgmac.h
+index 8efd74078b..0cc476b1f5 100644
+--- a/drivers/net/dwc_eth_xgmac.h
++++ b/drivers/net/dwc_eth_xgmac.h
+@@ -189,12 +189,18 @@ struct xgmac_dma_regs {
+ #define XGMAC_DMA_SYSBUS_MODE_WR_OSR_LMT_MASK		GENMASK(4, 0)
+ #define XGMAC_DMA_SYSBUS_MODE_RD_OSR_LMT_SHIFT		16
+ #define XGMAC_DMA_SYSBUS_MODE_RD_OSR_LMT_MASK		GENMASK(4, 0)
++#define XGMAC_DMA_SYSBUS_MODE_EN_LPI			BIT(15)
++#define XGMAC_DMA_SYSBUS_MODE_LPI_XIT_PKT		BIT(14)
+ #define XGMAC_DMA_SYSBUS_MODE_AAL			BIT(12)
+ #define XGMAC_DMA_SYSBUS_MODE_EAME			BIT(11)
++#define XGMAC_DMA_SYSBUS_MODE_BLEN256			BIT(7)
++#define XGMAC_DMA_SYSBUS_MODE_BLEN128			BIT(6)
++#define XGMAC_DMA_SYSBUS_MODE_BLEN64			BIT(5)
+ #define XGMAC_DMA_SYSBUS_MODE_BLEN32			BIT(4)
+ #define XGMAC_DMA_SYSBUS_MODE_BLEN16			BIT(3)
+ #define XGMAC_DMA_SYSBUS_MODE_BLEN8			BIT(2)
+ #define XGMAC_DMA_SYSBUS_MODE_BLEN4			BIT(1)
++#define XGMAC_DMA_SYSBUS_MODE_BLEN_MASK			GENMASK(7, 1)
+ #define XGMAC_DMA_SYSBUS_MODE_UNDEF			BIT(0)
+ 
+ #define XGMAC_DMA_CH0_CONTROL_DSL_SHIFT			18
+-- 
+2.34.1
+
