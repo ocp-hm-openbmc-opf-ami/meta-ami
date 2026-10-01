@@ -1,6 +1,6 @@
 FILESEXTRAPATHS:append := "${THISDIR}/${PN}:"
 
-SRC_URI += "git://github.com/ocp-hm-openbmc-opf-ami/host-error-monitor;branch=integrate-onetree-latest;protocol=https;name=override;"
+SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/host-error-monitor.git;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
 SRCREV_override = "5706cbb67498dc189080605e2b4da9bfe2f474fd"
 

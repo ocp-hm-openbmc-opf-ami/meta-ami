@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 PROJECT_SRC_DIR := "${THISDIR}/${PN}"
 
 SRCREV_override = "2e1d7ce09cd40a8475be4ed50d4c1892d96fea7e"
-SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/phosphor-sel-logger.git;branch=integrate-onetree-latest;protocol=https;name=override;"
+SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-sel-logger.git;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
 
 EXTRA_OEMESON +=  "-Dsel-extended=true"
