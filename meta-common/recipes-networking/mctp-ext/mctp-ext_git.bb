@@ -4,7 +4,7 @@ LICENSE = "GPL-2.0-only"
 
 LIC_FILES_CHKSUM = "file://LICENSE;md5=4cc91856b08b094b4f406a29dc61db21"
 
-SRC_URI = "git://github.com/ocp-hm-openbmc-opf-ami/mctp-ext.git;protocol=https;branch=integrate-onetree-latest \
+SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/mctp-ext.git;protocol=https;branch=main \
            "
 SRCREV = "0aa80775bbf78d4d35eddbe6a1365a6a80b9e093"
 PV = "1.0+git${SRCPV}"

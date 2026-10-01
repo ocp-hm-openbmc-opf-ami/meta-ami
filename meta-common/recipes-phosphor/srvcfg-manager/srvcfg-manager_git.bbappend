@@ -1,6 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI += "git://git@github.com/ocp-hm-openbmc-opf-ami/service-config-manager.git;branch=integrate-onetree-latest;protocol=https;name=override;"
+SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/service-config-manager.git;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
 SRCREV_override = "abc51dfebc9ed481aa31e4f9583953e32575bdf2"
 

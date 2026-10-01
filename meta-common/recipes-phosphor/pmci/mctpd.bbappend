@@ -1,6 +1,6 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI:bhs-features = "git://git@github.com/ocp-hm-openbmc-opf-ami/firmware.bmc.openbmc.applications.mctpd.git;protocol=https;branch=openbmc/release/birchstream/common"
+SRC_URI:bhs-features = "git://git.ami.com/core/ami-bmc/one-tree/core/firmware.bmc.openbmc.applications.mctpd.git;protocol=https;branch=openbmc/release/birchstream/common"
 
 SRCREV:bhs-features = "87279f7cb3313c56fdc419edeaf36251389ef265"
 
