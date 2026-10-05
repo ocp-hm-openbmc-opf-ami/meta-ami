@@ -97,6 +97,38 @@ meta-ami/github-gitlab-url.sh
 TEMPLATECONF=meta-ami/meta-evb/meta-evb-arm/meta-evb-fvp-base/conf/templates/default . openbmc-env
 bitbake obmc-phosphor-image
 ```
+### 2.7 Devkit-2600
+
+```
+git clone https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-core
+git clone --branch DevKit_AST2600 https://github.com/ocp-hm-openbmc-opf-ami/meta-ami.git meta-ami
+meta-ami/github-gitlab-url.sh
+TEMPLATECONF=meta-ami/meta-ami-devkit/conf/templates/default . openbmc-env 
+bitbake obmc-phosphor-image
+```
+
+### 2.8 Devkit-2700
+
+```
+git clone https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-core
+git clone --branch DevKit_AST2700 https://github.com/ocp-hm-openbmc-opf-ami/meta-ami.git meta-ami
+meta-ami/github-gitlab-url.sh
+TEMPLATECONF=meta-ami/meta-amidevkit-2700/conf/templates/default . openbmc-env
+bitbake obmc-phosphor-image
+```
+
+### 2.9 Devkit-arbel
+
+```
+git clone https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-core
+git clone --branch DevKit_Arbel https://github.com/ocp-hm-openbmc-opf-ami/meta-ami.git meta-ami
+meta-ami/github-gitlab-url.sh
+TEMPLATECONF=meta-ami/meta-aminuvton/conf/templates/default . openbmc-env 
+bitbake obmc-phosphor-image
+```
 
 Please refer to [ocp-hm-openbmc-opf-ami/docs](https://github.com/ocp-hm-openbmc-opf-ami/docs)
 for more information.
