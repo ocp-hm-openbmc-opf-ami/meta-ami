@@ -53,3 +53,36 @@ UBOOT_MKIMAGE:append:npcm8xx = " -E -B 8"
 # From 4.16+ the COPYING file changed
 LIC_FILES_CHKSUM:evb-npcm845 = "file://COPYING;md5=6bc538ed5bd9a7fc9398086aedcd7e46"
 
+SRC_URI += "file://0004-Fix-I2C-Coverity-for-linux-onetree.patch \
+            file://0004-Fix-common-kernel-I2C-patch-error-in-OT-AMD.patch \
+            file://0005-Add-the-M-Hold-patch-and-I2C-Driver-change-from-INTEL.patch \
+            file://0006-Fixed-the-bootup-issue.patch \
+            "
+
+SRC_CPLD_SPI = " file://cpld-spidev.cfg \
+                 file://0006-enable-spidev-in-driver-file.patch \
+                file://0001-spi-aspeed-smc-enable-cpld-spidev-transfers.patch \
+               "
+SRC_URI:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-fwupdate', SRC_CPLD_SPI,'', d)}"
+
+SRC_IPMI_SSIF = " file://0006-Add-SSIF-and-SBMR-support.patch \
+                "
+SRC_URI:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-ipmi-ssif', SRC_IPMI_SSIF,'', d)}"
+
+# ABR mode detection patch for AST2600
+SRC_URI_ABR_PATCH = "file://0001-spi-aspeed-Add-ABR-mode-detection-support-for-AST260.patch \
+                     file://0007-dual-image-abr-mode-fix.patch \
+                    "
+
+# Apply to evb-ast2600
+SRC_URI:append:evb-ast2600 = " \
+    ${@bb.utils.contains('IMAGE_FEATURES', 'onetree-hw-failsafe-boot', \
+        '${SRC_URI_ABR_PATCH}', '', d)} \
+"
+
+# Apply to intel-ast2600
+SRC_URI:append:intel-ast2600 = " \
+    ${@bb.utils.contains('IMAGE_FEATURES', 'onetree-hw-failsafe-boot', \
+        '${SRC_URI_ABR_PATCH}', '', d)} \
+"
+
