@@ -1,30 +1,33 @@
-From 2dc9fc77396dbba494be8742f6f37caf4e08a4cb Mon Sep 17 00:00:00 2001
+From e81eb040ee71b08ecd27fdfd260b593707f517d7 Mon Sep 17 00:00:00 2001
 From: jasshsu <jasshsu@ami.com>
-Date: Tue, 16 Sep 2025 16:08:42 +0800
+Date: Tue, 14 Jul 2026 19:54:00 +0530
 Subject: [PATCH] Add the M Hold patch and I2C Driver change from INTEL
 
+Patch recreated by Vijay K S <vijayks@ami.com> for kernel upgrade v6.18
+
 Upstream-Status: Inappropriate [AMI: driver changes]
+
 ---
- drivers/i2c/Kconfig                           |   6 +
- drivers/i2c/i2c-core-base.c                   |  79 ++++++-
- drivers/i2c/i2c-core-smbus.c                  |  22 +-
- drivers/i2c/i2c-mux.c                         | 122 +++++++++-
- drivers/i2c/muxes/i2c-arb-gpio-challenge.c    | 177 ++++++++++++++
- include/linux/device/class.h                  |  23 ++
- include/linux/i2c-aspeed.h                    | 216 ++++++++++++++++++
- include/linux/i2c-mux.h                       |   5 +
- include/linux/i2c.h                           |  27 ++-
- include/uapi/linux/i2c.h                      |   1 +
- 10 files changed, 658 insertions(+), 20 deletions(-)
+ drivers/i2c/Kconfig                        |   6 +
+ drivers/i2c/i2c-core-base.c                |  75 ++++++-
+ drivers/i2c/i2c-core-smbus.c               |  20 +-
+ drivers/i2c/i2c-mux.c                      | 151 +++++++++++---
+ drivers/i2c/muxes/i2c-arb-gpio-challenge.c | 132 ++++++++++++-
+ include/linux/device/class.h               |  23 +++
+ include/linux/i2c-aspeed.h                 | 216 +++++++++++++++++++++
+ include/linux/i2c-mux.h                    |   5 +
+ include/linux/i2c.h                        |  28 ++-
+ include/uapi/linux/i2c.h                   |   1 +
+ 10 files changed, 625 insertions(+), 32 deletions(-)
  create mode 100644 include/linux/i2c-aspeed.h
 
 diff --git a/drivers/i2c/Kconfig b/drivers/i2c/Kconfig
-index 96a5d23bd5c9..4e21b6658173 100644
+index 32c34a426413..1db8cc32e1e3 100644
 --- a/drivers/i2c/Kconfig
 +++ b/drivers/i2c/Kconfig
-@@ -193,4 +193,10 @@ config I2C_DEBUG_BUS
- 
- endif # I2C
+@@ -185,6 +185,12 @@ config I2C_DEBUG_BUS
+ 	  a problem with I2C support and want to see more of what is going
+ 	  on.
  
 +config DRAGON_CHASSIS
 +	bool "Nvidia Dragon Chassis support"
@@ -32,12 +35,14 @@ index 96a5d23bd5c9..4e21b6658173 100644
 +	  This enables all the necessary code for the support of the
 +	  Dragon Chassis features.
 +
+ endif # I2C
+ 
  endmenu
 diff --git a/drivers/i2c/i2c-core-base.c b/drivers/i2c/i2c-core-base.c
-index 9cb03d2a1919..97ef54ae4741 100644
+index 3039af033ad9..2f010a187c07 100644
 --- a/drivers/i2c/i2c-core-base.c
 +++ b/drivers/i2c/i2c-core-base.c
-@@ -102,6 +102,27 @@ const char *i2c_freq_mode_string(u32 bus_freq_hz)
+@@ -102,6 +102,26 @@ const char *i2c_freq_mode_string(u32 bus_freq_hz)
  }
  EXPORT_SYMBOL_GPL(i2c_freq_mode_string);
  
@@ -56,8 +61,7 @@ index 9cb03d2a1919..97ef54ae4741 100644
 +static void i2c_adapter_unhold_work(struct work_struct *work)
 +{
 +	struct delayed_work *dwork = to_delayed_work(work);
-+	struct i2c_adapter *adapter = container_of(dwork, struct i2c_adapter,
-+						   unhold_work);
++	struct i2c_adapter *adapter = container_of(dwork, struct i2c_adapter, unhold_work);
 +
 +	mutex_unlock(&adapter->hold_lock);
 +}
@@ -65,25 +69,23 @@ index 9cb03d2a1919..97ef54ae4741 100644
  const struct i2c_device_id *i2c_match_id(const struct i2c_device_id *id,
  						const struct i2c_client *client)
  {
-@@ -1616,7 +1637,7 @@ static int i2c_register_adapter(struct i2c_adapter *adap)
- 		dev_warn(&adap->dev,
- 			 "Failed to create compatibility class link\n");
- #endif
--
+@@ -1627,6 +1647,7 @@ static int i2c_register_adapter(struct i2c_adapter *adap)
+ 
+ 	dev_dbg(&adap->dev, "adapter [%s] registered\n", adap->name);
+ 
 +	mutex_init(&adap->hold_lock);
  	/* create pre-declared device nodes */
  	of_i2c_register_devices(adap);
  	i2c_acpi_install_space_handler(adap);
-@@ -1630,6 +1651,8 @@ static int i2c_register_adapter(struct i2c_adapter *adap)
+@@ -1639,6 +1660,7 @@ static int i2c_register_adapter(struct i2c_adapter *adap)
+ 	mutex_lock(&core_lock);
  	bus_for_each_drv(&i2c_bus_type, NULL, adap, __process_new_adapter);
  	mutex_unlock(&core_lock);
- 
 +	INIT_DELAYED_WORK(&adap->unhold_work, i2c_adapter_unhold_work);
-+
+ 
  	return 0;
  
- out_reg:
-@@ -1853,6 +1876,8 @@ void i2c_del_adapter(struct i2c_adapter *adap)
+@@ -1856,6 +1878,8 @@ void i2c_del_adapter(struct i2c_adapter *adap)
  	idr_remove(&i2c_adapter_idr, adap->nr);
  	mutex_unlock(&core_lock);
  
@@ -92,7 +94,7 @@ index 9cb03d2a1919..97ef54ae4741 100644
  	/* Clear the device structure in case this adapter is ever going to be
  	   added again */
  	memset(&adap->dev, 0, sizeof(adap->dev));
-@@ -2269,7 +2294,9 @@ static int i2c_check_for_quirks(struct i2c_adapter *adap, struct i2c_msg *msgs,
+@@ -2258,7 +2282,9 @@ static int i2c_check_for_quirks(struct i2c_adapter *adap, struct i2c_msg *msgs,
   */
  int __i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
  {
@@ -102,11 +104,11 @@ index 9cb03d2a1919..97ef54ae4741 100644
  	int ret, try;
  
  	if (!adap->algo->master_xfer) {
-@@ -2287,6 +2314,25 @@ int __i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
+@@ -2276,6 +2302,25 @@ int __i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
  	if (adap->quirks && i2c_check_for_quirks(adap, msgs, num))
  		return -EOPNOTSUPP;
  
-+	/* Do not deliver a mux hold msg to root bus adapter */
++			/* Do not deliver a mux hold msg to root bus adapter */
 +	if (!i2c_parent_is_i2c_adapter(adap)) {
 +	    hold_msg = i2c_check_hold_msg(msgs[num - 1].flags,
 +					   msgs[num - 1].len,
@@ -128,7 +130,7 @@ index 9cb03d2a1919..97ef54ae4741 100644
  	/*
  	 * i2c_trace_msg_key gets enabled when tracepoint i2c_transfer gets
  	 * enabled.  This is an efficient way of keeping the for-loop from
-@@ -2323,6 +2369,13 @@ int __i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
+@@ -2312,6 +2357,13 @@ int __i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
  		trace_i2c_result(adap, num, ret);
  	}
  
@@ -142,7 +144,7 @@ index 9cb03d2a1919..97ef54ae4741 100644
  	return ret;
  }
  EXPORT_SYMBOL(__i2c_transfer);
-@@ -2341,6 +2394,7 @@ EXPORT_SYMBOL(__i2c_transfer);
+@@ -2330,6 +2382,7 @@ EXPORT_SYMBOL(__i2c_transfer);
   */
  int i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
  {
@@ -150,7 +152,7 @@ index 9cb03d2a1919..97ef54ae4741 100644
  	int ret;
  
  	/* REVISIT the fault reporting model here is weak:
-@@ -2359,12 +2413,27 @@ int i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
+@@ -2348,12 +2401,26 @@ int i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
  	 *    one (discarding status on the second message) or errno
  	 *    (discarding status on the first one).
  	 */
@@ -173,7 +175,6 @@ index 9cb03d2a1919..97ef54ae4741 100644
 +		if (ret)
 +			return ret;
 +	}
-+	
  
  	ret = __i2c_transfer(adap, msgs, num);
 -	i2c_unlock_bus(adap, I2C_LOCK_SEGMENT);
@@ -183,19 +184,20 @@ index 9cb03d2a1919..97ef54ae4741 100644
  	return ret;
  }
 diff --git a/drivers/i2c/i2c-core-smbus.c b/drivers/i2c/i2c-core-smbus.c
-index e3b96fc53b5c..f5b9615d4b65 100644
+index 71eb1ef56f0c..1b60dc2b92e5 100644
 --- a/drivers/i2c/i2c-core-smbus.c
 +++ b/drivers/i2c/i2c-core-smbus.c
-@@ -536,15 +536,29 @@ s32 i2c_smbus_xfer(struct i2c_adapter *adapter, u16 addr,
+@@ -537,15 +537,33 @@ s32 i2c_smbus_xfer(struct i2c_adapter *adapter, u16 addr,
  		   unsigned short flags, char read_write,
  		   u8 command, int protocol, union i2c_smbus_data *data)
  {
 +	bool do_bus_lock = true;
  	s32 res;
  
--	res = __i2c_lock_bus_helper(adapter);
--	if (res)
--		return res;
+ 	res = __i2c_lock_bus_helper(adapter);
+ 	if (res)
+ 		return res;
+ 
 +	/*
 +	 * Do not lock a bus for delivering an unhold msg to a mux adpater.
 +	 * This is just for a single length unhold msg case.
@@ -211,7 +213,7 @@ index e3b96fc53b5c..f5b9615d4b65 100644
 +		if (res)
 +			return res;
 +	}
- 
++
  	res = __i2c_smbus_xfer(adapter, addr, flags, read_write,
  			       command, protocol, data);
 -	i2c_unlock_bus(adapter, I2C_LOCK_SEGMENT);
@@ -221,13 +223,22 @@ index e3b96fc53b5c..f5b9615d4b65 100644
  	return res;
  }
 diff --git a/drivers/i2c/i2c-mux.c b/drivers/i2c/i2c-mux.c
-index 3f1302bd0c23..331ee226d36f 100644
+index 2c7ddfae55b5..e156cfa54a8e 100644
 --- a/drivers/i2c/i2c-mux.c
 +++ b/drivers/i2c/i2c-mux.c
-@@ -35,6 +35,29 @@ struct i2c_mux_priv {
- 	struct i2c_mux_core *muxc;
+@@ -27,6 +27,8 @@
+ #include <linux/of.h>
+ #include <linux/slab.h>
+ #include <linux/sysfs.h>
++#include <linux/mutex.h>
++#include <linux/workqueue.h>
+ 
+ /* multiplexer per channel data */
+ struct i2c_mux_priv {
+@@ -36,84 +38,180 @@ struct i2c_mux_priv {
  	u32 chan_id;
  };
+ 
 +static void i2c_mux_hold(struct i2c_mux_core *muxc, u32 chan_id, unsigned long timeout)
 +{
 +	mutex_lock(&muxc->hold_lock);
@@ -244,17 +255,16 @@ index 3f1302bd0c23..331ee226d36f 100644
 +static void i2c_mux_unhold_work(struct work_struct *work)
 +{
 +	struct delayed_work *dwork = to_delayed_work(work);
-+	struct i2c_mux_core *muxc = container_of(dwork, struct i2c_mux_core,
-+						 unhold_work);
++	struct i2c_mux_core *muxc = container_of(dwork, struct i2c_mux_core, unhold_work);
 +
 +	if (muxc->deselect)
 +		muxc->deselect(muxc, muxc->holder_chan_id);
 +	mutex_unlock(&muxc->hold_lock);
 +}
- 
++
  static int __i2c_mux_master_xfer(struct i2c_adapter *adap,
  				 struct i2c_msg msgs[], int num)
-@@ -42,15 +65,35 @@ static int __i2c_mux_master_xfer(struct i2c_adapter *adap,
+ {
  	struct i2c_mux_priv *priv = adap->algo_data;
  	struct i2c_mux_core *muxc = priv->muxc;
  	struct i2c_adapter *parent = muxc->parent;
@@ -292,7 +302,11 @@ index 3f1302bd0c23..331ee226d36f 100644
  
  	return ret;
  }
-@@ -61,15 +104,33 @@ static int i2c_mux_master_xfer(struct i2c_adapter *adap,
+ 
+ static int i2c_mux_master_xfer(struct i2c_adapter *adap,
+-			       struct i2c_msg msgs[], int num)
++			      struct i2c_msg msgs[], int num)
+ {
  	struct i2c_mux_priv *priv = adap->algo_data;
  	struct i2c_mux_core *muxc = priv->muxc;
  	struct i2c_adapter *parent = muxc->parent;
@@ -328,7 +342,15 @@ index 3f1302bd0c23..331ee226d36f 100644
  
  	return ret;
  }
-@@ -82,16 +143,33 @@ static int __i2c_mux_smbus_xfer(struct i2c_adapter *adap,
+ 
+ static int __i2c_mux_smbus_xfer(struct i2c_adapter *adap,
+-				u16 addr, unsigned short flags,
+-				char read_write, u8 command,
+-				int size, union i2c_smbus_data *data)
++				 u16 addr, unsigned short flags,
++				 char read_write, u8 command,
++				 int size, union i2c_smbus_data *data)
+ {
  	struct i2c_mux_priv *priv = adap->algo_data;
  	struct i2c_mux_core *muxc = priv->muxc;
  	struct i2c_adapter *parent = muxc->parent;
@@ -345,14 +367,15 @@ index 3f1302bd0c23..331ee226d36f 100644
 +		timeout = msecs_to_jiffies(data->word);
 +		i2c_mux_hold(muxc, priv->chan_id, timeout);
 +	} else if (hold_msg == I2C_HOLD_MSG_NONE) {
-+		mutex_lock(&muxc->hold_lock);	
++		mutex_lock(&muxc->hold_lock);
 +	}
  	ret = muxc->select(muxc, priv->chan_id);
  	if (ret >= 0)
  		ret = __i2c_smbus_xfer(parent, addr, flags,
- 				       read_write, command, size, data);
+-				       read_write, command, size, data);
 -	if (muxc->deselect)
 -		muxc->deselect(muxc, priv->chan_id);
++				   read_write, command, size, data);
 +	if (hold_msg != I2C_HOLD_MSG_SET) {
 +		if (muxc->deselect)
 +			muxc->deselect(muxc, priv->chan_id);
@@ -364,7 +387,15 @@ index 3f1302bd0c23..331ee226d36f 100644
  
  	return ret;
  }
-@@ -104,16 +182,34 @@ static int i2c_mux_smbus_xfer(struct i2c_adapter *adap,
+ 
+ static int i2c_mux_smbus_xfer(struct i2c_adapter *adap,
+-			      u16 addr, unsigned short flags,
+-			      char read_write, u8 command,
+-			      int size, union i2c_smbus_data *data)
++			    u16 addr, unsigned short flags,
++			    char read_write, u8 command,
++			    int size, union i2c_smbus_data *data)
+ {
  	struct i2c_mux_priv *priv = adap->algo_data;
  	struct i2c_mux_core *muxc = priv->muxc;
  	struct i2c_adapter *parent = muxc->parent;
@@ -387,9 +418,10 @@ index 3f1302bd0c23..331ee226d36f 100644
  	ret = muxc->select(muxc, priv->chan_id);
  	if (ret >= 0)
  		ret = i2c_smbus_xfer(parent, addr, flags,
- 				     read_write, command, size, data);
+-				     read_write, command, size, data);
 -	if (muxc->deselect)
 -		muxc->deselect(muxc, priv->chan_id);
++				 read_write, command, size, data);
 +	if (hold_msg != I2C_HOLD_MSG_SET) {
 +		if (muxc->deselect)
 +			muxc->deselect(muxc, priv->chan_id);
@@ -401,16 +433,32 @@ index 3f1302bd0c23..331ee226d36f 100644
  
  	return ret;
  }
-@@ -307,6 +403,8 @@ struct i2c_mux_core *i2c_mux_alloc(struct i2c_adapter *parent,
+@@ -267,10 +365,10 @@ struct i2c_adapter *i2c_root_adapter(struct device *dev)
+ EXPORT_SYMBOL_GPL(i2c_root_adapter);
+ 
+ struct i2c_mux_core *i2c_mux_alloc(struct i2c_adapter *parent,
+-				   struct device *dev, int max_adapters,
+-				   int sizeof_priv, u32 flags,
+-				   int (*select)(struct i2c_mux_core *, u32),
+-				   int (*deselect)(struct i2c_mux_core *, u32))
++			   struct device *dev, int max_adapters,
++			   int sizeof_priv, u32 flags,
++			   int (*select)(struct i2c_mux_core *, u32),
++			   int (*deselect)(struct i2c_mux_core *, u32))
+ {
+ 	struct i2c_mux_core *muxc;
+ 	size_t mux_size;
+@@ -291,6 +389,9 @@ struct i2c_mux_core *i2c_mux_alloc(struct i2c_adapter *parent,
  	muxc->deselect = deselect;
  	muxc->max_adapters = max_adapters;
  
 +	mutex_init(&muxc->hold_lock);
 +	INIT_DELAYED_WORK(&muxc->unhold_work, i2c_mux_unhold_work);
++
  	return muxc;
  }
  EXPORT_SYMBOL_GPL(i2c_mux_alloc);
-@@ -437,7 +535,11 @@ int i2c_mux_add_adapter(struct i2c_mux_core *muxc,
+@@ -412,7 +513,11 @@ int i2c_mux_add_adapter(struct i2c_mux_core *muxc,
  			}
  		}
  
@@ -423,23 +471,24 @@ index 3f1302bd0c23..331ee226d36f 100644
  		of_node_put(mux_node);
  	}
  
-@@ -491,6 +593,8 @@ EXPORT_SYMBOL_GPL(i2c_mux_add_adapter);
- void i2c_mux_del_adapters(struct i2c_mux_core *muxc)
+@@ -467,6 +572,8 @@ void i2c_mux_del_adapters(struct i2c_mux_core *muxc)
  {
  	char symlink_name[20];
-+	
-+	i2c_mux_unhold(muxc);
  
++	i2c_mux_unhold(muxc);
++	
  	while (muxc->num_adapters) {
  		struct i2c_adapter *adap = muxc->adapter[--muxc->num_adapters];
+ 		struct i2c_mux_priv *priv = adap->algo_data;
 diff --git a/drivers/i2c/muxes/i2c-arb-gpio-challenge.c b/drivers/i2c/muxes/i2c-arb-gpio-challenge.c
-index 24168e9f7df4..5acc786c9484 100644
+index d6ef91b888c6..6c2cb1c5fecc 100644
 --- a/drivers/i2c/muxes/i2c-arb-gpio-challenge.c
 +++ b/drivers/i2c/muxes/i2c-arb-gpio-challenge.c
-@@ -14,6 +14,10 @@
+@@ -13,7 +13,10 @@
+ #include <linux/module.h>
  #include <linux/platform_device.h>
  #include <linux/slab.h>
- 
+-
 +#if CONFIG_DRAGON_CHASSIS
 +#include <linux/device.h>
 +#include <linux/timer.h>
@@ -447,17 +496,19 @@ index 24168e9f7df4..5acc786c9484 100644
  
  /**
   * struct i2c_arbitrator_data - Driver data for I2C arbitrator
-@@ -28,9 +32,17 @@
+@@ -28,9 +31,19 @@
  struct i2c_arbitrator_data {
  	struct gpio_desc *our_gpio;
  	struct gpio_desc *their_gpio;
++#if CONFIG_DRAGON_CHASSIS
 +	struct gpio_desc *cpld_refresh;
++#endif
  	unsigned int slew_delay_us;
  	unsigned int wait_retry_us;
  	unsigned int wait_free_us;
++#if CONFIG_DRAGON_CHASSIS
 +	struct timer_list timer;
 +	struct i2c_mux_core *muxc;
-+#if CONFIG_DRAGON_CHASSIS
 +	struct i2c_adapter *cpld_access;
 +	u8 cpld_address;
 +	bool bus_locked;
@@ -465,37 +516,35 @@ index 24168e9f7df4..5acc786c9484 100644
  };
  
  
-@@ -44,6 +56,17 @@ static int i2c_arbitrator_select(struct i2c_mux_core *muxc, u32 chan)
+@@ -43,7 +56,14 @@ static int i2c_arbitrator_select(struct i2c_mux_core *muxc, u32 chan)
+ {
  	const struct i2c_arbitrator_data *arb = i2c_mux_priv(muxc);
  	unsigned long stop_retry, stop_time;
- 
+-
 +#if CONFIG_DRAGON_CHASSIS
 +	if (!IS_ERR(arb->cpld_refresh)) {
 +		if (gpiod_get_value(arb->cpld_refresh))
 +			return -EBUSY;
 +	}
-+
 +	if (arb->bus_locked)
 +		return 0;
-+
 +#endif //CONFIG_DRAGON_CHASSIS
-+
  	/* Start a round of trying to claim the bus */
  	stop_time = jiffies + usecs_to_jiffies(arb->wait_free_us) + 1;
  	do {
-@@ -86,6 +109,11 @@ static int i2c_arbitrator_deselect(struct i2c_mux_core *muxc, u32 chan)
+@@ -85,7 +105,10 @@ static int i2c_arbitrator_select(struct i2c_mux_core *muxc, u32 chan)
+ static int i2c_arbitrator_deselect(struct i2c_mux_core *muxc, u32 chan)
  {
  	const struct i2c_arbitrator_data *arb = i2c_mux_priv(muxc);
- 
+-
 +#if CONFIG_DRAGON_CHASSIS
 +	if (arb->bus_locked) //if bus is locked do not deselect it
 +		return 0;
 +#endif //CONFIG_DRAGON_CHASSIS
-+
  	/* Release the bus and wait for the other master to notice */
  	gpiod_set_value(arb->our_gpio, 0);
  	udelay(arb->slew_delay_us);
-@@ -93,6 +121,118 @@ static int i2c_arbitrator_deselect(struct i2c_mux_core *muxc, u32 chan)
+@@ -93,6 +116,105 @@ static int i2c_arbitrator_deselect(struct i2c_mux_core *muxc, u32 chan)
  	return 0;
  }
  
@@ -508,49 +557,41 @@ index 24168e9f7df4..5acc786c9484 100644
 +	struct i2c_mux_core *muxc = i2c_get_clientdata(client);
 +	const struct i2c_arbitrator_data *arb = i2c_mux_priv(muxc);
 +	int gpio_val = -1;
-+
 +	if (!IS_ERR(arb->cpld_refresh))
 +		gpio_val = gpiod_get_value(arb->cpld_refresh);
-+
 +	return sprintf(buf, "%d\n", gpio_val);
 +}
 +static DEVICE_ATTR_RO(cpld_refresh);
 +
 +static ssize_t arb_state_show(struct device *dev,
-+			      struct device_attribute *attr,
-+			      char *buf)
++			    struct device_attribute *attr,
++			    char *buf)
 +{
 +	struct i2c_client *client = to_i2c_client(dev);
 +	struct i2c_mux_core *muxc = i2c_get_clientdata(client);
 +	const struct i2c_arbitrator_data *arb = i2c_mux_priv(muxc);
-+
 +	int gpio_val = gpiod_get_value(arb->their_gpio);
-+
 +	if (!IS_ERR(arb->cpld_refresh)) {
 +		if (gpiod_get_value(arb->cpld_refresh))
 +			return -EBUSY;
 +	}
-+
 +	return sprintf(buf, "%d\n", gpio_val);
 +}
 +
 +static ssize_t arb_state_store(struct device *dev,
-+			       struct device_attribute *attr,
-+			       const char *buf, size_t count)
++			     struct device_attribute *attr,
++			     const char *buf, size_t count)
 +{
 +	struct i2c_client *client = to_i2c_client(dev);
 +	struct i2c_mux_core *muxc = i2c_get_clientdata(client);
 +	struct i2c_arbitrator_data *arb = i2c_mux_priv(muxc);
 +	int val;
 +	int ret;
-+
 +	ret = kstrtoint(buf, 0, &val);
 +	if (ret < 0)
 +		return ret;
-+
 +	if (val != 0 && val != 1)
 +		return -EINVAL;
-+
 +	if (!val) {
 +		arb->bus_locked = false;
 +		del_timer_sync(&arb->timer);
@@ -588,116 +629,43 @@ index 24168e9f7df4..5acc786c9484 100644
 +			.buf = out_buf1,
 +		}
 +	};
-+
 +	out_buf0[0] = 16;
 +	out_buf0[1] = 0x5;
 +	out_buf1[0] = 16;
 +	out_buf1[1] = 0xA;
-+
 +	gpio_val = gpiod_get_value(arb->their_gpio);
-+
 +	if (!gpio_val)
 +	{
 +		if (i2c_transfer(arb->cpld_access, msgs, 2) != 2)
 +			dev_err(muxc->dev, "Could not access cpld to pet the watchdog\n");
-+
 +		mod_timer(&arb->timer, jiffies + HZ);
 +	}
 +	else
 +	{
-+			dev_err(muxc->dev, "Unexpected gpio value in timer.\n");
++		dev_err(muxc->dev, "Unexpected gpio value in timer.\n");
 +	}
 +}
 +#endif //CONFIG_DRAGON_CHASSIS
 +
-+
  static int i2c_arbitrator_probe(struct platform_device *pdev)
  {
  	struct device *dev = &pdev->dev;
-@@ -103,6 +243,10 @@ static int i2c_arbitrator_probe(struct platform_device *pdev)
- 	struct gpio_desc *dummy;
- 	int ret;
- 
-+#if CONFIG_DRAGON_CHASSIS
-+	struct device_node *cpld_np;
-+#endif //CONFIG_DRAGON_CHASSIS
-+
- 	/* We only support probing from device tree; no platform_data */
- 	if (!np) {
- 		dev_err(dev, "Cannot find device tree node\n");
-@@ -118,6 +262,7 @@ static int i2c_arbitrator_probe(struct platform_device *pdev)
+@@ -118,7 +240,9 @@ static int i2c_arbitrator_probe(struct platform_device *pdev)
  	if (!muxc)
  		return -ENOMEM;
  	arb = i2c_mux_priv(muxc);
+-
++#if CONFIG_DRAGON_CHASSIS
 +	arb->muxc = muxc;
- 
++#endif //CONFIG_DRAGON_CHASSIS
  	platform_set_drvdata(pdev, muxc);
  
-@@ -136,6 +281,8 @@ static int i2c_arbitrator_probe(struct platform_device *pdev)
- 		return PTR_ERR(arb->their_gpio);
- 	}
- 
-+	arb->cpld_refresh = devm_gpiod_get(dev, "cpld-refresh", GPIOD_IN);
-+
- 	/* At the moment we only support a single two master (us + 1 other) */
- 	dummy = devm_gpiod_get_index(dev, "their-claim", 1, GPIOD_IN);
- 	if (!IS_ERR(dummy)) {
-@@ -153,6 +300,24 @@ static int i2c_arbitrator_probe(struct platform_device *pdev)
- 	if (of_property_read_u32(np, "wait-free-us", &arb->wait_free_us))
- 		arb->wait_free_us = 50000;
- 
-+#if CONFIG_DRAGON_CHASSIS
-+	if (of_property_read_u8(np, "cpld-address", &arb->cpld_address))
-+		return -EINVAL;
-+
-+	/* Find our cpld i2c bus */
-+	cpld_np = of_parse_phandle(np, "i2c-cpld", 0);
-+	if (!cpld_np) {
-+		dev_err(dev, "Cannot parse i2c-cpld\n");
-+		return -EINVAL;
-+	}
-+	arb->cpld_access = of_get_i2c_adapter_by_node(cpld_np);
-+	of_node_put(cpld_np);
-+	if (!arb->cpld_access) {
-+		dev_err(dev, "Cannot find cpld bus\n");
-+		return -EPROBE_DEFER;
-+	}
-+#endif //CONFIG_DRAGON_CHASSIS
-+
- 	/* Find our parent */
- 	parent_np = of_parse_phandle(np, "i2c-parent", 0);
- 	if (!parent_np) {
-@@ -171,6 +336,13 @@ static int i2c_arbitrator_probe(struct platform_device *pdev)
- 	if (ret)
- 		i2c_put_adapter(muxc->parent);
- 
-+#if CONFIG_DRAGON_CHASSIS
-+	timer_setup(&arb->timer, pet_cpld_register, 0);
-+	device_create_file(dev, &dev_attr_arb_state);
-+	device_create_file(dev, &dev_attr_cpld_refresh);
-+	arb->bus_locked = false;
-+#endif //CONFIG_DRAGON_CHASSIS
-+
- 	return ret;
- }
- 
-@@ -178,6 +350,11 @@ static void i2c_arbitrator_remove(struct platform_device *pdev)
- {
- 	struct i2c_mux_core *muxc = platform_get_drvdata(pdev);
- 
-+#if CONFIG_DRAGON_CHASSIS
-+	device_remove_file(&pdev->dev, &dev_attr_arb_state);
-+	device_remove_file(&pdev->dev, &dev_attr_cpld_refresh);
-+#endif //CONFIG_DRAGON_CHASSIS
-+
- 	i2c_mux_del_adapters(muxc);
- 	i2c_put_adapter(muxc->parent);
- }
+ 	/* Request GPIOs, our GPIO as unclaimed to begin with */
 diff --git a/include/linux/device/class.h b/include/linux/device/class.h
-index abf3d3bfb6fe..4f27dffc7a15 100644
+index 65880e60c720..f04f4536bc8a 100644
 --- a/include/linux/device/class.h
 +++ b/include/linux/device/class.h
-@@ -230,4 +230,27 @@ void class_interface_unregister(struct class_interface *);
+@@ -226,4 +226,27 @@ void class_interface_unregister(struct class_interface *);
  struct class * __must_check class_create(const char *name);
  void class_destroy(const struct class *cls);
  
@@ -948,7 +916,7 @@ index 000000000000..57d47d2ea82c
 +
 +#endif
 diff --git a/include/linux/i2c-mux.h b/include/linux/i2c-mux.h
-index 98ef73b7c8fd..3d2586062ccc 100644
+index 1784ac7afb11..476ffcaf7247 100644
 --- a/include/linux/i2c-mux.h
 +++ b/include/linux/i2c-mux.h
 @@ -14,6 +14,7 @@
@@ -971,10 +939,10 @@ index 98ef73b7c8fd..3d2586062ccc 100644
  	int max_adapters;
  	struct i2c_adapter *adapter[];
 diff --git a/include/linux/i2c.h b/include/linux/i2c.h
-index 1befb99c6887..af3a043f11f8 100644
+index 45431a3a3205..c971a7233cd2 100644
 --- a/include/linux/i2c.h
 +++ b/include/linux/i2c.h
-@@ -770,6 +770,13 @@ struct i2c_adapter {
+@@ -784,6 +784,13 @@ struct i2c_adapter {
  	struct irq_domain *host_notify_domain;
  	struct regulator *bus_regulator;
  
@@ -988,7 +956,7 @@ index 1befb99c6887..af3a043f11f8 100644
  	struct dentry *debugfs;
  
  	/* 7bit address space */
-@@ -1082,7 +1089,7 @@ static inline int of_i2c_get_board_info(struct device *dev,
+@@ -1118,7 +1125,7 @@ static inline int of_i2c_get_board_info(struct device *dev,
  struct acpi_resource;
  struct acpi_resource_i2c_serialbus;
  
@@ -997,7 +965,7 @@ index 1befb99c6887..af3a043f11f8 100644
  bool i2c_acpi_get_i2c_resource(struct acpi_resource *ares,
  			       struct acpi_resource_i2c_serialbus **i2c);
  int i2c_acpi_client_count(struct acpi_device *adev);
-@@ -1129,4 +1136,22 @@ static inline struct i2c_client *i2c_acpi_new_device(struct device *dev,
+@@ -1165,4 +1172,23 @@ static inline struct i2c_client *i2c_acpi_new_device(struct device *dev,
  	return i2c_acpi_new_device_by_fwnode(dev_fwnode(dev), index, info);
  }
  
@@ -1019,12 +987,13 @@ index 1befb99c6887..af3a043f11f8 100644
 +	return I2C_HOLD_MSG_NONE;
 +}
 +
++
  #endif /* _LINUX_I2C_H */
 diff --git a/include/uapi/linux/i2c.h b/include/uapi/linux/i2c.h
-index 92326ebde350..83e0f406fedc 100644
+index a2db2a56c8b0..1766411f7947 100644
 --- a/include/uapi/linux/i2c.h
 +++ b/include/uapi/linux/i2c.h
-@@ -75,6 +75,7 @@ struct i2c_msg {
+@@ -76,6 +76,7 @@ struct i2c_msg {
  	__u16 flags;
  #define I2C_M_RD		0x0001	/* guaranteed to be 0x0001! */
  #define I2C_M_TEN		0x0010	/* use only if I2C_FUNC_10BIT_ADDR */

@@ -1,49 +1,48 @@
-From fb81074a81431725ad3e01f263dbd2ee2833e8c5 Mon Sep 17 00:00:00 2001
+From 0202bf347c6e0e3354684ae61bb108445f3f19ec Mon Sep 17 00:00:00 2001
 From: fredhsieh <fredhsieh@ami.com>
-Date: Fri, 12 Sep 2025 17:44:41 +0800
-Subject: [PATCH] Fix I2C Coverity for linux-onetree
+Date: Wed, 15 Jul 2026 00:14:30 +0530
+Subject: [PATCH] Fix-I2C-Coverity-for-linux-onetree
+
+Signed-off-by: fredhsieh <fredhsieh@ami.com>
+
+Patch recreated by Vijay K S <vijayks@ami.com> for kernel upgrade v6.18
 
 Upstream-Status: Inappropriate [AMI: coverity]
+
 ---
- drivers/i2c/i2c-slave-mqueue.c | 57 +++++++++++++++++++++++++---------
- 1 file changed, 43 insertions(+), 14 deletions(-)
+ drivers/i2c/i2c-slave-mqueue.c | 44 +++++++++++++++++++++++++---------
+ include/linux/i2c.h            |  2 ++
+ 2 files changed, 35 insertions(+), 11 deletions(-)
 
 diff --git a/drivers/i2c/i2c-slave-mqueue.c b/drivers/i2c/i2c-slave-mqueue.c
-index a9f116ef9528..385f4cc854db 100644
+index 0f5dda9897aa..5dfc340ea2be 100644
 --- a/drivers/i2c/i2c-slave-mqueue.c
 +++ b/drivers/i2c/i2c-slave-mqueue.c
-@@ -51,34 +51,49 @@ static int i2c_slave_mqueue_callback(struct i2c_client *client,
- 				     enum i2c_slave_event event, u8 *val)
+@@ -37,31 +37,41 @@ static int i2c_slave_mqueue_callback(struct i2c_client *client,
  {
  	struct mq_queue *mq = i2c_get_clientdata(client);
--	struct mq_msg *msg = mq->curr;
-+	struct mq_msg *msg;
+ 	struct mq_msg *msg = mq->curr;
 +	unsigned long flags;
  	int ret = 0;
  
  	switch (event) {
  	case I2C_SLAVE_WRITE_REQUESTED:
- 	case I2C_SLAVE_GCALL_REQUESTED:
++	case I2C_SLAVE_GCALL_REQUESTED:
 +		spin_lock_irqsave(&mq->lock, flags);
  		mq->truncated = 0;
-+		msg = mq->curr;
  
  		msg->len = 1;
- 		msg->buf[0] = event == I2C_SLAVE_GCALL_REQUESTED ?
- 			      0 : client->addr << 1;
+-		msg->buf[0] = client->addr << 1;
++		msg->buf[0] = (event == I2C_SLAVE_GCALL_REQUESTED) ? 0 : client->addr << 1;
 +		spin_unlock_irqrestore(&mq->lock, flags);
  		break;
  
  	case I2C_SLAVE_WRITE_RECEIVED:
 +		spin_lock_irqsave(&mq->lock, flags);
-+		msg = mq->curr;
-+
  		if (msg->len < MQ_MSGBUF_SIZE) {
--			msg->buf[msg->len++] = *val;
-+			msg->buf[msg->len] = *val;
-+			msg->len++;
+ 			msg->buf[msg->len++] = *val;
  		} else {
--			dev_err(&client->dev, "message is truncated!\n");
+ 			dev_err(&client->dev, "message is truncated!\n");
  			mq->truncated = 1;
  			ret = -EINVAL;
 +			spin_unlock_irqrestore(&mq->lock, flags);
@@ -56,98 +55,105 @@ index a9f116ef9528..385f4cc854db 100644
  	case I2C_SLAVE_STOP:
 -		if (unlikely(mq->truncated || msg->len < 2))
 +		spin_lock_irqsave(&mq->lock, flags);
-+		msg = mq->curr;
-+
 +		if (unlikely(mq->truncated || msg->len < 2)) {
 +			spin_unlock_irqrestore(&mq->lock, flags);
  			break;
-+		}
- 
+-
 -		spin_lock(&mq->lock);
++		}
  		mq->in = MQ_QUEUE_NEXT(mq->in);
  		mq->curr = &mq->queue[mq->in];
  		mq->curr->len = 0;
-@@ -86,7 +101,7 @@ static int i2c_slave_mqueue_callback(struct i2c_client *client,
+@@ -69,8 +79,7 @@ static int i2c_slave_mqueue_callback(struct i2c_client *client,
  		/* Flush the oldest message */
  		if (mq->out == mq->in)
  			mq->out = MQ_QUEUE_NEXT(mq->out);
 -		spin_unlock(&mq->lock);
+-
 +		spin_unlock_irqrestore(&mq->lock, flags);
- 
  		kernfs_notify(mq->kn);
  		break;
-@@ -150,16 +165,18 @@ static int i2c_slave_mqueue_probe(struct i2c_client *client)
+ 
+@@ -128,14 +137,15 @@ static int i2c_slave_mqueue_probe(struct i2c_client *client)
+ 
  	BUILD_BUG_ON(!is_power_of_2(MQ_QUEUE_SIZE));
  
- 	mq->client = client;
--
--	buf = devm_kmalloc_array(dev, MQ_QUEUE_SIZE, MQ_MSGBUF_SIZE,
--				 GFP_KERNEL);
-+	
-+	buf = kzalloc(MQ_QUEUE_SIZE * MQ_MSGBUF_SIZE, GFP_KERNEL);
-+	
- 	if (!buf)
+-	mq = devm_kzalloc(dev, sizeof(*mq), GFP_KERNEL);
++	mq = kzalloc(sizeof(*mq), GFP_KERNEL);
+ 	if (!mq)
  		return -ENOMEM;
  
--	mq->queue = devm_kzalloc(dev, sizeof(*mq->queue) * MQ_QUEUE_SIZE,
+-	buf = devm_kmalloc_array(dev, MQ_QUEUE_SIZE, MQ_MSGBUF_SIZE,
 -				 GFP_KERNEL);
 -	if (!buf)
-+	mq->queue = kzalloc(sizeof(*mq->queue) * MQ_QUEUE_SIZE, GFP_KERNEL);
-+
-+	if (!mq->queue) {
-+		kfree(buf);
++	buf = kzalloc(MQ_QUEUE_SIZE * MQ_MSGBUF_SIZE, GFP_KERNEL);
++	if (!buf) {
++		kfree(mq);
  		return -ENOMEM;
 +	}
  
  	for (i = 0; i < MQ_QUEUE_SIZE; i++)
  		mq->queue[i].buf = buf + i * MQ_MSGBUF_SIZE;
-@@ -176,12 +193,17 @@ static int i2c_slave_mqueue_probe(struct i2c_client *client)
+@@ -152,12 +162,17 @@ static int i2c_slave_mqueue_probe(struct i2c_client *client)
  	mq->bin.size = MQ_MSGBUF_SIZE * MQ_QUEUE_SIZE;
  
  	ret = sysfs_create_bin_file(&dev->kobj, &mq->bin);
 -	if (ret)
 +	if (ret) {
-+		kfree(mq->queue);
 +		kfree(buf);
++		kfree(mq);
  		return ret;
 +	}
  
  	mq->kn = kernfs_find_and_get(dev->kobj.sd, mq->bin.attr.name);
  	if (!mq->kn) {
  		sysfs_remove_bin_file(&dev->kobj, &mq->bin);
-+		kfree(mq->queue);
 +		kfree(buf);
++		kfree(mq);
  		return -EFAULT;
  	}
  
-@@ -189,6 +211,8 @@ static int i2c_slave_mqueue_probe(struct i2c_client *client)
+@@ -165,6 +180,8 @@ static int i2c_slave_mqueue_probe(struct i2c_client *client)
  	if (ret) {
  		kernfs_put(mq->kn);
  		sysfs_remove_bin_file(&dev->kobj, &mq->bin);
-+		kfree(mq->queue);
 +		kfree(buf);
++		kfree(mq);
  		return ret;
  	}
  
-@@ -198,12 +222,17 @@ static int i2c_slave_mqueue_probe(struct i2c_client *client)
- static void i2c_slave_mqueue_remove(struct i2c_client *client)
- {
- 	struct mq_queue *mq = i2c_get_clientdata(client);
--
-+	
- 	i2c_slave_unregister(client);
+@@ -179,6 +196,11 @@ static void i2c_slave_mqueue_remove(struct i2c_client *client)
  
  	kernfs_put(mq->kn);
  	sysfs_remove_bin_file(&client->dev.kobj, &mq->bin);
- 
-+	if (mq->queue) {
-+		kfree(mq->queue[0].buf);  /* Free the original buf */
-+		kfree(mq->queue);         /* Free the queue array */
-+	}
 +
++	if (mq) {
++		kfree(mq->queue[0].buf);  /* Free the original buf */
++	}
++	kfree(mq);
  }
  
  static const struct i2c_device_id i2c_slave_mqueue_id[] = {
+diff --git a/include/linux/i2c.h b/include/linux/i2c.h
+index 04eb1138b9d6..c971a7233cd2 100644
+--- a/include/linux/i2c.h
++++ b/include/linux/i2c.h
+@@ -21,6 +21,7 @@
+ #include <linux/irqdomain.h>		/* for Host Notify IRQ */
+ #include <linux/of.h>		/* for struct device_node */
+ #include <linux/swab.h>		/* for swab16 */
++#include <linux/workqueue.h>
+ #include <uapi/linux/i2c.h>
+ 
+ extern const struct bus_type i2c_bus_type;
+@@ -385,6 +386,7 @@ enum i2c_slave_event {
+ 	I2C_SLAVE_WRITE_REQUESTED,
+ 	I2C_SLAVE_READ_PROCESSED,
+ 	I2C_SLAVE_WRITE_RECEIVED,
++	I2C_SLAVE_GCALL_REQUESTED,
+ 	I2C_SLAVE_STOP,
+ };
+ 
 -- 
 2.34.1
 
