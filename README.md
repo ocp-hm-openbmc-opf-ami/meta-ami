@@ -34,9 +34,9 @@ sudo dnf install git python3 gcc g++ gawk which bzip2 chrpath cpio \
 
 ### 2.1 AST2600EVB
 ```sh
-git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
-git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/meta-core
-git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
+git clone https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-core
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
 meta-ami/github-gitlab-url.sh
 TEMPLATECONF=meta-ami/meta-evb/meta-evb-aspeed/meta-evb-ast2600/conf/templates/default . openbmc-env
 bitbake obmc-phosphor-image
@@ -44,9 +44,9 @@ bitbake obmc-phosphor-image
 
 ### 2.2 AST2700EVB
 ```sh
-git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
-git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/meta-core
-git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
+git clone https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-core
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
 meta-ami/github-gitlab-url.sh
 TEMPLATECONF=meta-ami/meta-evb/meta-evb-aspeed/meta-evb-ast2700/meta-ast2700/conf/templates/default . openbmc-env
 bitbake obmc-phosphor-image
@@ -55,9 +55,9 @@ bitbake obmc-phosphor-image
 ### 2.3 Nuvoton Arbel
 
 ```sh
-git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
-git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/meta-core
-git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
+git clone https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-core
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
 meta-ami/github-gitlab-url.sh
 TEMPLATECONF=meta-ami/meta-evb/meta-evb-nuvoton/meta-evb-npcm845/conf/templates/default . openbmc-env
 bitbake obmc-phosphor-image
@@ -66,9 +66,9 @@ bitbake obmc-phosphor-image
 ### 2.4 Agilex-3
 
 ```sh
-git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
-git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/meta-core
-git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
+git clone https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-core
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
 git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-altera.git
 meta-ami/github-gitlab-url.sh
 TEMPLATECONF=meta-altera/meta-agilex3/conf/templates/default . openbmc-env
@@ -78,9 +78,9 @@ bitbake obmc-phosphor-image
 ### 2.5 Agilex-5
 
 ```sh
-git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
-git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/meta-core
-git clone --branch CE-AMI202607 https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
+git clone https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-core
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
 git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-altera.git
 meta-ami/github-gitlab-url.sh
 TEMPLATECONF=meta-altera/meta-agilex5/conf/templates/default . openbmc-env
