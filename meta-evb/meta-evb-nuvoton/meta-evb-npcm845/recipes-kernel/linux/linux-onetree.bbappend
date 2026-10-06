@@ -15,6 +15,7 @@ SRC_URI:append = " file://nfs_cifs.cfg \
 
 SRC_URI += "file://dts-arbel-npcm845/ \
             file://i3c-arbel-npcm845/ \
+	    file://0001-Nuvoton-sdkv11.02-change.patch \
             file://0004-Enable-usb-device-8-9-on-usbphy-2-3.patch \
             file://Enable_msft.cfg \
             file://0002-Add-workaround-for-using-header-file-in-user-space-w.patch \
@@ -29,7 +30,6 @@ SRC_URI += "file://dts-arbel-npcm845/ \
             file://0010-add-support-for-mbox-interface-for-mctp-endpoint-com.patch \
             file://0011-Add-pmbus-driver-support-for-mp5940.patch \
             file://0012-Add-skip-soft-reset-config-to-spi-nor-driver.patch \
-            file://0013-Modify-driver-adm1275-Add-adm1281-and-adm1273-suppor.patch \
             file://0014-Support-ADC-ads112c04-driver.patch \
             file://0015-Add-pmbus-driver-support-for-tps53689t-and-tps536c9t.patch \
             file://0016-Add-a-clear-fault-flag-and-implement-support-to-exec.patch \
@@ -43,21 +43,16 @@ SRC_URI += "file://dts-arbel-npcm845/ \
             file://0024-Add-max34452-driver-info.patch \
             file://0025-iio-adc-max1363-Add-ability-to-set-scale-of-the-ADC.patch \
             file://0026-iio-adc-ti-ads7142-Add-new-driver-support-for-ADS714.patch \
-            file://0005-net-ethernet-stmmac-add-sgmii-support.patch \
             file://0028-hw-i2c-nuvoton-expose-bus-timeout-as-device-tree-pro.patch \
             file://0029-hw-i2c-nuvoton-log-bus-timeout-and-retries.patch \
             file://0030-Add-i2c-gpio-expander-driver-for-MSFT-FPGA.patch \
+	    file://0031-Fix_compilation_issue_kernel-v6.18.patch \
             "
 SRC_URI:remove = "file://Enable_I3C.cfg"
 SRC_URI:remove = "file://CVE-2026-43078.patch"
 SRC_URI:remove = "file://CVE-2025-21868.patch "
 SRC_URI:remove = "file://CVE-2026-64597.patch "
 
-SRC_URI:append = " file://0001-Nuvoton-drivers.patch \
-		   file://0002-Nuvoton-include.patch \
-		   file://0003-Nuvoton-net.patch \
-		   file://0004-Nuvoton-Generic.patch \
-		 "
 do_configure:append (){
 
     cp ${UNPACKDIR}/dts-arbel-npcm845/nuvoton-npcm845-evb.dts ${S}/arch/arm64/boot/dts/nuvoton/
