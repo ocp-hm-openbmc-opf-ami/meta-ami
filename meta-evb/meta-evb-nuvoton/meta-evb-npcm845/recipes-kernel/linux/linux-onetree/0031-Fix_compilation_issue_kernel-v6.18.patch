@@ -1,0 +1,169 @@
+From 8c2bd1b731471d0fc93172176f3bc2356517cf17 Mon Sep 17 00:00:00 2001
+From: Vijay K S <vijayks@ami.com>
+Date: Mon, 27 Jul 2026 14:10:29 +0530
+Subject: [PATCH] Added the patch to fix compilation issue in Kernel
+v6.18
+
+Signed-off-by: Vijay K S <vijayks@ami.com>
+Upstream-Status: Inappropriate [AMI specific change]
+---
+ drivers/gpio/gpio-msft-fpga.c   | 22 ++++++++++++++++++----
+ drivers/iio/adc/ti-ads112c04.c  | 13 ++++++++-----
+ drivers/iio/adc/ti-ads7142.c    |  7 +++----
+ include/linux/compiler.h        |  1 +
+ include/linux/error-injection.h |  1 +
+ 5 files changed, 31 insertions(+), 13 deletions(-)
+
+diff --git a/drivers/gpio/gpio-msft-fpga.c b/drivers/gpio/gpio-msft-fpga.c
+index 49d63d06d3b3..f6be333b1ec8 100644
+--- a/drivers/gpio/gpio-msft-fpga.c
++++ b/drivers/gpio/gpio-msft-fpga.c
+@@ -84,7 +84,7 @@ static int fpga_iox_gpio_get(struct gpio_chip *gc, unsigned offset)
+ 	return !!(reg_val & bit);
+ }
+ 
+-static void fpga_iox_gpio_set(struct gpio_chip *gc, unsigned offset, int value)
++static int fpga_iox_gpio_set(struct gpio_chip *gc, unsigned offset, int value)
+ {
+ 	struct fpga_iox *chip = gpiochip_get_data(gc);
+ 	unsigned int reg = offset >> chip->reg_shift;
+@@ -102,10 +102,12 @@ static void fpga_iox_gpio_set(struct gpio_chip *gc, unsigned offset, int value)
+ 	else
+ 		val &= ~BIT(pos);
+ 
+-	fpga_iox_write(chip, reg, val);
++	err = fpga_iox_write(chip, reg, val);
+ 
+ unlock:
+ 	mutex_unlock(&chip->i2c_lock);
++
++	return err;
+ }
+ 
+ static void fpga_iox_gpio_dbg_show(struct seq_file *s, struct gpio_chip *gc)
+@@ -131,12 +133,21 @@ static void fpga_iox_gpio_dbg_show(struct seq_file *s, struct gpio_chip *gc)
+ 		for (j = 0; j < 8; j++) {
+ 			unsigned int bit = (i << chip->reg_shift) + j;
+ 			const char *level = "low ";
++			char *line_label;
+ 
+ 			if (reg_val & BIT(j))
+ 				level = "high";
+ 
+-			label = gpiochip_is_requested(gc, bit);
++			line_label = gpiochip_dup_line_label(gc, bit);
++			if (IS_ERR(line_label))
++				label = "";
++			else
++				label = line_label;
++
+ 			seq_printf(s, "%2u: {%s} %s\n", bit, label, level);
++
++			if (!IS_ERR(line_label))
++				kfree(line_label);
+ 		}
+ 	}
+ 
+@@ -197,9 +208,12 @@ static int fpga_iox_gpio_direction_output(struct gpio_chip *gc,
+ 	struct fpga_iox *chip = gpiochip_get_data(gc);
+ 	u8 reg = offset >> chip->reg_shift;
+ 	u8 bit = BIT(offset % BANK_SZ);
++	int ret;
+ 
+ 	/* set output level */
+-	fpga_iox_gpio_set(gc, offset, val);
++	ret = fpga_iox_gpio_set(gc, offset, val);
++	if (ret)
++		return ret;
+ 
+ 	val = bitmap_get_value8(chip->direction, reg * BANK_SZ);
+ 	val &= ~bit;
+diff --git a/drivers/iio/adc/ti-ads112c04.c b/drivers/iio/adc/ti-ads112c04.c
+index 683daa846902..751cfc83c90a 100644
+--- a/drivers/iio/adc/ti-ads112c04.c
++++ b/drivers/iio/adc/ti-ads112c04.c
+@@ -301,9 +301,10 @@ static int ads112c04_read_raw(struct iio_dev *indio_dev,
+ 	mutex_lock(&data->lock);
+ 	switch (mask) {
+ 	case IIO_CHAN_INFO_RAW:
+-		ret = iio_device_claim_direct_mode(indio_dev);
+-		if (ret)
++		if (!iio_device_claim_direct(indio_dev)) {
++			ret = -EBUSY;
+ 			break;
++		}
+ 
+ 		ret = ads112c04_get_adc_result(data, chan->address, val);
+ 		if (ret < 0)
+@@ -318,14 +319,16 @@ static int ads112c04_read_raw(struct iio_dev *indio_dev,
+ 
+ 		/*Read data command*/
+ 		swap_val = i2c_smbus_read_word_swapped(data->i2c, CMD_RDATA);
+-		if (swap_val < 0)
+-			return swap_val;
++		if (swap_val < 0) {
++			ret = swap_val;
++			goto release_direct;
++		}
+ 
+ 		*val = swap_val;
+ 
+ 		ret = IIO_VAL_INT;
+ release_direct:
+-		iio_device_release_direct_mode(indio_dev);
++				iio_device_release_direct(indio_dev);
+ 		break;
+ 	case IIO_CHAN_INFO_SCALE:
+ 		idx = data->channel_data[chan->address].gain;
+diff --git a/drivers/iio/adc/ti-ads7142.c b/drivers/iio/adc/ti-ads7142.c
+index 472c83eb9e5c..0aabeb68258b 100644
+--- a/drivers/iio/adc/ti-ads7142.c
++++ b/drivers/iio/adc/ti-ads7142.c
+@@ -152,9 +152,8 @@ static int ads7142_read_channel(struct iio_dev *indio_dev, int channel,
+ 	u16 output;
+ 	int ret;
+ 
+-	ret = iio_device_claim_direct_mode(indio_dev);
+-	if (ret)
+-		return ret;
++	if (!iio_device_claim_direct(indio_dev))
++		return -EBUSY;
+ 
+ 	/* Configure the inputs to Two Channel, Single Ended mode */
+ 	ret = ads7142_reg_write(client,
+@@ -195,7 +194,7 @@ static int ads7142_read_channel(struct iio_dev *indio_dev, int channel,
+ 		ADS7142_ABORT_SEQUENCE_REG, ADS7142_ABORT_SEQUENCE_DATA);
+ 
+ release_direct:
+-	iio_device_release_direct_mode(indio_dev);
++	iio_device_release_direct(indio_dev);
+ 
+ 	return ret;
+ }
+diff --git a/include/linux/compiler.h b/include/linux/compiler.h
+index d59ee74a8bf4..7580ef258860 100644
+--- a/include/linux/compiler.h
++++ b/include/linux/compiler.h
+@@ -3,6 +3,7 @@
+ #define __LINUX_COMPILER_H
+ 
+ #include <linux/compiler_types.h>
++#include <linux/types.h>
+ 
+ #ifndef __ASSEMBLY__
+ 
+diff --git a/include/linux/error-injection.h b/include/linux/error-injection.h
+index 20e738f4eae8..828d113e812a 100644
+--- a/include/linux/error-injection.h
++++ b/include/linux/error-injection.h
+@@ -4,6 +4,7 @@
+ 
+ #include <linux/compiler.h>
+ #include <linux/errno.h>
++#include <linux/types.h>
+ #include <asm-generic/error-injection.h>
+ 
+ #ifdef CONFIG_FUNCTION_ERROR_INJECTION
+-- 
+2.34.1
+
