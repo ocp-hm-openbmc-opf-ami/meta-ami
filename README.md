@@ -150,7 +150,7 @@ TEMPLATECONF=meta-ami/meta-aminuvton/conf/templates/default . openbmc-env
 bitbake obmc-phosphor-image
 ```
 
-### 2.10 NXP FRDM i.MX93
+### NXP FRDM i.MX93
 
 ```sh
 git clone https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
@@ -161,7 +161,7 @@ TEMPLATECONF=meta-ami/meta-evb/meta-evb-nxp/meta-imx93/conf/templates/default . 
 bitbake obmc-phosphor-image
 ```
 
-### 2.11 NXP i.MX95 EVK
+### NXP i.MX95 EVK
 
 ```sh
 git clone https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
