@@ -150,5 +150,27 @@ TEMPLATECONF=meta-ami/meta-aminuvton/conf/templates/default . openbmc-env
 bitbake obmc-phosphor-image
 ```
 
+### 2.10 NXP FRDM i.MX93
+
+```sh
+git clone https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-core
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
+meta-ami/github-gitlab-url.sh
+TEMPLATECONF=meta-ami/meta-evb/meta-evb-nxp/meta-imx93/conf/templates/default . openbmc-env
+bitbake obmc-phosphor-image
+```
+
+### 2.11 NXP i.MX95 EVK
+
+```sh
+git clone https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-core
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
+meta-ami/github-gitlab-url.sh
+TEMPLATECONF=meta-ami/meta-evb/meta-evb-nxp/meta-imx95/conf/templates/default . openbmc-env
+bitbake obmc-phosphor-image
+```
+
 Please refer to [ocp-hm-openbmc-opf-ami/docs](https://github.com/ocp-hm-openbmc-opf-ami/docs)
 for more information.
