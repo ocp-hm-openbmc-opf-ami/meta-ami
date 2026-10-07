@@ -61,7 +61,7 @@ SRC_URI += "file://0004-Fix-I2C-Coverity-for-linux-onetree.patch \
 
 SRC_CPLD_SPI = " file://cpld-spidev.cfg \
                  file://0006-enable-spidev-in-driver-file.patch \
-                file://0001-spi-aspeed-smc-enable-cpld-spidev-transfers.patch \
+		 file://0001-spi-aspeed-smc-enable-cpld-spidev-transfers.patch \
                "
 SRC_URI:append = "${@bb.utils.contains('IMAGE_FEATURES', 'onetree-fwupdate', SRC_CPLD_SPI,'', d)}"
 

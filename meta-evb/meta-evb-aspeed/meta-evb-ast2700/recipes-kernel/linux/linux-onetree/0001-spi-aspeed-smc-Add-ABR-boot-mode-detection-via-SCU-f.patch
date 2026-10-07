@@ -1,13 +1,9 @@
-From 46762a75c4aa1eb84c1a5fb414b0230ee86f3a33 Mon Sep 17 00:00:00 2001
+From d5aed59577b29aa438f9b6b87d4db089f06deae8 Mon Sep 17 00:00:00 2001
 From: saikumaru <saikumaru@ami.com>
-Date: Wed, 5 Nov 2025 16:15:33 +0530
+Date: Thu, 16 Jul 2026 01:32:10 +0530
 Subject: [PATCH] spi: aspeed-smc: Add ABR boot mode detection via SCU for
- AST2700
 
-This patch adds support for detecting the ABR boot mode (single or dual SPI) on AST2700 platforms by reading the SCU1_030 register (bit 29). The detected mode is:
-
-- 0: Dual SPI ABR mode
-- 1: Single SPI ABR mode
+Patch recreated by Vijay K S <vijayks@ami.com> for kernel upgrade v6.18
 
 Key additions:
 - Maps SCU base at 0x14C02000 and reads bit 29 of offset 0x30
@@ -24,17 +20,14 @@ Upstream-Status: Inappropriate [AMI specific change]
  1 file changed, 115 insertions(+)
 
 diff --git a/drivers/spi/spi-aspeed-smc.c b/drivers/spi/spi-aspeed-smc.c
-index 32d2096a7cf0..b5be53fa62c3 100644
+index bf0cfa5c8dc9..465b57223549 100644
 --- a/drivers/spi/spi-aspeed-smc.c
 +++ b/drivers/spi/spi-aspeed-smc.c
-@@ -103,8 +103,18 @@
+@@ -102,6 +102,14 @@
+ #define ABR_CLEAR_BOOT_SRC_MAGIC (0xEA << 16)
  #define ABR_RELOAD_MAX_VALUE 0x3ff
  #define ABR_WDT_TIMEOUT_STATUS 0x10
- 
 +#define ABR_MODE_FILE_PATH "/run/media/abr_bootmode"
-+
- #define WDT_BASE_ADDR  0x14c37400
- #define WDT_SCRATCH_ADDR 0x4C //Boot indicator
 +
 +/* SCU registers for ABR mode detection */
 +#define SCU_BASE_ADDR   0x14C02000
@@ -42,11 +35,10 @@ index 32d2096a7cf0..b5be53fa62c3 100644
 +#define ABR_MODE_BIT    29  /* bit 29: trap_bspi_abrmode */
 +
 +static void __iomem *scu_base;
-+
- static void __iomem *wdt_base;
  
- static spinlock_t g_lock;
-@@ -194,6 +204,80 @@ struct aspeed_spi {
+ #define WDT_BASE_ADDR  0x14c37400
+ #define WDT_SCRATCH_ADDR 0x4C //Boot indicator
+@@ -194,6 +202,80 @@ struct aspeed_spi {
  	u32			 flag;
  };
  
@@ -127,7 +119,7 @@ index 32d2096a7cf0..b5be53fa62c3 100644
  static inline ssize_t _access_primary_show(void __iomem *regs,
  					   struct device_attribute *attr,
  					   char *buf)
-@@ -319,6 +403,7 @@ static ssize_t current_boot_show(struct device *dev,
+@@ -313,6 +395,7 @@ static ssize_t current_boot_show(struct device *dev,
  
  static DEVICE_ATTR_RW(access_primary);
  static DEVICE_ATTR_RW(access_backup);
@@ -135,14 +127,18 @@ index 32d2096a7cf0..b5be53fa62c3 100644
  static DEVICE_ATTR_RO(current_boot);
  
  static struct attribute *bswitch_primary_attrs[] = {
-@@ -333,9 +418,14 @@ static struct attribute *bcurrent_boot_attrs[] = {
- 	&dev_attr_current_boot.attr, NULL
+@@ -323,6 +406,10 @@ static struct attribute *bswitch_backup_attrs[] = {
+ 	&dev_attr_access_backup.attr, NULL
  };
  
 +static struct attribute *abr_bootmode_attrs[] = {
 +       &dev_attr_abr_bootmode.attr, NULL
 +};
 +
+ static struct attribute *bcurrent_boot_attrs[] = {
+ 	&dev_attr_current_boot.attr, NULL
+ };
+@@ -330,6 +417,7 @@ static struct attribute *bcurrent_boot_attrs[] = {
  ATTRIBUTE_GROUPS(bswitch_primary);
  ATTRIBUTE_GROUPS(bswitch_backup);
  ATTRIBUTE_GROUPS(bcurrent_boot);
@@ -150,11 +146,11 @@ index 32d2096a7cf0..b5be53fa62c3 100644
  
  static u32 aspeed_spi_get_io_mode(const struct spi_mem_op *op,
  				  enum aspeed_spi_op_field field)
-@@ -1779,6 +1869,22 @@ static int aspeed_spi_probe(struct platform_device *pdev)
-     			printk("Failed to map WDT base address\n");
-     		return -ENOMEM;
+@@ -1779,6 +1867,23 @@ static int aspeed_spi_probe(struct platform_device *pdev)
+ 		return -ENOMEM;
  	}
-+		/* Map SCU base for ABR mode detection (AST2700 only) */
+ 
++			/* Map SCU base for ABR mode detection (AST2700 only) */
 +	if (data->ver == 2700) {
 +		int abr_mode;
 +		
@@ -165,19 +161,20 @@ index 32d2096a7cf0..b5be53fa62c3 100644
 +			abr_mode = aspeed_spi_get_abr_mode();
 +			if (abr_mode >= 0) {
 +				aspeed_spi_create_abr_mode_file(abr_mode);
-+				if (devm_device_add_groups(dev, abr_bootmode_groups))
++				if (device_add_groups(dev, abr_bootmode_groups))
 +					dev_warn(dev, "Could not add abr_bootmode sysfs\n");
 +			}
 +		}
-+	}	
++	}
++
  	aspi->flag = 0;
  	if (of_property_read_bool(dev->of_node, "fmc-spi-normal-mode"))
  		aspi->flag |= ASPEED_SPI_NORMAL_MODE;
-@@ -1937,6 +2043,15 @@ static void aspeed_spi_remove(struct platform_device *pdev)
- 				  aspi->op_buf,
+@@ -1941,6 +2046,16 @@ static void aspeed_spi_remove(struct platform_device *pdev)
  				  aspi->dma_addr_phy);
  	}
-+       if (scu_base) {
+ 
++	       if (scu_base) {
 +               iounmap(scu_base);
 +               scu_base = NULL;
 +       }
@@ -186,9 +183,10 @@ index 32d2096a7cf0..b5be53fa62c3 100644
 +               iounmap(wdt_base);
 +               wdt_base = NULL;
 +       }
- 
++
  	aspeed_spi_enable(aspi, false);
  }
+ 
 -- 
-2.47.1
+2.34.1
 
