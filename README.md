@@ -97,6 +97,29 @@ meta-ami/github-gitlab-url.sh
 TEMPLATECONF=meta-ami/meta-evb/meta-evb-arm/meta-evb-fvp-base/conf/templates/default . openbmc-env
 bitbake obmc-phosphor-image
 ```
+
+### 2.7 NXP FRDM i.MX93
+
+```sh
+git clone https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-core
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
+meta-ami/github-gitlab-url.sh
+TEMPLATECONF=meta-ami/meta-evb/meta-evb-nxp/meta-imx93/conf/templates/default . openbmc-env
+bitbake obmc-phosphor-image
+```
+
+### 2.8 NXP i.MX95 EVK
+
+```sh
+git clone https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-core
+git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
+meta-ami/github-gitlab-url.sh
+TEMPLATECONF=meta-ami/meta-evb/meta-evb-nxp/meta-imx95/conf/templates/default . openbmc-env
+bitbake obmc-phosphor-image
+```
+
 ##  DevKit
 
 The AMI DevKit is a development platform for building and testing BMC firmware. It helps developers check how the BMC works with server hardware, including monitoring sensors and controlling supported devices.The sensor board provides hardware signals that make these functions available for testing.
@@ -147,28 +170,6 @@ git clone --branch DevKit_Arbel https://github.com/ocp-hm-openbmc-opf-ami/meta-c
 git clone --branch DevKit_Arbel https://github.com/ocp-hm-openbmc-opf-ami/meta-ami.git meta-ami
 meta-ami/github-gitlab-url.sh
 TEMPLATECONF=meta-ami/meta-aminuvton/conf/templates/default . openbmc-env 
-bitbake obmc-phosphor-image
-```
-
-### NXP FRDM i.MX93
-
-```sh
-git clone https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
-git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-core
-git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
-meta-ami/github-gitlab-url.sh
-TEMPLATECONF=meta-ami/meta-evb/meta-evb-nxp/meta-imx93/conf/templates/default . openbmc-env
-bitbake obmc-phosphor-image
-```
-
-### NXP i.MX95 EVK
-
-```sh
-git clone https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
-git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-core
-git clone https://github.com/ocp-hm-openbmc-opf-ami/meta-ami
-meta-ami/github-gitlab-url.sh
-TEMPLATECONF=meta-ami/meta-evb/meta-evb-nxp/meta-imx95/conf/templates/default . openbmc-env
 bitbake obmc-phosphor-image
 ```
 
