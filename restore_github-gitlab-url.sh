@@ -84,10 +84,6 @@
 
 	sed -i 's/git@github.com\/ocp-hm-openbmc-opf-ami\/virtual-media.git;protocol=https;branch=integrate-onetree-latest/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.virtual-media;branch=main;protocol=https/g' meta-ami/meta-common/recipes-phosphor/virtual-media/virtual-media.bbappend
 
-	sed -i 's|git://github.com/openbmc/phosphor-user-manager;branch=master;protocol=https|git\.ami\.com/core/ami-bmc/one-tree/core/phosphor-user-manager\.git;branch=master;protocol=https|g' meta-phosphor/recipes-phosphor/users/phosphor-user-manager_git.bb
-
-	sed -i 's|git://github.com/openbmc/phosphor-certificate-manager;branch=master;protocol=https;name=override;|git\.ami\.com/core/ami-bmc/one-tree/core/phosphor-certificate-manager\.git;branch=master;protocol=https;name=override;|g' meta-phosphor/recipes-phosphor/certificate/phosphor-certificate-manager_git.bb
-
 if [ -d "meta-core/meta-common" ]; then
 
 	sed -i 's/git@github.com\/ocp-hm-openbmc-opf-ami\/host-misc-comm-manager.git;protocol=https;branch=main/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.host-misc-comm-manager;protocol=ssh;branch=main/g' meta-core/meta-common/recipes-intel/host-misc-comm-manager/host-misc-comm-manager_git.bb
