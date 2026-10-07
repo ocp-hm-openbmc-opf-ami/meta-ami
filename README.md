@@ -97,7 +97,27 @@ meta-ami/github-gitlab-url.sh
 TEMPLATECONF=meta-ami/meta-evb/meta-evb-arm/meta-evb-fvp-base/conf/templates/default . openbmc-env
 bitbake obmc-phosphor-image
 ```
-### 2.7 Devkit-2600
+##  DevKit
+
+The AMI DevKit is a development platform for building and testing BMC firmware. It helps developers check how the BMC works with server hardware, including monitoring sensors and controlling supported devices.The sensor board provides hardware signals that make these functions available for testing.
+
+### Sensor Board
+
+The AMI S997 sensor board provides interfaces for:
+
+- Temperature, voltage, and current monitoring
+- Fan speed readings and PWM fan control
+- ADC, GPIO, and discrete inputs
+- LEDs, buttons, DIP switches, and a 7-segment display
+- SGPIO and backplane management
+
+These interfaces let developers test sensor monitoring and hardware control during firmware development. The features available depend on the DevKit platform and firmware configuration.
+
+## Build Instructions
+
+Build instructions are provided below for the supported SoCs: AST2600, AST2700, and Arbel.
+
+###  Devkit-2600
 
 ```
 git clone --branch DevKit_AST2600 https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
@@ -108,7 +128,7 @@ TEMPLATECONF=meta-ami/meta-ami-devkit/conf/templates/default . openbmc-env
 bitbake obmc-phosphor-image
 ```
 
-### 2.8 Devkit-2700
+###  Devkit-2700
 
 ```
 git clone --branch DevKit_AST2700 https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
@@ -119,7 +139,7 @@ TEMPLATECONF=meta-ami/meta-amidevkit-2700/conf/templates/default . openbmc-env
 bitbake obmc-phosphor-image
 ```
 
-### 2.9 Devkit-arbel
+###  Devkit-arbel
 
 ```
 git clone --branch DevKit_Arbel https://github.com/ocp-hm-openbmc-opf-ami/openbmc openbmc; cd openbmc
