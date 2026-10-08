@@ -30,5 +30,18 @@ do_replace_files() {
 }
 addtask replace_files after do_patch before do_configure
 
+# The committed gen/ tree mixes stale (old sdbus++-gen-meson) meson.build files for
+# custom interfaces that lack install directives, so their server.hpp never installs.
+# Regenerate gen/ from yaml/ with the native v10 generator for a consistent tree.
+do_regen_meson() {
+    rm -rf ${S}/gen
+    ${STAGING_BINDIR_NATIVE}/sdbus++-gen-meson --command meson \
+        --directory ${S}/yaml \
+        --output ${S}/gen \
+        --tool ${STAGING_BINDIR_NATIVE}/sdbus++
+}
+do_regen_meson[depends] += "python3-sdbus++-native:do_populate_sysroot"
+addtask regen_meson after do_replace_files before do_configure
+
 EXTRA_OEMESON += "-Ddata_com_nvidia=true"
 
