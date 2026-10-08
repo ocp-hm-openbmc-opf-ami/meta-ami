@@ -25,3 +25,8 @@ DEPENDS = " \
 inherit pkgconfig meson systemd
 
 FILES:${PN} += "${libdir}/libapisensor.so*"
+
+# meson writes full sysroot .so paths into the .pc; rewrite them back to -l flags
+do_install:append() {
+    sed -i -E "s|${RECIPE_SYSROOT}${libdir}/lib([^ ]*)\\.so[0-9.]*|-l\\1|g" ${D}${libdir}/pkgconfig/libapisensor.pc
+}
