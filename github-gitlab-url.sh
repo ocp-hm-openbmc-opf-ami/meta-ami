@@ -18,7 +18,7 @@
 
 	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-sel-logger.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-sel-logger.git;branch=integrate-onetree-latest;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/sel-logger/phosphor-sel-logger_%.bbappend
 
-	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/webui-vue.git;branch=main;protocol=https;name=webui/git@github.com\/ocp-hm-openbmc-opf-ami\/webui-vue;branch=integrate-onetree-latest;protocol=https/g' meta-ami/meta-common/recipes-phosphor/webui/webui-vue_%.bbappend
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/webui-vue.git;branch=main;protocol=https;name=webui/git@github.com\/ocp-hm-openbmc-opf-ami\/webui-vue;protocol=https;branch=main;name=webui/g' meta-ami/meta-common/recipes-phosphor/webui/webui-vue_%.bbappend
 
 	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-time-manager.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-time-manager.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/date-time/phosphor-time-manager_%.bbappend
 
