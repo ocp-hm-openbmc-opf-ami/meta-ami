@@ -2,7 +2,7 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 # The list of source files — local or remote
-SRC_URI_EXT:append= " \
+SRC_URI_EXT:append = " \
         file://common \
 "
 SRC_URI:append = "${@bb.utils.contains_any('IMAGE_FEATURES', 'onetree-msccraid onetree-nvme onetree-nvmebasic onetree-brcmraid onetree-brcmraid8 onetree-rtp', SRC_URI_EXT, '', d)}"
