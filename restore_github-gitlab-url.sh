@@ -18,8 +18,8 @@
 
 	sed -i 's/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-sel-logger.git;branch=integrate-onetree-latest;protocol=https;name=override/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-sel-logger.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/sel-logger/phosphor-sel-logger_%.bbappend
 
-	sed -i 's|git://git@github.com/ocp-hm-openbmc-opf-ami/webui-vue;protocol=https;branch=integrate-onetree-latest|git://git.ami.com/core/ami-bmc/one-tree/core/webui-vue.git;protocol=https;branch=main|g' meta-ami/meta-common/recipes-phosphor/webui/webui-vue_%.bbappend
-	
+	sed -i 's|git@github.com/ocp-hm-openbmc-opf-ami/webui-vue;branch=integrate-onetree-latest;protocol=https|git.ami.com/core/ami-bmc/one-tree/core/webui-vue.git;branch=main;protocol=https;name=webui|g' meta-ami/meta-common/recipes-phosphor/webui/webui-vue_%.bbappend
+
 	sed -i 's/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-time-manager.git;branch=master;protocol=https;name=override/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-time-manager.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/date-time/phosphor-time-manager_%.bbappend
 
 	sed -i 's/git@github.com\/ocp-hm-openbmc-opf-ami\/snmp-agent;protocol=https;branch=integrate-onetree-latest/git.ami.com\/core\/ami-bmc\/one-tree\/core\/snmp-agent.git;branch=main;protocol=https/g' meta-ami/meta-common/recipes-phosphor/snmp/snmp-agent_%.bb
@@ -48,7 +48,7 @@
 
 	sed -i 's/git@github.com\/ocp-hm-openbmc-opf-ami\/dbus-sensors;protocol=https;branch=integrate-onetree-latest;name=override/git.ami.com\/core\/ami-bmc\/one-tree\/core\/dbus-sensors.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/sensors/dbus-sensors_%.bbappend
 
-	sed -i 's/git@github.com\/ocp-hm-openbmc-opf-ami\/libapisensor.git;protocol=https;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/libapisensor.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/sensors/libapisensor_git.bb
+	sed -i 's/git@github.com\/ocp-hm-openbmc-opf-ami\/libapisensor.git;protocol=https;branch=integrate-onetree-latest/git.ami.com\/core\/ami-bmc\/one-tree\/core\/libapisensor.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/sensors/libapisensor_git.bb
 
 	sed -i 's/git@github.com\/ocp-hm-openbmc-opf-ami\/sensor-history-reader.git;protocol=https;branch=integrate-onetree-latest/git.ami.com\/core\/ami-bmc\/one-tree\/core\/sensor-history-reader.git;protocol=https;branch=master/g' meta-ami/meta-common/recipes-ami/sensor-reader/sensor-reader_git.bb
 
