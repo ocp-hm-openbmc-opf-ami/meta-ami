@@ -303,10 +303,10 @@ static const struct device_type i3c_device_type = {
 const struct device_type i3c_target_device_type = {
 };
 
-static int i3c_device_match(struct device *dev, struct device_driver *drv)
+static int i3c_device_match(struct device *dev, const struct device_driver *drv)
 {
 	struct i3c_device *i3cdev;
-	struct i3c_driver *i3cdrv;
+	const struct i3c_driver *i3cdrv;
 
 	if (dev->type != &i3c_device_type && dev->type != &i3c_target_device_type)
 		return 0;

@@ -1,0 +1,478 @@
+From 0659af7263345176c4ec9cfde3f70bc7eb178342 Mon Sep 17 00:00:00 2001
+From: Jacky Chou <jacky_chou@aspeedtech.com>
+Date: Tue, 2 Jun 2026 14:48:42 +0800
+Subject: [PATCH 11/13] cmd: aspeed: nettest: add multicast filter test
+
+Add a netdiag multicast filter mode that programs the MAC hash table
+and verifies whether multicast packets are received or dropped for each
+bucket. The new scan and random modes exercise the MAHT registers
+through the existing nettest transmit and receive path.
+
+Signed-off-by: Jacky Chou <jacky_chou@aspeedtech.com>
+Change-Id: I521345e519365ececbc02ebd55302ad058186ed5
+Upstream-Status: Backport [SDK v11.03 migration]
+---
+ cmd/aspeed/nettest/Makefile   |   1 +
+ cmd/aspeed/nettest/internal.h |  13 ++
+ cmd/aspeed/nettest/m_filter.c | 231 ++++++++++++++++++++++++++++++++++
+ cmd/aspeed/nettest/m_filter.h |  11 ++
+ cmd/aspeed/nettest/mac.c      |  28 +++++
+ cmd/aspeed/nettest/netdiag.c  |  28 ++++-
+ 6 files changed, 307 insertions(+), 5 deletions(-)
+ create mode 100644 cmd/aspeed/nettest/m_filter.c
+ create mode 100644 cmd/aspeed/nettest/m_filter.h
+
+diff --git a/cmd/aspeed/nettest/Makefile b/cmd/aspeed/nettest/Makefile
+index db713aee10..77f98ebbc4 100644
+--- a/cmd/aspeed/nettest/Makefile
++++ b/cmd/aspeed/nettest/Makefile
+@@ -11,6 +11,7 @@ obj-$(CONFIG_CMD_NETTEST) += \
+ 	pktgen.o \
+ 	checksum.o \
+ 	vlan.o \
++	m_filter.o \
+ 	mdio.o \
+ 	mac.o \
+ 	phy.o \
+diff --git a/cmd/aspeed/nettest/internal.h b/cmd/aspeed/nettest/internal.h
+index a82655fdbb..df38eeb507 100644
+--- a/cmd/aspeed/nettest/internal.h
++++ b/cmd/aspeed/nettest/internal.h
+@@ -125,6 +125,7 @@ enum test_mode {
+ 	NCSI_MODE,
+ 	CHECKSUM_MODE,
+ 	VLAN_MODE,
++	M_FILTER_MODE,
+ };
+ 
+ #define DECLARE_DEV_CLK(_name, _reg_en, _reg_dis, _bits)                       \
+@@ -245,6 +246,9 @@ struct parameter_s {
+ 	u32 ncsi_channel;
+ 	s32 tx_delay;
+ 	s32 rx_delay;
++	u32 m_filter_mode;
++	u32 m_filter_target;
++	u32 m_filter_pattern;
+ };
+ 
+ struct mac_s {
+@@ -317,6 +321,12 @@ struct test_s {
+ 		u16 tci[PKT_PER_TEST];
+ 		bool append_vlan;
+ 	} vlan;
++
++	struct {
++		u32 mode;
++		u32 target;
++		u32 pattern;
++	} m_filter;
+ 	bool fail_stop;
+ };
+ 
+@@ -437,6 +447,9 @@ void ast2705_clk_set_rgmii_delay(struct mac_s *obj, int speed, u32 tx, u32 rx);
+ void ast2705_clk_get_rgmii_delay(struct mac_s *obj, int speed, u32 *tx, u32 *rx);
+ int net_get_packet(struct mac_s *obj, void **packet, u32 *rxlen, int max_try);
+ int net_enable_mdio_pin(int mdio_idx);
++void aspeed_mac_set_mcast_hash(struct mac_s *obj, u32 ht0, u32 ht1);
++void aspeed_mac_enable_all_mcast(struct mac_s *obj, bool enable);
++void aspeed_mac_enable_hash_mcast(struct mac_s *obj, bool enable);
+ #if defined(ASPEED_AST2700)
+ #define MEMCPY memcpy
+ #else
+diff --git a/cmd/aspeed/nettest/m_filter.c b/cmd/aspeed/nettest/m_filter.c
+new file mode 100644
+index 0000000000..29aa369bea
+--- /dev/null
++++ b/cmd/aspeed/nettest/m_filter.c
+@@ -0,0 +1,231 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright (C) ASPEED Technology Inc.
++ */
++#include <u-boot/crc.h>
++#include <rand.h>
++#include "platform.h"
++#include "internal.h"
++#include "m_filter.h"
++
++#define MCAST_HASH_BUCKETS	64
++#define MCAST_PKT_SIZE		64
++#define MCAST_RECV_TRIES	10
++
++static u8 ftgmac100_mcast_hash(const u8 *addr)
++{
++	u32 crc = 0xffffffff;
++	int i, j;
++
++	/* Ethernet CRC32 reflected:
++	 * Poly = 0xEDB88320
++	 * LSB-first
++	 */
++	for (i = 0; i < 6; i++) {
++		crc ^= addr[i];
++
++		for (j = 0; j < 8; j++) {
++			if (crc & 1)
++				crc = (crc >> 1) ^ 0xEDB88320;
++			else
++				crc >>= 1;
++		}
++	}
++
++	return (u8)(~(crc >> 2) & 0x3f);
++}
++
++/*
++ * Find a multicast address that hashes to the requested bucket by walking
++ * 01:aa:bb:cc:dd:XX candidates through ftgmac100_mcast_hash().
++ */
++static const u8 *mcast_addr_for_bucket(u8 bucket)
++{
++	static u8 addr[ETH_SIZE_DA] = { 0x01, 0x00, 0x00, 0x00, 0x00, 0x00 };
++	u16 last;
++
++	bucket &= 0x3f;
++	srand(get_timer(0));
++	addr[1] = rand() & 0xFF;
++	addr[2] = rand() & 0xFF;
++	addr[3] = rand() & 0xFF;
++	addr[4] = rand() & 0xFF;
++	for (last = 0; last <= 0xff; last++) {
++		addr[5] = (u8)last;
++		if (ftgmac100_mcast_hash(addr) == bucket)
++			return addr;
++	}
++	return NULL;
++}
++
++/*
++ * Send one 64-byte Ethernet frame with the given DA, wait for receive,
++ * and check whether the hardware hash filter passed or dropped it.
++ */
++static int send_filter_pkt(struct test_s *test_obj, const u8 *da, bool expect_recv)
++{
++	struct mac_s *mac_obj = test_obj->mac_obj;
++	u8 *tx_buf = test_obj->tx_pkt_buf[0];
++	struct eth_hdr *eth = (struct eth_hdr *)tx_buf;
++	void *rx_pkt;
++	u32 rxlen;
++	int ret;
++
++	aspeed_mac_init_tx_desc(mac_obj);
++	aspeed_mac_init_rx_desc(mac_obj);
++
++	memcpy(eth->da, da, ETH_SIZE_DA);
++	memcpy(eth->sa, mac_obj->mac_addr, ETH_SIZE_SA);
++	eth->ethtype = htons(ETHTYPE_IPV4);
++	memset(tx_buf + ETH_SIZE_HEADER, 0xa5, MCAST_PKT_SIZE - ETH_SIZE_HEADER);
++
++	aspeed_mac_txpkt_add(mac_obj, tx_buf, MCAST_PKT_SIZE, test_obj);
++	DSB;
++	aspeed_mac_xmit(mac_obj);
++
++	ret = net_get_packet(mac_obj, &rx_pkt, &rxlen, MCAST_RECV_TRIES);
++
++	if (expect_recv) {
++		if (ret) {
++			printf("[FAIL] hash=%u expect receive, got timeout\n",
++			       ftgmac100_mcast_hash(da));
++			return FAIL_TIMEOUT;
++		}
++		if (memcmp(((struct eth_hdr *)rx_pkt)->da, da, ETH_SIZE_DA)) {
++			printf("[FAIL] DA mismatch in received packet\n");
++			return FAIL_ETH_HDR_COMPARE;
++		}
++	} else {
++		if (!ret) {
++			printf("[FAIL] hash=%u expect filtered, got packet\n",
++			       ftgmac100_mcast_hash(da));
++			return FAIL_GENERAL;
++		}
++	}
++
++	return 0;
++}
++
++static int mfilter_scan_test(struct test_s *test_obj)
++{
++	struct mac_s *mac_obj = test_obj->mac_obj;
++	bool loopback = test_obj->parm.control == NETDIAG_CTRL_LOOPBACK_MAC;
++	int b, i, ret = 0;
++
++	printf("= Scan: testing %d hash bit positions\n", MCAST_HASH_BUCKETS);
++
++	for (b = 0; b < MCAST_HASH_BUCKETS; b++) {
++		u32 ht0 = 0, ht1 = 0;
++
++#if defined(U_BOOT)
++		if (ctrlc()) {
++			clear_ctrlc();
++			return FAIL_CTRL_C;
++		}
++#endif
++
++		if (b < 32)
++			ht0 = BIT(b);
++		else
++			ht1 = BIT(b - 32);
++
++		printf("Bit %2d: ", b);
++
++		for (i = 0; i < MCAST_HASH_BUCKETS; i++) {
++			bool expect_hit = (i == b);
++
++			aspeed_mac_init(mac_obj);
++			aspeed_mac_set_loopback(mac_obj, loopback);
++			aspeed_mac_set_mcast_hash(mac_obj, ht0, ht1);
++			aspeed_mac_enable_hash_mcast(mac_obj, true);
++
++			ret = send_filter_pkt(test_obj, mcast_addr_for_bucket(i), expect_hit);
++			if (ret) {
++				printf("%s addr[%d] FAIL\n", expect_hit ? "hit" : "miss", i);
++				aspeed_mac_reg_dump(mac_obj);
++				goto out_reset;
++			}
++
++			aspeed_reset_assert(mac_obj->device);
++		}
++		printf("PASS\n");
++	}
++
++	return 0;
++
++out_reset:
++	aspeed_reset_assert(mac_obj->device);
++	return ret;
++}
++
++static int mfilter_random_test(struct test_s *test_obj)
++{
++	struct mac_s *mac_obj = test_obj->mac_obj;
++	bool loopback = test_obj->parm.control == NETDIAG_CTRL_LOOPBACK_MAC;
++	u32 ht0, ht1;
++	int b, ret = 0;
++
++	srand(get_timer(0));
++	ht0 = rand();
++	ht1 = rand();
++
++	printf("= Random Test: MAHT0=0x%08x MAHT1=0x%08x\n", ht0, ht1);
++
++	for (b = 0; b < MCAST_HASH_BUCKETS; b++) {
++		bool expect_hit = (b < 32) ? !!(ht0 & BIT(b)) : !!(ht1 & BIT(b - 32));
++
++#if defined(U_BOOT)
++		if (ctrlc()) {
++			clear_ctrlc();
++			ret = FAIL_CTRL_C;
++			goto out_reset;
++		}
++#endif
++
++		aspeed_mac_init(mac_obj);
++		aspeed_mac_set_loopback(mac_obj, loopback);
++		aspeed_mac_set_mcast_hash(mac_obj, ht0, ht1);
++		aspeed_mac_enable_hash_mcast(mac_obj, true);
++
++		printf("Bit %2d (%s): ", b, expect_hit ? "hit " : "miss");
++		ret = send_filter_pkt(test_obj, mcast_addr_for_bucket(b), expect_hit);
++		printf("%s\n", ret ? "FAIL" : "PASS");
++		if (ret) {
++			aspeed_mac_reg_dump(mac_obj);
++			goto out_reset;
++		}
++
++		aspeed_reset_assert(mac_obj->device);
++	}
++
++	return 0;
++
++out_reset:
++	aspeed_reset_assert(mac_obj->device);
++	return ret;
++}
++
++int multicast_filter_test(struct test_s *test_obj)
++{
++	struct mac_s *mac_obj = test_obj->mac_obj;
++	int ret;
++
++	printf("== Multicast Hash Table Filter Test\n");
++
++	switch (test_obj->m_filter.mode) {
++	case NETDIAG_M_FILTER_SCAN:
++		ret = mfilter_scan_test(test_obj);
++		break;
++	case NETDIAG_M_FILTER_RANDOM:
++		ret = mfilter_random_test(test_obj);
++		break;
++	default:
++		return FAIL_PARAMETER_INVALID;
++	}
++
++	aspeed_mac_set_loopback(mac_obj, false);
++	aspeed_mac_enable_hash_mcast(mac_obj, false);
++
++	printf("\n%s\n", ret ? "netdiag FAIL" : "netdiag PASS");
++	return ret;
++}
+diff --git a/cmd/aspeed/nettest/m_filter.h b/cmd/aspeed/nettest/m_filter.h
+new file mode 100644
+index 0000000000..79b2c30fac
+--- /dev/null
++++ b/cmd/aspeed/nettest/m_filter.h
+@@ -0,0 +1,11 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++#ifndef _NETDIAG_M_FILTER_H
++#define _NETDIAG_M_FILTER_H
++
++#define NETDIAG_M_FILTER_NONE		0	/* no multicast address test */
++#define NETDIAG_M_FILTER_SCAN		1	/* Scan all test */
++#define NETDIAG_M_FILTER_RANDOM		2	/* Random target test */
++
++int multicast_filter_test(struct test_s *test_obj);
++
++#endif	/* _NETDIAG_M_FILTER_H */
+diff --git a/cmd/aspeed/nettest/mac.c b/cmd/aspeed/nettest/mac.c
+index 51c46f0f36..01f4f3563b 100644
+--- a/cmd/aspeed/nettest/mac.c
++++ b/cmd/aspeed/nettest/mac.c
+@@ -33,6 +33,8 @@
+ #define   DBLAC_IFG_INC			GENMASK(23, 23)
+ #define FEAR				0x40
+ #define RBSR				0x4c
++#define MAHT0				0x10
++#define MAHT1				0x14
+ #define MACCR				0x50
+ #define   MACCR_TXDMA_EN		BIT(0)
+ #define   MACCR_RXDMA_EN		BIT(1)
+@@ -538,3 +540,29 @@ void ast2705_clk_get_rgmii_delay(struct mac_s *obj, int speed, u32 *tx, u32 *rx)
+ 	*tx = FIELD_GET(TX_CLK_IO_DLY_SEL, reg);
+ 	*rx = FIELD_GET(RX_CLK_IO_DLY_SEL, reg);
+ }
++
++void aspeed_mac_set_mcast_hash(struct mac_s *obj, u32 ht0, u32 ht1)
++{
++	writel(ht0, obj->device->base + MAHT0);
++	writel(ht1, obj->device->base + MAHT1);
++}
++
++void aspeed_mac_enable_all_mcast(struct mac_s *obj, bool enable)
++{
++	u32 maccr = readl(obj->device->base + MACCR);
++
++	maccr &= ~(MACCR_RX_HT_EN | MACCR_RX_MULTIPKT_EN);
++	if (enable)
++		maccr |= MACCR_RX_MULTIPKT_EN;
++	writel(maccr, obj->device->base + MACCR);
++}
++
++void aspeed_mac_enable_hash_mcast(struct mac_s *obj, bool enable)
++{
++	u32 maccr = readl(obj->device->base + MACCR);
++
++	maccr &= ~(MACCR_RX_HT_EN | MACCR_RX_MULTIPKT_EN);
++	if (enable)
++		maccr |= MACCR_RX_HT_EN;
++	writel(maccr, obj->device->base + MACCR);
++}
+diff --git a/cmd/aspeed/nettest/netdiag.c b/cmd/aspeed/nettest/netdiag.c
+index d8fa615f55..d01fbc88bc 100644
+--- a/cmd/aspeed/nettest/netdiag.c
++++ b/cmd/aspeed/nettest/netdiag.c
+@@ -9,7 +9,7 @@
+ #include "ncsi.h"
+ #include "checksum.h"
+ #include "vlan.h"
+-#include "pktgen.h"
++#include "m_filter.h"
+ #include "pattern.h"
+ 
+ // #define DUMP_TX_PACKET
+@@ -249,6 +249,8 @@ void netdiag_init_parameter(struct parameter_s *parm)
+ 
+ 	parm->tx_delay = -1;
+ 	parm->rx_delay = -1;
++
++	parm->m_filter_mode = NETDIAG_M_FILTER_NONE;
+ }
+ 
+ static const char help_string[] = "\nnetdiag: network diagnostic tool.\n"
+@@ -309,6 +311,9 @@ static const char help_string[] = "\nnetdiag: network diagnostic tool.\n"
+ "                    |   rx-qinq = RX VLAN QinQ (0x8100 in 0x8100)\n"
+ "                    |   rx-all  = RX ALL\n"
+ "                    |   all     = TX/RX VLAN\n"
++"    -f <mode>       | mode: test mode\n"
++"                    |   scan    = run all bits of hash tabel\n"
++"                    |   random  = random a hash table\n"
+ "    -d <tx>,<rx>    | tx: RGMII/RMII TX Delay\n"
+ "                    |   0 - 63  = (RGMII) tx step delay\n"
+ "                    |   0 - 1   = (RMII)  tx clock edge\n"
+@@ -376,7 +381,7 @@ int netdiag_parse_parameter_from_argv(int argc, char *const argv[], struct param
+ #else
+ 	int option_index = 0;
+ #endif
+-	static const char optstring[] = "o:i:l:s:m:k:u:n:c:v:d:zh";
++	static const char optstring[] = "o:i:l:s:m:k:u:n:c:v:f:d:zh";
+ #if !defined(U_BOOT)
+ 	static const struct option long_options[] = {
+ 		{ "objects", 1, NULL, 'o' },  { "interface", 1, NULL, 'i' },
+@@ -384,7 +389,8 @@ int netdiag_parse_parameter_from_argv(int argc, char *const argv[], struct param
+ 		{ "mode", 1, NULL, 'm' },     { "count", 1, NULL, 'k' },
+ 		{ "mtu", 1, NULL, 'u' },      { "ncsi", 1, NULL, 'n' },
+ 		{ "checksum", 1, NULL, 'c' }, { "vlan", 1, NULL, 'v' },
+-		{ "delay", 1, NULL, 'd' },    { "help", 0, NULL, 'h' },
++		{ "m-filter", 1, NULL, 'f' }, { "delay", 1, NULL, 'd' },
++		{ "help", 0, NULL, 'h' },
+ 	};
+ #endif
+ 
+@@ -516,6 +522,12 @@ int netdiag_parse_parameter_from_argv(int argc, char *const argv[], struct param
+ 			else if (strncmp(optarg, "all", strlen("all")) == 0)
+ 				parm->vlan = NETDIAG_VLAN_ALL;
+ 			break;
++		case 'f':
++			if (strncmp(optarg, "scan", strlen("scan")) == 0)
++				parm->m_filter_mode = NETDIAG_M_FILTER_SCAN;
++			else if (strncmp(optarg, "random", strlen("random")) == 0)
++				parm->m_filter_mode = NETDIAG_M_FILTER_RANDOM;
++			break;
+ 		case 'd':
+ 			data_ptrs[0] = strtok(optarg, ",");
+ 			data_ptrs[1] = strtok(NULL, ",");
+@@ -637,6 +649,9 @@ int netdiag_func(int argc, char *const argv[])
+ 	} else if (parm->vlan != NETDIAG_CKS_NONE) {
+ 		test_obj.mode = VLAN_MODE;
+ 		test_obj.vlan.mode = parm->vlan;
++	} else if (parm->m_filter_mode != NETDIAG_M_FILTER_NONE) {
++		test_obj.mode = M_FILTER_MODE;
++		test_obj.m_filter.mode = parm->m_filter_mode;
+ 	} else {
+ 		test_obj.mode = MAC_MODE;
+ 	}
+@@ -646,10 +661,10 @@ int netdiag_func(int argc, char *const argv[])
+ 	       "interface: %d, mode: %d, count: %d\n"
+ 	       "mtu-size: %d, checksum: %d, margin: %d\n"
+ 	       "tx-delay: %d, rx-delay: %d, packets: %d\n"
+-	       "vlan: %d\n",
++	       "vlan: %d, m-filter: %d\n",
+ 	       parm->mac_index, parm->mdio_index, parm->speed, parm->control, parm->interface,
+ 	       parm->mode, parm->loop, parm->mtu_size, parm->checksum, parm->margin, parm->tx_delay,
+-	       parm->rx_delay, parm->packets, parm->vlan);
++	       parm->rx_delay, parm->packets, parm->vlan, parm->m_filter_mode);
+ 
+ 	/* configure phy */
+ 	phy->speed = parm->speed;
+@@ -741,6 +756,9 @@ int netdiag_func(int argc, char *const argv[])
+ 	case VLAN_MODE:
+ 		has_error = vlan_offload_test(&test_obj);
+ 		break;
++	case M_FILTER_MODE:
++		has_error = multicast_filter_test(&test_obj);
++		break;
+ 	case NONE_MODE:
+ 	default:
+ 		has_error = FAIL_PARAMETER_INVALID;
+-- 
+2.34.1
+

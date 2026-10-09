@@ -1,0 +1,84 @@
+From 725c2ced7c4ce336937698bec3f415d4f31eb1e0 Mon Sep 17 00:00:00 2001
+From: Arun R <rarun@ami.com>
+Date: Thu, 10 Sep 2026 12:28:32 +0530
+Subject: [PATCH] spi aspeed smc enable cpld spidev transfers
+
+Signed-off-by: Arun R <rarun@ami.com>
+Upstream-Status: Inappropriate [AMI specific change]
+---
+ drivers/spi/spi-aspeed-smc.c | 52 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 52 insertions(+)
+
+diff --git a/drivers/spi/spi-aspeed-smc.c b/drivers/spi/spi-aspeed-smc.c
+index 443e7d0a9c0f..a33262629e90 100644
+--- a/drivers/spi/spi-aspeed-smc.c
++++ b/drivers/spi/spi-aspeed-smc.c
+@@ -1827,6 +1827,49 @@ static void aspeed_spi_enable(struct aspeed_spi *aspi, bool enable)
+ 		aspeed_spi_chip_enable(aspi, cs, enable);
+ }
+ 
++/*
++ * Manual chip-select control used by the generic transfer path. The
++ * controller keeps the CS asserted while CTRL_CE_STOP_ACTIVE is cleared
++ * and in USER I/O mode. 'enable' follows the SPI core convention where
++ * true means the CS line is driven to its idle (de-asserted) level.
++ */
++static void aspeed_spi_set_cs(struct spi_device *spi, bool enable)
++{
++	struct aspeed_spi *aspi = spi_controller_get_devdata(spi->controller);
++	struct aspeed_spi_chip *chip = &aspi->chips[spi_get_chipselect(spi, 0)];
++
++	if (enable)
++		writel(CTRL_CE_STOP_ACTIVE | CTRL_IO_MODE_USER, chip->ctl);
++	else
++		writel(CTRL_IO_MODE_USER, chip->ctl);
++}
++
++/*
++ * Generic half-duplex transfer. In USER mode every access to the CE
++ * decode window shifts one byte on the SPI bus, so a write drains the
++ * tx buffer and a read fills the rx buffer. This lets spidev users such
++ * as cpld-tool talk to non-flash devices on this controller.
++ */
++static int aspeed_spi_transfer_one(struct spi_controller *ctlr,
++				   struct spi_device *spi,
++				   struct spi_transfer *xfer)
++{
++	struct aspeed_spi *aspi = spi_controller_get_devdata(ctlr);
++	struct aspeed_spi_chip *chip = &aspi->chips[spi_get_chipselect(spi, 0)];
++	const u8 *tx_buf = xfer->tx_buf;
++	u8 *rx_buf = xfer->rx_buf;
++	unsigned int i;
++
++	if (tx_buf)
++		for (i = 0; i < xfer->len; i++)
++			writeb(tx_buf[i], chip->ahb_base);
++	else if (rx_buf)
++		for (i = 0; i < xfer->len; i++)
++			rx_buf[i] = readb(chip->ahb_base);
++
++	return 0;
++}
++
+ static int aspeed_spi_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -1998,6 +2041,15 @@ static int aspeed_spi_probe(struct platform_device *pdev)
+ 	ctlr->num_chipselect = of_get_available_child_count(dev->of_node);
+ 	ctlr->dev.of_node = dev->of_node;
+ 
++	/*
++	 * Provide a generic (half-duplex) transfer path in addition to the
++	 * spi-mem flash ops so that spidev-based user tools (e.g. cpld-tool)
++	 * can drive devices such as the CPLD hung off this controller.
++	 */
++	ctlr->flags |= SPI_CONTROLLER_HALF_DUPLEX;
++	ctlr->set_cs = aspeed_spi_set_cs;
++	ctlr->transfer_one = aspeed_spi_transfer_one;
++
+ 	if ((aspi->flag & ASPEED_SPI_NORMAL_MODE) != 0) {
+ 		dev_info(&pdev->dev, "normal mode is used\n");
+ 		ctlr->mem_ops = &aspeed_spi_mem_ops_normal_mode;
+-- 
+2.34.1
+

@@ -3,24 +3,26 @@ From: owenkuo <owenkuo@ami.com>
 Date: Fri, 7 Nov 2025 11:21:03 +0800
 Subject: [PATCH] Add SSIF and SBMR support
 
+Upstream-Status: Inappropriate [AMI specific change]
+
 ---
  .../devicetree/bindings/i2c/aspeed,i2c.yaml   |  27 +
- Documentation/devicetree/bindings/i2c/i2c.txt |   6 +
  drivers/char/ipmi/Kconfig                     |   4 +
  drivers/char/ipmi/ipmb_dev_int.c              |   4 +
- drivers/char/ipmi/ssif_bmc.c                  | 205 +++-
+ drivers/char/ipmi/ssif_bmc.c                  | 203 +++-
  drivers/i2c/busses/i2c-aspeed.c               | 906 ++++++++++++++++--
  drivers/i2c/i2c-core-base.c                   |  12 +-
- 7 files changed, 1057 insertions(+), 107 deletions(-)
+ 6 files changed, 1050 insertions(+), 106 deletions(-)
 
 diff --git a/Documentation/devicetree/bindings/i2c/aspeed,i2c.yaml b/Documentation/devicetree/bindings/i2c/aspeed,i2c.yaml
-index 6df27b47b922..f958748d49aa 100644
+index 5b9bd2feda3b..5cfb22e903f4 100644
 --- a/Documentation/devicetree/bindings/i2c/aspeed,i2c.yaml
 +++ b/Documentation/devicetree/bindings/i2c/aspeed,i2c.yaml
-@@ -49,6 +49,33 @@ properties:
-     description:
-       states that there is another master active on this bus
- 
+@@ -43,6 +43,33 @@ properties:
+     default: 100000
+     description: frequency of the bus clock in Hz defaults to 100 kHz when not
+       specified
++  
 +  bus-timeout-ms:
 +    default: 1000
 +    description:
@@ -47,32 +49,14 @@ index 6df27b47b922..f958748d49aa 100644
 +    type: boolean
 +    description:
 +      enables general call receiving
-+
+ 
  required:
    - reg
-   - compatible
-diff --git a/Documentation/devicetree/bindings/i2c/i2c.txt b/Documentation/devicetree/bindings/i2c/i2c.txt
-index fc3dd7ec0445..1f9c8d0e3d62 100644
---- a/Documentation/devicetree/bindings/i2c/i2c.txt
-+++ b/Documentation/devicetree/bindings/i2c/i2c.txt
-@@ -137,6 +137,12 @@ wants to support one of the below features, it should adapt these bindings.
- - wakeup-source
- 	device can be used as a wakeup source.
- 
-+- bus-timeout-ms
-+	Bus timeout in milliseconds.
-+
-+- #retries
-+	Number of retries for master transfer.
-+
- Binding may contain optional "interrupts" property, describing interrupts
- used by the device. I2C core will assign "irq" interrupt (or the very first
- interrupt if not using interrupt names) as primary interrupt for the slave.
 diff --git a/drivers/char/ipmi/Kconfig b/drivers/char/ipmi/Kconfig
-index d82323f8393b..c24eff526726 100644
+index efcd94cd2c36..f66bac96d1eb 100644
 --- a/drivers/char/ipmi/Kconfig
 +++ b/drivers/char/ipmi/Kconfig
-@@ -197,6 +197,10 @@ config SSIF_IPMI_BMC
+@@ -214,6 +214,10 @@ config SSIF_IPMI_BMC
  	  The driver implements the BMC side of the SMBus system
  	  interface (SSIF).
  
@@ -84,7 +68,7 @@ index d82323f8393b..c24eff526726 100644
  	tristate 'IPMB Interface handler'
  	depends on I2C
 diff --git a/drivers/char/ipmi/ipmb_dev_int.c b/drivers/char/ipmi/ipmb_dev_int.c
-index 937189191512..0ee1fd304675 100644
+index ee2bdc7ed0da..a2154ec62366 100644
 --- a/drivers/char/ipmi/ipmb_dev_int.c
 +++ b/drivers/char/ipmi/ipmb_dev_int.c
 @@ -330,8 +330,12 @@ static int ipmb_probe(struct i2c_client *client)
@@ -101,7 +85,7 @@ index 937189191512..0ee1fd304675 100644
  	ipmb_dev->client = client;
  	i2c_set_clientdata(client, ipmb_dev);
 diff --git a/drivers/char/ipmi/ssif_bmc.c b/drivers/char/ipmi/ssif_bmc.c
-index 2f4b1731042b..c228762fb3f4 100644
+index a45e80d13e10..04674dd3cd36 100644
 --- a/drivers/char/ipmi/ssif_bmc.c
 +++ b/drivers/char/ipmi/ssif_bmc.c
 @@ -6,6 +6,7 @@
@@ -139,7 +123,7 @@ index 2f4b1731042b..c228762fb3f4 100644
  
  struct ssif_part_buffer {
  	u8 address;
-@@ -102,8 +112,18 @@ struct ssif_bmc_ctx {
+@@ -102,8 +112,17 @@ struct ssif_bmc_ctx {
  	struct ssif_part_buffer part_buf;
  	struct ipmi_ssif_msg    response;
  	struct ipmi_ssif_msg    request;
@@ -154,11 +138,10 @@ index 2f4b1731042b..c228762fb3f4 100644
  };
  
 +static void on_stop_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val);
-+
  static inline struct ssif_bmc_ctx *to_ssif_bmc(struct file *file)
  {
  	return container_of(file->private_data, struct ssif_bmc_ctx, miscdev);
-@@ -168,6 +188,97 @@ static ssize_t ssif_bmc_read(struct file *file, char __user *buf, size_t count,
+@@ -170,6 +189,97 @@ static ssize_t ssif_bmc_read(struct file *file, char __user *buf, size_t count,
  	return (ret < 0) ? ret : count;
  }
  
@@ -256,7 +239,7 @@ index 2f4b1731042b..c228762fb3f4 100644
  /* Handle SSIF message that is written by user */
  static ssize_t ssif_bmc_write(struct file *file, const char __user *buf, size_t count,
  			      loff_t *ppos)
-@@ -222,6 +333,10 @@ static ssize_t ssif_bmc_write(struct file *file, const char __user *buf, size_t
+@@ -224,6 +334,11 @@ static ssize_t ssif_bmc_write(struct file *file, const char __user *buf, size_t
  
  	/* Clean old request buffer */
  	memset(&ssif_bmc->request, 0, sizeof(struct ipmi_ssif_msg));
@@ -264,10 +247,11 @@ index 2f4b1731042b..c228762fb3f4 100644
 +	/* Response ready. Disable NAK */
 +	ssif_bmc->nackstatus = 0;
 +	dev_dbg(&ssif_bmc->client->dev, "respok, disable nak\n");
++
  exit:
  	spin_unlock_irqrestore(&ssif_bmc->lock, flags);
  
-@@ -317,12 +432,27 @@ static void response_timeout(struct timer_list *t)
+@@ -320,12 +435,27 @@ static void response_timeout(struct timer_list *t)
  /* Called with ssif_bmc->lock held. */
  static void handle_request(struct ssif_bmc_ctx *ssif_bmc)
  {
@@ -286,16 +270,16 @@ index 2f4b1731042b..c228762fb3f4 100644
 +	dev_dbg(&ssif_bmc->client->dev, "enable nack\n");
  	/* Clean old response buffer */
  	memset(&ssif_bmc->response, 0, sizeof(struct ipmi_ssif_msg));
-+
 +#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
 +	if(netfn == 0x2c && cmd == 0x02 && group == 0xAE) {
 +		send_post_code(ssif_bmc);
 +	}
 +#endif //CONFIG_SEPARATE_SSIF_POSTCODES
++
  	/* This is the new READ request.*/
  	wake_up_all(&ssif_bmc->wait_queue);
  
-@@ -589,7 +719,13 @@ static void process_smbus_cmd(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
+@@ -601,7 +731,13 @@ static void process_smbus_cmd(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
  		 * pending response and clear it
  		 */
  		if (ssif_bmc->response_in_progress)
@@ -309,15 +293,13 @@ index 2f4b1731042b..c228762fb3f4 100644
  
  		/* This is new request, flip aborting flag if set */
  		if (ssif_bmc->aborting)
-@@ -666,9 +802,20 @@ static void on_read_processed_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
+@@ -678,8 +814,17 @@ static void on_read_processed_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
  
  static void on_write_requested_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
  {
 +	struct aspeed_i2c_bus *bus = i2c_get_adapdata(ssif_bmc->client->adapter);
-+
  	if (ssif_bmc->state == SSIF_READY || ssif_bmc->state == SSIF_SMBUS_CMD) {
  		ssif_bmc->state = SSIF_START;
- 
 +	} else if(ssif_bmc->state == SSIF_REQ_RECVING && !ssif_bmc->nackstatus) {
 +		/* As per I2C spec,
 +		 * If a controller still wishes to
@@ -326,16 +308,15 @@ index 2f4b1731042b..c228762fb3f4 100644
 +		on_stop_event(ssif_bmc, val);
 +		if (ssif_bmc->state == SSIF_READY)
 +			ssif_bmc->state = SSIF_START;
-+
+ 
  	} else if (ssif_bmc->state == SSIF_START ||
  		   ssif_bmc->state == SSIF_REQ_RECVING ||
- 		   ssif_bmc->state == SSIF_RES_SENDING) {
-@@ -681,6 +828,21 @@ static void on_write_requested_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
+@@ -693,6 +838,21 @@ static void on_write_requested_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
  
  	ssif_bmc->msg_idx = 0;
  	ssif_bmc->part_buf.address = *val;
 +
-+	if(ssif_bmc->nackstatus)
++		if(ssif_bmc->nackstatus)
 +	{
 +		dev_dbg(&ssif_bmc->client->dev, "send nack\n");
 +		writel((readl(bus->base + ASPEED_I2C_CMD_REG)|ASPEED_I2CD_M_S_RX_CMD_LAST),
@@ -352,24 +333,26 @@ index 2f4b1731042b..c228762fb3f4 100644
  }
  
  static void on_write_received_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
-@@ -719,12 +881,14 @@ static void on_stop_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
+@@ -736,12 +896,16 @@ static void on_stop_event(struct ssif_bmc_ctx *ssif_bmc, u8 *val)
  {
  	if (ssif_bmc->state == SSIF_READY ||
  	    ssif_bmc->state == SSIF_START ||
 -	    ssif_bmc->state == SSIF_SMBUS_CMD ||
 -	    ssif_bmc->state == SSIF_ABORTING) {
-+	    /* To aviod multiple warning prints in BMC console */
++ 	    /* To aviod multiple warning prints in BMC console */
 +	    ssif_bmc->state == SSIF_SMBUS_CMD) {
- 		dev_warn(&ssif_bmc->client->dev,
++
+ 		dev_dbg(&ssif_bmc->client->dev,
  			 "Warn: %s unexpected SLAVE STOP in state=%s\n",
  			 __func__, state_to_string(ssif_bmc->state));
  		ssif_bmc->state = SSIF_READY;
 +	    } else if (ssif_bmc->state == SSIF_ABORTING) {
 +		    ssif_bmc->state = SSIF_READY;
++
  
  	} else if (ssif_bmc->state == SSIF_REQ_RECVING) {
  		if (validate_request_part(ssif_bmc)) {
-@@ -773,6 +937,8 @@ static int ssif_bmc_cb(struct i2c_client *client, enum i2c_slave_event event, u8
+@@ -790,6 +954,8 @@ static int ssif_bmc_cb(struct i2c_client *client, enum i2c_slave_event event, u8
  
  	case I2C_SLAVE_WRITE_REQUESTED:
  		on_write_requested_event(ssif_bmc, val);
@@ -378,7 +361,7 @@ index 2f4b1731042b..c228762fb3f4 100644
  		break;
  
  	case I2C_SLAVE_READ_PROCESSED:
-@@ -816,6 +982,7 @@ static int ssif_bmc_probe(struct i2c_client *client)
+@@ -833,6 +999,7 @@ static int ssif_bmc_probe(struct i2c_client *client)
  	ssif_bmc->response_in_progress = false;
  	ssif_bmc->busy = false;
  	ssif_bmc->response_timer_inited = false;
@@ -386,10 +369,10 @@ index 2f4b1731042b..c228762fb3f4 100644
  
  	/* Register misc device interface */
  	ssif_bmc->miscdev.minor = MISC_DYNAMIC_MINOR;
-@@ -825,6 +992,25 @@ static int ssif_bmc_probe(struct i2c_client *client)
- 	ret = misc_register(&ssif_bmc->miscdev);
+@@ -843,14 +1010,38 @@ static int ssif_bmc_probe(struct i2c_client *client)
  	if (ret)
  		return ret;
+ 
 +#ifdef CONFIG_SEPARATE_SSIF_POSTCODES
 +	ssif_bmc->running_post = 0;
 +	spin_lock_init(&ssif_bmc->lock_post_rd);
@@ -409,10 +392,10 @@ index 2f4b1731042b..c228762fb3f4 100644
 +		return ret;
 + }
 +#endif //CONFIG_SEPARATE_SSIF_POSTCODES
- 
++
  	ssif_bmc->client = client;
  	ssif_bmc->client->flags |= I2C_CLIENT_SLAVE;
-@@ -832,8 +1018,12 @@ static int ssif_bmc_probe(struct i2c_client *client)
+ 
  	/* Register I2C slave */
  	i2c_set_clientdata(client, ssif_bmc);
  	ret = i2c_slave_register(client, ssif_bmc_cb);
@@ -426,7 +409,7 @@ index 2f4b1731042b..c228762fb3f4 100644
  
  	return ret;
  }
-@@ -844,6 +1034,11 @@ static void ssif_bmc_remove(struct i2c_client *client)
+@@ -861,6 +1052,10 @@ static void ssif_bmc_remove(struct i2c_client *client)
  
  	i2c_slave_unregister(client);
  	misc_deregister(&ssif_bmc->miscdev);
@@ -434,19 +417,11 @@ index 2f4b1731042b..c228762fb3f4 100644
 +	kfifo_free(&ssif_bmc->fifo_post);
 +	misc_deregister(&ssif_bmc->miscdev_post);
 +#endif //CONFIG_SEPARATE_SSIF_POSTCODES
-+
  }
  
  static const struct of_device_id ssif_bmc_match[] = {
-@@ -873,4 +1068,4 @@ module_i2c_driver(ssif_bmc_driver);
- MODULE_AUTHOR("Quan Nguyen <quan@os.amperecomputing.com>");
- MODULE_AUTHOR("Chuong Tran <chuong@os.amperecomputing.com>");
- MODULE_DESCRIPTION("Linux device driver of the BMC IPMI SSIF interface.");
--MODULE_LICENSE("GPL");
-\ No newline at end of file
-+MODULE_LICENSE("GPL");
 diff --git a/drivers/i2c/busses/i2c-aspeed.c b/drivers/i2c/busses/i2c-aspeed.c
-index 2a03a221e2dd..c81ca6da5c83 100644
+index a26b74c71206..614ebfd34e64 100644
 --- a/drivers/i2c/busses/i2c-aspeed.c
 +++ b/drivers/i2c/busses/i2c-aspeed.c
 @@ -7,8 +7,11 @@
@@ -1784,10 +1759,10 @@ index 2a03a221e2dd..c81ca6da5c83 100644
  MODULE_DESCRIPTION("Aspeed I2C Bus Driver");
  MODULE_LICENSE("GPL v2");
 diff --git a/drivers/i2c/i2c-core-base.c b/drivers/i2c/i2c-core-base.c
-index 5103cf2491dc..2a4767aed6f5 100644
+index 2f010a187c07..3c4f12fc4faa 100644
 --- a/drivers/i2c/i2c-core-base.c
 +++ b/drivers/i2c/i2c-core-base.c
-@@ -1563,6 +1563,7 @@ EXPORT_SYMBOL_GPL(i2c_handle_smbus_host_notify);
+@@ -1573,6 +1573,7 @@ EXPORT_SYMBOL_GPL(i2c_handle_smbus_host_notify);
  
  static int i2c_register_adapter(struct i2c_adapter *adap)
  {
@@ -1795,7 +1770,7 @@ index 5103cf2491dc..2a4767aed6f5 100644
  	int res = -EINVAL;
  
  	/* Can't register until after driver model init */
-@@ -1593,8 +1594,15 @@ static int i2c_register_adapter(struct i2c_adapter *adap)
+@@ -1603,8 +1604,15 @@ static int i2c_register_adapter(struct i2c_adapter *adap)
  	INIT_LIST_HEAD(&adap->userspace_clients);
  
  	/* Set default timeout to 1 second if not already set */

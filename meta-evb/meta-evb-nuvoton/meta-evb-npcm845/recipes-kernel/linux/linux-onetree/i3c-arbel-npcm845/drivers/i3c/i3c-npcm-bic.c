@@ -64,8 +64,8 @@ static void i3c_ibi_mqueue_callback(struct i3c_device *dev,
 }
 
 static ssize_t i3c_npcm_bic_bin_read(struct file *filp, struct kobject *kobj,
-				     struct bin_attribute *attr, char *buf,
-				     loff_t pos, size_t count)
+				     const struct bin_attribute *attr,
+				     char *buf, loff_t off, size_t count)
 {
 	struct npcm_bic *bic;
 	struct mq_buf *mq_buf;
@@ -97,7 +97,7 @@ static ssize_t i3c_npcm_bic_bin_read(struct file *filp, struct kobject *kobj,
 }
 
 static ssize_t i3c_npcm_bic_bin_write(struct file *filp, struct kobject *kobj,
-				      struct bin_attribute *attr, char *buf,
+				      const struct bin_attribute *attr, char *buf,
 				      loff_t pos, size_t count)
 {
 	struct npcm_bic *bic;

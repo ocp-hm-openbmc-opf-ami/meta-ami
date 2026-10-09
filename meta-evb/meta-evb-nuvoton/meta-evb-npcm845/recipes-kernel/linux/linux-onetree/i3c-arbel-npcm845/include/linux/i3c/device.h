@@ -186,9 +186,9 @@ struct i3c_driver {
 	bool target;
 };
 
-static inline struct i3c_driver *drv_to_i3cdrv(struct device_driver *drv)
+static inline const struct i3c_driver *drv_to_i3cdrv(const struct device_driver *drv)
 {
-	return container_of(drv, struct i3c_driver, driver);
+    return container_of_const(drv, struct i3c_driver, driver);
 }
 
 struct device *i3cdev_to_dev(struct i3c_device *i3cdev);
