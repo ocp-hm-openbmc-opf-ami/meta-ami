@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/libmctp.git;protocol=https;branch=main \
            file://default"
-SRCREV = "823b18fbf9d9802a40e1a2800a9f14986209d5cc"
+SRCREV = "acf58d70161a1273ba82593e36765fb4380a70e8"
 
 PACKAGECONFIG ??= ""
 PACKAGECONFIG[libmctp-kernel-mode] = " -Dmctp-in-kernel-enable=enabled "
