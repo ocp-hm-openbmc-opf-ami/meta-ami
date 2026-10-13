@@ -3,7 +3,7 @@ inherit obmc-phosphor-systemd
 
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/mctp.git;protocol=https;branch=main \
            "
-SRCREV = "f434a1336f1256c0bbc539989e90a9461d6027f7"
+SRCREV = "26e71bfdef35910a2f5452a7ef43d9b4a2345465"
 
 RDEPENDS:${PN} = " bash "
 DEPENDS:append = " libusb1 json-c boost sdbusplus phosphor-logging i2c-tools"

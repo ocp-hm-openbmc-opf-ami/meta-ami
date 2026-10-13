@@ -78,7 +78,7 @@
 	
 	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/service-config-manager.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/service-config-manager.git;branch=integrate-onetree-latest;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/srvcfg-manager/srvcfg-manager_git.bbappend
 	
-	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/webui-libraries.git;branch=main;protocol=https;destsuffix=webui-libs;name=webuilib/github.com\/ocp-hm-openbmc-opf-ami\/webui-libraries.git;branch=main;protocol=https;destsuffix=webui-libs;name=webuilib/g' meta-ami/meta-common/recipes-phosphor/webui/webui-vue_%.bbappend
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/webui-libraries.git;branch=main;protocol=https;destsuffix=webui-libs;name=webuilib/github.com\/ocp-hm-openbmc-opf-ami\/webui-libraries.git;branch=integrate-onetree-latest;protocol=https;destsuffix=webui-libs;name=webuilib/g' meta-ami/meta-common/recipes-phosphor/webui/webui-vue_%.bbappend
 
 	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.mctpd.git;protocol=https;branch=openbmc\/release\/birchstream\/common/git@github.com\/ocp-hm-openbmc-opf-ami\/mctpd.git;protocol=https;branch=openbmc\/release\/birchstream\/common/g' meta-ami/meta-common/recipes-phosphor/pmci/mctpd.bbappend
 	
@@ -90,9 +90,9 @@
 
 if [ -d "meta-core/meta-common" ]; then
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.host-misc-comm-manager;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/host-misc-comm-manager.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-intel/host-misc-comm-manager/host-misc-comm-manager_git.bb
+	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.host-misc-comm-manager;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/host-misc-comm-manager.git;protocol=https;branch=integrate-onetree-latest/g' meta-core/meta-common/recipes-intel/host-misc-comm-manager/host-misc-comm-manager_git.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.psu-manager.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/psu-manager.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-intel/psu-manager/psu-manager.bb
+	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.psu-manager.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/psu-manager.git;protocol=https;branch=integrate-onetree-latest/g' meta-core/meta-common/recipes-intel/psu-manager/psu-manager.bb
 
 	sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.node-manager-proxy.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/node-manager-proxy.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-phosphor/ipmi/phosphor-node-manager-proxy_git.bb
 
@@ -114,11 +114,11 @@ if [ -d "meta-core/meta-common" ]; then
 
 	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.provisioning-mode-manager.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/provisioning-mode-manager.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-phosphor/prov-mode-mgr/prov-mode-mgr_git.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.security-manager.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/security-manager.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-phosphor/security-manager/security-manager_git.bb
+	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.security-manager.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/security-manager.git;protocol=https;branch=integrate-onetree-latest/g' meta-core/meta-common/recipes-phosphor/security-manager/security-manager_git.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.settings-manager.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/settings-manager.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-phosphor/settings/settings_git.bb
+	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.settings-manager.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/settings-manager.git;protocol=https;branch=integrate-onetree-latest/g' meta-core/meta-common/recipes-phosphor/settings/settings_git.bb
 
-	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.special-mode-manager.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/special-mode-manager.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-phosphor/special-mode-mgr/special-mode-mgr_git.bb
+	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.special-mode-manager.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/special-mode-manager.git;protocol=https;branch=integrate-onetree-latest/g' meta-core/meta-common/recipes-phosphor/special-mode-mgr/special-mode-mgr_git.bb
 
 	sed -i 's/git@github.com\/intel-collab\/firmware.bmc.openbmc.applications.mctp-emulator.git;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/mctp-emulator.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-phosphor/pmci/mctp-emulator.bb
 
