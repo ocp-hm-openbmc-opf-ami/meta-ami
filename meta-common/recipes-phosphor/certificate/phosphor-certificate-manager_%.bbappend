@@ -1,5 +1,3 @@
-FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
-
 #PACKAGECONFIG:append = " asd-cert"
 #PACKAGECONFIG[asd-cert] = "-Dconfig-asd=enabled,-Dconfig-asd=disabled"
 PACKAGECONFIG:append = " authority-cert"

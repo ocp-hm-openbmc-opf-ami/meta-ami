@@ -58,7 +58,7 @@
 
 	sed -i 's/git@github.com\/ocp-hm-openbmc-opf-ami\/email-alert-manager.git;protocol=https;branch=integrate-onetree-latest/git.ami.com\/core\/ami-bmc\/one-tree\/core\/email-alert-manager.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/pef/mail-alert-manager.bb
 
-	sed -i 's/git@github.com\/ocp-hm-openbmc-opf-ami\/obmc-ikvm;protocol=https;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/obmc-ikvm;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/kvm-dbus-monitor/kvm-dbus-monitor_git.bb
+	sed -i 's/git@github.com\/ocp-hm-openbmc-opf-ami\/obmc-ikvm;protocol=https;branch=integrate-onetree-latest/git.ami.com\/core\/ami-bmc\/one-tree\/core\/obmc-ikvm;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/kvm-dbus-monitor/kvm-dbus-monitor_git.bb
 
 	sed -i 's/git@github.com\/ocp-hm-openbmc-opf-ami\/libpdkhook.git;protocol=https;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/libpdkhook.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/libpdkhook/libpdkhook_git.bb
 
