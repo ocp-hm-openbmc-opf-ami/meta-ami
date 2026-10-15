@@ -8,7 +8,8 @@ RDEPENDS:${PN}:remove = "intel-ipmi-oem-ext"
 # which is not available on NXP platforms (intel-ipmi-oem-ext is SKIP_RECIPE'd).
 # SRC_URI:remove is a post-assignment operation and reliably strips the value
 # regardless of how (+=, :append, direct =) it was added by lower-priority layers.
-SRC_URI:remove = "git://git@github.com/ocp-hm-openbmc-opf-ami/phosphor-sel-logger.git;branch=master;protocol=https;name=override;"
+# The string must match meta-ami/meta-common's SRC_URI entry exactly, branch included.
+SRC_URI:remove = "git://git@github.com/ocp-hm-openbmc-opf-ami/phosphor-sel-logger.git;branch=integrate-onetree-latest;protocol=https;name=override;"
 SRCREV_FORMAT = ""
 SRCREV = "5bafde6f7769e314feb7d091d50f20f6631fbb06"
 

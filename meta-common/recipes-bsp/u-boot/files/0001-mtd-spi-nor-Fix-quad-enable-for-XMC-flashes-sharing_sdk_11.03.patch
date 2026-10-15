@@ -1,0 +1,66 @@
+From 53ef21a7a4e0a7db614a697bb8207d84d3c69e29 Mon Sep 17 00:00:00 2001
+From: cooper_huang <cooper_huang@aspeedtech.com>
+Date: Wed, 3 Jun 2026 14:24:39 +0800
+Subject: [PATCH 1/2] mtd: spi-nor: Fix quad enable for XMC flashes sharing ST
+ manufacturer ID
+
+XMC flashes use JEDEC manufacturer ID 0x20, same as ST Microelectronics
+(SNOR_MFR_ST), causing spi_nor_init_params() to assign
+micron_read_cr_quad_enable() to XMC devices. This function reads Micron's
+proprietary NVCR register (opcode 0xB5) which XMC does not implement,
+resulting in probe failure with "Quad bit not set" (-EINVAL).
+
+XMC devices can be identified by their memory type byte (id[1] = 0x40,
+0x41 or 0x70), distinct from genuine Micron n25q/mt25q (0xba/0xbb).
+
+Assign winbond_sr2_bit1_quad_enable() for XMC in the quad enable
+selection switch, and exclude XMC from the SFDP-section NVCR override
+
+Upstream-Status: Backport [SDK v11.03 migration]
+Signed-off-by: cooper_huang <cooper_huang@aspeedtech.com>
+Change-Id: I178786bf630f6ff2b10cdd0cb34d24d658459df0
+Signed-off-by: rupeshs <rupeshs@ami.com>
+---
+ drivers/mtd/spi/spi-nor-core.c | 19 +++++++++++++++++--
+ 1 file changed, 17 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/mtd/spi/spi-nor-core.c b/drivers/mtd/spi/spi-nor-core.c
+index f0a2bea415..be0dc23d99 100644
+--- a/drivers/mtd/spi/spi-nor-core.c
++++ b/drivers/mtd/spi/spi-nor-core.c
+@@ -2280,6 +2280,15 @@ static int spi_nor_init_params(struct spi_nor *nor,
+ 			break;
+ #endif
+ 		case SNOR_MFR_ST:
++#ifdef CONFIG_SPI_FLASH_XMC
++			/* XMC shares MFR byte 0x20 with ST but uses SR2 bit1 for QE */
++			if (info->id[1] == 0x40 || info->id[1] == 0x41 ||
++			    info->id[1] == 0x70) {
++				params->quad_enable = winbond_sr2_bit1_quad_enable;
++				break;
++			}
++#endif
++			/* fall through */
+ 		case SNOR_MFR_MICRON:
+ 		case SNOR_MFR_ISSI:
+ 			break;
+@@ -2330,8 +2339,14 @@ static int spi_nor_init_params(struct spi_nor *nor,
+ 		}
+ 
+ 		/* need to disable hold/reset pin feature */
+-		if (JEDEC_MFR(info) == SNOR_MFR_ST)
+-			params->quad_enable = micron_read_cr_quad_enable;
++		if (JEDEC_MFR(info) == SNOR_MFR_ST) {
++#ifdef CONFIG_SPI_FLASH_XMC
++			/* XMC shares MFR 0x20 with ST but does not have Micron NVCR */
++			if (info->id[1] != 0x40 && info->id[1] != 0x41 &&
++			    info->id[1] != 0x70)
++#endif
++				params->quad_enable = micron_read_cr_quad_enable;
++		}
+ 
+ 		if (JEDEC_MFR(info) == SNOR_MFR_GIGADEVICE)
+ 			params->quad_enable = winbond_sr2_bit1_quad_enable;
+-- 
+2.43.0
+

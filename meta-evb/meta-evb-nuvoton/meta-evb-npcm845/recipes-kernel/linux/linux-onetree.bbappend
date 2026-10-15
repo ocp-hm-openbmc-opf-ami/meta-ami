@@ -49,6 +49,9 @@ SRC_URI += "file://dts-arbel-npcm845/ \
             file://0030-Add-i2c-gpio-expander-driver-for-MSFT-FPGA.patch \
             "
 SRC_URI:remove = "file://Enable_I3C.cfg"
+SRC_URI:remove = "file://CVE-2026-43078.patch"
+SRC_URI:remove = "file://CVE-2025-21868.patch "
+SRC_URI:remove = "file://CVE-2026-64597.patch "
 
 SRC_URI:append = " file://0001-Nuvoton-drivers.patch \
 		   file://0002-Nuvoton-include.patch \

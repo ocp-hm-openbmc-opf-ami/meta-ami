@@ -1,0 +1,397 @@
+From 42c88dcf5de050492392d3162e3c9cc179800db7 Mon Sep 17 00:00:00 2001
+From: Jacky Chou <jacky_chou@aspeedtech.com>
+Date: Wed, 27 May 2026 20:07:14 +0800
+Subject: [PATCH 10/13] cmd: aspeed: add support for AST27x5
+
+Signed-off-by: Jacky Chou <jacky_chou@aspeedtech.com>
+Change-Id: I8fdd6ef4a79e7b943e1cf6b1c023dd885f81c90c
+Upstream-Status: Backport [SDK v11.03 migration]
+---
+ cmd/aspeed/nettest/internal.h | 27 ++++++++----
+ cmd/aspeed/nettest/mac.c      | 78 +++++++++++++++++++++++++++++++++++
+ cmd/aspeed/nettest/netdiag.c  | 43 +++++++++++++++++++
+ cmd/aspeed/nettest/nettest.c  | 46 ++++++++++++++-------
+ cmd/aspeed/nettest/platform.h |  1 +
+ cmd/aspeed/nettest/syscon.c   | 14 ++++---
+ 6 files changed, 179 insertions(+), 30 deletions(-)
+
+diff --git a/cmd/aspeed/nettest/internal.h b/cmd/aspeed/nettest/internal.h
+index 833502f052..a82655fdbb 100644
+--- a/cmd/aspeed/nettest/internal.h
++++ b/cmd/aspeed/nettest/internal.h
+@@ -65,10 +65,10 @@
+ #define PROTOCOL_TCP		0x02
+ #define PROTOCOL_UDP		0x03
+ 
+-#define MAX_DELAY_TAPS_RGMII_TX         63
+-#define MAX_DELAY_TAPS_RGMII_RX         63
+-#define MAX_DELAY_TAPS_RMII_TX          1
+-#define MAX_DELAY_TAPS_RMII_RX          63
++#define MAX_DELAY_TAPS_RGMII_TX		63
++#define MAX_DELAY_TAPS_RGMII_RX		63
++#define MAX_DELAY_TAPS_RMII_TX		1
++#define MAX_DELAY_TAPS_RMII_RX		63
+ 
+ struct aspeed_sig_desc_s {
+ 	u32 offset;
+@@ -265,6 +265,11 @@ struct mac_s {
+ 	bool rx_vlan_remove;
+ };
+ 
++enum chip_version {
++	AST2700 = 0,
++	AST2705,
++};
++
+ struct test_s {
+ 	enum test_mode mode;
+ 	struct mac_s *mac_obj;
+@@ -274,6 +279,8 @@ struct test_s {
+ 
+ 	struct parameter_s parm;
+ 
++	enum chip_version chip;
++
+ 	struct {
+ 		u32 mode;
+ 		enum {
+@@ -403,10 +410,10 @@ int aspeed_reset_assert(struct aspeed_device_s *device);
+ int aspeed_reset_deassert(struct aspeed_device_s *device);
+ int aspeed_clk_enable(struct aspeed_device_s *device);
+ int aspeed_clk_disable(struct aspeed_device_s *device);
+-void aspeed_clk_set_rgmii_delay(enum aspeed_dev_id macdev, int speed, u32 tx, u32 rx);
+-void aspeed_clk_get_rgmii_delay(enum aspeed_dev_id macdev, int speed, u32 *tx, u32 *rx);
+-void aspeed_clk_set_rmii_delay(enum aspeed_dev_id macdev, int speed, u32 tx, u32 rx);
+-void aspeed_clk_get_rmii_delay(enum aspeed_dev_id macdev, int speed, u32 *tx, u32 *rx);
++void aspeed_clk_set_rgmii_delay(struct mac_s *obj, int speed, u32 tx, u32 rx);
++void aspeed_clk_get_rgmii_delay(struct mac_s *obj, int speed, u32 *tx, u32 *rx);
++void aspeed_clk_set_rmii_delay(struct mac_s *obj, int speed, u32 tx, u32 rx);
++void aspeed_clk_get_rmii_delay(struct mac_s *obj, int speed, u32 *tx, u32 *rx);
+ 
+ void aspeed_mdio_init(struct mdio_s *mdio);
+ int aspeed_mdio_read(struct mdio_s *mdio, int addr, int regnum);
+@@ -424,6 +431,10 @@ int aspeed_mac_init_rx_desc(struct mac_s *obj);
+ int aspeed_mac_init_tx_desc(struct mac_s *obj);
+ int aspeed_mac_set_speed(struct mac_s *obj, u32 speed);
+ void aspeed_mac_reg_dump(struct mac_s *obj);
++void ast2705_clk_set_rmii_delay(struct mac_s *obj, int speed, u32 tx, u32 rx);
++void ast2705_clk_get_rmii_delay(struct mac_s *obj, int speed, u32 *tx, u32 *rx);
++void ast2705_clk_set_rgmii_delay(struct mac_s *obj, int speed, u32 tx, u32 rx);
++void ast2705_clk_get_rgmii_delay(struct mac_s *obj, int speed, u32 *tx, u32 *rx);
+ int net_get_packet(struct mac_s *obj, void **packet, u32 *rxlen, int max_try);
+ int net_enable_mdio_pin(int mdio_idx);
+ #if defined(ASPEED_AST2700)
+diff --git a/cmd/aspeed/nettest/mac.c b/cmd/aspeed/nettest/mac.c
+index 0c0f982329..51c46f0f36 100644
+--- a/cmd/aspeed/nettest/mac.c
++++ b/cmd/aspeed/nettest/mac.c
+@@ -59,6 +59,13 @@
+ #define TXR_BADR_HI			0x17c
+ #define RXR_BADR_HI			0x18c
+ 
++#define RGMII_DLY_SEL_1G	0x1d0
++#define TX_CLK_IO_DLY_SEL		GENMASK(5, 0)
++#define RX_CLK_IO_DLY_SEL		GENMASK(13, 8)
++#define RMII_TX_ALIGN_CLK_FALL		BIT(20)
++#define RGMII_DLY_SEL_100M	0x1d4
++#define RGMII_DLY_SEL_10M	0x1d8
++
+ /* descriptors */
+ #define TO_PHY_ADDR(x)			(x)
+ #if defined(ASPEED_AST2600)
+@@ -460,3 +467,74 @@ void aspeed_mac_reg_dump(struct mac_s *obj)
+ 
+ 	print_hex_dump("", DUMP_PREFIX_OFFSET, 16, 4, reg, sizeof(u32) * 64, false);
+ }
++
++void ast2705_clk_set_rmii_delay(struct mac_s *obj, int speed, u32 tx, u32 rx)
++{
++	void __iomem *base = obj->device->base + RGMII_DLY_SEL_1G;
++	u32 reg;
++
++	reg = readl(base);
++	reg &= ~(RMII_TX_ALIGN_CLK_FALL | RX_CLK_IO_DLY_SEL);
++	if (tx)
++		reg |= RMII_TX_ALIGN_CLK_FALL;
++	reg |= FIELD_PREP(RX_CLK_IO_DLY_SEL, rx);
++	writel(reg, base);
++}
++
++void ast2705_clk_get_rmii_delay(struct mac_s *obj, int speed, u32 *tx, u32 *rx)
++{
++	void __iomem *base = obj->device->base + RGMII_DLY_SEL_1G;
++	u32 reg;
++
++	reg = readl(base);
++	*tx = !!(reg & RMII_TX_ALIGN_CLK_FALL);
++	*rx = FIELD_GET(RX_CLK_IO_DLY_SEL, reg);
++}
++
++void ast2705_clk_set_rgmii_delay(struct mac_s *obj, int speed, u32 tx, u32 rx)
++{
++	void __iomem *base = obj->device->base;
++	u32 reg;
++
++	switch (speed) {
++	case 100:
++		base += RGMII_DLY_SEL_100M;
++		break;
++	case 10:
++		base += RGMII_DLY_SEL_10M;
++		break;
++	case 1000:
++	default:
++		base += RGMII_DLY_SEL_1G;
++		break;
++	}
++
++	reg = readl(base);
++	reg &= ~(TX_CLK_IO_DLY_SEL | RX_CLK_IO_DLY_SEL);
++	reg |= FIELD_PREP(TX_CLK_IO_DLY_SEL, tx);
++	reg |= FIELD_PREP(RX_CLK_IO_DLY_SEL, rx);
++	writel(reg, base);
++}
++
++void ast2705_clk_get_rgmii_delay(struct mac_s *obj, int speed, u32 *tx, u32 *rx)
++{
++	void __iomem *base = obj->device->base;
++	u32 reg;
++
++	switch (speed) {
++	case 100:
++		base += RGMII_DLY_SEL_100M;
++		break;
++	case 10:
++		base += RGMII_DLY_SEL_10M;
++		break;
++	case 1000:
++	default:
++		base += RGMII_DLY_SEL_1G;
++		break;
++	}
++
++	reg = readl(base);
++	*tx = FIELD_GET(TX_CLK_IO_DLY_SEL, reg);
++	*rx = FIELD_GET(RX_CLK_IO_DLY_SEL, reg);
++}
+diff --git a/cmd/aspeed/nettest/netdiag.c b/cmd/aspeed/nettest/netdiag.c
+index 7b19e34c43..d8fa615f55 100644
+--- a/cmd/aspeed/nettest/netdiag.c
++++ b/cmd/aspeed/nettest/netdiag.c
+@@ -39,6 +39,47 @@ static struct mac_adaptor_s mac_adaptor = { 0 };
+ struct test_s test_obj = { 0 };
+ u8 mac_addr[8] = { 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05 }; /*[0], [1]: pendding*/
+ 
++/* SoC mapping Table */
++#define SOC_ID(str, rev, chip_version) { .name = str, .rev_id = rev, .chip = chip_version}
++
++struct soc_id {
++	const char *name;
++	u64 rev_id;
++	enum chip_version chip;
++};
++
++static struct soc_id soc_map_table[] = {
++	SOC_ID("AST2750-A1", 0x0601000306010003, AST2700),
++	SOC_ID("AST2700-A1", 0x0601010306010103, AST2700),
++	SOC_ID("AST2720-A1", 0x0601020306010203, AST2700),
++	SOC_ID("AST2750-A2", 0x0602000306020003, AST2700),
++	SOC_ID("AST2700-A2", 0x0602010306020103, AST2700),
++	SOC_ID("AST2720-A2", 0x0602020306020203, AST2700),
++	SOC_ID("AST2755-A0", 0x0600000506020003, AST2705),
++	SOC_ID("AST2705-A0", 0x0600010506020103, AST2705),
++	SOC_ID("AST2725-A0", 0x0600020506020203, AST2705),
++};
++
++void net_print_soc_id(struct test_s *obj)
++{
++	int i;
++	u64 rev_id;
++
++	rev_id = readl(ASPEED_CPU_REVISION_ID);
++	rev_id = ((u64)readl(ASPEED_IO_REVISION_ID) << 32) | rev_id;
++
++	for (i = 0; i < ARRAY_SIZE(soc_map_table); i++) {
++		if (rev_id == soc_map_table[i].rev_id)
++			break;
++	}
++	if (i == ARRAY_SIZE(soc_map_table)) {
++		printf("UnKnow-SOC: %llx\n", rev_id);
++	} else {
++		printf("SOC: %4s\n", soc_map_table[i].name);
++		obj->chip = soc_map_table[i].chip;
++	}
++}
++
+ int net_connect_mdio(int mac_idx, int mdio_idx)
+ {
+ 	if (mac_idx >= NUM_OF_MAC_DEVICES ||
+@@ -553,6 +594,8 @@ int netdiag_func(int argc, char *const argv[])
+ 		return FAIL_PARAMETER_INVALID;
+ 	}
+ 
++	net_print_soc_id(&test_obj);
++
+ 	mac_obj = mac_adaptor.objs[parm->mac_index];
+ 	phy = mac_obj->phy;
+ 	net_connect_mdio(parm->mac_index, parm->mdio_index);
+diff --git a/cmd/aspeed/nettest/nettest.c b/cmd/aspeed/nettest/nettest.c
+index f90cc2a40b..5d681d22a5 100644
+--- a/cmd/aspeed/nettest/nettest.c
++++ b/cmd/aspeed/nettest/nettest.c
+@@ -192,8 +192,8 @@ int nettest_test(struct test_s *test_obj)
+ 	int tx_c, tx_s, tx_e, rx_c, rx_s, rx_e, tx_max, rx_max;
+ 	int i, j, has_error = 0;
+ 	int (*run_test)(struct test_s *test_obj);
+-	void (*clk_get_delay)(enum aspeed_dev_id macdev, int speed, u32 *tx, u32 *rx);
+-	void (*clk_set_delay)(enum aspeed_dev_id macdev, int speed, u32 tx, u32 rx);
++	void (*clk_get_delay)(struct mac_s *mac_obj, int speed, u32 *tx, u32 *rx);
++	void (*clk_set_delay)(struct mac_s *mac_obj, int speed, u32 tx, u32 rx);
+ 
+ 	nettest_info(test_obj);
+ 
+@@ -214,19 +214,33 @@ int nettest_test(struct test_s *test_obj)
+ 		goto out;
+ 	}
+ 
+-	if (mac_obj->phy->phy_mode == PHY_INTERFACE_MODE_RMII) {
+-		clk_get_delay = aspeed_clk_get_rmii_delay;
+-		clk_set_delay = aspeed_clk_set_rmii_delay;
+-		tx_max = MAX_DELAY_TAPS_RMII_TX;
+-		rx_max = MAX_DELAY_TAPS_RMII_RX;
++	if (test_obj->chip == AST2705) {
++		if (mac_obj->phy->phy_mode == PHY_INTERFACE_MODE_RMII) {
++			clk_get_delay = ast2705_clk_get_rmii_delay;
++			clk_set_delay = ast2705_clk_set_rmii_delay;
++			tx_max = MAX_DELAY_TAPS_RMII_TX;
++			rx_max = MAX_DELAY_TAPS_RMII_RX;
++		} else {
++			clk_get_delay = ast2705_clk_get_rgmii_delay;
++			clk_set_delay = ast2705_clk_set_rgmii_delay;
++			tx_max = MAX_DELAY_TAPS_RGMII_TX;
++			rx_max = MAX_DELAY_TAPS_RGMII_RX;
++		}
+ 	} else {
+-		clk_get_delay = aspeed_clk_get_rgmii_delay;
+-		clk_set_delay = aspeed_clk_set_rgmii_delay;
+-		tx_max = MAX_DELAY_TAPS_RGMII_TX;
+-		rx_max = MAX_DELAY_TAPS_RGMII_RX;
++		if (mac_obj->phy->phy_mode == PHY_INTERFACE_MODE_RMII) {
++			clk_get_delay = aspeed_clk_get_rmii_delay;
++			clk_set_delay = aspeed_clk_set_rmii_delay;
++			tx_max = MAX_DELAY_TAPS_RMII_TX;
++			rx_max = MAX_DELAY_TAPS_RMII_RX;
++		} else {
++			clk_get_delay = aspeed_clk_get_rgmii_delay;
++			clk_set_delay = aspeed_clk_set_rgmii_delay;
++			tx_max = MAX_DELAY_TAPS_RGMII_TX;
++			rx_max = MAX_DELAY_TAPS_RGMII_RX;
++		}
+ 	}
+ 
+-	clk_get_delay(mac_obj->device->dev_id, mac_obj->phy->speed, (u32 *)&tx_c,
++	clk_get_delay(mac_obj, mac_obj->phy->speed, (u32 *)&tx_c,
+ 		      (u32 *)&rx_c);
+ 
+ 	/* if need to specify tx/rx delay */
+@@ -239,7 +253,7 @@ int nettest_test(struct test_s *test_obj)
+ 			parm->rx_delay = rx_c;
+ 		else
+ 			rx_c = parm->rx_delay;
+-		clk_set_delay(mac_obj->device->dev_id, mac_obj->phy->speed, parm->tx_delay,
++		clk_set_delay(mac_obj, mac_obj->phy->speed, parm->tx_delay,
+ 			      parm->rx_delay);
+ 		/* single step */
+ 		parm->margin = 0;
+@@ -274,7 +288,7 @@ int nettest_test(struct test_s *test_obj)
+ 		for (j = rx_s; j <= rx_e; j++) {
+ 			int status;
+ 
+-			clk_set_delay(mac_obj->device->dev_id, mac_obj->phy->speed, i, j);
++			clk_set_delay(mac_obj, mac_obj->phy->speed, i, j);
+ 			status = run_test(test_obj);
+ 			if (status == 0) {
+ 				if (i == tx_c && j == rx_c)
+@@ -297,7 +311,7 @@ int nettest_test(struct test_s *test_obj)
+ #if defined(U_BOOT)
+ 			if (ctrlc()) {
+ 				clear_ctrlc();
+-				clk_set_delay(mac_obj->device->dev_id, mac_obj->phy->speed, tx_c, rx_c);
++				clk_set_delay(mac_obj, mac_obj->phy->speed, tx_c, rx_c);
+ 				aspeed_reset_deassert(mac_obj->device);
+ 				aspeed_mac_set_loopback(mac_obj, false);
+ 				aspeed_mac_set_sgmii_loopback(mac_obj, false);
+@@ -310,7 +324,7 @@ int nettest_test(struct test_s *test_obj)
+ 
+ 	/* restore the delay setting */
+ 	printf("\nSystem default setting: TX: 0x%x, RX: 0x%x\n", tx_c, rx_c);
+-	clk_set_delay(mac_obj->device->dev_id, mac_obj->phy->speed, tx_c, rx_c);
++	clk_set_delay(mac_obj, mac_obj->phy->speed, tx_c, rx_c);
+ out:
+ 	aspeed_reset_deassert(mac_obj->device);
+ 	aspeed_mac_set_loopback(mac_obj, false);
+diff --git a/cmd/aspeed/nettest/platform.h b/cmd/aspeed/nettest/platform.h
+index d2f99c6555..542b926f51 100644
+--- a/cmd/aspeed/nettest/platform.h
++++ b/cmd/aspeed/nettest/platform.h
+@@ -17,6 +17,7 @@
+ #include <getopt.h>
+ #include <hexdump.h>
+ #include <console.h>
++#include <asm/arch/scu_ast2700.h>
+ 
+ #define AST_SGMII_BASE		0X014C01000 //HS034
+ #define AST_IO_SCU_BASE		0X014C02000 //HS035
+diff --git a/cmd/aspeed/nettest/syscon.c b/cmd/aspeed/nettest/syscon.c
+index c6a15b2495..d676dec379 100644
+--- a/cmd/aspeed/nettest/syscon.c
++++ b/cmd/aspeed/nettest/syscon.c
+@@ -137,9 +137,9 @@ static int aspeed_clk_get_mii_reg_info(enum aspeed_dev_id macdev, int speed,
+ 	return 0;
+ }
+ 
+-void aspeed_clk_set_rgmii_delay(enum aspeed_dev_id macdev, int speed, u32 tx,
+-				u32 rx)
++void aspeed_clk_set_rgmii_delay(struct mac_s *obj, int speed, u32 tx, u32 rx)
+ {
++	enum aspeed_dev_id macdev = obj->device->dev_id;
+ 	struct mii_reg_info_s info;
+ 	u32 reg;
+ 	int ret;
+@@ -159,9 +159,9 @@ void aspeed_clk_set_rgmii_delay(enum aspeed_dev_id macdev, int speed, u32 tx,
+ 	writel(reg, info.addr);
+ }
+ 
+-void aspeed_clk_get_rgmii_delay(enum aspeed_dev_id macdev, int speed, u32 *tx,
+-				u32 *rx)
++void aspeed_clk_get_rgmii_delay(struct mac_s *obj, int speed, u32 *tx, u32 *rx)
+ {
++	enum aspeed_dev_id macdev = obj->device->dev_id;
+ 	struct mii_reg_info_s info;
+ 	u32 reg;
+ 	int ret;
+@@ -181,8 +181,9 @@ void aspeed_clk_get_rgmii_delay(enum aspeed_dev_id macdev, int speed, u32 *tx,
+ 	}
+ }
+ 
+-void aspeed_clk_set_rmii_delay(enum aspeed_dev_id macdev, int speed, u32 tx, u32 rx)
++void aspeed_clk_set_rmii_delay(struct mac_s *obj, int speed, u32 tx, u32 rx)
+ {
++	enum aspeed_dev_id macdev = obj->device->dev_id;
+ 	struct mii_reg_info_s info;
+ 	u32 reg;
+ 	int ret;
+@@ -207,8 +208,9 @@ void aspeed_clk_set_rmii_delay(enum aspeed_dev_id macdev, int speed, u32 tx, u32
+ 	writel(reg, info.addr);
+ }
+ 
+-void aspeed_clk_get_rmii_delay(enum aspeed_dev_id macdev, int speed, u32 *tx, u32 *rx)
++void aspeed_clk_get_rmii_delay(struct mac_s *obj, int speed, u32 *tx, u32 *rx)
+ {
++	enum aspeed_dev_id macdev = obj->device->dev_id;
+ 	struct mii_reg_info_s info;
+ 	u32 reg;
+ 	int ret;
+-- 
+2.34.1
+

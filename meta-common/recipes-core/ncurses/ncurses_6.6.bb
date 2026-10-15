@@ -1,0 +1,19 @@
+require ncurses.inc
+
+SRC_URI += "file://0001-tic-hang.patch \
+           file://0002-configure-reproducible.patch \
+           file://0003-gen-pkgconfig.in-Do-not-include-LDFLAGS-in-generated.patch \
+           file://0004-Make-install.libs-depend-on-installed-shared-libraries.patch \
+           file://0005-misc-Always-regenerate-pkg-config-files-before-install.patch \
+           file://exit_prototype.patch \
+           file://0001-do-not-create-symlink-to-terminfo-under-usr-lib.patch \
+           "
+# commit id corresponds to the revision in package version
+SRCREV = "a1c9c082bbe6ac18d96eb2e1ee2146e1665deaf8"
+EXTRA_OECONF += "--with-abi-version=5"
+UPSTREAM_CHECK_GITTAGREGEX = "v(?P<pver>\d+_\d+)$"
+
+# This is needed when using patchlevel versions like 6.1+20181013
+#CVE_VERSION = "${@d.getVar("PV").split('+')[0]}.${@d.getVar("PV").split('+')[1]}"
+
+# Fix for CVE-2025-6141 not required in current 6.6 version as this version is unaffected by the vulnerability.

@@ -3,7 +3,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/obmc-ikvm;branch=main;protocol=https"
 
 
-SRCREV = "4e6eb7c682d08a04b53ba05bbb5c1dd1552fac10"
+SRCREV = "506f145dd1bb303130b55c53ccc4277b10b2f34b"
 SYSTEMD_SERVICE:${PN}:remove = "obmc-ikvm.service"
 SYSTEMD_SERVICE:${PN} += "start-ipkvm.socket start-dummy-ipkvm-client.service"
 SYSTEMD_SERVICE:${PN} += "${@bb.utils.contains('MULTI_HOST_DEFAULT_MODE', '1', 'start-ipkvm1.service start-ipkvm1.socket', '', d)}"

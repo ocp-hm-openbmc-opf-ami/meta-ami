@@ -1,0 +1,140 @@
+From 552cec74c24de3042bdf74eccdec075fe2643196 Mon Sep 17 00:00:00 2001
+From: Jacky Chou <jacky_chou@aspeedtech.com>
+Date: Tue, 5 May 2026 17:06:39 +0800
+Subject: [PATCH 05/13] net: dwc_eth_xgmac: add ASPEED glue layer
+
+Add the ASPEED-specific XGMAC configuration, Kconfig option, build
+rule, and compatible table entry. The glue layer reuses the generic
+descriptor and buffer cache operations while providing null hooks for
+resources that do not need platform-specific setup yet.
+
+Signed-off-by: Jacky Chou <jacky_chou@aspeedtech.com>
+Change-Id: If2d11ca631bb5ea0e01a660e4cec80ad1af428b1
+Upstream-Status: Backport [SDK v11.03 migration]
+---
+ drivers/net/Kconfig                |  7 ++++
+ drivers/net/Makefile               |  1 +
+ drivers/net/dwc_eth_xgmac.c        |  6 ++++
+ drivers/net/dwc_eth_xgmac.h        |  1 +
+ drivers/net/dwc_eth_xgmac_aspeed.c | 52 ++++++++++++++++++++++++++++++
+ 5 files changed, 67 insertions(+)
+ create mode 100644 drivers/net/dwc_eth_xgmac_aspeed.c
+
+diff --git a/drivers/net/Kconfig b/drivers/net/Kconfig
+index 44f6870055..34b9b4b045 100644
+--- a/drivers/net/Kconfig
++++ b/drivers/net/Kconfig
+@@ -201,6 +201,13 @@ config DWC_ETH_XGMAC
+ 	  Ethernet MAC) IP block. The IP supports many options for bus type,
+ 	  clocking/reset structure, and feature list.
+ 
++config DWC_ETH_XGMAC_ASPEED
++	bool "Synopsys DWC Ethernet XGMAC device support for ASPEED"
++	select DWC_ETH_XGMAC
++	help
++	  The Synopsys Designware Ethernet XGMAC IP block with specific
++	  configuration used in ASPEED chip.
++
+ config DWC_ETH_XGMAC_SOCFPGA
+ 	bool "Synopsys DWC Ethernet XGMAC device support for SOCFPGA"
+ 	select REGMAP
+diff --git a/drivers/net/Makefile b/drivers/net/Makefile
+index 0db7b54dec..5f1c2e109f 100644
+--- a/drivers/net/Makefile
++++ b/drivers/net/Makefile
+@@ -22,6 +22,7 @@ obj-$(CONFIG_DWC_ETH_QOS) += dwc_eth_qos.o
+ obj-$(CONFIG_DWC_ETH_QOS_IMX) += dwc_eth_qos_imx.o
+ obj-$(CONFIG_DWC_ETH_QOS_QCOM) += dwc_eth_qos_qcom.o
+ obj-$(CONFIG_DWC_ETH_XGMAC) += dwc_eth_xgmac.o
++obj-$(CONFIG_DWC_ETH_XGMAC_ASPEED) += dwc_eth_xgmac_aspeed.o
+ obj-$(CONFIG_DWC_ETH_XGMAC_SOCFPGA) += dwc_eth_xgmac_socfpga.o
+ obj-$(CONFIG_DWC_ETH_QOS_STARFIVE) += dwc_eth_qos_starfive.o
+ obj-$(CONFIG_E1000) += e1000.o
+diff --git a/drivers/net/dwc_eth_xgmac.c b/drivers/net/dwc_eth_xgmac.c
+index d179fe287d..a110fbb2e6 100644
+--- a/drivers/net/dwc_eth_xgmac.c
++++ b/drivers/net/dwc_eth_xgmac.c
+@@ -1199,6 +1199,12 @@ static const struct eth_ops xgmac_ops = {
+ };
+ 
+ static const struct udevice_id xgmac_ids[] = {
++#if CONFIG_IS_ENABLED(DWC_ETH_XGMAC_ASPEED)
++	{
++		.compatible = "aspeed,ast2700-dwxgmac",
++		.data = (ulong)&xgmac_aspeed_config
++	},
++#endif
+ #if CONFIG_IS_ENABLED(DWC_ETH_XGMAC_SOCFPGA)
+ 	{
+ 		.compatible = "intel,socfpga-dwxgmac",
+diff --git a/drivers/net/dwc_eth_xgmac.h b/drivers/net/dwc_eth_xgmac.h
+index 90c2e22997..8efd74078b 100644
+--- a/drivers/net/dwc_eth_xgmac.h
++++ b/drivers/net/dwc_eth_xgmac.h
+@@ -296,4 +296,5 @@ void xgmac_inval_buffer_generic(void *buf, size_t size);
+ void xgmac_flush_buffer_generic(void *buf, size_t size);
+ int xgmac_null_ops(struct udevice *dev);
+ 
++extern struct xgmac_config xgmac_aspeed_config;
+ extern struct xgmac_config xgmac_socfpga_config;
+diff --git a/drivers/net/dwc_eth_xgmac_aspeed.c b/drivers/net/dwc_eth_xgmac_aspeed.c
+new file mode 100644
+index 0000000000..861ef161ba
+--- /dev/null
++++ b/drivers/net/dwc_eth_xgmac_aspeed.c
+@@ -0,0 +1,52 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright 2026 Aspeed Technology Inc.
++ */
++#include <clk.h>
++#include <cpu_func.h>
++#include <dm.h>
++#include <errno.h>
++#include <eth_phy.h>
++#include <log.h>
++#include <malloc.h>
++#include <memalign.h>
++#include <miiphy.h>
++#include <net.h>
++#include <netdev.h>
++#include <phy.h>
++#include <reset.h>
++#include <wait_bit.h>
++#include <regmap.h>
++#include <syscon.h>
++#include <asm/cache.h>
++#include <asm/gpio.h>
++#include <asm/io.h>
++#include <linux/delay.h>
++#include <dm/device_compat.h>
++#include "dwc_eth_xgmac.h"
++
++static struct xgmac_ops xgmac_aspeed_ops = {
++	.xgmac_inval_desc = xgmac_inval_desc_generic,
++	.xgmac_flush_desc = xgmac_flush_desc_generic,
++	.xgmac_inval_buffer = xgmac_inval_buffer_generic,
++	.xgmac_flush_buffer = xgmac_flush_buffer_generic,
++	.xgmac_probe_resources = xgmac_null_ops,
++	.xgmac_remove_resources = xgmac_null_ops,
++	.xgmac_stop_resets = xgmac_null_ops,
++	.xgmac_start_resets = xgmac_null_ops,
++	.xgmac_stop_clks = xgmac_null_ops,
++	.xgmac_start_clks = xgmac_null_ops,
++	.xgmac_calibrate_pads = xgmac_null_ops,
++	.xgmac_disable_calibration = xgmac_null_ops,
++	.xgmac_get_enetaddr = xgmac_null_ops,
++};
++
++struct xgmac_config __maybe_unused xgmac_aspeed_config = {
++	.reg_access_always_ok = false,
++	.swr_wait = 50,
++	.config_mac = XGMAC_MAC_RXQ_CTRL0_RXQ0EN_ENABLED_DCB,
++	.config_mac_mdio = XGMAC_MAC_MDIO_ADDRESS_CR_350_400,
++	.axi_bus_width = XGMAC_AXI_WIDTH_64,
++	.interface = dev_read_phy_mode,
++	.ops = &xgmac_aspeed_ops
++};
+-- 
+2.34.1
+
