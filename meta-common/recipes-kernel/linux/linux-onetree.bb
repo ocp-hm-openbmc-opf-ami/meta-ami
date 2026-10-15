@@ -14,7 +14,7 @@ EXTRA_OEMAKE += "KCFLAGS=-DCONFIG_I3C_MCTP_HELPERS"
 
 # Include this as a comment only for downstream auto-bump
 # SRC_URI = "git://git@github.com/intel-bmc/os.linux.kernel.openbmc.linux.git;protocol=ssh;branch=dev-6.1-intel"
-SRC_URI:append = "git://git.ami.com/core/ami-bmc/base-tech/linux-lf.git;protocol=https;branch=onetree-dev-6.6 "
+SRC_URI:append = "git://git.ami.com/core/ami-bmc/base-tech/linux-lf.git;protocol=https;branch=integrate-onetree-latest "
 
 # KBRANCH is added for devtool to checkout to the same branch as the linux-lf branch. This variable is only used by the devtool utility and must be updated whenever the linux-lf branch changes.
 KBRANCH = "onetree-dev-6.6"
