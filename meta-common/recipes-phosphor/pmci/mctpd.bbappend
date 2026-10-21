@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI:bhs-features = "git://git.ami.com/core/ami-bmc/one-tree/core/firmware.bmc.openbmc.applications.mctpd.git;protocol=https;branch=openbmc/release/birchstream/common"
 
-SRCREV:bhs-features = "87279f7cb3313c56fdc419edeaf36251389ef265"
+SRCREV:bhs-features = "43787d5aed2c1d43d1ddc4dcc43aea725d0e2247"
 
 #SRC_URI += "file://0001-Add-secured-message-type-in-mctpd.patch"
 
