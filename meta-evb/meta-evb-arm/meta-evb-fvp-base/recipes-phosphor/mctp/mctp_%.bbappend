@@ -1,7 +1,7 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
 PV = "2.1"
-SRCREV = "3a6d65a5527a025d63fc00aa85ef388324d1b9e7"
+SRCREV = "1953cea70f9290d46d219f2d7ac25662983e9424"
 
 EXTRA_OEMESON = " \
     -Dtests=false \

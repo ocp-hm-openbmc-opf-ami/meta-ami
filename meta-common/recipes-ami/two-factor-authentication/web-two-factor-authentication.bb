@@ -10,7 +10,7 @@ SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/two-factor-authenticatio
 
 
 
-SRCREV = "104f8baba74c14c4838d5a58956aaa31cee2b499"
+SRCREV = "2c493e22fc43b352c1656ffe6fdcddcd1a5511ec"
 
 
 S = "${WORKDIR}/git"

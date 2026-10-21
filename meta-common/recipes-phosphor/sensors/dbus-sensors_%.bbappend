@@ -3,7 +3,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 RDEPENDS:${PN} += " libapisensor"
 SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/dbus-sensors.git;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "81666dc453cef96049277f0fe3c0ef9fd9d2e273"
+SRCREV_override = "292fceb51a1afd3c62826f103ad1e48f822f3df7"
 
 SRC_URI:append = "\
      file://intrusionsensor-depend-on-networkd.conf \

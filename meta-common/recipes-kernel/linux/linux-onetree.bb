@@ -21,7 +21,7 @@ KBRANCH = "onetree-dev-6.6"
 
 KBUILD_CFLAGS += "-ffile-prefix-map=${WORKDIR}=/usr/src/debug/${PN}/${PV}"
 KBUILD_CFLAGS += "-ffile-prefix-map=${B}=/usr/src/debug/${PN}/${PV}"
-SRCREV = "2b3327e80175b530b1a6ed6aa64dc16a043a5591"
+SRCREV = "00ee738d91980defe834aa1f31825ad31909ce57"
 
 
 do_compile:prepend(){
