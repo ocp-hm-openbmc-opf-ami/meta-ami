@@ -6,7 +6,7 @@ LICENSE = "Apache-2.0"
 LIC_FILES_CHKSUM = "file://${COREBASE}/meta/files/common-licenses/Apache-2.0;md5=89aea4e17d99a7cacdbeed46a0096b10"
  
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/libapisensor.git;protocol=https;branch=main"
-SRCREV = "0916ddd437852a1e4ada30629f3c960b86f0940b"
+SRCREV = "c8b383b2074432aa0b375ce6a2b221a7778dbd86"
  
 PV = "1.0.0"
  

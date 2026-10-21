@@ -6,7 +6,7 @@ LIC_FILES_CHKSUM = "file://LICENSE;md5=4cc91856b08b094b4f406a29dc61db21"
 
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/mctp-ext.git;protocol=https;branch=main \
            "
-SRCREV = "ab4c2e1c46d44178d6678cc472650a1b7ec32cb8"
+SRCREV = "242edbfac8e1b3d2f56e43da9b614bec7f420886"
 PV = "1.0+git${SRCPV}"
 
 S = "${WORKDIR}/git"
