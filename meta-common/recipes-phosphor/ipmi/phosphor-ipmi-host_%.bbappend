@@ -2,7 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-host-ipmid.git;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
-SRCREV_override = "07bbeecb569848e48ca8d97aa9ade6705418d7ec"
+SRCREV_override = "6a0395593c53e8a6282b396a7458914614918990"
 
 RDEPENDS:${PN}:remove = "phosphor-time-manager"
 DEPENDS:append = " libpdkhook "

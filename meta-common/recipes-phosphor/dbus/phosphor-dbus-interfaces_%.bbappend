@@ -3,7 +3,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-dbus-interfaces.git;branch=main;protocol=https;name=override;"
 
 SRCREV_FORMAT = "override"
-SRCREV_override = "e0237b4d28a9ff513ae265cfa90d04bafd777360"
+SRCREV_override = "38323614f9de788a618c98b9a86b764ac04afa11"
 
 include ${@bb.utils.contains('BBFILE_COLLECTIONS', 'nvidia-layer', 'phosphor-dbus-interfaces_nv.inc', '', d)}
 
