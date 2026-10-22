@@ -16,15 +16,15 @@
 
 	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-logging.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-logging.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/logging/phosphor-logging_%.bbappend
 
-	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-sel-logger.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-sel-logger.git;branch=integrate-onetree-latest;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/sel-logger/phosphor-sel-logger_%.bbappend
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-sel-logger.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-sel-logger.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/sel-logger/phosphor-sel-logger_%.bbappend
 
 	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/webui-vue.git;branch=main;protocol=https;name=webui/git@github.com\/ocp-hm-openbmc-opf-ami\/webui-vue;protocol=https;branch=main;name=webui/g' meta-ami/meta-common/recipes-phosphor/webui/webui-vue_%.bbappend
 
 	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-time-manager.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-time-manager.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/date-time/phosphor-time-manager_%.bbappend
 
-	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/snmp-agent.git;branch=main;protocol=https/git@github.com\/ocp-hm-openbmc-opf-ami\/snmp-agent;protocol=https;branch=integrate-onetree-latest/g' meta-ami/meta-common/recipes-phosphor/snmp/snmp-agent_%.bb
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/snmp-agent.git;branch=main;protocol=https/git@github.com\/ocp-hm-openbmc-opf-ami\/snmp-agent;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/snmp/snmp-agent_%.bb
 
-	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/session-manager.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/session-manager.git;protocol=https;branch=integrate-onetree-latest/g' meta-ami/meta-common/recipes-phosphor/session-management/session-management_git.bb
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/session-manager.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/session-manager.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/session-management/session-management_git.bb
 
 	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-gpio-monitor.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-gpio-monitor.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/gpio/phosphor-gpio-monitor_%.bbappend
 
@@ -50,11 +50,11 @@
 
 	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/libapisensor.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/libapisensor.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/sensors/libapisensor_git.bb
 
-	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/sensor-history-reader.git;protocol=https;branch=master/git@github.com\/ocp-hm-openbmc-opf-ami\/sensor-history-reader.git;protocol=https;branch=integrate-onetree-latest/g' meta-ami/meta-common/recipes-ami/sensor-reader/sensor-reader_git.bb
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/sensor-history-reader.git;protocol=https;branch=master/git@github.com\/ocp-hm-openbmc-opf-ami\/sensor-history-reader.git;protocol=https;branch=master/g' meta-ami/meta-common/recipes-ami/sensor-reader/sensor-reader_git.bb
 
 	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/two-factor-authentication.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/two-factor-authentication.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/two-factor-authentication/web-two-factor-authentication.bb
 
-	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/platform-event-filter.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/platform-event-filter.git;protocol=https;branch=integrate-onetree-latest/g' meta-ami/meta-common/recipes-ami/pef/pef-alert-manager.bb
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/platform-event-filter.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/platform-event-filter.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/pef/pef-alert-manager.bb
 
 	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/email-alert-manager.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/email-alert-manager.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/pef/mail-alert-manager.bb
 
@@ -76,7 +76,7 @@
 	
 	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/phosphor-net-ipmid.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/phosphor-net-ipmid.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/ipmi/phosphor-ipmi-net_%.bbappend
 	
-	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/service-config-manager.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/service-config-manager.git;branch=integrate-onetree-latest;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/srvcfg-manager/srvcfg-manager_git.bbappend
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/service-config-manager.git;branch=master;protocol=https;name=override/git@github.com\/ocp-hm-openbmc-opf-ami\/service-config-manager.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-phosphor/srvcfg-manager/srvcfg-manager_git.bbappend
 	
 	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/webui-libraries.git;branch=main;protocol=https;destsuffix=webui-libs;name=webuilib/github.com\/ocp-hm-openbmc-opf-ami\/webui-libraries.git;branch=main;protocol=https;destsuffix=webui-libs;name=webuilib/g' meta-ami/meta-common/recipes-phosphor/webui/webui-vue_%.bbappend
 
