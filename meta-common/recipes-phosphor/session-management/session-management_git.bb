@@ -4,7 +4,7 @@ LICENSE = "CLOSED"
 
 
 SRC_URI = "git://git.ami.com/core/ami-bmc/one-tree/core/session-manager.git;protocol=https;branch=main"
-SRCREV = "81872de8da0d6bf2a5208550756d4dc70c06d7a2"
+SRCREV = "249eced4f19939fbdfeca5a535cd689f81b7ef71"
 
 S = "${UNPACKDIR}/git"
 PV = "1.0+git${SRCPV}"
