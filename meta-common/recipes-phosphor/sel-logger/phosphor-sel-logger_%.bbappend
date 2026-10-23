@@ -1,7 +1,7 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 PROJECT_SRC_DIR := "${THISDIR}/${PN}"
 
-SRCREV_override = "9507fbeefa8292ced8235ba4d1cb6a1f781f37b4"
+SRCREV_override = "178f50fbeb44458f32268214dd066616a323073e"
 SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-sel-logger.git;branch=master;protocol=https;name=override;"
 SRCREV_FORMAT = "override"
 
