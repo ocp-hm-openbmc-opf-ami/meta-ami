@@ -26,7 +26,7 @@ SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 RDEPENDS:${PN} = " bash "
 DEPENDS:append = " libusb1 json-c boost sdbusplus phosphor-logging i2c-tools "
 
-FILES:${PN} += "${datadir}/mctp/mctp_ext_options.json"
+FILES:${PN} += "${datadir}/mctp"
 
 SRC_URI:append = " \
 	file://mctpreactor.service \
@@ -42,4 +42,3 @@ do_install:append () {
 	install -d ${D}${systemd_system_unitdir}
 	install -m 0644 ${UNPACKDIR}/mctpreactor.service ${D}${systemd_system_unitdir}/mctpreactor.service
 }
-

@@ -80,10 +80,14 @@
 	
 	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/webui-libraries.git;branch=main;protocol=https;destsuffix=webui-libs;name=webuilib/github.com\/ocp-hm-openbmc-opf-ami\/webui-libraries.git;branch=main;protocol=https;destsuffix=webui-libs;name=webuilib/g' meta-ami/meta-common/recipes-phosphor/webui/webui-vue_%.bbappend
 
-	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.mctpd.git;protocol=https;branch=openbmc\/release\/birchstream\/common/git@github.com\/ocp-hm-openbmc-opf-ami\/firmware.bmc.openbmc.applications.mctpd.git;protocol=https;branch=openbmc\/release\/birchstream\/common/g' meta-ami/meta-common/recipes-phosphor/pmci/mctpd.bbappend
+	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.mctpd.git;protocol=https;branch=openbmc\/release\/birchstream\/common/git@github.com\/ocp-hm-openbmc-opf-ami\/mctpd.git;protocol=https;branch=openbmc\/release\/birchstream\/common/g' meta-ami/meta-common/recipes-phosphor/pmci/mctpd.bbappend
 	
 	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/firmware.bmc.openbmc.applications.virtual-media;branch=main;protocol=https/git@github.com\/ocp-hm-openbmc-opf-ami\/virtual-media.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/virtual-media/virtual-media.bbappend
 	
+	sed -i 's|git.ami.com/core/ami-bmc/one-tree/core/phosphor-certificate-manager.git;branch=master;protocol=https;name=override|git@github.com/ocp-hm-openbmc-opf-ami/phosphor-certificate-manager.git;branch=master;protocol=https;name=override|g' meta-ami/meta-common/recipes-phosphor/certificate/phosphor-certificate-manager_%.bbappend
+
+	sed -i 's|git.ami.com/core/ami-bmc/one-tree/core/phosphor-user-manager.git;branch=master;protocol=https|git@github.com/ocp-hm-openbmc-opf-ami/phosphor-user-manager.git;branch=master;protocol=https|g' meta-ami/meta-common/recipes-phosphor/users/phosphor-user-manager_%.bbappend
+
 if [ -d "meta-core/meta-common" ]; then
 
 	sed -i 's/git@github.com\/intel-bmc\/firmware.bmc.openbmc.applications.host-misc-comm-manager;protocol=ssh;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/host-misc-comm-manager.git;protocol=https;branch=main/g' meta-core/meta-common/recipes-intel/host-misc-comm-manager/host-misc-comm-manager_git.bb

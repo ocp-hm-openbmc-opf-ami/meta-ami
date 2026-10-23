@@ -6,8 +6,8 @@ APP_NAME = "pwmtachtool"
 bindir = "/usr/bin"
 
 SRC_URI = "git://github.com/openbmc/openbmc-tools;protocol=https;branch=master \
-           file://0002-pwm-max-min-value-range.patch \
-           file://0003-set-fan-speed-set-dutycycle.patch \
+           file://0002-pwm-max-min-value-range-recreate.patch \
+           file://0003-set-fan-speed-set-dutycycle-recreate.patch \
            file://0001-Mapping-pwm-tach-number-starting-from-0.patch \
            file://0004-pwmtachtool-dutycycle-is-giving-percentage-instead-o.patch \
            file://0005-build_fix_pwmtachtool.patch \

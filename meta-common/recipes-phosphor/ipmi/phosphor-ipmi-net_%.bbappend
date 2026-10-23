@@ -7,10 +7,9 @@ SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-net-ipmid.git;
 SRCREV_FORMAT = "override"
 CXXFLAGS += "-DENABLE_RMCP_RMCPP_IN_IPV6"
 
-python Add_DefaultUser_if_debugtweaks_not_enabled() {
-    if 'allow-root-login' not in d.getVar('EXTRA_IMAGE_FEATURES', True).split():
-        d.appendVar('SRC_URI', " file://0308-Allow-Default-User-To-Change-Password-Even-Expired-A.patch")
-}
+# Expired-password restriction for the default user lives in command_table.cpp,
+# guarded by ALLOW_ROOT_LOGIN: compiled in only when allow-root-login is NOT enabled.
+CXXFLAGS += "${@bb.utils.contains('EXTRA_IMAGE_FEATURES', 'allow-root-login', '-DALLOW_ROOT_LOGIN', '', d)}"
 
 ALT_RMCPP_IFACE = "hostusb0"
 SYSTEMD_SERVICE:${PN} += " \

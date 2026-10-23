@@ -17,6 +17,13 @@ inherit systemd
 
 EXTRA_OEMESON += "-Dcpp_std=c++23"
 
+# Unit tests + code coverage (opt-in). Set SENSOR_READER_UT = "1" to enable:
+#   - meson '-Dtests=enabled' gates subdir('tests') (see meson.options).
+#   - '-Db_coverage=true' turns on gcov instrumentation.
+#   - 'gtest' is added to DEPENDS so gtest/gmock are in the sysroot.
+SENSOR_READER_UT ?= "0"
+EXTRA_OEMESON:append = "${@bb.utils.contains('SENSOR_READER_UT', '1', ' -Dtests=enabled -Db_coverage=true', ' -Dtests=disabled -Db_coverage=false', d)}"
+
 FILES:${PN} += "${systemd_system_unitdir}/xyz.openbmc_project.SensorReader.service"
 SYSTEMD_SERVICE:${PN} = "xyz.openbmc_project.SensorReader.service"
 
@@ -30,6 +37,10 @@ DEPENDS += " \
     boost \
     nlohmann-json \
     "
+
+# GTest/GMock for unit tests (provides both gtest and gmock); pulled in only
+# when SENSOR_READER_UT is enabled.
+DEPENDS:append = "${@bb.utils.contains('SENSOR_READER_UT', '1', ' gtest', '', d)}"
 
 do_install:append() {
 

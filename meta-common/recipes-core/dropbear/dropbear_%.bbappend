@@ -2,7 +2,8 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI =+ "file://dropbear.default  \
             file://dropbear@.service "
-SRC_URI =+ "file://0006-Add-ECC-macro-guard-insecure-cipher-option-and-stric.patch "
+SRC_URI =+ "file://0006-Add-ECC-macro-guard-insecure-cipher-option-and-stric.patch \
+            file://CVE-2025-14282.patch "
 
 do_configure:append() {
         echo "#define DROPBEAR_CURVE25519 0" >> ${B}/localoptions.h
