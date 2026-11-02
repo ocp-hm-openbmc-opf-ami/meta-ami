@@ -10,11 +10,22 @@ SRC_URI:append = " \
 	file://nv/PortState.interface.yaml \
         file://nv/BootStatus.interface.yaml \
         file://nv/Update-all-meson-build-files.patch \
+        file://nv/0006-Add-DeviceState.interface.yaml.patch \
         file://nv/0009-Add-csm-interfaces-for-state-manager.patch \
         file://nv/0010-nvidia-sync-changes-from-gb300nvl-ws-2506-branch.patch \
         file://nv/0011-Add-EMMC-dbus-properties.patch \
         file://nv/0012-Added-nsmd-related-changes-into-dbus.patch \
         file://nv/0013-Adding-changes-for-NSM-sync.patch \
+        file://nv/0014-Add-ConflictingOperation-enum-to-Async-Status-interf.patch \
+        file://nv/0015-Add-LLDP-Modes-and-RawFrame-dbus-interfaces.patch \
+        file://nv/0016-Add-xyz-openbmc_project-Network-LLDP-dbus-interfaces.patch \
+        file://nv/0017-Add-nsmd-dbus-interface-updates.patch \
+        file://nv/0018-Add-nsmd-missing-dbus-interfaces-for-VRB-2605-12.patch \
+        file://nv/0019-Add-missing-nsmd-dbus-interfaces.patch \
+        file://nv/0020-Adding-nsmd-related-changes-for-VRB2605.25.04-tag.patch \
+        file://nv/0021-Fix-DOTAuthState-meson-install-directives.patch \
+        file://nv/0022-Add-nsmd-required-dbus-interfaces-VRB-2608-09.03.patch \
+        file://nv/0023-Fix-missing-meson-install-directives.patch \
 "
 
 do_replace_files() {

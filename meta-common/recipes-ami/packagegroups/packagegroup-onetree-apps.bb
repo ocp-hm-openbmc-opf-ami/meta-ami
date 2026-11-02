@@ -101,6 +101,7 @@ PACKAGES = "\
                 ${@bb.utils.contains('IMAGE_FEATURES', 'onetree-ipmb', '${PN}-ipmb', '', d)} \
                 ${@bb.utils.contains('IMAGE_FEATURES', 'onetree-phosphor-health-monitor', '${PN}-phosphor-health-monitor', '', d)} \
 		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-mac-eeprom-support', '${PN}-onetree-mac-eeprom-support','', d)} \
+		${@bb.utils.contains('IMAGE_FEATURES', 'onetree-emmc-fsck-on-por', '${PN}-emmc-fsck-on-por', '', d)} \
 		"
 
 SUMMARY:${PN}-brcmraid = "EP : Broadcom RAID"
@@ -901,4 +902,12 @@ SUMMARY:${PN}-onetree-mac-eeprom-support = "AMI Core Features: reacd mac from ee
 DESCRIPTION:${PN}-onetree-mac-eeprom-support = " Reads mac address from the peerom specified in the DTS "
 RDEPENDS:${PN}-onetree-mac-eeprom-support = " "
 SUPPORTED_VENDOR:${PN}-onetree-mac-eeprom-support = "EVB-2600 INTEL_BHS OKS_2700 INTEL_2700"
+#-----------------------------------#
+
+SUMMARY:${PN}-emmc-fsck-on-por = "AMI Core Features : eMMC Fsck on Power-On-Reset"
+DESCRIPTION:${PN}-emmc-fsck-on-por = "Runs fsck on the eMMC data partitions after a power-on-reset to recover from unclean unmounts"
+RDEPENDS:${PN}-emmc-fsck-on-por = " \
+				emmc-fsck-on-por \
+			"
+SUPPORTED_VENDOR:${PN}-emmc-fsck-on-por = "ALL"
 #-----------------------------------#

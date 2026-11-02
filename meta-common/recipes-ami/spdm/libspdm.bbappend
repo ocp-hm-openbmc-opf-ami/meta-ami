@@ -8,7 +8,7 @@ SRC_URI:append = " \
     file://0007-Add-sample-SPDM-1.2-APIs-to-sign-CSR.patch \
 "
 
-SRC_URI:remove = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'oks',' file://0001-CMakeLists64.patch','',d)}"
+SRC_URI:remove:intel-ast2600 = "file://0001-CMakeLists64.patch"
 
 EXTRA_OECMAKE:remove = "${@bb.utils.contains('BBFILE_COLLECTIONS', 'ast2700-sdk-layer','-DARCH=arm','',d)}"
 EXTRA_OECMAKE:append = " ${@bb.utils.contains('BBFILE_COLLECTIONS', 'ast2700-sdk-layer','-DARCH=aarch64','',d)}"

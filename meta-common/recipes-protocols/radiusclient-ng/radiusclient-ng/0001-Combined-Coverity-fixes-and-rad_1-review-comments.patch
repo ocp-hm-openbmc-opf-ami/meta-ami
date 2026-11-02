@@ -1,0 +1,327 @@
+From bc5268a24fe0b1928ddfd5bb2285ab76e19920c1 Mon Sep 17 00:00:00 2001
+From: franklinsamuvelg <franklinsamuvelg@ami.com>
+Date: Tue, 13 Oct 2026 23:59:48 +0530
+Subject: [PATCH] Combined Coverity fixes and rad_1 review comments
+
+Upstream-Status: Inappropriate [Coverity fix]
+
+---
+ lib/avpair.c     | 13 +++++++++++--
+ lib/config.c     | 30 ++++++++++++++++++++----------
+ lib/ip_util.c    |  1 +
+ lib/log.c        | 14 +++++++++++---
+ lib/sendserver.c | 27 +++++++++++++++++----------
+ src/radexample.c | 17 +++++++++++++++--
+ src/radlogin.c   | 29 +++++++++++++++++++++++++----
+ 7 files changed, 100 insertions(+), 31 deletions(-)
+
+diff --git a/lib/avpair.c b/lib/avpair.c
+index 3807e2e..0431f1e 100644
+--- a/lib/avpair.c
++++ b/lib/avpair.c
+@@ -736,8 +736,17 @@ int rc_avpair_tostr (rc_handle const *rh, VALUE_PAIR *pair, char *name, int ln,
+ 	    	pos = 0;
+ 		ptr = (unsigned char *) pair->strvalue;
+ 		if (pair->attribute == PW_DIGEST_ATTRIBUTES) {
+-			pair->strvalue[*(ptr + 1)] = '\0';
+-			ptr += 2;
++
++    			unsigned int digest_len = *(ptr + 1);
++
++    			if (digest_len >= sizeof(pair->strvalue)) {
++        			rc_log(LOG_ERR,
++               				"rc_avpair_tostr: invalid digest attribute length");
++        			return -1;
++    			}
++
++    			pair->strvalue[digest_len] = '\0';
++    			ptr += 2;
+ 		}
+ 		while (*ptr != '\0')
+ 		{
+diff --git a/lib/config.c b/lib/config.c
+index 84644ed..08953c5 100644
+--- a/lib/config.c
++++ b/lib/config.c
+@@ -129,9 +129,14 @@ static int set_option_srv(char const *filename, int line, OPTION *option, char c
+ 
+ 		q = strchr(p_pointer, ']');
+ 		if (q == NULL) {
+-			free(p_dupe);
+-			rc_log(LOG_CRIT, "read_config: IPv6 parse error");
+-			return -1;
++    			free(p_dupe);
++
++    			if (option->val == NULL) {
++        			free(serv);
++    			}
++
++    			rc_log(LOG_CRIT, "read_config: IPv6 parse error");
++    			return -1;
+ 		}
+ 		*q = '\0';
+ 		q++;
+@@ -147,8 +152,8 @@ static int set_option_srv(char const *filename, int line, OPTION *option, char c
+ 			serv->secret[serv->max] = strdup(s);
+ 			if (serv->secret[serv->max] == NULL) {
+ 				rc_log(LOG_CRIT, "read_config: out of memory");
++                                free(p_dupe);
+ 				if (option->val == NULL) {
+-					free(p_dupe);
+ 					free(serv);
+ 				}
+ 				return -1;
+@@ -167,8 +172,8 @@ static int set_option_srv(char const *filename, int line, OPTION *option, char c
+ 			serv->secret[serv->max] = strdup(s);
+ 			if (serv->secret[serv->max] == NULL) {
+ 				rc_log(LOG_CRIT, "read_config: out of memory");
++                                free(p_dupe);
+ 				if (option->val == NULL) {
+-					free(p_dupe);
+ 					free(serv);
+ 				}
+ 				return -1;
+@@ -202,6 +207,10 @@ static int set_option_srv(char const *filename, int line, OPTION *option, char c
+ 	serv->name[serv->max] = strdup(p_pointer);
+ 	if (serv->name[serv->max] == NULL) {
+ 		rc_log(LOG_CRIT, "read_config: out of memory");
++                if (serv->secret[serv->max] != NULL) {
++			free(serv->secret[serv->max]);
++			serv->secret[serv->max] = NULL;
++		}
+ 		if (option->val == NULL) {
+ 			free(p_dupe);
+ 			free(serv);
+@@ -766,8 +775,9 @@ int rc_find_server_addr (rc_handle const *rh, char const *server_name,
+ 		{
+ 			for( i = 0; i < authservers->max; i++ )
+ 			{
+-				if( (strncmp(server_name, authservers->name[i], strlen(server_name)) == 0) &&
+-				    (authservers->secret[i] != NULL) )
++				if ((authservers->name[i] != NULL) &&
++    				(strcmp(server_name, authservers->name[i]) == 0) &&
++    				(authservers->secret[i] != NULL))
+ 				{
+                     memset(secret, '\0', MAX_SECRET_LENGTH + 1);
+                     size_t len = strlen(s);
+@@ -795,9 +805,9 @@ int rc_find_server_addr (rc_handle const *rh, char const *server_name,
+         {
+             for (i = 0; i < acctservers->max; i++)
+             {
+-                if ((strncmp(server_name, acctservers->name[i],
+-                             strlen(server_name)) == 0) &&
+-                    (acctservers->secret[i] != NULL))
++                if ((acctservers->name[i] != NULL) &&
++    		(strcmp(server_name, acctservers->name[i]) == 0) &&
++    		(acctservers->secret[i] != NULL))
+                 {
+                     memset(secret, '\0', MAX_SECRET_LENGTH + 1);
+                     size_t len = strlen(s);
+diff --git a/lib/ip_util.c b/lib/ip_util.c
+index 4e8b28f..19c249b 100644
+--- a/lib/ip_util.c
++++ b/lib/ip_util.c
+@@ -188,6 +188,7 @@ void rc_own_bind_addr(rc_handle const *rh, struct sockaddr_storage *lia)
+ 		}
+ 
+ 		memcpy(lia, info->ai_addr, info->ai_addrlen);
++                freeaddrinfo(info);
+        }
+ 
+        return;
+diff --git a/lib/log.c b/lib/log.c
+index ae2b980..5f7ddab 100644
+--- a/lib/log.c
++++ b/lib/log.c
+@@ -34,9 +34,17 @@ void rc_log(int prio, char const *format, ...)
+ 	char buff[1024];
+ 	va_list ap;
+ 
+-	va_start(ap,format);
+-	vsnprintf(buff, sizeof(buff), format, ap);
+-	va_end(ap);
++
++        if (format != NULL){
++                va_start(ap, format);
++    		vsnprintf(buff, sizeof(buff), format, ap);
++                va_end(ap);
++	}
++	else
++	{	
++    		snprintf(buff, sizeof(buff), "%s", "NULL format string");
++	}
++
+ 
+ #ifndef _MSC_VER /* TODO: Fix me */
+ 	syslog(prio, "%s", buff);
+diff --git a/lib/sendserver.c b/lib/sendserver.c
+index 60333f7..9fddfc0 100644
+--- a/lib/sendserver.c
++++ b/lib/sendserver.c
+@@ -214,7 +214,7 @@ static void strappend(char* dest, unsigned max_size, int* pos, const char* src)
+ int rc_send_server(const rc_handle* rh, SEND_DATA* data, char* msg,
+                    unsigned flags)
+ {
+-    int sockfd;
++    int sockfd = -1;
+     AUTH_HDR *auth, *recv_auth;
+     char* server_name; /* Name of server to query */
+     struct sockaddr_storage our_sockaddr;
+@@ -512,9 +512,8 @@ int rc_send_server(const rc_handle* rh, SEND_DATA* data, char* msg,
+             rc_log(LOG_ERR,
+                    "rc_send_server: recvfrom: %s:%d: attribute zero is invalid",
+                    server_name, data->svc_port);
+-            close(sockfd);
+-            memset(secret, '\0', sizeof(secret));
+-            return ERROR_RC;
++            result = ERROR_RC;
++            goto cleanup;
+         }
+ 
+         if (attr[1] < 2)
+@@ -523,9 +522,8 @@ int rc_send_server(const rc_handle* rh, SEND_DATA* data, char* msg,
+                 LOG_ERR,
+                 "rc_send_server: recvfrom: %s:%d: attribute length is too small",
+                 server_name, data->svc_port);
+-            close(sockfd);
+-            memset(secret, '\0', sizeof(secret));
+-            return ERROR_RC;
++            result = ERROR_RC;
++            goto cleanup;
+         }
+ 
+         if ((attr + attr[1]) > (recv_buffer + length))
+@@ -534,9 +532,8 @@ int rc_send_server(const rc_handle* rh, SEND_DATA* data, char* msg,
+                 LOG_ERR,
+                 "rc_send_server: recvfrom: %s:%d: attribute overflows the packet",
+                 server_name, data->svc_port);
+-            close(sockfd);
+-            memset(secret, '\0', sizeof(secret));
+-            return ERROR_RC;
++            result = ERROR_RC;
++            goto cleanup;
+         }
+ 
+         attr += attr[1];
+@@ -603,8 +600,18 @@ int rc_send_server(const rc_handle* rh, SEND_DATA* data, char* msg,
+     }
+ 
+ cleanup:
++
++    if (sockfd >= 0)
++    {
++        close(sockfd);
++    }
++
+     if (auth_addr)
++    {
+         freeaddrinfo(auth_addr);
++    }
++
++    memset(secret, '\0', sizeof(secret));
+ 
+     return result;
+ }
+diff --git a/src/radexample.c b/src/radexample.c
+index bffe402..7bc0028 100644
+--- a/src/radexample.c
++++ b/src/radexample.c
+@@ -43,8 +43,21 @@ main (int argc, char **argv)
+ 
+ 	default_realm = rc_conf_str(rh, "default_realm");
+ 
+-	strncpy(username, rc_getstr (rh, "login: ",1), sizeof(username));
+-	strncpy (passwd, rc_getstr(rh, "Password: ",0), sizeof (passwd));
++	int ret;
++
++	ret = snprintf(username, sizeof(username), "%s",
++               rc_getstr(rh, "login: ", 1));
++	if ((ret < 0) || ((size_t)ret >= sizeof(username)))
++	{
++    		username[0] = '\0';
++	}
++
++	ret = snprintf(passwd, sizeof(passwd), "%s",
++               rc_getstr(rh, "Password: ", 0));
++	if ((ret < 0) || ((size_t)ret >= sizeof(passwd)))
++	{
++    		passwd[0] = '\0';
++	} 
+ 
+ 	send = NULL;
+ 
+diff --git a/src/radlogin.c b/src/radlogin.c
+index 7076b2d..c3509fb 100644
+--- a/src/radlogin.c
++++ b/src/radlogin.c
+@@ -38,11 +38,17 @@ login_allowed(char *tty)
+ 	FILE *fp;
+ 	char fname[PATH_MAX];
+ 	int c;
++        int ret;
+ 
+ 	strcpy(fname, rc_conf_str(rh, "nologin"));
+ 	if (access(fname, F_OK) < 0) {
+ 		if (tty) {
+-			snprintf(fname, sizeof(fname), "%s.%s", rc_conf_str(rh, "nologin"), tty);
++			ret = snprintf(fname, sizeof(fname), "%s.%s",
++               			rc_conf_str(rh, "nologin"), tty);
++			if ((ret < 0) || ((size_t)ret >= sizeof(fname)))
++			{
++    				return 0;
++			}
+ 			if (access(fname, F_OK) < 0)
+ 				return 1;
+ 		} else {
+@@ -188,6 +194,7 @@ main (int argc, char **argv)
+ 	char		username[128];
+ 	char		passwd[AUTH_PASS_LEN + 1];
+ 	int 		tries, remaining, c;
++        int             ret;
+ 	uint32_t		client_port;
+ 	void 		(*login_func)(rc_handle *, char const *);
+ 	FILE		*fp;
+@@ -256,7 +263,11 @@ main (int argc, char **argv)
+ 		if (ttyn)
+ 		{
+ 			if ((p = strrchr(ttyn, '/')) == NULL)
+-				strncpy(tty, ttyn, sizeof(tty));
++				ret = snprintf(tty, sizeof(tty), "%s", ttyn);
++				if ((ret < 0) || ((size_t)ret >= sizeof(tty)))
++				{
++    					tty[0] = '\0';
++				}
+ 			else
+ 				strncpy(tty, p+1, sizeof(tty));
+ 
+@@ -277,7 +288,12 @@ main (int argc, char **argv)
+ 
+ 	if ((argc - optind) == 1)
+ 	{
+-		strncpy(username,argv[optind], sizeof(username));
++		ret = snprintf(username, sizeof(username), "%s", argv[optind]);
++		if ((ret < 0) || ((size_t)ret >= sizeof(username)))
++		{
++    			username[0] = '\0';
++    			exit(ERROR_RC);
++		}
+ 	}
+ 	else
+ 	{
+@@ -330,7 +346,12 @@ main (int argc, char **argv)
+ 	 while (!*username) {
+ 	 	p = rc_getstr (rh, SC_LOGIN, 1);
+ 	 	if (p)
+-	 		strncpy(username, p, sizeof(username));
++	 		ret = snprintf(username, sizeof(username), "%s", p);
++			if ((ret < 0) || ((size_t)ret >= sizeof(username)))
++			{
++    				username[0] = '\0';
++    				exit(ERROR_RC);
++			}
+ 	 	else
+ 	 		exit (ERROR_RC);
+ 	 }
+-- 
+2.43.0
+

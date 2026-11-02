@@ -10,6 +10,7 @@ SRC_URI += " \
     file://Encryption.h;subdir=git/include/ \
     file://0284-AMI-Unified-Update.patch \
     file://0285-Fix-For-LF-Sync-Build-Issue.patch \
+    file://0001-Combined-Coverity-fixes-and-rad_1-review-comments.patch \
     "
 
 SRCREV = "c7d94ca0b59f8f618fddd8a73e0876bdbc441dc8"

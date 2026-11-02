@@ -1,9 +1,5 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
- 
-SRC_URI += " \
-	file://CVE-2025-14104.patch \
-	file://CVE-2026-27456.patch \
-	file://CVE-2026-53612.patch \
-	file://CVE-2026-53613.patch \
-	file://CVE-2026-53614.patch \
-"
+
+SRC_URI += "file://CVE-2026-76642.patch"
+SRC_URI += "file://CVE-2026-78408.patch"
+SRC_URI += "file://CVE-2026-78410.patch"

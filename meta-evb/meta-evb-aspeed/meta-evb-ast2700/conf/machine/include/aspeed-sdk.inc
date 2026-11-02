@@ -1,7 +1,4 @@
 PREFERRED_PROVIDER_virtual/kernel ?= "linux-aspeed"
-PREFERRED_PROVIDER_virtual/bootloader ?= "u-boot-aspeed-sdk"
-PREFERRED_PROVIDER_u-boot ?= "u-boot-aspeed-sdk"
-PREFERRED_PROVIDER_u-boot-fw-utils ?= "u-boot-fw-utils-aspeed-sdk"
 
 # Build a FIT image and stuff core-image-minimal in it by default.
 KERNEL_IMAGETYPE ?= "fitImage"
@@ -53,3 +50,10 @@ QB_NETWORK_DEVICE = "-net nic,netdev=net0"
 # Boot from drive
 QB_DEFAULT_KERNEL = "none"
 
+
+PREFERRED_PROVIDER_virtual/bootloader = "u-boot-onetree"
+PREFERRED_PROVIDER_u-boot = "u-boot-onetree"
+PREFERRED_PROVIDER_u-boot-fw-utils = "u-boot-fw-utils-onetree"
+
+PREFERRED_VERSION_u-boot-onetree = "v2023.10+%"
+PREFERRED_VERSION_u-boot-fw-utils-onetree = "v2023.10+%"
