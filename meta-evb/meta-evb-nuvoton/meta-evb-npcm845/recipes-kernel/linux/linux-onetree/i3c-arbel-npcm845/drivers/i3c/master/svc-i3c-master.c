@@ -2756,10 +2756,9 @@ err_disable_clks:
 	return ret;
 }
 
-static int svc_i3c_master_remove(struct platform_device *pdev)
+static void svc_i3c_master_remove(struct platform_device *pdev)
 {
 	struct svc_i3c_master *master = platform_get_drvdata(pdev);
-	int ret;
 
 	/* Avoid ibi events during driver unbinding */
 	writel(SVC_I3C_MINT_SLVSTART, master->regs + SVC_I3C_MINTCLR);
@@ -2767,9 +2766,7 @@ static int svc_i3c_master_remove(struct platform_device *pdev)
 	debugfs_remove_recursive(master->debugfs);
 
 	cancel_work_sync(&master->hj_work);
-	ret = i3c_unregister(&master->base);
-	if (ret)
-		return ret;
+	i3c_unregister(&master->base);
 
 	pm_runtime_dont_use_autosuspend(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
@@ -2780,7 +2777,6 @@ static int svc_i3c_master_remove(struct platform_device *pdev)
 		dma_free_coherent(master->dev, MAX_DMA_COUNT, master->dma_rx_buf,
 				  master->dma_rx_addr);
 	}
-	return 0;
 }
 
 static void svc_i3c_save_regs(struct svc_i3c_master *master)
@@ -2832,6 +2828,7 @@ static const struct dev_pm_ops svc_i3c_pm_ops = {
 
 static const struct of_device_id svc_i3c_master_of_match_tbl[] = {
 	{ .compatible = "silvaco,i3c-master" },
+	{ .compatible = "nuvoton,npcm845-i3c" },
 	{ /* sentinel */ },
 };
 MODULE_DEVICE_TABLE(of, svc_i3c_master_of_match_tbl);

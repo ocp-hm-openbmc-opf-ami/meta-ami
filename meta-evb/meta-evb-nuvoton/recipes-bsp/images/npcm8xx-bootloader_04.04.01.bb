@@ -60,7 +60,7 @@ do_configure() {
 do_compile[depends] += " \
     npcm8xx-tip-fw:do_deploy npcm8xx-bootblock:do_deploy \
     trusted-firmware-a:do_deploy optee-os:do_deploy \
-    u-boot-nuvoton:do_deploy"
+    u-boot-onetree:do_deploy"
 do_compile() {
     # copy Openbmc built images
     cd ${DEPLOY_DIR_IMAGE}

@@ -100,7 +100,7 @@ cleanup_overlay_with_blacklist_and_rsync() {
         # remove files if present in emmc
         for emmc_list in "${EMMC_FILE_LIST[@]}"; do
             if grep -q -- "$emmc_list" "$BLACKLIST"; then
-                rm -rf -- "$emmc_list" 2>/dev/null || true
+                rm -rf -- $emmc_list 2>/dev/null || true
             fi
         done
     else

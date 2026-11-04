@@ -16,3 +16,24 @@ do_install:append() {
     fi
 
 }
+
+SRC_URI += "file://CVE-2026-63073.patch"
+
+SRC_URI += "file://CVE-2026-75803.patch"
+
+SRC_URI += "file://CVE-2026-14456.patch"
+
+SRC_URI += "file://CVE-2026-63074.patch"
+
+
+SRC_URI += "file://CVE-2026-54874.patch"
+
+SRC_URI += "file://CVE-2026-18798.patch"
+
+SRC_URI += "file://CVE-2026-63075.patch"
+
+SRC_URI += "file://CVE-2026-14457.patch"
+
+SRC_URI += "file://CVE-2026-63072.patch"
+
+SRC_URI += "file://CVE-2026-63076.patch"

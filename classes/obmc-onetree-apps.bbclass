@@ -60,7 +60,8 @@ FEATURE_PACKAGES_onetree-pdk ?= "packagegroup-onetree-apps-pdk"
 FEATURE_PACKAGES_onetree-telemetry ?= "packagegroup-onetree-apps-telemetry"
 FEATURE_PACKAGES_onetree-ipmb ?= "packagegroup-onetree-apps-ipmb"
 FEATURE_PACKAGES_onetree-cxl-mgmt ?= "packagegroup-onetree-apps-cxl-mgmt"
-FEATURE_PACKAGES_onetree-phosphor-health-monitor ?= "packagegroup-onetree-apps-phosphor-health-monitor" 
+FEATURE_PACKAGES_onetree-phosphor-health-monitor ?= "packagegroup-onetree-apps-phosphor-health-monitor"
+FEATURE_PACKAGES_onetree-emmc-fsck-on-por ?= "packagegroup-onetree-apps-emmc-fsck-on-por"
 
 # NVIDIA Features
 FEATURE_PACKAGES_onetree-nvidiasipack ?= "packagegroup-onetree-apps-nvidiasipack"

@@ -3,8 +3,8 @@ SRC_URI_ASPEED_ZEPHYR_PROJECT = "gitsm://github.com/AspeedTech-BMC/aspeed-zephyr
 ASPEED_ZEPHYR_PROJECT_BRANCH ??= "aspeed-master"
 ASPEED_ZEPHYR_PROJECT_NOBRANCH ??= "0"
 
-# Tag for v03.06
-SRCREV_app = "4214794e852eafdc5ee32bcecf888db216e7722c"
+# Tag for v03.08
+SRCREV_app = "e5862a5b048cc7ce7557c3d4600cb98faab66f3b"
 
 SRC_URI += "\
     ${SRC_URI_ASPEED_ZEPHYR_PROJECT};name=app;branch=${ASPEED_ZEPHYR_PROJECT_BRANCH};destsuffix=${S}/aspeed-zephyr-project;nobranch=${ASPEED_ZEPHYR_PROJECT_NOBRANCH} \

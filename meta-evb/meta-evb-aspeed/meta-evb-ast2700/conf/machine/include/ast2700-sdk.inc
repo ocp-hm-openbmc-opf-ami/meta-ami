@@ -82,3 +82,10 @@ QB_SYSTEM_NAME = "qemu-system-aarch64"
 QB_MACHINE = "-machine ast2700a1-evb"
 QB_MEM = "-m 1G"
 
+
+PREFERRED_PROVIDER_virtual/bootloader = "u-boot-onetree"
+PREFERRED_PROVIDER_u-boot = "u-boot-onetree"
+PREFERRED_PROVIDER_u-boot-fw-utils = "u-boot-fw-utils-onetree"
+
+PREFERRED_VERSION_u-boot-onetree = "v2023.10+%"
+PREFERRED_VERSION_u-boot-fw-utils-onetree = "v2023.10+%"

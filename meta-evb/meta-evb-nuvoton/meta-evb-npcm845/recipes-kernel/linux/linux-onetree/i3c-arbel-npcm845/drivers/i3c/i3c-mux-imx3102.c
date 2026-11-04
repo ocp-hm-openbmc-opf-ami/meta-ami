@@ -51,7 +51,7 @@ struct imx3102 {
 };
 
 static ssize_t i3c_mux_imx3102_query(struct file *filp, struct kobject *kobj,
-				     struct bin_attribute *attr, char *buf,
+				     const struct bin_attribute *attr, char *buf,
 				     loff_t pos, size_t count)
 {
 	struct imx3102 *imx3102;
@@ -59,7 +59,7 @@ static ssize_t i3c_mux_imx3102_query(struct file *filp, struct kobject *kobj,
 	int ret;
 	u8 data[2];
 
-	imx3102 = dev_get_drvdata(container_of(kobj, struct device, kobj));
+	imx3102 = dev_get_drvdata(container_of_const(kobj, struct device, kobj));
 	if (!imx3102)
 		return -1;
 
@@ -77,7 +77,7 @@ static ssize_t i3c_mux_imx3102_query(struct file *filp, struct kobject *kobj,
 /* write whatever value to imx3102-mux to release the ownership */
 static ssize_t i3c_mux_imx3102_release_chan(struct file *filp,
 					    struct kobject *kobj,
-					    struct bin_attribute *attr,
+					    const struct bin_attribute *attr,
 					    char *buf, loff_t pos, size_t count)
 {
 	struct imx3102 *imx3102;
@@ -86,7 +86,7 @@ static ssize_t i3c_mux_imx3102_release_chan(struct file *filp,
 	int ret;
 	u8 select;
 
-	imx3102 = dev_get_drvdata(container_of(kobj, struct device, kobj));
+	imx3102 = dev_get_drvdata(container_of_const(kobj, struct device, kobj));
 	if (!imx3102) {
 		count = -1;
 		goto out;
@@ -108,13 +108,13 @@ out:
 
 static ssize_t i3c_mux_imx3102_bus_reinit(struct file *filp,
 					  struct kobject *kobj,
-					  struct bin_attribute *attr, char *buf,
+					  const struct bin_attribute *attr, char *buf,
 					  loff_t pos, size_t count)
 {
 	struct imx3102 *imx3102;
 	int ret;
 
-	imx3102 = dev_get_drvdata(container_of(kobj, struct device, kobj));
+	imx3102 = dev_get_drvdata(container_of_const(kobj, struct device, kobj));
 	if (!imx3102) {
 		count = -1;
 		return count;

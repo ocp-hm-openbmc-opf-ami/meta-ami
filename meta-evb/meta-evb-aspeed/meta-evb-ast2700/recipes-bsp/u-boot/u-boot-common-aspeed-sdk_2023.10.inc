@@ -6,12 +6,6 @@ LICENSE = "GPL-2.0-or-later"
 LIC_FILES_CHKSUM = "file://Licenses/README;md5=2ca5f2c35c8cc335f0a19756634782f1"
 PE = "1"
 
-BRANCH = "aspeed-master-v2023.10"
-SRC_URI = "git://github.com/AspeedTech-BMC/u-boot.git;protocol=https;branch=${BRANCH}"
-
-# Tag for v00.05.11
-SRCREV = "a155d1c48228aa3dbac097266381bf02b7179f33"
-
 S = "${WORKDIR}/git"
 B = "${WORKDIR}/build"
 do_configure[cleandirs] = "${B}"

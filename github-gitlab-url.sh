@@ -63,6 +63,10 @@
 	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/libpdkhook.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/libpdkhook.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-ami/libpdkhook/libpdkhook_git.bb
 
 	sed -i 's|git\.ami\.com/core/ami-bmc/base-tech/linux-lf\.git|git@github.com/ocp-hm-openbmc-opf-ami/linux.git|g' meta-ami/meta-common/recipes-kernel/linux/linux-onetree.bb
+
+	sed -i 's|git\.ami\.com/core/ami-bmc/base-tech/u-boot-onetree\.git|github.com/ocp-hm-openbmc-opf-ami/u-boot-onetree.git|g' meta-ami/meta-common/recipes-bsp/u-boot/u-boot*onetree_2019.04.bb meta-ami/meta-common/recipes-bsp/u-boot/u-boot*onetree_2023.10.bb
+
+	sed -i 's|git\.ami\.com/core/ami-bmc/base-tech/u-boot-onetree\.git|github.com/ocp-hm-openbmc-opf-ami/u-boot-onetree.git|g' meta-ami/meta-evb/meta-evb-aspeed/meta-evb-ast2700/recipes-bsp/bootmcu/bootmcu-spl_2023.10.bb
 	
 	sed -i 's/git.ami.com\/core\/ami-bmc\/one-tree\/core\/libmctp.git;protocol=https;branch=main/git@github.com\/ocp-hm-openbmc-opf-ami\/libmctp.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/libmctp/libmctp_%.bbappend
 	

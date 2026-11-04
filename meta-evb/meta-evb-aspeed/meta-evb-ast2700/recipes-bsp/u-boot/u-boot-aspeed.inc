@@ -1,5 +1,5 @@
 SUMMARY = "Universal Boot Loader for embedded devices"
-PROVIDES = "virtual/bootloader"
+PROVIDES += "virtual/bootloader"
 
 B = "${WORKDIR}/build"
 

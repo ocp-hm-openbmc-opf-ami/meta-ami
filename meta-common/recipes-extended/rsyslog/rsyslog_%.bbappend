@@ -6,6 +6,7 @@ SRC_URI += " file://hostconsole.conf \
          file://rsyslog.logrotate \
          file://syslog.conf \
          file://rsyslog.conf \
+	 file://CVE-2026-19654.patch \
        "
 
 FILES:${PN} += "${systemd_system_unitdir}/rsyslog.service.d/rsyslog-override.conf"

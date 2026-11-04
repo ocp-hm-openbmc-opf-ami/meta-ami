@@ -64,6 +64,10 @@
 
 	sed -i 's|git@github.com/ocp-hm-openbmc-opf-ami/linux.git|git\.ami\.com/core/ami-bmc/base-tech/linux-lf\.git|g' meta-ami/meta-common/recipes-kernel/linux/linux-onetree.bb
 
+	sed -i 's|github\.com/ocp-hm-openbmc-opf-ami/u-boot-onetree\.git|git.ami.com/core/ami-bmc/base-tech/u-boot-onetree.git|g' meta-ami/meta-common/recipes-bsp/u-boot/u-boot*onetree_2019.04.bb meta-ami/meta-common/recipes-bsp/u-boot/u-boot*onetree_2023.10.bb
+
+	sed -i 's|github\.com/ocp-hm-openbmc-opf-ami/u-boot-onetree\.git|git.ami.com/core/ami-bmc/base-tech/u-boot-onetree.git|g' meta-ami/meta-evb/meta-evb-aspeed/meta-evb-ast2700/recipes-bsp/bootmcu/bootmcu-spl_2023.10.bb
+
 	sed -i 's/git@github.com\/ocp-hm-openbmc-opf-ami\/libmctp.git;protocol=https;branch=main/git.ami.com\/core\/ami-bmc\/one-tree\/core\/libmctp.git;protocol=https;branch=main/g' meta-ami/meta-common/recipes-phosphor/libmctp/libmctp_%.bbappend
 
 	sed -i 's/github.com\/ocp-hm-openbmc-opf-ami\/host-error-monitor;branch=master;protocol=https;name=override/git.ami.com\/core\/ami-bmc\/one-tree\/core\/host-error-monitor.git;branch=master;protocol=https;name=override/g' meta-ami/meta-common/recipes-core/host-error-monitor/host-error-monitor_%.bbappend

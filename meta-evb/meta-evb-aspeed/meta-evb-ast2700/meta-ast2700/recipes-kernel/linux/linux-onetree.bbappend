@@ -22,4 +22,9 @@ do_configure:append (){
         echo '#include "ast2700a1-evb.dtsi"' >> ${S}/arch/arm64/boot/dts/aspeed/ast2700-evb.dts
     fi
 
+    # RS-485: inject board DTS wiring when MACHINE_FEATURES "onetree-rs485" is set.
+    if ${@bb.utils.contains('MACHINE_FEATURES', 'onetree-rs485', 'true', 'false', d)}; then
+        echo '#include "ast2700-rs485.dtsi"' >> ${S}/arch/arm64/boot/dts/aspeed/ast2700-evb.dts
+    fi
+
 }
