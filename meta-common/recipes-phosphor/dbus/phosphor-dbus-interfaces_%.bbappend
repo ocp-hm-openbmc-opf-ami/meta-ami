@@ -3,7 +3,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 SRC_URI += "git://git.ami.com/core/ami-bmc/one-tree/core/phosphor-dbus-interfaces.git;branch=main;protocol=https;name=override;"
 
 SRCREV_FORMAT = "override"
-SRCREV_override = "38323614f9de788a618c98b9a86b764ac04afa11"
+SRCREV_override = "03e0bc586efe95155d3ac7525e376da0f3e98afb"
 
 # Include NVIDIA D-Bus interface patches for non-NVIDIA GPGPU builds.
 include ${@bb.utils.contains('BBFILE_COLLECTIONS', 'nvidia-layer', 'phosphor-dbus-interfaces_nv.inc', bb.utils.contains('EXTRA_IMAGE_FEATURES', 'onetree-gpgpu', 'phosphor-dbus-interfaces_nv.inc', '', d), d)}
